@@ -1,0 +1,6 @@
+# OPDL - TODO
+
+Actionable items and known unfinished work.
+Do not use this file for tracking progress or track finished work. If work is finished, then its finished; remove it from this file.
+Keep this file short; the structured backlog of lower-priority follow-ups lives in
+`docs/backlog/` (start at `docs/backlog/README.md`), and the architecture overview in `README.md`.
