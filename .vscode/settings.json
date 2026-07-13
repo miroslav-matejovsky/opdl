@@ -56,7 +56,12 @@
     ]
   },
   "cSpell.words": [
+    "deadcode",
+    "fe3dback",
     "gopls",
-    "opdl"
+    "gotest",
+    "gotestsum",
+    "opdl",
+    "taskfile"
   ]
 }
