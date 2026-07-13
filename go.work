@@ -3,3 +3,7 @@ go 1.26.5
 use ./blueprint
 
 use	./distribution
+
+use ./builder
+
+use ./platform
