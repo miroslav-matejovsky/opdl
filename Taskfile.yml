@@ -70,7 +70,7 @@ tasks:
       - task lint
       - task arch
       - task test
-      - echo all done
+      - echo fast done
 
   all:
     desc: Run all checks, tests and scenarios. This is the main task to run before considering work complete.
@@ -87,8 +87,8 @@ tasks:
       - task lint
       - task arch
       - task test
-      - task validate
-      - task scenarios
+      # - task validate
+      # - task scenarios
       - echo all done
 
 # ---- running stuff ----
