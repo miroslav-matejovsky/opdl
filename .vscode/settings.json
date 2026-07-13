@@ -62,6 +62,7 @@
     "gopls",
     "gotest",
     "gotestsum",
+    "LASTEXITCODE",
     "opdl",
     "taskfile"
   ]
