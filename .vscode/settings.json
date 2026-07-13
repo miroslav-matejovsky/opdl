@@ -58,6 +58,7 @@
   "cSpell.words": [
     "deadcode",
     "fe3dback",
+    "golangci",
     "gopls",
     "gotest",
     "gotestsum",
