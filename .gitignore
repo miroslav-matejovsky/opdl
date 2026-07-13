@@ -1,0 +1,55 @@
+# Windows-Native / .NET / C#
+[Bb]in/
+[Oo]bj/
+artifacts/
+publish/
+TestResults/
+coverage/
+packages/
+*.user
+*.rsuser
+*.suo
+.vs/
+*.nupkg
+*.snupkg
+
+# Go
+vendor/
+dist/
+bin/
+.gocache/
+.lintcache/
+
+
+# Web / Frontend (TS / JS / UI)
+node_modules/
+dist/
+build/
+wwwroot/lib/
+
+# Rust
+target/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Binaries & Runtimes
+*.dll
+*.exe
+*.pdb
+*.so
+*.dylib
+
+# Archives
+*.zip
+*.tar
+*.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secret / Environment
+.env
+.env.ps1
