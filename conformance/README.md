@@ -12,10 +12,11 @@ The conformance logic is ordinary package code, not test code — each check pac
 could be a `main` on its own. Test files exist only where they earn their keep:
 
 - `api-specifications/` — regenerates the platform's API specification. The
-  OpenAPI specification (`api-specifications/openapi.yaml`) is generated from the
-  platform's API description (`platform/api`), and the .NET client (`sdk-dotnet`)
-  is generated from that specification with Kiota. `Run` performs both steps in
-  that order, since the client depends on the specification.
+  OpenAPI specification (`api-specifications/openapi.yaml`), its compact Markdown
+  companion for review (`api-specifications/openapi.md`), and the .NET client
+  (`sdk-dotnet`) generated from the OpenAPI specification with Kiota. `Run`
+  generates the specification (and its Markdown companion) first, then the client,
+  since the client depends on the specification.
 - `deployment-descriptors/` — verifies that the builder's and the platform's
   deployment descriptors describe the same contract, even though they are
   separate Go types in separate modules (the platform must not depend on the

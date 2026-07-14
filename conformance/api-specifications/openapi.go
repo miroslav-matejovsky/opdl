@@ -20,24 +20,38 @@ import (
 // levels below the repository root.
 var contractPath = filepath.Join("..", "..", "api-specifications", "openapi.yaml")
 
+// markdownPath is the compact, human-readable companion to contractPath: the same
+// specification rendered as Markdown instead of YAML, for reviewing API changes
+// without reading OpenAPI. See renderMarkdown.
+var markdownPath = filepath.Join(filepath.Dir(contractPath), "openapi.md")
+
 // generateOpenAPISpec generates the OpenAPI specification from the platform's API
-// description and writes it to api-specifications/openapi.yaml, unconditionally.
-// The specification is a build artifact of platform/api, not a hand-maintained
-// file, so every run regenerates it from the current platform API rather than
-// checking it for staleness — the published specification is always exactly what
-// the code that serves it currently describes.
+// description and writes it to api-specifications/openapi.yaml and, as a compact
+// human-readable companion, api-specifications/openapi.md — unconditionally. The
+// specification is a build artifact of platform/api, not a hand-maintained file,
+// so every run regenerates both from the current platform API rather than checking
+// them for staleness — they are always exactly what the code that serves the API
+// currently describes.
 func generateOpenAPISpec() error {
-	got, err := renderOpenAPI(platformapi.Describe())
+	doc := buildOpenAPIDoc(platformapi.Describe())
+
+	yamlBytes, err := yaml.Marshal(doc)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(contractPath, got, 0o644)
+	if err := os.WriteFile(contractPath, yamlBytes, 0o644); err != nil {
+		return err
+	}
+
+	return os.WriteFile(markdownPath, renderMarkdown(doc), 0o644)
 }
 
-// renderOpenAPI turns the platform's API contract into an OpenAPI 3.0.3 document.
-// Response schemas are derived from the Go response types by reflection, so the
-// specification describes exactly the JSON the platform serves.
-func renderOpenAPI(c platformapi.Contract) ([]byte, error) {
+// buildOpenAPIDoc turns the platform's API contract into an OpenAPI 3.0.3
+// document. Response schemas are derived from the Go response types by
+// reflection, so the specification describes exactly the JSON the platform
+// serves. Both generated artifacts (the YAML specification and its Markdown
+// companion) render from this one document, so they cannot disagree.
+func buildOpenAPIDoc(c platformapi.Contract) openAPIDoc {
 	doc := openAPIDoc{
 		OpenAPI: "3.0.3",
 		Info: openAPIInfo{
@@ -73,7 +87,7 @@ func renderOpenAPI(c platformapi.Contract) ([]byte, error) {
 		methods[strings.ToLower(op.Method)] = operation
 	}
 
-	return yaml.Marshal(doc)
+	return doc
 }
 
 // schemaFor builds an OpenAPI schema for a Go type by reflection. It handles the

@@ -14,9 +14,15 @@ Compliance is verified by the `conformance` module during the build process.
 - `openapi.yaml` - OpenAPI 3.0.3 specification of the platform's HTTP API. It is
   generated from the platform's API description (`platform/api`) by the
   `conformance` module, not edited by hand, and the .NET SDK (`sdk-dotnet`) is
-  generated from it in turn. The conformance check always regenerates both from the
-  current source rather than checking them for staleness, so a change that was not
-  propagated here shows up as an unexpected diff after running:
+  generated from it in turn.
+- `openapi.md` - a compact, human-readable companion to `openapi.yaml`: one
+  section per operation, its response payload's field table inlined directly
+  beneath it, meant to be skimmed in a PR diff when reviewing an API change.
+  Generated from the same source alongside `openapi.yaml`, not edited by hand.
+
+  The conformance check always regenerates both from the current source rather
+  than checking them for staleness, so a change that was not propagated here shows
+  up as an unexpected diff after running:
 
   ```
   go test ./conformance/cmd
