@@ -1,7 +1,17 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+)
 
 func main() {
-	fmt.Println("I don't do anything yet, but I will eventually!")
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "platform:", err)
+		os.Exit(1)
+	}
+	fmt.Println(cfg.Summary())
 }

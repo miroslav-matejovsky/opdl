@@ -1,0 +1,19 @@
+{
+  "platform": "opdl",
+  "project": "mock",
+  "environment": "development",
+  "site": "local",
+  "machine": "mock",
+  "role": "all-in-one",
+  "ip": "127.0.0.1",
+  "services": [
+    "core-services"
+  ],
+  "features": {
+    "chaos": false,
+    "redundancy": false
+  },
+  "runtime": {
+    "port": 8080
+  }
+}
