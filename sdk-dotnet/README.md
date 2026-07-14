@@ -20,7 +20,22 @@ sdk-dotnet/
       PlatformClient.cs             API client entry point
       Models/Status.cs             response models
       kiota-lock.json               generation manifest (contract hash, Kiota version)
+  tests/Opdl.Sdk.E2E/
+    Opdl.Sdk.E2E.csproj             end-to-end tests (references the SDK)
+    PlatformStatusTests.cs          drives a running platform through the SDK
 ```
+
+## End-to-end tests
+
+`tests/Opdl.Sdk.E2E` exercises the SDK against a real, running platform. The tests
+read the platform address from the `OPDL_PLATFORM_BASEURL` environment variable and
+skip when it is unset, so they are harmless to run standalone.
+
+They are driven by the `scenarios` module
+(`scenarios/dotnet_sdk_e2e_test.go`), which builds a platform binary from a
+blueprint, starts it, and runs these tests against it: the full loop from build
+tool to running service to generated client. That scenario runs as part of
+`task all` (in the `task scenarios` pass).
 
 ## Regenerating the client
 
