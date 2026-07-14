@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/builder/blueprint"
+	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
 )
 
 func TestLoad(t *testing.T) {

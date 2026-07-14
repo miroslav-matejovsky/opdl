@@ -7,7 +7,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/builder/blueprint"
+	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
 )
 
 func validProject() *blueprint.Project {
