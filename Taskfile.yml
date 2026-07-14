@@ -88,7 +88,7 @@ tasks:
       - task arch
       - task test
       - task validate
-      # - task scenarios
+      - task scenarios
       - echo all done
 
 # ---- running stuff ----

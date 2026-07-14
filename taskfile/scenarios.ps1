@@ -1,17 +1,6 @@
-# Run build-tagged platform integration tests and the black-box scenario suite.
+# Run the black-box scenario suite. No build-tagged platform integration
+# tests exist yet; add that step back here when the platform grows some.
 . (Join-Path $PSScriptRoot "modules.ps1")
-
-Write-Host "--- platform integration ---"
-Push-Location (Join-Path $RepoRoot "platform")
-try {
-    gotestsum --format pkgname -- -tags integration ./...
-    if ($LASTEXITCODE -ne 0) {
-        throw "platform integration tests failed (exit $LASTEXITCODE)"
-    }
-}
-finally {
-    Pop-Location
-}
 
 Write-Host "--- scenarios ---"
 Push-Location (Join-Path $RepoRoot "scenarios")
