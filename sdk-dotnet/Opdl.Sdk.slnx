@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Opdl.Sdk/Opdl.Sdk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Opdl.Sdk.E2E/Opdl.Sdk.E2E.csproj" />
+  </Folder>
+</Solution>

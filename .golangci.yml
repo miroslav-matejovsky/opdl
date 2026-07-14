@@ -1,0 +1,95 @@
+version: "2"
+run:
+  # 15m headroom: a cold compile of the nuclei SDK dependency graph (~500 modules,
+  # pulled in by internal/tools/nucleiscan) can exceed the old 5m on a clean build
+  # cache, which `task all` triggers via `clean` before lint.
+  timeout: 15m
+
+linters:
+  default: standard
+  enable:
+    - staticcheck
+    - errcheck
+    - errorlint
+    - nilnil
+    - copyloopvar
+    - gocyclo
+    - exhaustive    # exhaustive handling of enum values in switch/select
+    - goconst       # repeated string literals that should be constants
+    - gocritic      # opinionated style, performance, and diagnostic checks
+    - godot         # comment sentences must end with a period
+    - misspell      # spelling mistakes in identifiers, strings, and comments
+    - nakedret      # naked returns in functions longer than a threshold
+    - nestif        # deeply nested if-else chains
+    - noctx         # HTTP requests not passed a context.Context
+    - nolintlint    # malformed or overly broad //nolint directives
+    - predeclared   # shadowing of predeclared identifiers (len, error, …)
+    - revive        # comprehensive drop-in replacement for golint
+    - unconvert     # unnecessary type conversions
+    - unparam       # function parameters that never vary across callers
+
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    gocyclo:
+      min-complexity: 20  # stricter than default 30
+    goconst:
+      ignore-tests: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        # Domain events are immutable facts passed by value on purpose (sealed
+        # DomainEvent interface). hugeParam would force pointer receivers and
+        # rangeValCopy would force index loops over the read-model rollups; both
+        # fight the value-type design for no real gain, so they are disabled.
+        - hugeParam
+        - rangeValCopy
+    godot:
+      scope: declarations   # exported declarations only
+    nakedret:
+      max-func-lines: 30
+    nestif:
+      min-complexity: 5
+    revive:
+      rules:
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: var-declaration
+    gosec:
+      severity: medium
+      confidence: medium
+      excludes:
+        - G404  # math/rand: not used for cryptographic purposes here
+
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

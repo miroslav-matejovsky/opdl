@@ -56,6 +56,25 @@
     ]
   },
   "cSpell.words": [
-    "opdl"
+    "builderdeployment",
+    "deadcode",
+    "fe3dback",
+    "gohcl",
+    "golangci",
+    "gopls",
+    "gotest",
+    "gotestsum",
+    "hclparse",
+    "httpapi",
+    "Kiota",
+    "LASTEXITCODE",
+    "matejovsky",
+    "miroslav",
+    "opdl",
+    "platformapi",
+    "platformdeployment",
+    "slnx",
+    "stretchr",
+    "taskfile"
   ]
 }

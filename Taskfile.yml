@@ -1,0 +1,157 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  clean:
+    desc: Remove build artifacts, .test-results, and .exe files
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/clean.ps1{{if .QUIET}} > /dev/null 2>&1{{end}}
+      - echo clean done
+
+  tidy:
+    desc: Run go mod tidy in every workspace module
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/tidy.ps1
+
+  vet:
+    desc: Run go vet in every workspace module
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/vet.ps1
+
+  fmt:
+    desc: Run go fmt in every workspace module
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/fmt.ps1
+
+  lint:
+    desc: Run golangci-lint in every workspace module
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/lint.ps1
+
+  deadcode:
+    desc: Check for unreachable functions in cmd entry points
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/deadcode.ps1
+
+  arch:
+    desc: Enforce package dependency rules with go-arch-lint (per-module .go-arch-lint.yml)
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/arch.ps1
+
+  test:
+    desc: Run unit tests (saved to .test-results/)
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/test.ps1
+
+  fast:
+    desc: Run basic checks and unit tests. This is the fast task.
+    silent: true
+    cmds:
+      - task: clean
+        # Set QUIET=1 to suppress output from clean since it can be very verbose and is not the main focus of this task.
+        vars:
+          QUIET: "1"
+      - task tidy
+      - task vet
+      - task fmt
+      - task deadcode
+      - task lint
+      - task arch
+      - task test
+      - echo fast done
+
+  all:
+    desc: Run all checks, tests and scenarios. This is the main task to run before considering work complete.
+    silent: true
+    cmds:
+      - task: clean
+        # Set QUIET=1 to suppress output from clean since it can be very verbose and is not the main focus of this task.
+        vars:
+          QUIET: "1"
+      - task tidy
+      - task vet
+      - task fmt
+      - task deadcode
+      - task lint
+      - task arch
+      - task test
+      - task validate
+      - task scenarios
+      - echo all done
+
+# ---- running stuff ----
+
+  run:
+    desc: Run the platform runtime with the neutral mock descriptor and platform/config.json
+    silent: true
+    dir: platform
+    cmds:
+      - go run ./cmd {{.CLI_ARGS}}
+
+  build:
+    desc: 'Build deployment packages for a project, e.g. `task build -- customer-a`'
+    silent: true
+    dir: builder
+    cmds:
+      - go run ./cmd/opdl build {{.CLI_ARGS}}
+
+  sdk-dotnet:
+    desc: Restore and build the .NET SDK (Kiota-generated client). Regenerate the client with `go test ./conformance/cmd`.
+    silent: true
+    dir: sdk-dotnet
+    cmds:
+      - dotnet build Opdl.Sdk.slnx
+
+  plan:
+    desc: 'Show the derivation plan for a project, e.g. `task plan -- customer-a`'
+    silent: true
+    dir: builder
+    cmds:
+      - go run ./cmd/opdl plan {{.CLI_ARGS}}
+
+  validate:
+    desc: 'Validate project blueprints (all examples if no argument), e.g. `task validate -- customer-a`'
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/validate.ps1 {{.CLI_ARGS}}
+
+  scenarios:
+    desc: Run build-tagged platform integration tests and the black-box scenario suite (pre-merge resilience gate)
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/scenarios.ps1
+
+# ---- maintenance tasks ----
+
+  deps:
+    desc: List direct dependencies with available updates in each workspace module
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/deps.ps1
+
+  go-tools:
+    desc: Install or update required Go tools
+    silent: true
+    cmds:
+      - echo "deadcode for clean code by detecting unused functions"
+      - go install golang.org/x/tools/cmd/deadcode@latest
+
+      - echo "gotestsum for improved test output formatting"
+      - go install gotest.tools/gotestsum@latest
+
+      - echo "go-arch-lint for keeping package dependencies in check and enforcing architectural rules"
+      - go install github.com/fe3dback/go-arch-lint@latest
+
+      - echo done
