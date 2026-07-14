@@ -57,3 +57,5 @@ Thumbs.db
 # Secret / Environment
 .env
 .env.ps1
+
+_opdl-v1/
