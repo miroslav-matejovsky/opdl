@@ -87,7 +87,7 @@ tasks:
       - task lint
       - task arch
       - task test
-      # - task validate
+      - task validate
       # - task scenarios
       - echo all done
 
