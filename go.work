@@ -1,5 +1,13 @@
 go 1.26.5
 
+// Machine-specific configuration, assembly, and binary generation.
 use ./builder
 
+// Core platform implementation and extension points used to build machine-specific deliverables.
 use ./platform
+
+// Cross-module compatibility and specification verification.
+use ./conformance
+
+// Full end-to-end scenarios that demonstrate the capabilities of the platform and its extensions.
+use ./scenarios
