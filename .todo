@@ -6,4 +6,3 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
 `docs/backlog/` (start at `docs/backlog/README.md`), and the architecture overview in `README.md`.
 
 - different approach might be "organization -> site -> group -> unit"
-- use platform-conformation to ensure that the platform is compatible with the deployment descriptor in builder
