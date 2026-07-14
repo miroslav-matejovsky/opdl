@@ -94,11 +94,11 @@ tasks:
 # ---- running stuff ----
 
   run:
-    desc: Run the platform runtime with the neutral mock descriptor
+    desc: Run the platform runtime with the neutral mock descriptor and platform/config.json
     silent: true
     dir: platform
     cmds:
-      - go run ./cmd/platform {{.CLI_ARGS}}
+      - go run ./cmd {{.CLI_ARGS}}
 
   build:
     desc: 'Build deployment packages for a project, e.g. `task build -- customer-a`'
