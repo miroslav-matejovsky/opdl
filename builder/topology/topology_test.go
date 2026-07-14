@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/stretchr/testify/require"
 
-	topology "github.com/miroslav-matejovsky/opdl/distribution/topology"
+	topology "github.com/miroslav-matejovsky/opdl/builder/topology"
 )
 
 func validProject() *topology.Project {

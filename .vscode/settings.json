@@ -58,12 +58,17 @@
   "cSpell.words": [
     "deadcode",
     "fe3dback",
+    "gohcl",
     "golangci",
     "gopls",
     "gotest",
     "gotestsum",
+    "hclparse",
     "LASTEXITCODE",
+    "matejovsky",
+    "miroslav",
     "opdl",
+    "stretchr",
     "taskfile"
   ]
 }
