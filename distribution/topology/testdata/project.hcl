@@ -1,10 +1,10 @@
 project "customer-a" {
   environment = "production"
 
-# global features that apply to all sites and machines in this project
-# mappable to the actual contracts with the customer and what they are paying for
-# or with chaos feature, something we can enable to test the resilience of the system on our test environments,
-# or to test the resilience of the system in production in a controlled way, with the customer aware of the test and its potential impact on their operations
+  # global features that apply to all sites and machines in this project
+  # mappable to the actual contracts with the customer and what they are paying for
+  # or with chaos feature, something we can enable to test the resilience of the system on our test environments,
+  # or to test the resilience of the system in production in a controlled way, with the customer aware of the test and its potential impact on their operations
   features {
     chaos = true
     # redundancy is enabling two instances of platform services to run in parallel on the same machine, to provide redundancy in case one instance fails.
@@ -13,24 +13,29 @@ project "customer-a" {
   }
 
   site "north" {
-    machine "sensor-01" {
+    machine "sensor" {
       role     = "sensor-node"
-      services = ["sensor-service", "opcua-adapter"]
+      services = ["sensor-services"]
     }
 
-    machine "historian-01" {
-      role     = "historian-node"
+    machine "local-server" {
+      role     = "local-server"
       services = ["historian"]
     }
   }
+
   site "control-room" {
     machine "master" {
-      role     = "control-room-node"
-      services = ["control-room-service"]
+      role     = "master-server"
+      services = ["core-services"]
     }
     machine "slave" {
-      role     = "control-room-node"
-      services = ["control-room-service"]
+      role     = "slave-server"
+      services = ["core-services"]
+    }
+    machine "integration" {
+      role     = "integration-server"
+      services = ["integration-services"]
     }
   }
 }
