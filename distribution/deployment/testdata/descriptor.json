@@ -1,0 +1,14 @@
+{
+  "environment": "production",
+  "project": "customer-a",
+  "site": "north",
+  "machine": "sensor-01",
+  "role": "sensor-node",
+  "features": {
+    "redundancy": false,
+    "chaos": true
+  },
+  "services": [
+    "core-services"
+  ]
+}

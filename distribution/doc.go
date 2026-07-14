@@ -9,11 +9,6 @@
 //
 // # What lives here
 //
-//   - catalog:       the platform's capability catalog of service kinds and
-//     feature keys: the vocabulary the topology validates against and the
-//     platform hosts. It is closed to projects (a project selects kinds, it
-//     never invents them) but extended by the platform: a new service kind is a
-//     platform capability, added here alongside its runtime implementation.
 //   - topology:      the topology contract: what a distribution should contain
 //     (projects, sites, machines, roles, service assignments). It is intent and
 //     structure, authored by the blueprint and read by the builder. It never
