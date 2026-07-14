@@ -107,6 +107,13 @@ tasks:
     cmds:
       - go run ./cmd/opdl build {{.CLI_ARGS}}
 
+  sdk-dotnet:
+    desc: Restore and build the .NET SDK (Kiota-generated client). Regenerate the client with `go test ./conformance -run TestDotnetClient -update`.
+    silent: true
+    dir: sdk-dotnet
+    cmds:
+      - dotnet build Opdl.Sdk.slnx
+
   plan:
     desc: 'Show the derivation plan for a project, e.g. `task plan -- customer-a`'
     silent: true

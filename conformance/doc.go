@@ -8,12 +8,17 @@
 // the two types in sync. This module's tests do: they import both and fail if the
 // descriptors diverge in JSON shape or stop round-tripping.
 //
-// It also generates the platform's OpenAPI contract (contracts/openapi.yaml) from
-// the platform's API description (platform/api) and fails if the checked-in file
-// is stale, so the published specification tracks the code that serves it.
-// Regenerate the contract with:
+// It also generates the downstream contract artifacts and fails if they go stale,
+// so the published specification and the SDKs track the code that serves them:
 //
-//	go test ./conformance -run TestOpenAPIContract -update
+//   - contracts/openapi.yaml, the OpenAPI specification, from the platform's API
+//     description (platform/api).
+//   - sdk-dotnet, the .NET client, generated from that OpenAPI specification with
+//     Kiota (this check needs Kiota installed; it skips otherwise).
+//
+// Regenerate every artifact with:
+//
+//	go test ./conformance -update
 //
 // It is a test-only module, shipping no runtime code, only the checks and
 // generators that guard the contracts.

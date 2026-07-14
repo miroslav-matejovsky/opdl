@@ -66,11 +66,13 @@
     "gotestsum",
     "hclparse",
     "httpapi",
+    "Kiota",
     "LASTEXITCODE",
     "matejovsky",
     "miroslav",
     "opdl",
     "platformdeployment",
+    "slnx",
     "stretchr",
     "taskfile"
   ]

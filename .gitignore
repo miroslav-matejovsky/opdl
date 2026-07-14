@@ -13,6 +13,9 @@ packages/
 *.nupkg
 *.snupkg
 
+# Codegen / Kiota
+.kiota.log
+
 # Go
 .test-results/
 vendor/
