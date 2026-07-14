@@ -70,9 +70,6 @@ func parse(data []byte) (*Config, error) {
 // Descriptor returns the deployment descriptor the platform booted with.
 func (c *Config) Descriptor() deployment.Descriptor { return c.descriptor }
 
-// Runtime returns the resolved runtime parameters.
-func (c *Config) Runtime() Runtime { return c.runtime }
-
 // Port returns the TCP port the platform listens on.
 func (c *Config) Port() int { return c.runtime.Port }
 

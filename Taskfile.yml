@@ -66,7 +66,7 @@ tasks:
       - task tidy
       - task vet
       - task fmt
-      # - task deadcode
+      - task deadcode
       - task lint
       - task arch
       - task test
@@ -83,7 +83,7 @@ tasks:
       - task tidy
       - task vet
       - task fmt
-      # - task deadcode
+      - task deadcode
       - task lint
       - task arch
       - task test

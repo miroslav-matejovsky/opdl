@@ -26,9 +26,12 @@ foreach ($m in $CmdModules) {
 # functions that no execution or test path can reach. Test roots matter for
 # reusable packages whose public API is exercised outside command flow.
 Invoke-PerModule -Names $CmdModules -Action {
-    # deadcode defaults to the module of the first package. Clear the filter
-    # so imported workspace modules, such as distribution, are also reported.
-    $out = go run golang.org/x/tools/cmd/deadcode@latest -test -filter= ./... 2>&1
+    # deadcode defaults to the module of the first package. Filter to the project
+    # module prefix instead, so dead code in any workspace module reachable from a
+    # command is reported while third-party dependencies are left out.
+    # The filter is quoted: unquoted, PowerShell splits the argument at the dot in
+    # "github.com", sending deadcode a bogus package path.
+    $out = go run golang.org/x/tools/cmd/deadcode@latest -test "-filter=github.com/miroslav-matejovsky/opdl" ./... 2>&1
     if ($LASTEXITCODE -ne 0) {
         $out | Out-String -Stream | ForEach-Object { Write-Host $_ }
         throw "deadcode failed"
