@@ -110,7 +110,16 @@ func cmdBuild(args []string) error {
 		return err
 	}
 
-	packer := pack.New(*platformDir, *out, *goos, *goarch)
+	packer, err := pack.New(*platformDir, *out, *goos, *goarch)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if restoreErr := packer.Restore(); restoreErr != nil {
+			fmt.Fprintln(os.Stderr, "opdl:", restoreErr)
+		}
+	}()
+
 	ctx := context.Background()
 	for _, d := range plan.Machines {
 		res, err := packer.BuildMachine(ctx, d)

@@ -20,26 +20,40 @@ const builderName = "opdl"
 // module root.
 const platformCmd = "./cmd"
 
-// deploymentFile is the deployment descriptor filename shipped in a package.
+// deploymentFile is the deployment descriptor filename, both embedded in the
+// platform binary and shipped alongside it in a package.
 const deploymentFile = "deployment.json"
 
-// Packer builds deployment packages by driving the platform's go build.
+// Packer builds deployment packages by staging a machine's deployment
+// descriptor into the platform's embedded folder and driving the platform's own
+// go build.
 type Packer struct {
 	platformDir string
+	embedFile   string
 	outputDir   string
 	goos        string
 	goarch      string
+	placeholder []byte
 }
 
 // New builds a Packer. platformDir is the platform module root; outputDir is
-// where packages are written; goos/goarch cross-compile (empty means host).
-func New(platformDir, outputDir, goos, goarch string) *Packer {
+// where packages are written; goos/goarch cross-compile (empty means host). It
+// snapshots the current embedded deployment descriptor so Restore can put it
+// back.
+func New(platformDir, outputDir, goos, goarch string) (*Packer, error) {
+	embedFile := filepath.Join(platformDir, "embedded", deploymentFile)
+	placeholder, err := os.ReadFile(embedFile)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot embedded deployment descriptor: %w", err)
+	}
 	return &Packer{
 		platformDir: platformDir,
+		embedFile:   embedFile,
 		outputDir:   outputDir,
 		goos:        goos,
 		goarch:      goarch,
-	}
+		placeholder: placeholder,
+	}, nil
 }
 
 // Result reports what a machine build produced.
@@ -49,10 +63,15 @@ type Result struct {
 	SHA256 string
 }
 
-// BuildMachine compiles the platform and assembles the deployment package for
-// one machine: the binary, the machine's deployment descriptor, a manifest,
-// release metadata, and a checksums file.
+// BuildMachine stages the machine's deployment descriptor into the platform's
+// embedded folder, compiles the platform, and assembles the deployment
+// package: the binary, a copy of the descriptor, a manifest, release metadata,
+// and a checksums file.
 func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (*Result, error) {
+	if err := writeJSON(p.embedFile, d); err != nil {
+		return nil, fmt.Errorf("stage deployment descriptor: %w", err)
+	}
+
 	pkgDir := filepath.Join(p.outputDir, d.Project, d.Site, d.Machine)
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create package dir %s: %w", pkgDir, err)
@@ -77,6 +96,15 @@ func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (*Re
 	}
 
 	return &Result{Dir: pkgDir, Binary: binaryName, SHA256: sum}, nil
+}
+
+// Restore rewrites the embedded deployment descriptor with the snapshot taken
+// at construction, leaving the working tree clean.
+func (p *Packer) Restore() error {
+	if err := os.WriteFile(p.embedFile, p.placeholder, 0o644); err != nil {
+		return fmt.Errorf("restore embedded deployment descriptor: %w", err)
+	}
+	return nil
 }
 
 // compile runs go build for the platform command into out.

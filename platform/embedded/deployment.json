@@ -12,8 +12,5 @@
   "features": {
     "chaos": false,
     "redundancy": false
-  },
-  "runtime": {
-    "port": 8080
   }
 }
