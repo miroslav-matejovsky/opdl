@@ -20,7 +20,7 @@ project "customer-a" {
 
     machine "local-server" {
       role     = "local-server"
-      services = ["historian"]
+      services = ["core-services"]
     }
   }
 
