@@ -21,6 +21,7 @@ func validProject() *topology.Project {
 			Machines: []topology.Machine{{
 				Name:     "sensor",
 				Role:     "sensor-node",
+				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
 			}},
 		}},
@@ -49,6 +50,18 @@ func TestProjectValidateMissingRole(t *testing.T) {
 	require.ErrorContains(t, p.Validate(), "role is required")
 }
 
+func TestProjectValidateMissingIP(t *testing.T) {
+	p := validProject()
+	p.Sites[0].Machines[0].IP = ""
+	require.ErrorContains(t, p.Validate(), "ip is required")
+}
+
+func TestProjectValidateInvalidIP(t *testing.T) {
+	p := validProject()
+	p.Sites[0].Machines[0].IP = "not-an-ip"
+	require.ErrorContains(t, p.Validate(), "not a valid IP address")
+}
+
 func TestProjectValidateEmptyServices(t *testing.T) {
 	p := validProject()
 	p.Sites[0].Machines[0].Services = nil
@@ -74,6 +87,7 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 		Machines: []topology.Machine{{
 			Name:     "other",
 			Role:     "sensor-node",
+			IP:       "10.0.1.12",
 			Services: []string{"sensor-services"},
 		}},
 	})
@@ -120,6 +134,7 @@ func TestProjectHCLDecodeAndValidate(t *testing.T) {
 	m1 := p.Sites[0].Machines[0]
 	require.Equal(t, "sensor", m1.Name)
 	require.Equal(t, "sensor-node", m1.Role)
+	require.Equal(t, "10.0.1.10", m1.IP)
 	require.Equal(t, []string{"sensor-services"}, m1.Services)
 
 	require.Equal(t, "control-room", p.Sites[1].Name)
@@ -142,11 +157,42 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  site "north" {
 			    machine "m1" {
 			      role     = ""
+			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			    }
 			  }
 			}`,
 			errText: "role is required",
+		},
+		{
+			name: "missing ip",
+			hcl: `project "bad-ip" {
+			  environment = "production"
+			  features {}
+			  site "north" {
+			    machine "m1" {
+			      role     = "node"
+			      ip       = ""
+			      services = ["core-services"]
+			    }
+			  }
+			}`,
+			errText: "ip is required",
+		},
+		{
+			name: "invalid ip",
+			hcl: `project "bad-ip" {
+			  environment = "production"
+			  features {}
+			  site "north" {
+			    machine "m1" {
+			      role     = "node"
+			      ip       = "not-an-ip"
+			      services = ["core-services"]
+			    }
+			  }
+			}`,
+			errText: "not a valid IP address",
 		},
 		{
 			name: "duplicate machine name across sites",
@@ -156,12 +202,14 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  site "north" {
 			    machine "node-1" {
 			      role     = "node"
+			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			    }
 			  }
 			  site "south" {
 			    machine "node-1" {
 			      role     = "node"
+			      ip       = "10.0.1.11"
 			      services = ["core-services"]
 			    }
 			  }

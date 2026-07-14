@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -50,6 +51,8 @@ type Machine struct {
 	Name string `hcl:"name,label"`
 	// Role is the machine's role, e.g. "sensor-node".
 	Role string `hcl:"role"`
+	// IP is the machine's network address, e.g. "10.0.1.10".
+	IP string `hcl:"ip"`
 	// Services lists the service groups assigned to this machine.
 	Services []string `hcl:"services"`
 }
@@ -105,6 +108,12 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 
 	if strings.TrimSpace(machine.Role) == "" {
 		return fmt.Errorf("machine %q: role is required", machine.Name)
+	}
+	if strings.TrimSpace(machine.IP) == "" {
+		return fmt.Errorf("machine %q: ip is required", machine.Name)
+	}
+	if net.ParseIP(machine.IP) == nil {
+		return fmt.Errorf("machine %q: ip %q is not a valid IP address", machine.Name, machine.IP)
 	}
 	if len(machine.Services) == 0 {
 		return fmt.Errorf("machine %q: at least one service is required", machine.Name)

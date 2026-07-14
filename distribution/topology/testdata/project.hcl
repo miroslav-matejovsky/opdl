@@ -15,11 +15,13 @@ project "customer-a" {
   site "north" {
     machine "sensor" {
       role     = "sensor-node"
+      ip       = "10.0.1.10"
       services = ["sensor-services"]
     }
 
     machine "local-server" {
       role     = "local-server"
+      ip       = "10.0.1.11"
       services = ["core-services"]
     }
   }
@@ -27,14 +29,17 @@ project "customer-a" {
   site "control-room" {
     machine "master" {
       role     = "master-server"
+      ip       = "10.0.2.10"
       services = ["core-services"]
     }
     machine "slave" {
       role     = "slave-server"
+      ip       = "10.0.2.11"
       services = ["core-services"]
     }
     machine "integration" {
       role     = "integration-server"
+      ip       = "10.0.2.12"
       services = ["integration-services"]
     }
   }
