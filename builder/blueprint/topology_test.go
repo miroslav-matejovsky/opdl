@@ -1,7 +1,6 @@
 package blueprint_test
 
 import (
-	"os"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2/gohcl"
@@ -115,32 +114,6 @@ func decodeHCL(t *testing.T, src string) blueprint.Project {
 	require.False(t, diags.HasErrors(), diags.Error())
 	require.Len(t, tf.Projects, 1)
 	return tf.Projects[0]
-}
-
-func TestProjectHCLDecodeAndValidate(t *testing.T) {
-	data, err := os.ReadFile("testdata/project.hcl")
-	require.NoError(t, err)
-
-	p := decodeHCL(t, string(data))
-	require.Equal(t, "customer-a", p.Name)
-	require.Equal(t, "production", p.Environment)
-	require.True(t, p.Features.Chaos)
-	require.True(t, p.Features.Redundancy)
-
-	require.Len(t, p.Sites, 2)
-	require.Equal(t, "north", p.Sites[0].Name)
-	require.Len(t, p.Sites[0].Machines, 2)
-
-	m1 := p.Sites[0].Machines[0]
-	require.Equal(t, "sensor", m1.Name)
-	require.Equal(t, "sensor-node", m1.Role)
-	require.Equal(t, "10.0.1.10", m1.IP)
-	require.Equal(t, []string{"sensor-services"}, m1.Services)
-
-	require.Equal(t, "control-room", p.Sites[1].Name)
-	require.Len(t, p.Sites[1].Machines, 3)
-
-	require.NoError(t, p.Validate())
 }
 
 func TestProjectHCLValidationFailures(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/hashicorp/hcl/v2/hclparse"
-
 )
 
 // topologyFile is the decode target for the merged blueprint HCL. Exactly one
