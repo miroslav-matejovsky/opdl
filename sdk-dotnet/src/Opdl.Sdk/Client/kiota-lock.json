@@ -1,6 +1,6 @@
 {
   "descriptionHash": "39944DC09F441B1D5FF609B7955192466A8E0FB062933BFF046643F6137807FE52948F397B8F0E879D1F7E6A6C07C7AA9422C1744916DC4723AB4241CBE6B2FA",
-  "descriptionLocation": "../../../../contracts/openapi.yaml",
+  "descriptionLocation": "../../../../api-specifications/openapi.yaml",
   "lockFileVersion": "1.0.0",
   "kiotaVersion": "1.34.1",
   "clientClassName": "PlatformClient",

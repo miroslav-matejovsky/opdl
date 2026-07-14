@@ -1,47 +1,37 @@
-package conformance_test
+package apispecifications
 
 import (
-	"flag"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
-	"testing"
 
-	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
 	platformapi "github.com/miroslav-matejovsky/opdl/platform/api"
 )
 
-// updateContract, when set, rewrites the checked-in OpenAPI contract from the
-// current platform API description instead of asserting against it. Regenerate
-// with: go test ./conformance -run TestOpenAPIContract -update
-var updateContract = flag.Bool("update", false, "rewrite the generated contract files from the current source")
+// contractPath is the OpenAPI specification this package generates. It is relative
+// to the working directory go test and go run set to a package's own directory, so
+// this resolves correctly from both this package (conformance/api-specifications)
+// and conformance/cmd, the two directories that invoke this generation — both two
+// levels below the repository root.
+var contractPath = filepath.Join("..", "..", "api-specifications", "openapi.yaml")
 
-// contractPath is the OpenAPI contract this test generates and guards, relative
-// to the conformance module directory the test runs in.
-var contractPath = filepath.Join("..", "contracts", "openapi.yaml")
-
-// TestOpenAPIContract generates the OpenAPI specification from the platform's API
-// description and checks it against contracts/openapi.yaml. The contract is a
-// build artifact of platform/api, not a hand-maintained file: change the platform
-// API and this test fails until the contract is regenerated with -update. That
-// keeps the published specification and the code that serves it in lockstep.
-func TestOpenAPIContract(t *testing.T) {
+// generateOpenAPISpec generates the OpenAPI specification from the platform's API
+// description and writes it to api-specifications/openapi.yaml, unconditionally.
+// The specification is a build artifact of platform/api, not a hand-maintained
+// file, so every run regenerates it from the current platform API rather than
+// checking it for staleness — the published specification is always exactly what
+// the code that serves it currently describes.
+func generateOpenAPISpec() error {
 	got, err := renderOpenAPI(platformapi.Describe())
-	require.NoError(t, err)
-
-	if *updateContract {
-		require.NoError(t, os.WriteFile(contractPath, got, 0o644))
-		return
+	if err != nil {
+		return err
 	}
-
-	want, err := os.ReadFile(contractPath)
-	require.NoError(t, err, "contracts/openapi.yaml missing; generate it with: go test ./conformance -run TestOpenAPIContract -update")
-	require.Equal(t, string(want), string(got), "contracts/openapi.yaml is stale; regenerate it with: go test ./conformance -run TestOpenAPIContract -update")
+	return os.WriteFile(contractPath, got, 0o644)
 }
 
 // renderOpenAPI turns the platform's API contract into an OpenAPI 3.0.3 document.

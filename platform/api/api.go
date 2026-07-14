@@ -47,7 +47,7 @@ type Contract struct {
 
 // Describe returns the platform's API contract. It is the single source the
 // conformance module generates the OpenAPI specification from: change the API
-// here and regenerate contracts/openapi.yaml.
+// here and regenerate api-specifications/openapi.yaml.
 func Describe() Contract {
 	return Contract{
 		Title:       "OPDL Platform API",

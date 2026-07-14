@@ -1,33 +1,44 @@
-package conformance_test
+package deploymentdescriptors
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
-	"testing"
-
-	"github.com/stretchr/testify/require"
 
 	builderdeployment "github.com/miroslav-matejovsky/opdl/builder/deployment"
 	platformdeployment "github.com/miroslav-matejovsky/opdl/platform/deployment"
 )
 
-// TestDescriptorContractsMatch fails if the builder's deployment descriptor and
-// the platform's diverge in JSON shape. The two are separate Go types in separate
-// modules on purpose (the platform must not depend on the build tool), so this
-// test is what keeps them the same contract: add, rename, or retype a field on
-// one side without matching the other and it fails.
-func TestDescriptorContractsMatch(t *testing.T) {
-	builderSig := signature(reflect.TypeFor[builderdeployment.Descriptor]())
-	platformSig := signature(reflect.TypeFor[platformdeployment.Descriptor]())
-	require.Equal(t, builderSig, platformSig, "builder and platform deployment descriptors have diverged")
+// Run performs the deployment descriptor conformance check: it confirms the
+// builder's and the platform's descriptors describe the same contract, both
+// structurally and by round-tripping a built descriptor through the platform's
+// type.
+func Run() error {
+	if err := checkContractsMatch(); err != nil {
+		return err
+	}
+	return checkRoundTrip()
 }
 
-// TestBuilderDescriptorRoundTripsIntoPlatform checks the contract behaviorally: a
-// descriptor the builder produces marshals to JSON the platform reads back with
-// every field intact.
-func TestBuilderDescriptorRoundTripsIntoPlatform(t *testing.T) {
+// checkContractsMatch fails if the builder's deployment descriptor and the
+// platform's diverge in JSON shape. The two are separate Go types in separate
+// modules on purpose (the platform must not depend on the build tool), so this
+// check is what keeps them the same contract: add, rename, or retype a field on
+// one side without matching the other and it fails.
+func checkContractsMatch() error {
+	builderSig := signature(reflect.TypeFor[builderdeployment.Descriptor]())
+	platformSig := signature(reflect.TypeFor[platformdeployment.Descriptor]())
+	if builderSig != platformSig {
+		return fmt.Errorf("builder and platform deployment descriptors have diverged:\n  builder:  %s\n  platform: %s", builderSig, platformSig)
+	}
+	return nil
+}
+
+// checkRoundTrip checks the contract behaviorally: a descriptor the builder
+// produces marshals to JSON the platform reads back with every field intact.
+func checkRoundTrip() error {
 	built := builderdeployment.Descriptor{
 		Platform:    "opdl",
 		Project:     "customer-a",
@@ -41,12 +52,16 @@ func TestBuilderDescriptorRoundTripsIntoPlatform(t *testing.T) {
 	}
 
 	data, err := json.Marshal(built)
-	require.NoError(t, err)
+	if err != nil {
+		return err
+	}
 
 	var got platformdeployment.Descriptor
-	require.NoError(t, json.Unmarshal(data, &got))
+	if err := json.Unmarshal(data, &got); err != nil {
+		return err
+	}
 
-	require.Equal(t, platformdeployment.Descriptor{
+	want := platformdeployment.Descriptor{
 		Platform:    "opdl",
 		Project:     "customer-a",
 		Environment: "production",
@@ -56,7 +71,11 @@ func TestBuilderDescriptorRoundTripsIntoPlatform(t *testing.T) {
 		IP:          "10.0.1.10",
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    platformdeployment.Features{Chaos: true, Redundancy: true},
-	}, got)
+	}
+	if !reflect.DeepEqual(got, want) {
+		return fmt.Errorf("builder descriptor did not round-trip into the platform descriptor:\n  got:  %+v\n  want: %+v", got, want)
+	}
+	return nil
 }
 
 // signature renders a type's JSON wire shape structurally: each field's JSON name
