@@ -18,5 +18,4 @@ Compliance is verified by the `conformance` module during the build process.
 
 - `platform`
 - `sdk-dotnet`
-- `sdk-go`
 - Future SDKs and integrations
