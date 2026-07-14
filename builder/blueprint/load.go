@@ -9,20 +9,19 @@ import (
 	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/hashicorp/hcl/v2/hclparse"
 
-	topology "github.com/miroslav-matejovsky/opdl/builder/topology"
 )
 
 // topologyFile is the decode target for the merged blueprint HCL. Exactly one
 // project block is expected across all files in a blueprint directory.
 type topologyFile struct {
-	Projects []topology.Project `hcl:"project,block"`
+	Projects []Project `hcl:"project,block"`
 }
 
 // Load reads every *.hcl file in dir, merges them, decodes the single project
 // they describe, and validates it as topology. A returned Project is guaranteed
 // well-formed. It is an error for a directory to hold zero or more than one
 // project block.
-func Load(dir string) (*topology.Project, error) {
+func Load(dir string) (*Project, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.hcl"))
 	if err != nil {
 		return nil, fmt.Errorf("scan blueprint dir %s: %w", dir, err)

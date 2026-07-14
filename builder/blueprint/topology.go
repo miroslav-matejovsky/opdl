@@ -1,4 +1,4 @@
-package topology
+package blueprint
 
 import (
 	"fmt"

@@ -1,4 +1,4 @@
-package topology_test
+package blueprint_test
 
 import (
 	"os"
@@ -8,17 +8,17 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/stretchr/testify/require"
 
-	topology "github.com/miroslav-matejovsky/opdl/builder/topology"
+	"github.com/miroslav-matejovsky/opdl/builder/blueprint"
 )
 
-func validProject() *topology.Project {
-	return &topology.Project{
+func validProject() *blueprint.Project {
+	return &blueprint.Project{
 		Name:        "customer-a",
 		Environment: "production",
-		Features:    topology.Features{Chaos: true, Redundancy: true},
-		Sites: []topology.Site{{
+		Features:    blueprint.Features{Chaos: true, Redundancy: true},
+		Sites: []blueprint.Site{{
 			Name: "north",
-			Machines: []topology.Machine{{
+			Machines: []blueprint.Machine{{
 				Name:     "sensor",
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
@@ -82,9 +82,9 @@ func TestProjectValidateDuplicateMachine(t *testing.T) {
 
 func TestProjectValidateDuplicateSite(t *testing.T) {
 	p := validProject()
-	p.Sites = append(p.Sites, topology.Site{
+	p.Sites = append(p.Sites, blueprint.Site{
 		Name: "north",
-		Machines: []topology.Machine{{
+		Machines: []blueprint.Machine{{
 			Name:     "other",
 			Role:     "sensor-node",
 			IP:       "10.0.1.12",
@@ -95,16 +95,16 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 }
 
 func TestFeatures(t *testing.T) {
-	f := topology.Features{Chaos: true}
+	f := blueprint.Features{Chaos: true}
 	require.True(t, f.Chaos)
 	require.False(t, f.Redundancy)
 }
 
 type topologyFile struct {
-	Projects []topology.Project `hcl:"project,block"`
+	Projects []blueprint.Project `hcl:"project,block"`
 }
 
-func decodeHCL(t *testing.T, src string) topology.Project {
+func decodeHCL(t *testing.T, src string) blueprint.Project {
 	t.Helper()
 	parser := hclparse.NewParser()
 	file, diags := parser.ParseHCL([]byte(src), "test.hcl")
