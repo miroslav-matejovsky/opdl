@@ -1,0 +1,28 @@
+openapi: 3.0.3
+info:
+    title: OPDL Platform API
+    version: 0.1.0
+    description: HTTP API served by the OPDL platform runtime.
+paths:
+    /:
+        get:
+            summary: Report platform status
+            responses:
+                "200":
+                    description: Report platform status
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Status'
+components:
+    schemas:
+        Status:
+            type: object
+            properties:
+                message:
+                    type: string
+                status:
+                    type: string
+            required:
+                - message
+                - status

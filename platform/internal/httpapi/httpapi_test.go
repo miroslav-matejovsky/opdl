@@ -1,4 +1,4 @@
-package api_test
+package httpapi_test
 
 import (
 	"context"
@@ -9,11 +9,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/api"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 )
 
 func TestHandlerReportsRunningOnGet(t *testing.T) {
-	srv := httptest.NewServer(api.NewHandler())
+	srv := httptest.NewServer(httpapi.NewHandler())
 	defer srv.Close()
 
 	resp := do(t, http.MethodGet, srv.URL+"/")
@@ -32,7 +32,7 @@ func TestHandlerReportsRunningOnGet(t *testing.T) {
 }
 
 func TestHandlerRejectsNonGet(t *testing.T) {
-	srv := httptest.NewServer(api.NewHandler())
+	srv := httptest.NewServer(httpapi.NewHandler())
 	defer srv.Close()
 
 	resp := do(t, http.MethodPost, srv.URL+"/")

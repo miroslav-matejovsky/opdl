@@ -65,6 +65,7 @@
     "gotest",
     "gotestsum",
     "hclparse",
+    "httpapi",
     "LASTEXITCODE",
     "matejovsky",
     "miroslav",

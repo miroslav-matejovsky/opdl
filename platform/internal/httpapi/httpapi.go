@@ -1,15 +1,11 @@
-package api
+package httpapi
 
 import (
 	"encoding/json"
 	"net/http"
-)
 
-// status is the JSON body returned by the platform's status endpoint.
-type status struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-}
+	"github.com/miroslav-matejovsky/opdl/platform/api"
+)
 
 // NewHandler builds the platform's HTTP handler. It serves a single status
 // endpoint that reports the platform is running as a JSON document.
@@ -27,7 +23,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	body, err := json.Marshal(status{Status: "ok", Message: "platform is running"})
+	body, err := json.Marshal(api.Status{Status: "ok", Message: "platform is running"})
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

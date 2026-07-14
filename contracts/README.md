@@ -6,6 +6,17 @@ Contracts are the authoritative description of public APIs, exchanged data forma
 
 Compliance is verified by the `conformance` module during the build process.
 
+## Artifacts
+
+- `openapi.yaml` - OpenAPI 3.0.3 specification of the platform's HTTP API. It is
+  generated from the platform's API description (`platform/api`) by the
+  `conformance` module, not edited by hand. The conformance golden test fails if
+  this file drifts from the source. Regenerate it with:
+
+  ```
+  go test ./conformance -run TestOpenAPIContract -update
+  ```
+
 ## Principles
 
 - Language-independent

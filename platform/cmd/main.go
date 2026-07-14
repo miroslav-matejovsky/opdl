@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/api"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 )
 
 func main() {
@@ -35,7 +35,7 @@ func run(args []string) error {
 	fmt.Printf("platform: listening on %s\n", addr)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.NewHandler(),
+		Handler:           httpapi.NewHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return srv.ListenAndServe()
