@@ -23,16 +23,19 @@ const defaultAddress = "127.0.0.1:8080"
 // deployment descriptor (see package embedded, which the builder stages before
 // compiling) and the platform's JSON configuration file, which supplies settings
 // a user may override without rebuilding the binary. For now that is the address
-// the platform's API listens on.
+// the platform's API listens on and where it records events.
 type Config struct {
 	descriptor deployment.Descriptor
 	address    string
+	eventsDir  string
 }
 
 // file is the schema of the platform's JSON configuration file. It carries the
 // settings a user may set without touching the embedded deployment descriptor.
 type file struct {
 	Address string `json:"address"`
+	// EventsDir is optional: empty disables event recording.
+	EventsDir string `json:"events_dir"`
 }
 
 // Load composes a Config from the platform's embedded deployment descriptor and
@@ -48,7 +51,7 @@ func Load(configPath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	return &Config{descriptor: d, address: f.Address}, nil
+	return &Config{descriptor: d, address: f.Address, eventsDir: f.EventsDir}, nil
 }
 
 // loadFile reads and validates the JSON configuration file. A file that does not
@@ -72,6 +75,10 @@ func loadFile(path string) (file, error) {
 	if err := validateAddress(f.Address); err != nil {
 		return file{}, fmt.Errorf("configuration file %s: %w", path, err)
 	}
+	// An events directory is not validated here. A path is only known to be
+	// usable once it is opened, so the runtime validates it by constructing the
+	// sink at startup rather than trusting a check that could go stale.
+	f.EventsDir = strings.TrimSpace(f.EventsDir)
 	return f, nil
 }
 
@@ -98,6 +105,10 @@ func (c *Config) Descriptor() deployment.Descriptor { return c.descriptor }
 // Address returns the host:port the platform's API listens on.
 func (c *Config) Address() string { return c.address }
 
+// EventsDir returns the directory the platform records events into. An empty
+// string means event recording is disabled.
+func (c *Config) EventsDir() string { return c.eventsDir }
+
 // Summary renders the effective configuration as a human-readable block for
 // logging at startup.
 func (c *Config) Summary() string {
@@ -115,6 +126,16 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t redundancy=%t\n", d.Features.Chaos, d.Features.Redundancy)
 	fmt.Fprintf(&b, "  configuration file (JSON, user-provided):\n")
-	fmt.Fprintf(&b, "    address      %s", c.address)
+	fmt.Fprintf(&b, "    address      %s\n", c.address)
+	fmt.Fprintf(&b, "    events_dir   %s", eventsDirSummary(c.eventsDir))
 	return b.String()
+}
+
+// eventsDirSummary renders an unset events directory as an explicit statement
+// that recording is off, so the startup block never shows a blank value.
+func eventsDirSummary(dir string) string {
+	if dir == "" {
+		return "(disabled)"
+	}
+	return dir
 }

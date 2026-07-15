@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
 type heldCoordinator struct {
@@ -22,18 +23,25 @@ func (c *heldCoordinator) Trigger(_ context.Context, _ Key, confirm func(context
 	return nil
 }
 
-func (c *heldCoordinator) confirmWith(t *testing.T, status string, reason *string) {
+// confirmFunc returns the confirmation callback the service handed the
+// coordinator, for tests that need the confirmation's own error.
+func (c *heldCoordinator) confirmFunc(t *testing.T) func(context.Context, string, *string) error {
 	t.Helper()
 	c.mu.Lock()
 	confirm := c.confirm
 	c.mu.Unlock()
 	require.NotNil(t, confirm)
-	require.NoError(t, confirm(context.Background(), status, reason))
+	return confirm
+}
+
+func (c *heldCoordinator) confirmWith(t *testing.T, status string, reason *string) {
+	t.Helper()
+	require.NoError(t, c.confirmFunc(t)(context.Background(), status, reason))
 }
 
 func TestServiceProjectsPendingThenAccepted(t *testing.T) {
 	coordinator := &heldCoordinator{}
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator)
+	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, events.NopRecorder{})
 	require.NoError(t, err)
 
 	request := api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Billing"}
@@ -60,7 +68,7 @@ func TestServiceProjectsPendingThenAccepted(t *testing.T) {
 
 func TestServiceKeepsRejectedRequestVisible(t *testing.T) {
 	coordinator := &heldCoordinator{}
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator)
+	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, events.NopRecorder{})
 	require.NoError(t, err)
 	create(t, service, api.RegistrationRequest{
 		UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker",
@@ -81,9 +89,9 @@ func TestServiceCreateIsIdempotentAndRejectsImmutableDifferences(t *testing.T) {
 	role := api.RoleMaster
 	request := api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker", Role: &role}
 	store := newMemoryStore()
-	first, err := newService(Location{Machine: "node-a", IP: "127.0.0.1"}, &heldCoordinator{}, store)
+	first, err := newService(Location{Machine: "node-a", IP: "127.0.0.1"}, &heldCoordinator{}, events.NopRecorder{}, store)
 	require.NoError(t, err)
-	second, err := newService(Location{Machine: "node-b", IP: "127.0.0.2"}, &heldCoordinator{}, store)
+	second, err := newService(Location{Machine: "node-b", IP: "127.0.0.2"}, &heldCoordinator{}, events.NopRecorder{}, store)
 	require.NoError(t, err)
 
 	result, err := first.Create(context.Background(), request)
@@ -107,7 +115,7 @@ func TestServiceCreateIsIdempotentAndRejectsImmutableDifferences(t *testing.T) {
 
 func TestServiceValidatesInputAndOriginLookup(t *testing.T) {
 	coordinator := &heldCoordinator{}
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator)
+	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, events.NopRecorder{})
 	require.NoError(t, err)
 
 	_, err = service.Create(context.Background(), api.RegistrationRequest{UnitTypeNameAdvertised: " "})
@@ -116,13 +124,15 @@ func TestServiceValidatesInputAndOriginLookup(t *testing.T) {
 	_, err = service.Create(context.Background(), api.RegistrationRequest{UnitTypeNameAdvertised: "Worker", Role: &invalidRole})
 	require.ErrorContains(t, err, "role")
 
-	_, err = NewService(Location{Machine: "", IP: "127.0.0.1"}, SingleInstanceCoordinator{})
+	_, err = NewService(Location{Machine: "", IP: "127.0.0.1"}, SingleInstanceCoordinator{}, events.NopRecorder{})
 	require.ErrorContains(t, err, "machine")
-	_, err = NewService(Location{Machine: "node-a", IP: "invalid"}, SingleInstanceCoordinator{})
+	_, err = NewService(Location{Machine: "node-a", IP: "invalid"}, SingleInstanceCoordinator{}, events.NopRecorder{})
 	require.ErrorContains(t, err, "IP")
+	_, err = NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, SingleInstanceCoordinator{}, nil)
+	require.ErrorContains(t, err, "recorder is required")
 
 	create(t, service, api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker"})
-	other, err := newService(Location{Machine: "node-b", IP: "127.0.0.2"}, SingleInstanceCoordinator{}, service.store)
+	other, err := newService(Location{Machine: "node-b", IP: "127.0.0.2"}, SingleInstanceCoordinator{}, events.NopRecorder{}, service.store)
 	require.NoError(t, err)
 	_, found, err := other.Get(context.Background(), Key{UnitType: 1, UnitID: 2})
 	require.NoError(t, err)
@@ -131,9 +141,9 @@ func TestServiceValidatesInputAndOriginLookup(t *testing.T) {
 
 func TestServiceListsDeterministically(t *testing.T) {
 	store := newMemoryStore()
-	first, err := newService(Location{Machine: "node-b", IP: "127.0.0.2"}, &heldCoordinator{}, store)
+	first, err := newService(Location{Machine: "node-b", IP: "127.0.0.2"}, &heldCoordinator{}, events.NopRecorder{}, store)
 	require.NoError(t, err)
-	second, err := newService(Location{Machine: "node-a", IP: "127.0.0.1"}, &heldCoordinator{}, store)
+	second, err := newService(Location{Machine: "node-a", IP: "127.0.0.1"}, &heldCoordinator{}, events.NopRecorder{}, store)
 	require.NoError(t, err)
 	create(t, first, api.RegistrationRequest{UnitType: 2, UnitID: 1, UnitTypeNameAdvertised: "B"})
 	create(t, second, api.RegistrationRequest{UnitType: 2, UnitID: 2, UnitTypeNameAdvertised: "A"})
@@ -152,7 +162,7 @@ func TestServiceAcceptsBothRoles(t *testing.T) {
 	for _, role := range []string{api.RoleMaster, api.RoleSlave} {
 		t.Run(role, func(t *testing.T) {
 			coordinator := &heldCoordinator{}
-			service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator)
+			service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, events.NopRecorder{})
 			require.NoError(t, err)
 			create(t, service, api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker", Role: &role})
 
@@ -165,7 +175,7 @@ func TestServiceAcceptsBothRoles(t *testing.T) {
 }
 
 func TestServiceConcurrentCreatesPreserveOneImmutableRequest(t *testing.T) {
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, &heldCoordinator{})
+	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, &heldCoordinator{}, events.NopRecorder{})
 	require.NoError(t, err)
 
 	requests := []api.RegistrationRequest{

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
@@ -138,7 +139,7 @@ func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 
 func newService(t *testing.T) *registration.Service {
 	t.Helper()
-	service, err := registration.NewService(registration.Location{Machine: "node-a", IP: "127.0.0.1"}, registration.SingleInstanceCoordinator{})
+	service, err := registration.NewService(registration.Location{Machine: "node-a", IP: "127.0.0.1"}, registration.SingleInstanceCoordinator{}, events.NopRecorder{})
 	require.NoError(t, err)
 	return service
 }
@@ -146,7 +147,7 @@ func newService(t *testing.T) *registration.Service {
 func newHeldService(t *testing.T) (*registration.Service, *heldCoordinator) {
 	t.Helper()
 	coordinator := &heldCoordinator{}
-	service, err := registration.NewService(registration.Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator)
+	service, err := registration.NewService(registration.Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, events.NopRecorder{})
 	require.NoError(t, err)
 	return service, coordinator
 }
