@@ -3,12 +3,13 @@ package apispecifications
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 // renderMarkdown turns an OpenAPI document into a compact Markdown summary of the
-// API surface: one section per operation, with its response payload shown inline
-// as a field table rather than referenced elsewhere. It exists to be skimmed
+// API surface: one section per operation, with its request and response payloads
+// shown inline as field tables rather than referenced elsewhere. It exists to be skimmed
 // during review — a full OpenAPI document is not — so each operation reads
 // top-to-bottom without following a link to see what it returns.
 func renderMarkdown(doc openAPIDoc) []byte {
@@ -51,23 +52,52 @@ func sortedRoutes(doc openAPIDoc) []route {
 	return routes
 }
 
-// writeOperation renders one "## METHOD /path" section: the summary, then each
-// response with its payload inlined directly beneath it.
+// writeOperation renders one "## METHOD /path" section: the summary, request
+// body, then each response with its payload inlined directly beneath it.
 func writeOperation(b *strings.Builder, doc openAPIDoc, r route) {
 	fmt.Fprintf(b, "## %s %s\n\n", strings.ToUpper(r.method), r.path)
 	if r.operation.Summary != "" {
 		fmt.Fprintf(b, "%s\n\n", r.operation.Summary)
+	}
+	if r.operation.RequestBody != nil {
+		writeRequestBody(b, doc, *r.operation.RequestBody)
 	}
 
 	statuses := make([]string, 0, len(r.operation.Responses))
 	for status := range r.operation.Responses {
 		statuses = append(statuses, status)
 	}
-	sort.Strings(statuses)
+	sort.Slice(statuses, func(i, j int) bool {
+		left, leftErr := strconv.Atoi(statuses[i])
+		right, rightErr := strconv.Atoi(statuses[j])
+		if leftErr == nil && rightErr == nil {
+			return left < right
+		}
+		return statuses[i] < statuses[j]
+	})
 
 	for _, status := range statuses {
 		writeResponse(b, doc, status, r.operation.Responses[status])
 	}
+}
+
+// writeRequestBody renders an operation's JSON request before its responses.
+func writeRequestBody(b *strings.Builder, doc openAPIDoc, body openAPIRequestBody) {
+	media, ok := body.Content["application/json"]
+	if !ok {
+		return
+	}
+
+	label := "**Request body**"
+	if body.Required {
+		label += " (required)"
+	}
+	if name := schemaName(media.Schema); name != "" {
+		fmt.Fprintf(b, "%s — `%s`\n\n", label, name)
+	} else {
+		fmt.Fprintf(b, "%s\n\n", label)
+	}
+	writePayload(b, doc, media.Schema)
 }
 
 // writeResponse renders one response's status and, if it carries a JSON payload,
@@ -85,7 +115,7 @@ func writeResponse(b *strings.Builder, doc openAPIDoc, status string, resp openA
 	} else {
 		fmt.Fprintf(b, "**Response `%s`**\n\n", status)
 	}
-	writePayload(b, resolveSchema(doc, media.Schema))
+	writePayload(b, doc, media.Schema)
 }
 
 // schemaName returns a $ref's schema name, or "" for an inline (non-reference)
@@ -108,7 +138,14 @@ func resolveSchema(doc openAPIDoc, s openAPISchema) openAPISchema {
 
 // writePayload renders a resolved schema's body: a field table for an object
 // (name, type, required), or a one-line type description otherwise.
-func writePayload(b *strings.Builder, schema openAPISchema) {
+func writePayload(b *strings.Builder, doc openAPIDoc, schema openAPISchema) {
+	schema = resolveSchema(doc, schema)
+	if schema.Type == schemaTypeArray && schema.Items != nil {
+		fmt.Fprintf(b, "Type: %s\n\n", typeLabel(schema))
+		b.WriteString("Items:\n\n")
+		writePayload(b, doc, *schema.Items)
+		return
+	}
 	if schema.Type != "object" {
 		if schema.Type != "" {
 			fmt.Fprintf(b, "Type: %s\n\n", typeLabel(schema))
@@ -146,7 +183,7 @@ func typeLabel(s openAPISchema) string {
 	switch {
 	case s.Ref != "":
 		return "`" + schemaName(s) + "`"
-	case s.Type == "array" && s.Items != nil:
+	case s.Type == schemaTypeArray && s.Items != nil:
 		return "array<" + typeLabel(*s.Items) + ">"
 	case s.Type != "":
 		return s.Type

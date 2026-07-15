@@ -16,8 +16,9 @@ Compliance is verified by the `conformance` module during the build process.
   `conformance` module, not edited by hand, and the .NET SDK (`sdk-dotnet`) is
   generated from it in turn.
 - `openapi.md` - a compact, human-readable companion to `openapi.yaml`: one
-  section per operation, its response payload's field table inlined directly
-  beneath it, meant to be skimmed in a PR diff when reviewing an API change.
+  section per operation, its request body and response payload field tables
+  inlined directly beneath it, meant to be skimmed in a PR diff when reviewing
+  an API change. Array payloads include their item schema and field table.
   Generated from the same source alongside `openapi.yaml`, not edited by hand.
 
   The conformance check always regenerates both from the current source rather

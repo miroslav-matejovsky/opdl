@@ -25,6 +25,11 @@ var contractPath = filepath.Join("..", "..", "api-specifications", "openapi.yaml
 // without reading OpenAPI. See renderMarkdown.
 var markdownPath = filepath.Join(filepath.Dir(contractPath), "openapi.md")
 
+const (
+	schemaTypeArray   = "array"
+	schemaFormatInt32 = "int32"
+)
+
 // generateOpenAPISpec generates the OpenAPI specification from the platform's API
 // description and writes it to api-specifications/openapi.yaml and, as a compact
 // human-readable companion, api-specifications/openapi.md — unconditionally. The
@@ -47,10 +52,10 @@ func generateOpenAPISpec() error {
 }
 
 // buildOpenAPIDoc turns the platform's API contract into an OpenAPI 3.0.3
-// document. Response schemas are derived from the Go response types by
-// reflection, so the specification describes exactly the JSON the platform
-// serves. Both generated artifacts (the YAML specification and its Markdown
-// companion) render from this one document, so they cannot disagree.
+// document. JSON schemas are derived from the Go request, path-parameter, and
+// response types by reflection, so the specification describes exactly the JSON
+// the platform accepts and serves. Both generated artifacts render from this one
+// document, so they cannot disagree.
 func buildOpenAPIDoc(c platformapi.Contract) openAPIDoc {
 	doc := openAPIDoc{
 		OpenAPI: "3.0.3",
@@ -62,22 +67,39 @@ func buildOpenAPIDoc(c platformapi.Contract) openAPIDoc {
 		Paths:      map[string]map[string]openAPIOperation{},
 		Components: openAPIComponents{Schemas: map[string]openAPISchema{}},
 	}
+	builder := schemaBuilder{doc: &doc}
 
 	for _, op := range c.Operations {
 		operation := openAPIOperation{
-			Summary:   op.Summary,
-			Responses: map[string]openAPIResponse{},
+			OperationID: op.OperationID,
+			Summary:     op.Summary,
+			Responses:   map[string]openAPIResponse{},
 		}
-
-		response := openAPIResponse{Description: op.Summary}
-		if t := reflect.TypeOf(op.SuccessBody); t != nil {
-			name := t.Name()
-			doc.Components.Schemas[name] = schemaFor(t)
-			response.Content = map[string]openAPIMediaType{
-				"application/json": {Schema: openAPISchema{Ref: "#/components/schemas/" + name}},
+		for _, parameter := range op.PathParameters {
+			operation.Parameters = append(operation.Parameters, openAPIParameter{
+				Name:     parameter.Name,
+				In:       "path",
+				Required: parameter.Required,
+				Schema:   builder.schemaFor(reflect.TypeOf(parameter.Type)),
+			})
+		}
+		if body := op.RequestBody; body != nil {
+			operation.RequestBody = &openAPIRequestBody{
+				Required: body.Required,
+				Content: map[string]openAPIMediaType{
+					"application/json": {Schema: builder.schemaFor(reflect.TypeOf(body.Type))},
+				},
 			}
 		}
-		operation.Responses[strconv.Itoa(op.SuccessStatus)] = response
+		for _, response := range op.Responses {
+			documented := openAPIResponse{Description: op.Summary}
+			if response.Body != nil {
+				documented.Content = map[string]openAPIMediaType{
+					"application/json": {Schema: builder.schemaFor(reflect.TypeOf(response.Body))},
+				}
+			}
+			operation.Responses[strconv.Itoa(response.Status)] = documented
+		}
 
 		methods := doc.Paths[op.Path]
 		if methods == nil {
@@ -90,10 +112,39 @@ func buildOpenAPIDoc(c platformapi.Contract) openAPIDoc {
 	return doc
 }
 
-// schemaFor builds an OpenAPI schema for a Go type by reflection. It handles the
-// JSON-encodable kinds the API uses: strings, booleans, integers, floats, slices,
-// pointers, and structs. Unsupported kinds yield an empty (unconstrained) schema.
-func schemaFor(t reflect.Type) openAPISchema {
+// schemaBuilder derives document schemas and turns named struct types into
+// reusable components. Slices remain inline array wrappers so a top-level array
+// references its named item schema instead of creating an unnamed component.
+type schemaBuilder struct {
+	doc *openAPIDoc
+}
+
+func (b schemaBuilder) schemaFor(t reflect.Type) openAPISchema {
+	if t == nil {
+		return openAPISchema{}
+	}
+	if t.Kind() == reflect.Pointer {
+		schema := b.schemaFor(t.Elem())
+		schema.Nullable = true
+		return schema
+	}
+	if t.Kind() == reflect.Struct && t.Name() != "" {
+		b.addComponent(t)
+		return openAPISchema{Ref: "#/components/schemas/" + t.Name()}
+	}
+	return b.inlineSchemaFor(t)
+}
+
+func (b schemaBuilder) addComponent(t reflect.Type) {
+	if _, ok := b.doc.Components.Schemas[t.Name()]; ok {
+		return
+	}
+	// Install a placeholder before recursing so a self-referential type terminates.
+	b.doc.Components.Schemas[t.Name()] = openAPISchema{}
+	b.doc.Components.Schemas[t.Name()] = b.structSchema(t)
+}
+
+func (b schemaBuilder) inlineSchemaFor(t reflect.Type) openAPISchema {
 	switch t.Kind() {
 	case reflect.String:
 		return openAPISchema{Type: "string"}
@@ -101,25 +152,56 @@ func schemaFor(t reflect.Type) openAPISchema {
 		return openAPISchema{Type: "boolean"}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return openAPISchema{Type: "integer"}
+		return integerSchema(t.Kind())
 	case reflect.Float32, reflect.Float64:
 		return openAPISchema{Type: "number"}
-	case reflect.Pointer:
-		return schemaFor(t.Elem())
 	case reflect.Slice, reflect.Array:
-		item := schemaFor(t.Elem())
-		return openAPISchema{Type: "array", Items: &item}
+		item := b.schemaFor(t.Elem())
+		return openAPISchema{Type: schemaTypeArray, Items: &item}
 	case reflect.Struct:
-		return structSchema(t)
+		return b.structSchema(t)
 	default:
 		return openAPISchema{}
 	}
 }
 
+// schemaFor builds an inline OpenAPI schema for a Go type. The document builder
+// uses reusable components for named structs; this helper keeps focused schema
+// tests independent of an OpenAPI document.
+func schemaFor(t reflect.Type) openAPISchema {
+	doc := openAPIDoc{Components: openAPIComponents{Schemas: map[string]openAPISchema{}}}
+	return (schemaBuilder{doc: &doc}).inlineSchemaFor(t)
+}
+
+func integerSchema(kind reflect.Kind) openAPISchema {
+	schema := openAPISchema{Type: "integer"}
+	switch kind {
+	case reflect.Uint8:
+		schema.Format = schemaFormatInt32
+		schema.Minimum = intPointer(0)
+		schema.Maximum = intPointer(255)
+	case reflect.Uint16:
+		schema.Format = schemaFormatInt32
+		schema.Minimum = intPointer(0)
+		schema.Maximum = intPointer(65535)
+	case reflect.Int64, reflect.Uint64:
+		schema.Format = "int64"
+	case reflect.Int8, reflect.Int16, reflect.Int32:
+		schema.Format = schemaFormatInt32
+	default:
+		return schema
+	}
+	return schema
+}
+
+func intPointer(value int) *int {
+	return &value
+}
+
 // structSchema builds an object schema from a struct type, mapping each exported
 // field to a property under its JSON name. A field is required unless it is a
 // pointer or carries the json "omitempty" option.
-func structSchema(t reflect.Type) openAPISchema {
+func (b schemaBuilder) structSchema(t reflect.Type) openAPISchema {
 	props := map[string]openAPISchema{}
 	var required []string
 	for f := range t.Fields() {
@@ -130,7 +212,7 @@ func structSchema(t reflect.Type) openAPISchema {
 		if skip {
 			continue
 		}
-		props[name] = schemaFor(f.Type)
+		props[name] = b.schemaFor(f.Type)
 		if !omitempty && f.Type.Kind() != reflect.Pointer {
 			required = append(required, name)
 		}
@@ -181,8 +263,23 @@ type openAPIInfo struct {
 }
 
 type openAPIOperation struct {
-	Summary   string                     `yaml:"summary,omitempty"`
-	Responses map[string]openAPIResponse `yaml:"responses"`
+	OperationID string                     `yaml:"operationId,omitempty"`
+	Summary     string                     `yaml:"summary,omitempty"`
+	Parameters  []openAPIParameter         `yaml:"parameters,omitempty"`
+	RequestBody *openAPIRequestBody        `yaml:"requestBody,omitempty"`
+	Responses   map[string]openAPIResponse `yaml:"responses"`
+}
+
+type openAPIParameter struct {
+	Name     string        `yaml:"name"`
+	In       string        `yaml:"in"`
+	Required bool          `yaml:"required"`
+	Schema   openAPISchema `yaml:"schema"`
+}
+
+type openAPIRequestBody struct {
+	Required bool                        `yaml:"required"`
+	Content  map[string]openAPIMediaType `yaml:"content"`
 }
 
 type openAPIResponse struct {
@@ -201,6 +298,10 @@ type openAPIComponents struct {
 type openAPISchema struct {
 	Ref        string                   `yaml:"$ref,omitempty"`
 	Type       string                   `yaml:"type,omitempty"`
+	Format     string                   `yaml:"format,omitempty"`
+	Minimum    *int                     `yaml:"minimum,omitempty"`
+	Maximum    *int                     `yaml:"maximum,omitempty"`
+	Nullable   bool                     `yaml:"nullable,omitempty"`
 	Properties map[string]openAPISchema `yaml:"properties,omitempty"`
 	Items      *openAPISchema           `yaml:"items,omitempty"`
 	Required   []string                 `yaml:"required,omitempty"`

@@ -19,6 +19,8 @@ func TestDescribeReportsStatusOperation(t *testing.T) {
 	op := c.Operations[0]
 	require.Equal(t, http.MethodGet, op.Method)
 	require.Equal(t, "/", op.Path)
-	require.Equal(t, http.StatusOK, op.SuccessStatus)
-	require.IsType(t, api.Status{}, op.SuccessBody)
+	require.Equal(t, "getPlatformStatus", op.OperationID)
+	require.Empty(t, op.PathParameters)
+	require.Nil(t, op.RequestBody)
+	require.Equal(t, []api.Response{{Status: http.StatusOK, Body: api.Status{}}}, op.Responses)
 }
