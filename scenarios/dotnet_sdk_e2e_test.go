@@ -22,9 +22,7 @@ import (
 // use: the builder, the platform runtime, the OpenAPI contract, and the
 // Kiota-generated .NET client a consumer calls.
 //
-// The platform API is deliberately trivial for now (a single status endpoint); the
-// point of this scenario is to wire the pieces together end to end so a real API
-// can grow behind the same seams. Nothing here imports builder, platform, or SDK
+// Nothing here imports builder, platform, or SDK
 // code: the builder, the platform, and the .NET tests are all driven as external
 // processes, exactly as a user would.
 func TestDotnetSDKEndToEnd(t *testing.T) {
@@ -82,7 +80,7 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 
 	// Wait until the platform answers before handing off to the .NET tests, so they
 	// do not have to carry their own start-up retry.
-	url := "http://" + addr + "/"
+	url := "http://" + addr + "/registrations"
 	require.Eventually(t, func() bool {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 		if reqErr != nil {

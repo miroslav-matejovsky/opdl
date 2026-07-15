@@ -9,6 +9,7 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
 func main() {
@@ -30,12 +31,20 @@ func run(args []string) error {
 		return err
 	}
 	fmt.Println(cfg.Summary())
+	descriptor := cfg.Descriptor()
+	registrations, err := registration.NewService(
+		registration.Location{Machine: descriptor.Machine, IP: descriptor.IP},
+		registration.SingleInstanceCoordinator{},
+	)
+	if err != nil {
+		return fmt.Errorf("registration service: %w", err)
+	}
 
 	addr := cfg.Address()
 	fmt.Printf("platform: listening on %s\n", addr)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.NewHandler(),
+		Handler:           httpapi.NewHandler(registrations),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return srv.ListenAndServe()

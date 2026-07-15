@@ -18,11 +18,12 @@ sdk-dotnet/
     Opdl.Sdk.csproj                 library project (references Microsoft.Kiota.Bundle)
     Client/                         Kiota output (generated; do not edit by hand)
       PlatformClient.cs             API client entry point
-      Models/Status.cs             response models
+      Models/Registration*.cs      request and response models
+      Registrations/               registration request builders
       kiota-lock.json               generation manifest (contract hash, Kiota version)
   tests/Opdl.Sdk.E2E/
     Opdl.Sdk.E2E.csproj             end-to-end tests (references the SDK)
-    PlatformStatusTests.cs          drives a running platform through the SDK
+    RegistrationTests.cs            drives registrations through the SDK
 ```
 
 ## End-to-end tests
@@ -69,13 +70,14 @@ or, from the repository root, `task sdk-dotnet`.
 ## Usage
 
 The platform listens on a deployment-specific address, so the base URL is set on
-the request adapter rather than baked into the contract. The status endpoint needs
-no authentication.
+the request adapter rather than baked into the contract. Registration endpoints
+need no authentication.
 
 ```csharp
 using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Http.HttpClientLibrary;
 using Opdl.Sdk.Client;
+using Opdl.Sdk.Client.Models;
 
 var adapter = new HttpClientRequestAdapter(new AnonymousAuthenticationProvider())
 {
@@ -84,10 +86,19 @@ var adapter = new HttpClientRequestAdapter(new AnonymousAuthenticationProvider()
 
 var client = new PlatformClient(adapter);
 
-var status = await client.GetAsync();
-Console.WriteLine($"{status?.StatusProp}: {status?.Message}");
-// ok: platform is running
+await client.Registrations.PostAsync(new RegistrationRequest
+{
+    UnitType = 7,
+    UnitId = 42,
+    UnitTypeNameAdvertised = "Billing",
+    Role = "Master",
+});
+
+var registration = await client.Registrations[7][42].Status.GetAsync();
+Console.WriteLine($"{registration?.Status}: {registration?.Machine}");
+// accepted: node-a
 ```
 
-`StatusProp` carries the JSON `status` field; Kiota renames it to avoid clashing
-with the generated `Status` model type.
+The status and list calls return the same generated `Registration` model. The
+platform supplies its `machine`, `ip`, and `platform_instances` values; clients
+only set the fields on `RegistrationRequest`.

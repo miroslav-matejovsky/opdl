@@ -4,26 +4,178 @@ info:
     version: 0.1.0
     description: HTTP API served by the OPDL platform runtime.
 paths:
-    /:
+    /registrations:
         get:
-            operationId: getPlatformStatus
-            summary: Report platform status
+            operationId: listRegistrations
+            summary: List registration requests
             responses:
                 "200":
-                    description: Report platform status
+                    description: List registration requests
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/Status'
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Registration'
+                "500":
+                    description: List registration requests
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+        post:
+            operationId: registerUnit
+            summary: Request unit registration
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/RegistrationRequest'
+            responses:
+                "202":
+                    description: Request unit registration
+                "400":
+                    description: Request unit registration
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "409":
+                    description: Request unit registration
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "500":
+                    description: Request unit registration
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /registrations/{unit_type}/{unit_id}/status:
+        get:
+            operationId: getRegistrationStatus
+            summary: Get registration request status
+            parameters:
+                - name: unit_type
+                  in: path
+                  required: true
+                  schema:
+                    type: integer
+                    format: int32
+                    minimum: 0
+                    maximum: 255
+                - name: unit_id
+                  in: path
+                  required: true
+                  schema:
+                    type: integer
+                    format: int32
+                    minimum: 0
+                    maximum: 65535
+            responses:
+                "200":
+                    description: Get registration request status
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Registration'
+                "404":
+                    description: Get registration request status
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+                "500":
+                    description: Get registration request status
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
 components:
     schemas:
-        Status:
+        Error:
             type: object
             properties:
-                message:
+                code:
                     type: string
+            required:
+                - code
+        PlatformInstanceRegistrationStatus:
+            type: object
+            properties:
+                ip:
+                    type: string
+                machine:
+                    type: string
+                reason:
+                    type: string
+                    nullable: true
                 status:
                     type: string
             required:
-                - message
+                - ip
+                - machine
                 - status
+        Registration:
+            type: object
+            properties:
+                ip:
+                    type: string
+                machine:
+                    type: string
+                platform_instances:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/PlatformInstanceRegistrationStatus'
+                reason:
+                    type: string
+                    nullable: true
+                role:
+                    type: string
+                    nullable: true
+                status:
+                    type: string
+                unit_id:
+                    type: integer
+                    format: int32
+                    minimum: 0
+                    maximum: 65535
+                unit_type:
+                    type: integer
+                    format: int32
+                    minimum: 0
+                    maximum: 255
+                unit_type_name_advertised:
+                    type: string
+            required:
+                - ip
+                - machine
+                - platform_instances
+                - status
+                - unit_id
+                - unit_type
+                - unit_type_name_advertised
+        RegistrationRequest:
+            type: object
+            properties:
+                role:
+                    type: string
+                    nullable: true
+                unit_id:
+                    type: integer
+                    format: int32
+                    minimum: 0
+                    maximum: 65535
+                unit_type:
+                    type: integer
+                    format: int32
+                    minimum: 0
+                    maximum: 255
+                unit_type_name_advertised:
+                    type: string
+            required:
+                - unit_id
+                - unit_type
+                - unit_type_name_advertised

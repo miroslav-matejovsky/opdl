@@ -3,8 +3,8 @@ package scenarios
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -19,8 +19,8 @@ import (
 
 // TestBuildAndRunSingleMachine is the bare-minimum end-to-end scenario: drive
 // the builder CLI to build the single machine in the "scenario" example
-// blueprint, then run the resulting platform binary and check it starts its API,
-// reports its configuration, and answers a GET request. Both are external
+// blueprint, then run the resulting platform binary and check it starts its
+// registration API, persists a request, and reports its configuration. Both are external
 // processes; nothing here imports builder or platform Go code.
 func TestBuildAndRunSingleMachine(t *testing.T) {
 	ctx := context.Background()
@@ -69,10 +69,9 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 	}
 	defer stop()
 
-	url := "http://" + addr + "/"
-	var body string
+	url := "http://" + addr
 	require.Eventually(t, func() bool {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url+"/registrations", http.NoBody)
 		if reqErr != nil {
 			return false
 		}
@@ -84,20 +83,69 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			return false
 		}
-		b, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return false
-		}
-		body = string(b)
-		return true
+		var registrations []registration
+		return json.NewDecoder(resp.Body).Decode(&registrations) == nil && len(registrations) == 0
 	}, 15*time.Second, 100*time.Millisecond, "platform API never became reachable")
 
-	require.Contains(t, body, "platform is running")
+	request := []byte(`{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Scenario service","role":"Master"}`)
+	post, err := http.NewRequestWithContext(ctx, http.MethodPost, url+"/registrations", bytes.NewReader(request))
+	require.NoError(t, err)
+	post.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(post)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusAccepted, response.StatusCode)
+
+	var status registration
+	require.Eventually(t, func() bool {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url+"/registrations/7/42/status", http.NoBody)
+		if reqErr != nil {
+			return false
+		}
+		resp, getErr := http.DefaultClient.Do(req)
+		if getErr != nil {
+			return false
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		return json.NewDecoder(resp.Body).Decode(&status) == nil && status.Status == "accepted"
+	}, 15*time.Second, 100*time.Millisecond, "registration was not accepted")
+	require.Equal(t, "node", status.Machine)
+	require.Equal(t, "127.0.0.1", status.IP)
+	require.Len(t, status.PlatformInstances, 1)
+	require.Equal(t, "node", status.PlatformInstances[0].Machine)
+	require.Equal(t, "127.0.0.1", status.PlatformInstances[0].IP)
+	require.Equal(t, "accepted", status.PlatformInstances[0].Status)
+
+	list, err := http.NewRequestWithContext(ctx, http.MethodGet, url+"/registrations", http.NoBody)
+	require.NoError(t, err)
+	response, err = http.DefaultClient.Do(list)
+	require.NoError(t, err)
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var registrations []registration
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&registrations))
+	require.Equal(t, []registration{status}, registrations)
 
 	// Stop the process before reading its captured output: Wait joins the exec
 	// copier goroutines, so the buffer is safe to read only afterwards.
 	stop()
 	require.Contains(t, out.String(), "platform configuration")
+}
+
+type registration struct {
+	UnitType          uint8  `json:"unit_type"`
+	UnitID            uint16 `json:"unit_id"`
+	Machine           string `json:"machine"`
+	IP                string `json:"ip"`
+	Status            string `json:"status"`
+	PlatformInstances []struct {
+		Machine string `json:"machine"`
+		IP      string `json:"ip"`
+		Status  string `json:"status"`
+	} `json:"platform_instances"`
 }
 
 // freePort reserves an ephemeral port, then releases it so the platform can bind

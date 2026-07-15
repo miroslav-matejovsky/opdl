@@ -111,7 +111,10 @@ func TestBuildOpenAPIDocCoversFutureOperationShapes(t *testing.T) {
 func TestPlatformOperationIDIsStable(t *testing.T) {
 	doc := buildOpenAPIDoc(platformapi.Describe())
 
-	require.Equal(t, "getPlatformStatus", doc.Paths["/"]["get"].OperationID)
+	require.NotContains(t, doc.Paths, "/")
+	require.Equal(t, "registerUnit", doc.Paths["/registrations"]["post"].OperationID)
+	require.Equal(t, "listRegistrations", doc.Paths["/registrations"]["get"].OperationID)
+	require.Equal(t, "getRegistrationStatus", doc.Paths["/registrations/{unit_type}/{unit_id}/status"]["get"].OperationID)
 }
 
 // TestSchemaForStruct is a small unit test of the reflection-to-schema mapping in
@@ -119,10 +122,11 @@ func TestPlatformOperationIDIsStable(t *testing.T) {
 // helpers directly. It documents that a struct becomes an object whose plain
 // scalar fields are required.
 func TestSchemaForStruct(t *testing.T) {
-	schema := schemaFor(reflect.TypeFor[platformapi.Status]())
+	schema := schemaFor(reflect.TypeFor[platformapi.RegistrationRequest]())
 
 	require.Equal(t, "object", schema.Type)
-	require.Equal(t, "string", schema.Properties["status"].Type)
-	require.Equal(t, "string", schema.Properties["message"].Type)
-	require.ElementsMatch(t, []string{"status", "message"}, schema.Required)
+	require.Equal(t, "integer", schema.Properties["unit_type"].Type)
+	require.Equal(t, "integer", schema.Properties["unit_id"].Type)
+	require.Equal(t, "string", schema.Properties["unit_type_name_advertised"].Type)
+	require.ElementsMatch(t, []string{"unit_type", "unit_id", "unit_type_name_advertised"}, schema.Required)
 }
