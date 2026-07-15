@@ -39,7 +39,7 @@ work during implementation:
 - Updating an existing key may change only the advertised name and role. The key
   remains the identity.
 - `GET /registrations` returns a top-level JSON array. It returns `[]` when
-  empty. Results are sorted by `unit_type`, then `unit_id`.
+  empty. Results are sorted by `unit_type`, then `unit_id` and grouped by machine.
 - List enumeration is not a collection-wide transaction. A list concurrent with
   writes may observe entries from immediately before or after those writes, but
   every returned entry must be complete and valid.

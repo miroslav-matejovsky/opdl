@@ -58,6 +58,7 @@ working.
 6. Regenerate `api-specifications/openapi.yaml`,
    `api-specifications/openapi.md`, and the .NET client. At this stage the
    generated public API must still contain only the existing status endpoint.
+   This can be done via conformance module.
 
 7. Update `api-specifications/README.md` if its description of supported request
    or response shapes is no longer accurate.
