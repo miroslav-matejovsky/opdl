@@ -117,6 +117,46 @@ func TestReconciliationOfContendersIsIdempotentAfterRestart(t *testing.T) {
 	require.Equal(t, before, restarted.recorder.types(), "reconciliation did not restate an existing transition")
 }
 
+func TestConflictsExposeDeterministicWinnerAndLoserViews(t *testing.T) {
+	site := newSite(t, "node-a", "node-b")
+	nodeA := site.start("node-a")
+	nodeB := site.start("node-b")
+	first := writeContender(t, nodeA, api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "First"}, nodeA.service.location, testTime(10))
+	writeContender(t, nodeA, api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Second"}, nodeB.service.location, testTime(20))
+	writeAcceptance(t, nodeA, first, testTime(15))
+	site.reconcile()
+
+	conflicts, err := nodeA.service.Conflicts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, conflicts, 1)
+	conflict := conflicts[0]
+	require.Equal(t, unitKey.UnitType, conflict.UnitType)
+	require.Equal(t, unitKey.UnitID, conflict.UnitID)
+	require.Equal(t, api.RegistrationConflictResolutionResolved, conflict.ResolutionStatus)
+	require.Equal(t, "First", conflict.Winner.UnitTypeNameAdvertised)
+	require.Equal(t, api.RegistrationStatusAccepted, conflict.Winner.Status)
+	require.Len(t, conflict.Losers, 1)
+	require.Equal(t, "Second", conflict.Losers[0].UnitTypeNameAdvertised)
+	require.Equal(t, api.RegistrationStatusRejected, conflict.Losers[0].Status)
+	require.Equal(t, ReasonKeyConflict, *conflict.Losers[0].Reason)
+
+	listed := nodeB.list(t)
+	require.Len(t, listed, 2)
+	require.Equal(t, "First", listed[0].UnitTypeNameAdvertised)
+	require.Equal(t, api.RegistrationStatusAccepted, listed[0].Status)
+	require.Equal(t, "Second", listed[1].UnitTypeNameAdvertised)
+	require.Equal(t, api.RegistrationStatusRejected, listed[1].Status)
+}
+
+func TestConflictsAreEmptyWithoutCompetingContenders(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+
+	conflicts, err := nodeA.service.Conflicts(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, conflicts)
+}
+
 func writeContender(t *testing.T, node *instance, request api.RegistrationRequest, origin Location, observedAt time.Time) requestRecord {
 	t.Helper()
 	record := requestRecord{

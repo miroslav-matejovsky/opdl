@@ -92,5 +92,5 @@ Olric test waits on observable state, never a fixed delay.
 Completed on 2026-07-15. Fabric and registration documentation now state the
 stable-membership Create guarantee, contender convergence, best-effort ordering,
 and the planned conflict query. The fabric contract test names now state their
-stable-membership scope. Stage 4 implements storage; Stage 5 implements the
+stable-membership scope. Stage 4 implements storage and Stage 5 implements the
 dedicated HTTP conflict query.

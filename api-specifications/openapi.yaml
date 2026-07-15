@@ -93,6 +93,25 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+    /registrations/conflicts:
+        get:
+            operationId: listRegistrationConflicts
+            summary: List resolved registration conflicts
+            responses:
+                "200":
+                    description: List resolved registration conflicts
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/RegistrationConflict'
+                "500":
+                    description: List resolved registration conflicts
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
 components:
     schemas:
         Error:
@@ -157,6 +176,33 @@ components:
                 - unit_id
                 - unit_type
                 - unit_type_name_advertised
+        RegistrationConflict:
+            type: object
+            properties:
+                losers:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Registration'
+                resolution_status:
+                    type: string
+                unit_id:
+                    type: integer
+                    format: int32
+                    minimum: 0
+                    maximum: 65535
+                unit_type:
+                    type: integer
+                    format: int32
+                    minimum: 0
+                    maximum: 255
+                winner:
+                    $ref: '#/components/schemas/Registration'
+            required:
+                - losers
+                - resolution_status
+                - unit_id
+                - unit_type
+                - winner
         RegistrationRequest:
             type: object
             properties:

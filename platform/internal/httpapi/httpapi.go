@@ -27,10 +27,28 @@ func NewHandler(service *registration.Service) http.Handler {
 	mux.HandleFunc("/registrations", func(w http.ResponseWriter, r *http.Request) {
 		handleRegistrations(service, w, r)
 	})
+	// Register this exact route before the parameterized status route. A conflict
+	// query is a collection operation, never a malformed status lookup.
+	mux.HandleFunc("/registrations/conflicts", func(w http.ResponseWriter, r *http.Request) {
+		handleRegistrationConflicts(service, w, r)
+	})
 	mux.HandleFunc("/registrations/", func(w http.ResponseWriter, r *http.Request) {
 		handleRegistrationStatus(service, w, r)
 	})
 	return mux
+}
+
+func handleRegistrationConflicts(service *registration.Service, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	conflicts, err := service.Conflicts(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errorCodeInternal)
+		return
+	}
+	writeJSON(w, http.StatusOK, conflicts)
 }
 
 func handleRegistrations(service *registration.Service, w http.ResponseWriter, r *http.Request) {

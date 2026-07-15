@@ -4,6 +4,7 @@ using Microsoft.Kiota.Abstractions.Extensions;
 using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Abstractions;
 using Opdl.Sdk.Client.Models;
+using Opdl.Sdk.Client.Registrations.Conflicts;
 using Opdl.Sdk.Client.Registrations.Item;
 using System.Collections.Generic;
 using System.IO;
@@ -18,6 +19,11 @@ namespace Opdl.Sdk.Client.Registrations
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     public partial class RegistrationsRequestBuilder : BaseRequestBuilder
     {
+        /// <summary>The conflicts property</summary>
+        public global::Opdl.Sdk.Client.Registrations.Conflicts.ConflictsRequestBuilder Conflicts
+        {
+            get => new global::Opdl.Sdk.Client.Registrations.Conflicts.ConflictsRequestBuilder(PathParameters, RequestAdapter);
+        }
         /// <summary>Gets an item from the Opdl.Sdk.Client.registrations.item collection</summary>
         /// <param name="position">Unique identifier of the item</param>
         /// <returns>A <see cref="global::Opdl.Sdk.Client.Registrations.Item.WithUnit_typeItemRequestBuilder"/></returns>

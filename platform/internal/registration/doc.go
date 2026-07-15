@@ -75,9 +75,9 @@
 //
 // # Querying and reporting conflicts
 //
-// Stage 5 makes GET /registrations list every retained proposal, including
-// rejected losers, and adds GET /registrations/conflicts to group the contenders
-// for one key and identify the winner and losers. It is a domain query rather
+// GET /registrations lists every retained proposal, including rejected losers.
+// GET /registrations/conflicts groups the contenders for one key and identifies
+// the winner and losers. It is a domain query rather
 // than a health endpoint: a resolved registration conflict does not make the
 // process unavailable. Notifications, acknowledgement, retention, and removal
 // are not part of this release.
@@ -90,7 +90,7 @@
 // origin's commit is accepted, an instance's refusal is rejected, and a refused
 // claim is conflict. Reconciliation can make a provisional transition visible before
 // reconciliation corrects it, so events are not the conflict-reporting
-// mechanism. Stage 5's query API is authoritative once contenders have
+// mechanism. The query API is authoritative once contenders have
 // converged. A recording failure surfaces to the caller as the operation's
 // error, and the store is not rolled back to match it.
 //

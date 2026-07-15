@@ -59,3 +59,12 @@ status route continues to return the proposal submitted on that machine.
   contenders without consulting event files.
 - The generated contract and SDK match runtime behavior.
 
+## Implementation result
+
+Completed on 2026-07-15. `GET /registrations/conflicts` returns deterministic
+resolved conflict groups containing the unit key, winner, and rejected losers.
+The normal registrations list already exposes every contender as an individual
+view. The route rejects non-GET methods with the standard `405` response. The
+OpenAPI documents and Kiota client were regenerated; SDK coverage deserializes
+winner and loser details from a conflict response. No acknowledgement,
+pagination, filtering, or active notification behavior was added.

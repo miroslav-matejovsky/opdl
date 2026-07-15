@@ -86,8 +86,9 @@ adapter behind the fabric here, not an API anything else depends on.
 
 ### Registration
 
-> **Implementation staging.** Stage 4 retains contenders and reconciles them to
-> repair the known join limitation. Stage 5 adds the dedicated conflict query.
+> **Implementation staging.** Stages 4 and 5 retain and reconcile contenders,
+> then expose detected conflicts through the registration API. Stage 6 proves the
+> complete two-member convergence path.
 
 A client asks the platform to register a unit, keyed by unit type and unit ID.
 `POST /registrations` takes the request and answers `202`: the request is a
@@ -131,10 +132,10 @@ machine is indistinguishable from a retry.
 **State lives on the fabric.** The registration package retains proposals,
 confirmations, acceptance evidence, and repairable current views, so a false
 create cannot erase a contender. `GET /registrations` lists every retained
-proposal, including rejected losers. Stage 5 adds `GET /registrations/conflicts`
-to group a key's contenders and identify its winner and losers. The latter is a
-domain query, not a health endpoint: a resolved conflict does not make a process
-unavailable. Notifications,
+proposal, including rejected losers. `GET /registrations/conflicts` groups each
+conflicting key and identifies its winner and losers. It is a domain query, not
+a health endpoint: a resolved conflict does not make a process unavailable.
+Notifications,
 acknowledgement, retention, and removal remain later work.
 
 State is in memory and is not replayed after a full-site shutdown. Different

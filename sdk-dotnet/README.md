@@ -91,7 +91,7 @@ The platform listens on a deployment-specific address, so the base URL is set on
 the request adapter rather than baked into the contract. Registration endpoints
 need no authentication.
 
-The API has three operations, and this is all of them.
+The API has four operations, and this is all of them.
 
 ### Requesting a registration
 
@@ -150,6 +150,22 @@ but only the origin answers its status; anywhere else this throws `Error` with
 // requests alike.
 var registrations = await client.Registrations.GetAsync();
 ```
+
+### Inspecting resolved conflicts
+
+```csharp
+var conflicts = await client.Registrations.Conflicts.GetAsync();
+foreach (var conflict in conflicts ?? [])
+{
+    // conflict.Winner survives. Each entry in conflict.Losers is rejected with
+    // reason "registration_key_conflict".
+    Console.WriteLine($"{conflict.UnitType}/{conflict.UnitId}: {conflict.Winner?.Machine}");
+}
+```
+
+This is a domain query, not a process-health signal. The result is empty when
+there are no duplicate proposals. It has no acknowledgement, filtering,
+pagination, or push delivery in this phase.
 
 ### Errors
 

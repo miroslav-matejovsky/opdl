@@ -244,6 +244,64 @@ func (s *Service) List(ctx context.Context) ([]api.Registration, error) {
 	return registrations, nil
 }
 
+// Conflicts returns every unit key with multiple retained proposals. Each
+// result is resolved from the same immutable contender history as List: the
+// selected winner is returned separately and every other proposal is an
+// effective registration_key_conflict rejection.
+//
+// Results are ordered by unit key. Losers retain contender order, which is
+// observed time then fingerprint, so all machines present the same result after
+// they have seen the same contenders.
+func (s *Service) Conflicts(ctx context.Context) ([]api.RegistrationConflict, error) {
+	contenders, err := s.store.allRequests(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byKey := make(map[Key][]requestRecord)
+	for _, contender := range contenders {
+		byKey[contender.key()] = append(byKey[contender.key()], contender)
+	}
+	keys := make([]Key, 0, len(byKey))
+	for key, group := range byKey {
+		if len(group) > 1 {
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+
+	conflicts := make([]api.RegistrationConflict, 0, len(keys))
+	for _, key := range keys {
+		group := byKey[key]
+		winner, _, err := s.store.winner(ctx, group)
+		if err != nil {
+			return nil, err
+		}
+		winnerView, err := s.projectContenders(ctx, winner, group)
+		if err != nil {
+			return nil, err
+		}
+		losers := make([]api.Registration, 0, len(group)-1)
+		for _, contender := range group {
+			if contender.Fingerprint == winner.Fingerprint {
+				continue
+			}
+			view, err := s.projectContenders(ctx, contender, group)
+			if err != nil {
+				return nil, err
+			}
+			losers = append(losers, view)
+		}
+		conflicts = append(conflicts, api.RegistrationConflict{
+			UnitType:         key.UnitType,
+			UnitID:           key.UnitID,
+			ResolutionStatus: api.RegistrationConflictResolutionResolved,
+			Winner:           winnerView,
+			Losers:           losers,
+		})
+	}
+	return conflicts, nil
+}
+
 // project derives one registration view from a stored proposal and the site's
 // current state. Status and List both use it, so the two can never disagree
 // about a request.
@@ -257,6 +315,14 @@ func (s *Service) project(ctx context.Context, request requestRecord) (api.Regis
 	if err != nil {
 		return api.Registration{}, err
 	}
+	return s.projectContenders(ctx, request, contenders)
+}
+
+// projectContenders derives a registration view using one supplied contender
+// group. Conflict queries pass their enumerated group through this helper so the
+// reported winner and loser views agree even if another write becomes visible
+// after their scan.
+func (s *Service) projectContenders(ctx context.Context, request requestRecord, contenders []requestRecord) (api.Registration, error) {
 	winner, accepted, err := s.store.winner(ctx, contenders)
 	if err != nil {
 		return api.Registration{}, err

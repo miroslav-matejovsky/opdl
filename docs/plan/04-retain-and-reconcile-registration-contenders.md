@@ -85,5 +85,5 @@ selection uses an accepted incumbent, then observed UTC time and fingerprint.
 The service injects its clock for deterministic tests. Unit coverage includes
 incumbent, ordering, temporary acceptance, and restart cases; a two-member
 Olric regression verifies a rejoined member's false projection is repaired.
-The internal record version remains 1 for this POC. Conflict visibility through
-a dedicated HTTP query remains Stage 5.
+The internal record version remains 1 for this POC. Stage 5 exposes conflicts
+through a dedicated HTTP query.
