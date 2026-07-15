@@ -30,9 +30,9 @@ registration behavior and verify it in black-box scenarios.
 
    - `platform.registration.created` with all four registration fields.
    - `platform.registration.updated` with the accepted new registration fields.
-   - `platform.distribution.started` with the local member address and current
-     member count. Stage 4 emits it.
-   - `platform.distribution.stopped` with no payload. Stage 4 emits it.
+   - `platform.fabric.started` with adapter name, local member address, and
+     current member count. Stage 4 emits it.
+   - `platform.fabric.stopped` with the adapter name. Stage 4 emits it.
 
    Exact retries do not emit a change event. Failed validation does not emit a
    registration event.

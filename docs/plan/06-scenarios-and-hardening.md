@@ -59,10 +59,10 @@ verify cross-machine distribution, and use platform events as evidence.
    - No extra registration event for the exact retry.
    - Event payload fields match the final accepted request at each transition.
    - Event node envelopes match the blueprint topology.
-   - Both nodes emitted `platform.distribution.started`.
+   - Both nodes emitted `platform.fabric.started`.
 
    Force-stop child processes during cleanup where the operating system cannot
-   portably deliver a graceful interrupt. Verify `platform.distribution.stopped`
+   portably deliver a graceful interrupt. Verify `platform.fabric.stopped`
    and dependency close order in in-process lifecycle tests instead.
 
 6. Add failure diagnostics to the scenario harness. On failure, report both
@@ -78,7 +78,7 @@ verify cross-machine distribution, and use platform events as evidence.
    - Root `README.md`: architecture and end-to-end request flow.
    - `api-specifications/README.md`: registration contract generation.
    - `sdk-dotnet/README.md`: current layout and two operation usage example.
-   - Platform package docs: runtime composition, registration, distribution, and
+   - Platform package docs: runtime composition, registration, fabric, and
      events.
    - Scenario package docs: two-node SDK and event verification.
    - Deployment docs: topology-derived addresses and runtime overrides.
@@ -92,8 +92,10 @@ verify cross-machine distribution, and use platform events as evidence.
 
     - `platform/api` contains only public contract descriptions and wire models.
     - HTTP depends on the registration use case, not directly on Olric.
-    - Registration depends on a narrow store interface, not on runtime startup.
-    - Distribution owns Olric details.
+    - Registration depends on a narrow store and fabric collection interface,
+      not on runtime startup or the Olric adapter.
+    - Fabric defines platform distribution semantics.
+    - Only `platform/internal/fabric/olric` owns Olric and memberlist details.
     - Scenarios import no internal Go packages from platform or builder.
     - The .NET SDK remains generated and has no hand-written generated-file
       changes.

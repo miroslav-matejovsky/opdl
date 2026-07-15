@@ -12,11 +12,10 @@ The first release provides:
 - `GET /registrations` to return all registrations as JSON.
 - A unique registration key composed of `unit_type` and `unit_id`.
 - Informational `unit_type_name_advertised` and optional `role` fields.
-- `role` values limited to `Master` and `Slave` when present.
-- Distribution of registration state across platform machines derived from the
-  deployment topology.
+- Distribution of registration state through a platform fabric whose peer
+  bootstrap is derived from the deployment topology.
 - Generated OpenAPI artifacts and a generated .NET SDK for both operations.
-- Platform events for registration changes and distribution lifecycle.
+- Platform events for registration changes and fabric lifecycle.
 - Single-machine and multi-machine black-box scenarios that use the SDK, REST,
   and event records to verify behavior.
 
@@ -41,16 +40,28 @@ work during implementation:
   remains the identity.
 - `GET /registrations` returns a top-level JSON array. It returns `[]` when
   empty. Results are sorted by `unit_type`, then `unit_id`.
+- List enumeration is not a collection-wide transaction. A list concurrent with
+  writes may observe entries from immediately before or after those writes, but
+  every returned entry must be complete and valid.
 - Registration keys are project-wide. The public record contains only the four
   requested fields. The machine that accepted a request is present in the event
   envelope, not in the registration response.
-- The first distribution backend is an embedded Olric distributed map, reduced
-  from `_opdl-v1/platform/internal/distdata` to the operations required here.
-  Do not port Pub/Sub, locks, chaos integration, the old registry, authority,
-  leases, service catalog, fabric, or redundancy code.
+- `platform/internal/fabric` is the abstraction for cross-machine platform
+  distribution. Registration depends only on its narrow named-collection
+  capability and never on Olric, memberlist, transport endpoints, or backend
+  iterators.
+- The first fabric implementation is an embedded Olric adapter under the fabric
+  package. `_opdl-v1/platform/internal/distdata/doc.go` explicitly deprecates the
+  old `distdata` package, so do not port it or make new code depend on it. Reuse
+  only the proven Olric lifecycle and map-operation ideas inside the adapter.
+- The first fabric increment does not copy the broad v1 messaging fabric. It
+  provides only lifecycle, connection state, atomic named-collection operations,
+  and enumeration required by registration. Pub/Sub, request/response, filters,
+  locks, chaos integration, the old registry, authority, leases, service catalog,
+  and redundancy remain outside this use case.
 - Registration data is in memory. Full-platform shutdown loses it. Persistence
   is a later use case.
-- One platform process and one distribution member run per deployment machine.
+- One platform process and one fabric member run per deployment machine.
   Per-machine platform service redundancy is not implemented.
 - Events are compact JSONL records written synchronously to a configured
   directory and flushed per record. No public events REST endpoint is added in
@@ -66,10 +77,10 @@ generated artifacts, and review fixes. They exclude external review wait time.
 | 1. Contract generation foundation | [01-contract-generation-foundation.md](01-contract-generation-foundation.md) | 2-3 days | None |
 | 2. Local registration vertical slice | [02-local-registration-vertical-slice.md](02-local-registration-vertical-slice.md) | 4-6 days | Stage 1 |
 | 3. Platform events | [03-platform-events.md](03-platform-events.md) | 3-4 days | Stage 2 |
-| 4. Topology-derived distribution foundation | [04-topology-distribution-foundation.md](04-topology-distribution-foundation.md) | 4-6 days | Stage 3 |
-| 5. Distributed registration integration | [05-distributed-registration.md](05-distributed-registration.md) | 3-5 days | Stage 4 |
+| 4. Platform fabric foundation and Olric adapter | [04-platform-fabric-foundation.md](04-platform-fabric-foundation.md) | 5-7 days | Stage 3 |
+| 5. Registration over the fabric | [05-registration-over-fabric.md](05-registration-over-fabric.md) | 3-5 days | Stage 4 |
 | 6. Multi-machine SDK scenarios and hardening | [06-scenarios-and-hardening.md](06-scenarios-and-hardening.md) | 3-5 days | Stage 5 |
-| **Total** | | **19-29 days** | |
+| **Total** | | **20-30 days** | |
 
 Stages should land in order. Each stage must leave `task all` passing. Generated
 OpenAPI and SDK changes belong in the stage that changes the contract, not in a
@@ -87,7 +98,8 @@ Do not expand these stages to include:
 - Dynamic topology discovery.
 - Cross-project registration sharing.
 - Pagination or filtering of the registration list.
-- A general message fabric, service catalog, or capability advertisement.
+- Fabric Pub/Sub, request/response, streaming, service catalog, or capability
+  advertisement.
 
 Record newly discovered work outside this scope in the root `.todo` only when it
 blocks completion. Otherwise place follow-up items in `docs/backlog`.
