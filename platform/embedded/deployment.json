@@ -14,8 +14,6 @@
     "redundancy": false
   },
   "fabric": {
-    "machine": "mock",
-    "ip": "127.0.0.1",
     "peers": []
   }
 }

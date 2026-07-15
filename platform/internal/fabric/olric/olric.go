@@ -37,14 +37,14 @@ type Fabric struct {
 	closed bool
 }
 
-// Open starts an embedded Olric member for a machine's resolved topology and
+// Open starts an embedded Olric member for a machine's resolved deployment descriptor and
 // returns once it is ready. It validates the composed configuration before
 // opening any listener. Failure leaves nothing running.
-func Open(ctx context.Context, site string, topology deployment.Fabric, cfg Config) (*Fabric, error) {
+func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*Fabric, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	members := fabric.MembersFromDescriptor(site, topology)
+	members := fabric.MembersFromDescriptor(descriptor)
 	addresses, err := clientAddresses(members, cfg.ClientAddress)
 	if err != nil {
 		return nil, err

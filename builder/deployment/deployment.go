@@ -35,9 +35,10 @@ type Features struct {
 	Redundancy bool `json:"redundancy"`
 }
 
-// Fabric is one machine's resolved view of the platform fabric: who it is on the
-// fabric, and the peers it forms that fabric with. The builder derives it from
-// the site portion of the project topology, so a machine boots knowing its
+// Fabric is this machine's resolved view of the platform fabric: the peers it
+// forms that fabric with. The descriptor already carries this machine's
+// identity, so Fabric contains only the additional topology. The builder derives
+// it from the site portion of the project topology, so a machine boots knowing its
 // membership without discovering anything at runtime.
 //
 // It is deliberately transport-neutral: it carries identities and addresses, and
@@ -45,13 +46,6 @@ type Features struct {
 // it needs from these addresses, which is what keeps the backend replaceable
 // without changing what the builder produces.
 type Fabric struct {
-	// Machine is this machine's fabric member identity. It always equals the
-	// descriptor's Machine: the fabric names members by their deployment
-	// identity, so a member is traceable to the machine it runs on.
-	Machine string `json:"machine"`
-	// IP is the address this machine's fabric member is reached on. It always
-	// equals the descriptor's IP.
-	IP string `json:"ip"`
 	// Peers are the other fabric members of this machine's site, ordered by
 	// machine name so every machine derives the same list. A machine never lists
 	// itself, and the fabric spans exactly one site: machines of another site,
@@ -108,12 +102,6 @@ func (d Descriptor) Validate() error {
 // duplicate address or a peer from another site produces a fabric that either
 // fails to bind or silently spans a boundary it must not cross.
 func (d Descriptor) validateFabric() error {
-	if d.Fabric.Machine != d.Machine {
-		return fmt.Errorf("fabric machine %q must be this machine %q", d.Fabric.Machine, d.Machine)
-	}
-	if d.Fabric.IP != d.IP {
-		return fmt.Errorf("fabric ip %q must be this machine's ip %q", d.Fabric.IP, d.IP)
-	}
 	machines := map[string]bool{d.Machine: true}
 	ips := map[string]bool{d.IP: true}
 	previous := ""

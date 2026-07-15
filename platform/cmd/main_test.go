@@ -31,7 +31,7 @@ var testDescriptor = deployment.Descriptor{
 	Machine:     "node",
 	Role:        "all-in-one",
 	IP:          "127.0.0.1",
-	Fabric:      deployment.Fabric{Machine: "node", IP: "127.0.0.1"},
+	Fabric:      deployment.Fabric{},
 }
 
 // testFabric is an in-process fabric. The lifecycle these tests check is the
@@ -39,7 +39,7 @@ var testDescriptor = deployment.Descriptor{
 // they use the memory adapter and stay in the fast gate. The real backend's
 // lifecycle is covered by the olric adapter's own tests.
 func testFabric() fabric.Fabric {
-	return memory.Open(testDescriptor.Site, testDescriptor.Fabric)
+	return memory.Open(testDescriptor)
 }
 
 // probeEvent is a real domain event, so these tests exercise the recorder the
@@ -208,14 +208,17 @@ func TestNewRecorderRejectsUnusableEventsDirAtStartup(t *testing.T) {
 // TestOlricConfigDerivesFromDescriptorAndAppliesOverrides pins the precedence
 // rule: the deployment decides, and the configuration file may move sockets.
 func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
-	topology := deployment.Fabric{
+	descriptor := deployment.Descriptor{
+		Site:    "north",
 		Machine: "node-a",
 		IP:      "10.0.1.10",
-		Peers:   []deployment.FabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
+		Fabric: deployment.Fabric{
+			Peers: []deployment.FabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
+		},
 	}
 
 	t.Run("no overrides uses the deployment", func(t *testing.T) {
-		cfg, err := olricConfig(topology, config.FabricOlric{})
+		cfg, err := olricConfig(descriptor, config.FabricOlric{})
 		require.NoError(t, err)
 		require.Equal(t, "10.0.1.10:3320", cfg.ClientAddress)
 		require.Equal(t, "10.0.1.10:3322", cfg.MemberlistAddress)
@@ -224,7 +227,7 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	})
 
 	t.Run("overrides move sockets", func(t *testing.T) {
-		cfg, err := olricConfig(topology, config.FabricOlric{
+		cfg, err := olricConfig(descriptor, config.FabricOlric{
 			ClientAddress:     "127.0.0.1:4001",
 			MemberlistAddress: "127.0.0.1:4002",
 			Join:              []string{"127.0.0.1:4102"},
@@ -238,7 +241,7 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	})
 
 	t.Run("a partial override keeps the rest of the deployment", func(t *testing.T) {
-		cfg, err := olricConfig(topology, config.FabricOlric{ClientAddress: "127.0.0.1:4001"})
+		cfg, err := olricConfig(descriptor, config.FabricOlric{ClientAddress: "127.0.0.1:4001"})
 		require.NoError(t, err)
 		require.Equal(t, "127.0.0.1:4001", cfg.ClientAddress)
 		require.Equal(t, "10.0.1.10:3322", cfg.MemberlistAddress, "an absent override is not a blank")
@@ -246,13 +249,13 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	})
 
 	t.Run("an explicit empty join list seeds from nobody", func(t *testing.T) {
-		cfg, err := olricConfig(topology, config.FabricOlric{Join: []string{}})
+		cfg, err := olricConfig(descriptor, config.FabricOlric{Join: []string{}})
 		require.NoError(t, err)
 		require.Empty(t, cfg.Join, "an explicit empty list is a deliberate override")
 	})
 
 	t.Run("an unparsable start timeout is reported", func(t *testing.T) {
-		_, err := olricConfig(topology, config.FabricOlric{StartTimeout: "soon"})
+		_, err := olricConfig(descriptor, config.FabricOlric{StartTimeout: "soon"})
 		require.ErrorContains(t, err, `start timeout "soon"`)
 	})
 }

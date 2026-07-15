@@ -73,9 +73,9 @@ lifecycle are tested.
    change. No package outside `fabric/olric` may import Olric.
 
 5. Extend the builder and platform deployment descriptor contracts with a
-   resolved fabric topology section. It must identify:
+   resolved fabric topology section. The descriptor already identifies the
+   local machine and IP, so the fabric section must identify only:
 
-   - This machine's fabric identity and IP address.
    - Deterministically ordered fabric peers in the same project, environment,
      and site.
    - Peer site, machine, and IP fields for validation and diagnostics.

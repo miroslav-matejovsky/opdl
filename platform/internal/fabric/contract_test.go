@@ -27,20 +27,23 @@ import (
 // independently of reachability.
 const testSite = "local"
 
-func testTopology() deployment.Fabric {
-	return deployment.Fabric{
+func testDescriptor() deployment.Descriptor {
+	return deployment.Descriptor{
+		Site:    testSite,
 		Machine: "node-a",
 		IP:      "127.0.0.1",
-		Peers: []deployment.FabricPeer{
-			{Site: testSite, Machine: "node-b", IP: "127.0.0.2"},
+		Fabric: deployment.Fabric{
+			Peers: []deployment.FabricPeer{
+				{Site: testSite, Machine: "node-b", IP: "127.0.0.2"},
+			},
 		},
 	}
 }
 
 // soloTopology is a single-machine site, which must form a fabric of one rather
 // than a fabric that is missing everybody.
-func soloTopology() deployment.Fabric {
-	return deployment.Fabric{Machine: "node-a", IP: "127.0.0.1"}
+func soloDescriptor() deployment.Descriptor {
+	return deployment.Descriptor{Site: testSite, Machine: "node-a", IP: "127.0.0.1"}
 }
 
 // adapter is one implementation under test. Every adapter answers identically:
@@ -49,7 +52,7 @@ func soloTopology() deployment.Fabric {
 type adapter struct {
 	name string
 	// open builds a fabric for a topology, ready to use.
-	open func(t *testing.T, topology deployment.Fabric) fabric.Fabric
+	open func(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric
 }
 
 // adapters returns every implementation the contract applies to.
@@ -57,19 +60,19 @@ func adapters() []adapter {
 	return []adapter{
 		{
 			name: "memory",
-			open: func(t *testing.T, topology deployment.Fabric) fabric.Fabric {
+			open: func(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric {
 				t.Helper()
-				f := memory.Open(testSite, topology)
+				f := memory.Open(descriptor)
 				t.Cleanup(func() { _ = f.Close(context.Background()) })
 				return f
 			},
 		},
 		{
 			name: "olric",
-			open: func(t *testing.T, topology deployment.Fabric) fabric.Fabric {
+			open: func(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric {
 				t.Helper()
 				requireIntegration(t)
-				return openOlric(t, topology)
+				return openOlric(t, descriptor)
 			},
 		},
 	}
@@ -86,12 +89,12 @@ func requireIntegration(t *testing.T) {
 // openOlric starts a real member on dynamic ports, so tests never collide with
 // a developer's machine or with each other. Its peer is left unreachable on
 // purpose: the fabric must be usable before its site is whole.
-func openOlric(t *testing.T, topology deployment.Fabric) fabric.Fabric {
+func openOlric(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	f, err := fabricolric.Open(ctx, testSite, topology, fabricolric.Config{
+	f, err := fabricolric.Open(ctx, descriptor, fabricolric.Config{
 		ClientAddress:     freeAddress(t),
 		MemberlistAddress: freeAddress(t),
 		StartTimeout:      60 * time.Second,
@@ -135,7 +138,7 @@ func collection(t *testing.T, f fabric.Fabric) fabric.Collection {
 func TestContract(t *testing.T) {
 	run(t, "create stores a value only when the key is absent", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		c := collection(t, a.open(t, testTopology()))
+		c := collection(t, a.open(t, testDescriptor()))
 
 		created, err := c.Create(ctx, "k", []byte("first"))
 		require.NoError(t, err)
@@ -152,7 +155,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "get reports a missing key as absent, not as an error", func(t *testing.T, a adapter) {
-		value, found, err := collection(t, a.open(t, testTopology())).Get(context.Background(), "missing")
+		value, found, err := collection(t, a.open(t, testDescriptor())).Get(context.Background(), "missing")
 		require.NoError(t, err)
 		require.False(t, found)
 		require.Nil(t, value)
@@ -160,7 +163,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "swap replaces a value and reports the previous one", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		c := collection(t, a.open(t, testTopology()))
+		c := collection(t, a.open(t, testDescriptor()))
 
 		previous, existed, err := c.Swap(ctx, "k", []byte("first"))
 		require.NoError(t, err)
@@ -179,7 +182,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "an empty value is stored, not treated as absent", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		c := collection(t, a.open(t, testTopology()))
+		c := collection(t, a.open(t, testDescriptor()))
 
 		created, err := c.Create(ctx, "k", []byte{})
 		require.NoError(t, err)
@@ -197,7 +200,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "entries enumerates the collection ordered by key", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		f := a.open(t, testTopology())
+		f := a.open(t, testDescriptor())
 		c := collection(t, f)
 
 		require.Empty(t, mustEntries(ctx, t, c), "a fresh collection enumerates as empty")
@@ -215,7 +218,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "collections are isolated from each other", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		f := a.open(t, testTopology())
+		f := a.open(t, testDescriptor())
 		first, err := f.Collection("first-" + t.Name())
 		require.NoError(t, err)
 		second, err := f.Collection("second-" + t.Name())
@@ -231,7 +234,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "opening the same collection twice is the same collection", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		f := a.open(t, testTopology())
+		f := a.open(t, testDescriptor())
 		name := "shared-" + t.Name()
 		first, err := f.Collection(name)
 		require.NoError(t, err)
@@ -247,13 +250,13 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "a blank collection name is rejected", func(t *testing.T, a adapter) {
-		_, err := a.open(t, testTopology()).Collection("  ")
+		_, err := a.open(t, testDescriptor()).Collection("  ")
 		require.ErrorContains(t, err, "collection name is required")
 	})
 
 	run(t, "a blank key is rejected", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		c := collection(t, a.open(t, testTopology()))
+		c := collection(t, a.open(t, testDescriptor()))
 		_, err := c.Create(ctx, "", []byte("v"))
 		require.ErrorContains(t, err, "key is required")
 		_, _, err = c.Get(ctx, "")
@@ -262,7 +265,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "the caller owns the bytes it writes and reads", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		c := collection(t, a.open(t, testTopology()))
+		c := collection(t, a.open(t, testDescriptor()))
 
 		written := []byte("original")
 		_, err := c.Create(ctx, "k", written)
@@ -283,7 +286,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "concurrent creates of one key produce exactly one winner", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		c := collection(t, a.open(t, testTopology()))
+		c := collection(t, a.open(t, testDescriptor()))
 
 		const writers = 16
 		results := make(chan bool, writers)
@@ -319,7 +322,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "expected members come from the descriptor, not from who is reachable", func(t *testing.T, a adapter) {
-		members := a.open(t, testTopology()).Members()
+		members := a.open(t, testDescriptor()).Members()
 		require.Equal(t, []fabric.Member{
 			{Site: testSite, Machine: "node-a", IP: "127.0.0.1", Self: true},
 			{Site: testSite, Machine: "node-b", IP: "127.0.0.2"},
@@ -331,7 +334,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "members are a copy the caller cannot use to mutate the fabric", func(t *testing.T, a adapter) {
-		f := a.open(t, testTopology())
+		f := a.open(t, testDescriptor())
 		members := f.Members()
 		members[0].Machine = "tampered"
 		require.Equal(t, "node-a", f.Members()[0].Machine)
@@ -340,7 +343,7 @@ func TestContract(t *testing.T) {
 	run(t, "a site whose peers are all unreachable is disconnected", func(t *testing.T, a adapter) {
 		// Only this member is up, so no peer is reachable. The fabric still
 		// works: state describes the site, not whether calls succeed.
-		f := a.open(t, testTopology())
+		f := a.open(t, testDescriptor())
 		state, err := f.State(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, fabric.StateDisconnected, state)
@@ -351,7 +354,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "a one-member site is connected on its own", func(t *testing.T, a adapter) {
 		// A standalone deployment is whole, not permanently disconnected.
-		f := a.open(t, soloTopology())
+		f := a.open(t, soloDescriptor())
 		state, err := f.State(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, fabric.StateConnected, state)
@@ -359,7 +362,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "a canceled context fails a call", func(t *testing.T, a adapter) {
-		c := collection(t, a.open(t, testTopology()))
+		c := collection(t, a.open(t, testDescriptor()))
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
@@ -375,7 +378,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "calls after close report the fabric is closed", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		f := a.open(t, testTopology())
+		f := a.open(t, testDescriptor())
 		c := collection(t, f)
 		require.NoError(t, f.Close(ctx))
 
@@ -395,7 +398,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "close is idempotent", func(t *testing.T, a adapter) {
 		ctx := context.Background()
-		f := a.open(t, testTopology())
+		f := a.open(t, testDescriptor())
 		require.NoError(t, f.Close(ctx))
 		require.NoError(t, f.Close(ctx), "a second close is not an error")
 	})
@@ -403,7 +406,7 @@ func TestContract(t *testing.T) {
 	run(t, "members remain readable after close", func(t *testing.T, a adapter) {
 		// Membership is a deployment fact, not a live query, so shutdown code
 		// can still report which site it was part of.
-		f := a.open(t, testTopology())
+		f := a.open(t, testDescriptor())
 		require.NoError(t, f.Close(context.Background()))
 		require.Len(t, f.Members(), 2)
 	})

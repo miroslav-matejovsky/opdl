@@ -39,9 +39,8 @@ func checkContractsMatch() error {
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
 // produces marshals to JSON the platform reads back with every field intact.
 func checkRoundTrip() error {
-	// A machine's fabric block restates the machine's own site, name, and IP, so
-	// those values appear both at the top level and under fabric. They are named
-	// here so the two stay one identity rather than four matching literals.
+	// These values are named so the descriptor and its peer topology stay easy to
+	// compare without scattering literals through the fixture.
 	const (
 		site        = "north"
 		machine     = "sensor"
@@ -61,8 +60,6 @@ func checkRoundTrip() error {
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    builderdeployment.Features{Chaos: true, Redundancy: true},
 		Fabric: builderdeployment.Fabric{
-			Machine: machine,
-			IP:      machineIP,
 			Peers: []builderdeployment.FabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
 			},
@@ -90,8 +87,6 @@ func checkRoundTrip() error {
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    platformdeployment.Features{Chaos: true, Redundancy: true},
 		Fabric: platformdeployment.Fabric{
-			Machine: machine,
-			IP:      machineIP,
 			Peers: []platformdeployment.FabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
 			},

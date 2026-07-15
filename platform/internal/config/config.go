@@ -182,13 +182,13 @@ func (c *Config) Summary() string {
 // the fabric and which peers it expects to meet.
 func fabricSummary(f deployment.Fabric) string {
 	if len(f.Peers) == 0 {
-		return fmt.Sprintf("%s (%s), one-member site", f.Machine, f.IP)
+		return "one-member site"
 	}
 	peers := make([]string, 0, len(f.Peers))
 	for _, peer := range f.Peers {
 		peers = append(peers, fmt.Sprintf("%s (%s)", peer.Machine, peer.IP))
 	}
-	return fmt.Sprintf("%s (%s), peers: %s", f.Machine, f.IP, strings.Join(peers, ", "))
+	return fmt.Sprintf("peers: %s", strings.Join(peers, ", "))
 }
 
 // olricSummary renders the fabric adapter overrides, so a startup log shows

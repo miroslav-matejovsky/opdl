@@ -32,9 +32,10 @@ type Features struct {
 	Redundancy bool `json:"redundancy"`
 }
 
-// Fabric is this machine's resolved view of the platform fabric: who it is on
-// the fabric, and the peers it forms that fabric with. The builder derives it
-// from the project topology and stages it here, so the platform boots knowing
+// Fabric is this machine's resolved view of the platform fabric: the peers it
+// forms that fabric with. The descriptor already carries this machine's
+// identity, so Fabric contains only the additional topology. The builder derives
+// it from the project topology and stages it here, so the platform boots knowing
 // its membership and discovers nothing at runtime.
 //
 // It is transport-neutral: identities and addresses only, with no ports, adapter
@@ -42,12 +43,6 @@ type Features struct {
 // addresses, which is what lets the backend be replaced without changing the
 // deployment contract.
 type Fabric struct {
-	// Machine is this machine's fabric member identity, always equal to the
-	// descriptor's Machine.
-	Machine string `json:"machine"`
-	// IP is the address this machine's fabric member is reached on, always equal
-	// to the descriptor's IP.
-	IP string `json:"ip"`
 	// Peers are the other fabric members of this machine's site, ordered by
 	// machine name. A machine never lists itself, and the fabric spans exactly
 	// one site. A single-machine site has no peers and forms a one-member fabric.

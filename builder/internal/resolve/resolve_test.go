@@ -86,9 +86,7 @@ func TestBuildDerivesOneMemberFabricForSingleMachineSite(t *testing.T) {
 	plan, err := resolve.Build(project(), "acme-opdl")
 	require.NoError(t, err)
 	require.Equal(t, deployment.Fabric{
-		Machine: "sensor",
-		IP:      "10.0.1.10",
-		Peers:   []deployment.FabricPeer{},
+		Peers: []deployment.FabricPeer{},
 	}, plan.Machines[0].Fabric)
 }
 
@@ -101,8 +99,6 @@ func TestBuildDerivesFabricPeersFromTheSiteOnly(t *testing.T) {
 
 	sensor := machineByName(t, plan, "sensor")
 	require.Equal(t, deployment.Fabric{
-		Machine: "sensor",
-		IP:      "10.0.1.10",
 		Peers: []deployment.FabricPeer{
 			{Site: "north", Machine: "archive", IP: "10.0.1.12"},
 			{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
