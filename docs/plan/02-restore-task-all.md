@@ -43,3 +43,10 @@ full-only tasks rather than assuming that the shared fix is sufficient.
 - `task all` passes without manual environment setup.
 - Every observed failure has a repair or regression test. None is merely noted
   and carried into the fabric stages.
+
+## Implementation result
+
+Completed on 2026-07-15. `task all` passes after the Stage 1 task fixes. No
+additional tests were marked ignored. The output contains only the existing
+short-mode and environment-dependent SDK skips; full platform integration and
+scenario tests pass.
