@@ -192,6 +192,17 @@ func requireSingleEvent(t *testing.T, records []eventRecord, eventType string) e
 	return matched[0]
 }
 
+// requireFirstEvent returns the first record of eventType, failing when there is
+// none. Prefer requireSingleEvent: a phase event states a transition, and a
+// transition happens once, so "the first of them" is only the right question
+// where a known defect can restate one. Every use owes a reason.
+func requireFirstEvent(t *testing.T, records []eventRecord, eventType string) eventRecord {
+	t.Helper()
+	matched := eventsOfType(records, eventType)
+	require.NotEmpty(t, matched, "expected at least one %s, recorded %v", eventType, eventTypes(records))
+	return matched[0]
+}
+
 // eventsConfig renders a platform configuration file that pins the listen
 // address and records events into eventsDir.
 func eventsConfig(addr, eventsDir string) []byte {

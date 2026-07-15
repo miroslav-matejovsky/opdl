@@ -1,0 +1,46 @@
+# API contract
+
+Follow-up items for the platform's public HTTP API and the artifacts generated
+from it (`api-specifications/openapi.yaml`, `openapi.md`, and the .NET SDK).
+
+## Closed value sets are described as free strings
+
+**Effort:** small. **Value:** medium.
+
+`status` and `role` are closed sets that the contract describes as plain strings:
+
+| Field | Values | Contract today |
+| --- | --- | --- |
+| `Registration.status`, `PlatformInstanceRegistrationStatus.status` | `pending`, `accepted`, `rejected` | `type: string` |
+| `Registration.role`, `RegistrationRequest.role` | `Master`, `Slave` | `type: string`, nullable |
+
+The platform already treats both as closed: `platform/api` declares every value as
+a constant, and a request carrying any other `role` is refused with `400`. Only
+the generated contract fails to say so, so a consumer cannot see the set without
+reading prose, and the generated SDK types them as strings. A .NET caller
+therefore compares `status == "accepted"` rather than an enum member, which is
+the one place the SDK stops being strongly typed.
+
+Closing the gap means:
+
+- Named types in `platform/api` (`RegistrationStatus`, `Role`) carrying their own
+  values, replacing the `string` fields.
+- Enum support in the OpenAPI generator
+  (`conformance-tests/api-specifications/openapi.go`), which derives schemas by
+  reflection and today emits no `enum` for any type.
+- Regenerating the contract and the SDK. Kiota then emits C# enums, which is the
+  point of doing it.
+
+**Why it is deferred.** Stage 6 of the registration plan lists "status enum" in
+its contract review, but it is the plan's only mention of an enum: no stage
+builds one, and no acceptance criterion requires one. Adding it at the end of
+that plan would have been a cross-cutting retype of a working contract for value
+that is real but not required, so the divergence was recorded here instead of
+being absorbed silently.
+
+**Worth knowing before scheduling it.** Kiota's generated enums reject values
+they do not know, so adding a status or role value later becomes a breaking
+change for already-deployed clients in a way that a string never is. Both sets
+look stable, but registration removal and relocation are deferred use cases that
+may yet want a new status. Prefer doing this once those are settled rather than
+before.

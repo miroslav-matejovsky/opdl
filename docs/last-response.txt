@@ -1,0 +1,17 @@
+Stage 6 is implemented, but I could not run the final `task all` — the sandbox's command classifier went down partway through verification and stayed down. I've recorded that in `.todo`. **Please run `task all` yourself.**
+
+**The headline: the new scenario found a real bug in Stage 5's foundation.**
+
+Olric's create-if-absent is unsafe for a sub-second window right after a member joins, while partitions move. Reproduced standalone: 40 keys written by node A alone, then node B joins — **26 of 40** had `Create` wrongly report the key absent, win, and **permanently overwrite** the value. `Get` stays correct throughout, so the fabric contradicts itself. The adapter is right; Olric is documented AP and consistent only "when the cluster is stable," and a join is exactly when it isn't. The contract suite never caught this because every case runs against one stable member.
+
+That breaks the promise all of registration's idempotency rests on. Visible impact is a duplicate `confirmed` event; the latent one is worse — a conflicting POST in that window could win instead of returning 409, overwriting an accepted claim. Per your call, it's documented in `docs/backlog/fabric.md` with measurements and reproduction, stated in `fabric/doc.go` next to the promise it qualifies, flagged in the README, and the scenario asserts what the platform actually does with the reason in place. The reproduction probe is in the scratchpad, not the repo.
+
+**What Stage 6 delivers.** The SDK scenario now drives two real machines through the generated client, with node B genuinely offline for the first half. The handshake is load-bearing: I verified by renaming the marker so it's never written — node B never starts and the test fails, rather than passing quietly. It also fails fast if the .NET test dies early, instead of burning the 90s timeout.
+
+**Verified before the classifier died:** `-race` clean across the platform packages; `dotnet build` clean; conformance regeneration produced an empty diff; `TestDotnetSDKEndToEnd` passed twice; all six architecture boundaries clean (Olric confined, `api` imports only `net/http`, `httpapi` imports only `api`+`registration`, generated SDK untouched).
+
+**Not verified:** the four scenarios running *together* after I split `startMachine` into `prepareMachine`+`start` — the SDK scenario passed after that refactor and the rest pass `go vet`, but haven't been executed since — plus fmt/lint/deadcode/arch/validate.
+
+Two other notes: step 9 (stale mock cleanup) was already clean — Stage 2 removed it, and the only remaining "mock" hits are the embedded deployment data the plan says to keep. And the `status enum` gap you chose to defer is recorded in `docs/backlog/api-contract.md`, including a caveat worth knowing: Kiota enums reject unknown values, so adding one later breaks deployed clients in a way a string doesn't — better done once removal and relocation are settled.
+
+Given the fabric defect, I'd push back gently on the plan's closing line that the first use case is "complete": it works, and it's honest about what it is, but site-wide uniqueness has a known hole that a customer joining a machine into a live site can hit.

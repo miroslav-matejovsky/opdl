@@ -6,3 +6,8 @@ blocks a default scan; every item is an enhancement, a tuning task, a deferred
 decision, or a known issue to schedule.
 
 ## Index
+
+| Subsystem | Items |
+| --- | --- |
+| [Platform fabric](fabric.md) | **Known defect:** create-if-absent is unsafe for a moment after a member joins |
+| [API contract](api-contract.md) | Closed value sets (`status`, `role`) are described as free strings |

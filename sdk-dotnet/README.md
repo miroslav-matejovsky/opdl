@@ -28,15 +28,33 @@ sdk-dotnet/
 
 ## End-to-end tests
 
-`tests/Opdl.Sdk.E2E` exercises the SDK against a real, running platform. The tests
-read the platform address from the `OPDL_PLATFORM_BASEURL` environment variable and
-skip when it is unset, so they are harmless to run standalone.
+`tests/Opdl.Sdk.E2E` exercises the SDK against a real, running two-machine site.
+It is driven by the `scenarios` module (`scenarios/dotnet_sdk_e2e_test.go`), which
+builds both machines from a blueprint with the builder, starts them, and runs
+these tests against them: the full loop from build tool to running site to
+generated client. That scenario runs as part of `task all` (in the `task
+scenarios` pass).
 
-They are driven by the `scenarios` module
-(`scenarios/dotnet_sdk_e2e_test.go`), which builds a platform binary from a
-blueprint, starts it, and runs these tests against it: the full loop from build
-tool to running service to generated client. That scenario runs as part of
-`task all` (in the `task scenarios` pass).
+The tests read their environment from the scenario and skip when it is unset, so
+they are harmless to run standalone:
+
+| Variable | Meaning |
+| --- | --- |
+| `OPDL_PLATFORM_BASEURL_A` | node A's API, where the registration is requested |
+| `OPDL_PLATFORM_BASEURL_B` | node B's API, the machine the site waits for |
+| `OPDL_CONTROL_DIR` | directory for the handshake described below |
+
+What they prove is the acceptance barrier, from a consumer's seat. Node B is
+deliberately **not running** for the first half of the test: a request node A
+takes must stay `pending`, and must name node B as the machine it is waiting for.
+Only once the test has asserted that does it write a `pending-observed` file into
+the control directory; the Go harness is watching for that file and starts node B
+when it appears, and the test then polls node A until the site accepts.
+
+The handshake is a file rather than a delay because the fact being waited for is
+another process finishing an assertion, and no sleep expresses that. It is also
+what makes the pending half meaningful: if the marker is never written, node B
+never starts and the test fails rather than quietly passing.
 
 ## Regenerating the client
 
@@ -73,6 +91,10 @@ The platform listens on a deployment-specific address, so the base URL is set on
 the request adapter rather than baked into the contract. Registration endpoints
 need no authentication.
 
+The API has three operations, and this is all of them.
+
+### Requesting a registration
+
 ```csharp
 using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Http.HttpClientLibrary;
@@ -86,19 +108,66 @@ var adapter = new HttpClientRequestAdapter(new AnonymousAuthenticationProvider()
 
 var client = new PlatformClient(adapter);
 
+// PostAsync returns nothing at all. The platform answered 202: it took the
+// request. That is not the same as registering the unit, and the contract gives
+// you nothing to mistake for a registration.
 await client.Registrations.PostAsync(new RegistrationRequest
 {
     UnitType = 7,
     UnitId = 42,
     UnitTypeNameAdvertised = "Billing",
-    Role = "Master",
+    Role = "Master",   // optional; omit it and the platform advertises none
 });
-
-var registration = await client.Registrations[7][42].Status.GetAsync();
-Console.WriteLine($"{registration?.Status}: {registration?.Machine}");
-// accepted: node-a
 ```
 
-The status and list calls return the same generated `Registration` model. The
-platform supplies its `machine`, `ip`, and `platform_instances` values; clients
-only set the fields on `RegistrationRequest`.
+### Confirming it, by polling the machine you asked
+
+A request is accepted only once **every** platform instance in the site has
+accepted it, so it stays `pending` while any of them is unavailable, for as long
+as that takes. Polling the origin is the only confirmation mechanism; nothing is
+pushed.
+
+```csharp
+Registration? status;
+do
+{
+    status = await client.Registrations[7][42].Status.GetAsync();
+    // status.Status is "pending", "accepted", or "rejected".
+    // status.PlatformInstances says which machines have answered and how, so a
+    // pending request tells you which machine it is still waiting for.
+}
+while (status?.Status == "pending");
+```
+
+Ask the machine you posted to. Every machine of the site holds the registration,
+but only the origin answers its status; anywhere else this throws `Error` with
+`ResponseStatusCode` 404.
+
+### Listing what the site holds
+
+```csharp
+// Answers on any machine of the site, and lists pending, accepted, and rejected
+// requests alike.
+var registrations = await client.Registrations.GetAsync();
+```
+
+### Errors
+
+Failures arrive as the generated `Error`, which is an exception carrying the
+platform's machine-readable `Code` and the HTTP status:
+
+```csharp
+try
+{
+    await client.Registrations.PostAsync(request);
+}
+catch (Error e) when (e.ResponseStatusCode == 409)
+{
+    // e.Code is "registration_key_conflict": the key is held by a different
+    // claim. Registration is create-only, so this never overwrites anything.
+}
+```
+
+Status and list return the same generated `Registration` model. The platform
+supplies `machine`, `ip`, `status`, and `platform_instances`; clients only set the
+fields on `RegistrationRequest`. Pass a `CancellationToken` to every call.
