@@ -114,11 +114,11 @@ func newRecorder(descriptor deployment.Descriptor, dir string) (recorder, error)
 // opens. A machine that cannot start its fabric returns an error and never
 // reaches the public API.
 func startFabric(ctx context.Context, descriptor deployment.Descriptor, overrides config.FabricOlric, rec recorder) (fabric.Fabric, error) {
-	cfg, err := olricConfig(descriptor.Fabric, overrides)
+	cfg, err := olricConfig(descriptor, overrides)
 	if err != nil {
 		return nil, err
 	}
-	f, err := fabricolric.Open(ctx, descriptor.Site, descriptor.Fabric, cfg)
+	f, err := fabricolric.Open(ctx, descriptor, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func startFabric(ctx context.Context, descriptor deployment.Descriptor, override
 		return nil, errors.Join(fmt.Errorf("fabric members: %w", err), f.Close(ctx))
 	}
 	fmt.Printf("platform: fabric member %s on %s, %d of %d members reachable\n",
-		descriptor.Fabric.Machine, cfg.ClientAddress, len(reachable), len(f.Members()))
+		descriptor.Machine, cfg.ClientAddress, len(reachable), len(f.Members()))
 
 	if err := rec.Record(ctx, fabric.Started{
 		Adapter: f.Name(),
@@ -143,8 +143,8 @@ func startFabric(ctx context.Context, descriptor deployment.Descriptor, override
 // olricConfig composes the adapter's configuration: the descriptor's derived
 // topology first, then whatever the configuration file overrides. Deriving first
 // means an absent override is the deployment's own value rather than a blank.
-func olricConfig(topology deployment.Fabric, overrides config.FabricOlric) (fabricolric.Config, error) {
-	cfg, err := fabricolric.DefaultConfig(topology)
+func olricConfig(descriptor deployment.Descriptor, overrides config.FabricOlric) (fabricolric.Config, error) {
+	cfg, err := fabricolric.DefaultConfig(descriptor)
 	if err != nil {
 		return fabricolric.Config{}, err
 	}

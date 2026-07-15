@@ -80,8 +80,6 @@ func fabric(site blueprint.Site, machine blueprint.Machine) deployment.Fabric {
 		return strings.Compare(a.Machine, b.Machine)
 	})
 	return deployment.Fabric{
-		Machine: machine.Name,
-		IP:      machine.IP,
-		Peers:   peers,
+		Peers: peers,
 	}
 }

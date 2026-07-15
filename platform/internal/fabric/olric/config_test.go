@@ -10,13 +10,16 @@ import (
 	fabricolric "github.com/miroslav-matejovsky/opdl/platform/internal/fabric/olric"
 )
 
-func topology() deployment.Fabric {
-	return deployment.Fabric{
+func descriptor() deployment.Descriptor {
+	return deployment.Descriptor{
+		Site:    "north",
 		Machine: "node-a",
 		IP:      "10.0.1.10",
-		Peers: []deployment.FabricPeer{
-			{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
-			{Site: "north", Machine: "node-c", IP: "10.0.1.12"},
+		Fabric: deployment.Fabric{
+			Peers: []deployment.FabricPeer{
+				{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
+				{Site: "north", Machine: "node-c", IP: "10.0.1.12"},
+			},
 		},
 	}
 }
@@ -25,7 +28,7 @@ func topology() deployment.Fabric {
 // bootstrap: a machine's own addresses and its seeds come from the topology it
 // was built with, on fixed ports, and nothing else is needed to join a site.
 func TestDefaultConfigDerivesEverythingFromTheDescriptor(t *testing.T) {
-	cfg, err := fabricolric.DefaultConfig(topology())
+	cfg, err := fabricolric.DefaultConfig(descriptor())
 	require.NoError(t, err)
 	require.Equal(t, fabricolric.Config{
 		ClientAddress:     "10.0.1.10:3320",
@@ -39,7 +42,7 @@ func TestDefaultConfigDerivesEverythingFromTheDescriptor(t *testing.T) {
 // TestDefaultConfigForOneMemberSiteSeedsNobody checks a standalone machine
 // starts a fabric rather than waiting to join one.
 func TestDefaultConfigForOneMemberSiteSeedsNobody(t *testing.T) {
-	cfg, err := fabricolric.DefaultConfig(deployment.Fabric{Machine: "solo", IP: "127.0.0.1"})
+	cfg, err := fabricolric.DefaultConfig(deployment.Descriptor{IP: "127.0.0.1"})
 	require.NoError(t, err)
 	require.Empty(t, cfg.Join)
 	require.NoError(t, cfg.Validate())
@@ -54,18 +57,18 @@ func TestDefaultStartTimeoutOutlastsAJoinAttempt(t *testing.T) {
 }
 
 func TestDefaultConfigRejectsInvalidTopologyAddresses(t *testing.T) {
-	_, err := fabricolric.DefaultConfig(deployment.Fabric{Machine: "node-a", IP: "not-an-ip"})
+	_, err := fabricolric.DefaultConfig(deployment.Descriptor{IP: "not-an-ip"})
 	require.ErrorContains(t, err, "client address")
 
-	bad := topology()
-	bad.Peers[1].IP = "nope"
+	bad := descriptor()
+	bad.Fabric.Peers[1].IP = "nope"
 	_, err = fabricolric.DefaultConfig(bad)
 	require.ErrorContains(t, err, `peer "node-c"`)
 }
 
 func TestConfigValidate(t *testing.T) {
 	valid := func() fabricolric.Config {
-		cfg, err := fabricolric.DefaultConfig(topology())
+		cfg, err := fabricolric.DefaultConfig(descriptor())
 		require.NoError(t, err)
 		return cfg
 	}

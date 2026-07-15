@@ -24,10 +24,11 @@ type Fabric struct {
 	collections map[string]*collection
 }
 
-// Open builds an in-process fabric for a machine's resolved topology.
-func Open(site string, topology deployment.Fabric) *Fabric {
+// Open builds an in-process fabric for a machine's resolved deployment
+// descriptor.
+func Open(descriptor deployment.Descriptor) *Fabric {
 	return &Fabric{
-		members:     fabric.MembersFromDescriptor(site, topology),
+		members:     fabric.MembersFromDescriptor(descriptor),
 		collections: map[string]*collection{},
 	}
 }

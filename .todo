@@ -10,4 +10,3 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
 - authentication for services as a platform feature
 - authorization for services as a platform feature
 - put shutdown timeout to the platform configuration file, scan for other constants that should be configurable, no defaults in code
-- remove redundant machine and ip in the deployment descriptor fabric section, they are already in the main section

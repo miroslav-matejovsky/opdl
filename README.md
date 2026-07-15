@@ -23,7 +23,7 @@ single source the OpenAPI specification and the .NET SDK are generated from.
 ### Deployment descriptor
 
 Each built binary embeds one `deployment.Descriptor` (project, environment,
-site, machine, role, IP, services, features, and its resolved fabric topology).
+site, machine, role, IP, services, features, and its resolved fabric peers).
 The platform trusts it as its own identity: it is what a registration's origin,
 an event's node, and a fabric member are taken from, so a client cannot claim to
 be somewhere it is not. Only settings a site may change without a rebuild live in

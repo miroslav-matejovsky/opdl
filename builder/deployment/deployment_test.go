@@ -20,8 +20,6 @@ func validDescriptor() deployment.Descriptor {
 		Services:    []string{"sensor-services"},
 		Features:    deployment.Features{Chaos: true},
 		Fabric: deployment.Fabric{
-			Machine: "sensor",
-			IP:      "10.0.1.10",
 			Peers: []deployment.FabricPeer{
 				{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
 				{Site: "north", Machine: "historian", IP: "10.0.1.12"},
@@ -48,16 +46,6 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing role", func(d *deployment.Descriptor) { d.Role = "" }, "role is required"},
 		{"invalid ip", func(d *deployment.Descriptor) { d.IP = "not-an-ip" }, "not a valid IP address"},
 		{"no services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
-		{
-			"fabric identity is not this machine",
-			func(d *deployment.Descriptor) { d.Fabric.Machine = "other" },
-			`fabric machine "other" must be this machine "sensor"`,
-		},
-		{
-			"fabric ip is not this machine's ip",
-			func(d *deployment.Descriptor) { d.Fabric.IP = "10.0.9.9" },
-			`fabric ip "10.0.9.9" must be this machine's ip "10.0.1.10"`,
-		},
 		{
 			"peer from another site",
 			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Site = "south" },

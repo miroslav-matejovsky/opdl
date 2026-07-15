@@ -101,21 +101,21 @@ type Collection interface {
 }
 
 // MembersFromDescriptor derives the expected site membership from a machine's
-// resolved fabric topology. Both adapters build their membership with it, so
-// "who belongs to this fabric" has exactly one definition and comes from the
+// resolved deployment descriptor. Both adapters build their membership with it,
+// so "who belongs to this fabric" has exactly one definition and comes from the
 // descriptor rather than from anything observed at runtime.
 //
 // The result is ordered by machine name and includes self, so every member of a
 // site derives an identical list.
-func MembersFromDescriptor(site string, topology deployment.Fabric) []Member {
-	members := make([]Member, 0, len(topology.Peers)+1)
+func MembersFromDescriptor(descriptor deployment.Descriptor) []Member {
+	members := make([]Member, 0, len(descriptor.Fabric.Peers)+1)
 	members = append(members, Member{
-		Site:    site,
-		Machine: topology.Machine,
-		IP:      topology.IP,
+		Site:    descriptor.Site,
+		Machine: descriptor.Machine,
+		IP:      descriptor.IP,
 		Self:    true,
 	})
-	for _, peer := range topology.Peers {
+	for _, peer := range descriptor.Fabric.Peers {
 		members = append(members, Member{
 			Site:    peer.Site,
 			Machine: peer.Machine,

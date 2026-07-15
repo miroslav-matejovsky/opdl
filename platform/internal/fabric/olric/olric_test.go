@@ -37,11 +37,11 @@ func freePort(t *testing.T) string {
 }
 
 // open starts a member for topology with cfg and closes it when the test ends.
-func open(t *testing.T, topology deployment.Fabric, cfg fabricolric.Config) *fabricolric.Fabric {
+func open(t *testing.T, descriptor deployment.Descriptor, cfg fabricolric.Config) *fabricolric.Fabric {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	f, err := fabricolric.Open(ctx, site, topology, cfg)
+	f, err := fabricolric.Open(ctx, descriptor, cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -61,17 +61,17 @@ func TestTwoMembersFormOneFabricAndShareState(t *testing.T) {
 
 	// Distinct loopback addresses stand in for two machines, so the derived
 	// production addresses do not collide and no override is needed.
-	nodeA := deployment.Fabric{
-		Machine: "node-a", IP: "127.0.0.1",
-		Peers: []deployment.FabricPeer{{Site: site, Machine: "node-b", IP: "127.0.0.2"}},
+	nodeA := deployment.Descriptor{
+		Site: site, Machine: "node-a", IP: "127.0.0.1",
+		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{{Site: site, Machine: "node-b", IP: "127.0.0.2"}}},
 	}
-	nodeB := deployment.Fabric{
-		Machine: "node-b", IP: "127.0.0.2",
-		Peers: []deployment.FabricPeer{{Site: site, Machine: "node-a", IP: "127.0.0.1"}},
+	nodeB := deployment.Descriptor{
+		Site: site, Machine: "node-b", IP: "127.0.0.2",
+		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{{Site: site, Machine: "node-a", IP: "127.0.0.1"}}},
 	}
 
-	configFor := func(topology deployment.Fabric) fabricolric.Config {
-		cfg, err := fabricolric.DefaultConfig(topology)
+	configFor := func(descriptor deployment.Descriptor) fabricolric.Config {
+		cfg, err := fabricolric.DefaultConfig(descriptor)
 		require.NoError(t, err)
 		return cfg
 	}
@@ -124,11 +124,11 @@ func TestTwoMembersFormOneFabricAndShareState(t *testing.T) {
 // machine that starts first must not fail because nobody answered.
 func TestOpenStartsAloneWhenPeersAreDown(t *testing.T) {
 	requireIntegration(t)
-	topology := deployment.Fabric{
-		Machine: "node-a", IP: "127.0.0.1",
-		Peers: []deployment.FabricPeer{{Site: site, Machine: "node-b", IP: "127.0.0.2"}},
+	descriptor := deployment.Descriptor{
+		Site: site, Machine: "node-a", IP: "127.0.0.1",
+		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{{Site: site, Machine: "node-b", IP: "127.0.0.2"}}},
 	}
-	f := open(t, topology, fabricolric.Config{
+	f := open(t, descriptor, fabricolric.Config{
 		ClientAddress:     freePort(t),
 		MemberlistAddress: freePort(t),
 		Join:              []string{freePort(t)},
@@ -145,7 +145,7 @@ func TestOpenStartsAloneWhenPeersAreDown(t *testing.T) {
 // TestOpenValidatesBeforeBinding checks a bad configuration fails without
 // leaving a listener behind.
 func TestOpenValidatesBeforeBinding(t *testing.T) {
-	_, err := fabricolric.Open(context.Background(), site, deployment.Fabric{Machine: "node-a", IP: "127.0.0.1"}, fabricolric.Config{
+	_, err := fabricolric.Open(context.Background(), deployment.Descriptor{Site: site, Machine: "node-a", IP: "127.0.0.1"}, fabricolric.Config{
 		ClientAddress:     "not-an-address",
 		MemberlistAddress: "127.0.0.1:0",
 		StartTimeout:      time.Second,
@@ -159,7 +159,7 @@ func TestOpenHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := fabricolric.Open(ctx, site, deployment.Fabric{Machine: "node-a", IP: "127.0.0.1"}, fabricolric.Config{
+	_, err := fabricolric.Open(ctx, deployment.Descriptor{Site: site, Machine: "node-a", IP: "127.0.0.1"}, fabricolric.Config{
 		ClientAddress:     freePort(t),
 		MemberlistAddress: freePort(t),
 		StartTimeout:      60 * time.Second,
@@ -172,8 +172,8 @@ func TestOpenHonorsCanceledContext(t *testing.T) {
 // elsewhere but is still the machine the descriptor says it is.
 func TestOverridesMoveSocketsWithoutChangingIdentity(t *testing.T) {
 	requireIntegration(t)
-	topology := deployment.Fabric{Machine: "node-a", IP: "10.99.99.99"}
-	f := open(t, topology, fabricolric.Config{
+	descriptor := deployment.Descriptor{Site: site, Machine: "node-a", IP: "10.99.99.99"}
+	f := open(t, descriptor, fabricolric.Config{
 		ClientAddress:     freePort(t),
 		MemberlistAddress: freePort(t),
 		StartTimeout:      60 * time.Second,

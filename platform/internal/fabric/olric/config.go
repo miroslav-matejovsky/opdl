@@ -52,20 +52,21 @@ type Config struct {
 }
 
 // DefaultConfig derives the production configuration from a machine's resolved
-// fabric topology: the member's own addresses from its topology IP, and its
-// seeds from its peers' IPs. This is the whole production bootstrap, and it
-// needs nothing beyond the descriptor the machine was built with.
-func DefaultConfig(topology deployment.Fabric) (Config, error) {
-	client, err := fabric.Address(topology.IP, ClientPort)
+// deployment descriptor: the member's own addresses from its descriptor IP,
+// and its seeds from its fabric peers' IPs. This is the whole production
+// bootstrap, and it needs nothing beyond the descriptor the machine was built
+// with.
+func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
+	client, err := fabric.Address(descriptor.IP, ClientPort)
 	if err != nil {
 		return Config{}, fmt.Errorf("olric: client address: %w", err)
 	}
-	memberlist, err := fabric.Address(topology.IP, MemberlistPort)
+	memberlist, err := fabric.Address(descriptor.IP, MemberlistPort)
 	if err != nil {
 		return Config{}, fmt.Errorf("olric: memberlist address: %w", err)
 	}
-	join := make([]string, 0, len(topology.Peers))
-	for _, peer := range topology.Peers {
+	join := make([]string, 0, len(descriptor.Fabric.Peers))
+	for _, peer := range descriptor.Fabric.Peers {
 		address, err := fabric.Address(peer.IP, MemberlistPort)
 		if err != nil {
 			return Config{}, fmt.Errorf("olric: peer %q: %w", peer.Machine, err)
