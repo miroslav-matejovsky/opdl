@@ -4,22 +4,30 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 
 // This file is the registration domain's complete list of events. Each one is a
 // fact this package can state because it owns the state that produced it, and
-// each is recorded at the transition that makes it true:
+// each is recorded at the transition that makes it true, by the machine that
+// owns that transition:
 //
-//   - platform.registration.requested: a request was persisted for the first
-//     time. Create records it. An exact retry does not, and a request that
-//     fails validation was never persisted, so it states nothing.
-//   - platform.registration.confirmed: one platform instance accepted a pending
-//     request. Confirm records it, once per instance that decides.
-//   - platform.registration.accepted: every expected platform instance has
-//     confirmed, and the request is committed. Confirm records it after the
-//     last confirmation, never for a retry of an already accepted request.
-//   - platform.registration.rejected: one platform instance refused a pending
-//     request. Confirm records it. Tagged warning.
-//   - platform.registration.conflict: an attempt reused a registration key with
-//     different immutable fields and was refused. Create records it for every
+//   - platform.registration.requested: a request claimed its key for the first
+//     time. Service.Create records it, on the origin. An exact retry does not,
+//     and a request that fails validation never claimed anything, so it states
+//     nothing.
+//   - platform.registration.confirmed: one platform instance accepted a
+//     proposal. That instance's Reconciler records it, once, however often it
+//     rescans or restarts.
+//   - platform.registration.accepted: every expected platform instance accepted,
+//     and the registration is committed. The origin's Reconciler records it,
+//     after the commit rather than after the confirmation that enabled it.
+//   - platform.registration.rejected: one platform instance refused a proposal.
+//     That instance's Reconciler records it. Tagged warning.
+//   - platform.registration.conflict: an attempt claimed a key already held by a
+//     different proposal and was refused. Service.Create records it for every
 //     rejected occurrence, because the attempt changes no state and would
-//     otherwise leave no trace. Tagged warning.
+//     otherwise leave no trace at all. Tagged warning.
+//
+// Between them they let a reader reconstruct a registration from outside the
+// platform: which machine took the request, which instances answered and how,
+// and when the site committed. A machine states only its own part, into its own
+// log, so no event reports a fact its machine did not witness.
 //
 // The payloads are a published contract read from outside the process. They
 // carry the origin the platform derived from its own deployment descriptor,

@@ -3,7 +3,6 @@ package registration
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -12,268 +11,331 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
-// recordingRecorder captures what the service records, in order, so a test can
-// assert behavior by the facts the service reports rather than by its calls.
-type recordingRecorder struct {
-	mu        sync.Mutex
-	recorded  []events.Event
-	failAfter int
-	err       error
+// These tests check registration by the facts it states. An event exists if and
+// only if the transition that owns it happened, which is what makes the event
+// log usable as evidence of behavior rather than of calls: a retry, a validation
+// failure, and a repeated scan all state nothing, because none of them changed
+// anything.
+
+// TestPhaseEventsAreStatedOnceInOrder checks the three phases of a registration
+// that is accepted, each stated by the machine that owns the transition.
+func TestPhaseEventsAreStatedOnceInOrder(t *testing.T) {
+	site := newSite(t, "node-a", "node-b")
+	nodeA := site.start("node-a")
+	nodeB := site.start("node-b")
+	nodeA.create(t, unitRequest())
+	site.reconcile()
+
+	require.Equal(t, []events.Type{TypeRequested, TypeConfirmed, TypeAccepted}, nodeA.recorder.types(),
+		"the origin took the request, answered for itself, and committed it")
+	require.Equal(t, []events.Type{TypeConfirmed}, nodeB.recorder.types(),
+		"a machine that is not the origin states its own answer and nothing else")
+
+	recorded := nodeA.recorder.events()
+	require.Equal(t, Requested{
+		UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Billing", Machine: "node-a", IP: "127.0.0.1",
+	}, recorded[0], "the origin is the platform's own descriptor identity, never the client's claim")
+	require.Equal(t, Confirmed{
+		UnitType: 7, UnitID: 42, OriginMachine: "node-a", ConfirmingMachine: "node-a",
+	}, recorded[1])
+	require.Equal(t, Accepted{
+		UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Billing", Machine: "node-a", IP: "127.0.0.1",
+	}, recorded[2], "acceptance is stated once, by the origin, after the commit")
+
+	require.Equal(t, Confirmed{
+		UnitType: 7, UnitID: 42, OriginMachine: "node-a", ConfirmingMachine: "node-b",
+	}, nodeB.recorder.events()[0], "a confirmation names who answered and whose request it was")
 }
 
-func (r *recordingRecorder) Record(_ context.Context, event events.Event) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.err != nil && len(r.recorded) >= r.failAfter {
-		return r.err
+// TestAcceptedIsStatedOnlyAfterEveryInstanceHasConfirmed checks the accepted
+// event follows the commit rather than the last confirmation that enabled it.
+func TestAcceptedIsStatedOnlyAfterEveryInstanceHasConfirmed(t *testing.T) {
+	site := newSite(t, "node-a", "node-b")
+	nodeA := site.start("node-a")
+	nodeA.create(t, unitRequest())
+	site.reconcile()
+	require.Equal(t, []events.Type{TypeRequested, TypeConfirmed}, nodeA.recorder.types(),
+		"the origin has answered for itself, but the site has not accepted anything")
+
+	site.start("node-b")
+	site.reconcile()
+	require.Equal(t, []events.Type{TypeRequested, TypeConfirmed, TypeAccepted}, nodeA.recorder.types())
+}
+
+// TestRejectionIsStatedAsAWarning checks a refusal is reported by the machine
+// that refused, with the bounded reason a client can act on.
+func TestRejectionIsStatedAsAWarning(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+
+	// A proposal whose fingerprint is not the one its content produces: this
+	// machine cannot trust it to be what it says, so it refuses it.
+	tampered := requestRecord{
+		Version: recordVersion, UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Billing",
+		OriginMachine: "node-a", OriginIP: "127.0.0.1",
+		Fingerprint: "0000000000000000000000000000000000000000000000000000000000000000",
 	}
-	r.recorded = append(r.recorded, event)
-	return nil
+	value, err := encode(tampered)
+	require.NoError(t, err)
+	created, err := nodeA.service.store.requests.Create(context.Background(), unitKey.String(), value)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	site.reconcile()
+
+	recorded := nodeA.recorder.events()
+	require.Len(t, recorded, 1)
+	require.Equal(t, Rejected{
+		UnitType: 7, UnitID: 42, OriginMachine: "node-a", RejectingMachine: "node-a",
+		Reason: ReasonFingerprintMismatch,
+	}, recorded[0])
+	require.Equal(t, []string{events.TagWarning}, recorded[0].(events.Tagged).Tags())
+
+	view := nodeA.get(t, unitKey)
+	require.Equal(t, api.RegistrationStatusRejected, view.Status)
+	require.Equal(t, ReasonFingerprintMismatch, *view.Reason)
 }
 
-func (r *recordingRecorder) events() []events.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]events.Event(nil), r.recorded...)
-}
-
-// types returns the recorded event types in order.
-func (r *recordingRecorder) types() []events.Type {
-	recorded := r.events()
-	types := make([]events.Type, 0, len(recorded))
-	for _, event := range recorded {
-		types = append(types, event.EventType())
+// TestValidationRefusesUntrustworthyProposals checks what an instance refuses,
+// and that its verdict is a function of the record and the deployment rather
+// than of anything it observed.
+func TestValidationRefusesUntrustworthyProposals(t *testing.T) {
+	valid := requestRecord{
+		Version: recordVersion, UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Billing",
+		OriginMachine: "node-a", OriginIP: "127.0.0.1",
 	}
-	return types
+	tests := []struct {
+		name string
+		// break_ mutates a valid proposal into one this instance must refuse.
+		break_ func(requestRecord) requestRecord
+		reason string
+	}{
+		{
+			name:   "a record from an encoding this instance does not know",
+			break_: func(r requestRecord) requestRecord { r.Version = recordVersion + 1; return r },
+			reason: ReasonUnsupportedVersion,
+		},
+		{
+			name: "a proposal whose own fields are not valid",
+			break_: func(r requestRecord) requestRecord {
+				r.UnitTypeNameAdvertised = " "
+				r.Fingerprint = fingerprintOf(r)
+				return r
+			},
+			reason: ReasonInvalidProposal,
+		},
+		{
+			name:   "a record whose fingerprint is not its content's",
+			break_: func(r requestRecord) requestRecord { r.Fingerprint = "deadbeef"; return r },
+			reason: ReasonFingerprintMismatch,
+		},
+		{
+			name: "an origin this site has no platform instance on",
+			break_: func(r requestRecord) requestRecord {
+				r.OriginMachine = "node-z"
+				r.Fingerprint = fingerprintOf(r)
+				return r
+			},
+			reason: ReasonUnknownOrigin,
+		},
+		{
+			name: "an origin at an IP the deployment does not put it at",
+			break_: func(r requestRecord) requestRecord {
+				r.OriginIP = "127.0.0.9"
+				r.Fingerprint = fingerprintOf(r)
+				return r
+			},
+			reason: ReasonUnknownOrigin,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			site := newSite(t, "node-a", "node-b")
+			nodeA := site.start("node-a")
+
+			proposal := valid
+			proposal.Fingerprint = fingerprintOf(proposal)
+			require.Empty(t, nodeA.reconciler.validate(proposal, false),
+				"the unbroken proposal must be acceptable")
+			require.Equal(t, test.reason, nodeA.reconciler.validate(test.break_(proposal), false))
+		})
+	}
 }
 
-// newRecordingService builds a service on one machine that accepts every
-// request as the only expected platform instance.
-func newRecordingService(t *testing.T) (*Service, *recordingRecorder) {
-	t.Helper()
-	recorder := &recordingRecorder{}
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, SingleInstanceCoordinator{}, recorder)
-	require.NoError(t, err)
-	return service, recorder
+// TestValidationRefusesAProposalOnAnAcceptedKey checks a key that already holds
+// a registration refuses a different proposal rather than leaving it pending
+// forever. Registration is create-only: the accepted record wins.
+func TestValidationRefusesAProposalOnAnAcceptedKey(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+
+	other := requestRecord{
+		Version: recordVersion, UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Payments",
+		OriginMachine: "node-a", OriginIP: "127.0.0.1",
+	}
+	other.Fingerprint = fingerprintOf(other)
+
+	require.Empty(t, nodeA.reconciler.validate(other, false), "the key is free")
+	require.Equal(t, ReasonAcceptedKeyConflict, nodeA.reconciler.validate(other, true))
 }
 
-func TestCreateRecordsRequestedConfirmedThenAccepted(t *testing.T) {
-	service, recorder := newRecordingService(t)
+// TestASettledRegistrationIsLeftAlone checks a pass does no work for a
+// registration that is committed. It cannot change, so touching it again would
+// make every scan cost what the site has ever registered rather than what is
+// still undecided.
+func TestASettledRegistrationIsLeftAlone(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	nodeA.create(t, unitRequest())
+	site.reconcile()
+	require.Equal(t, api.RegistrationStatusAccepted, nodeA.get(t, unitKey).Status)
+
+	// A recorder that fails on any further event, and a fabric closed underneath
+	// the confirmations: a pass that touched a settled registration would have
+	// to read or write, and would fail. It does neither.
+	nodeA.recorder.err = errors.New("sink is gone")
+	nodeA.recorder.failAfter = len(nodeA.recorder.types())
+	require.NoError(t, nodeA.reconciler.Reconcile(context.Background()))
+	require.NoError(t, nodeA.reconciler.Reconcile(context.Background()))
+}
+
+// TestKeyConflictIsStatedForEveryAttempt checks the conflict warning carries
+// both sides of the difference, and is stated every time. The refused attempt
+// changes nothing, so the event is the only trace it ever existed.
+func TestKeyConflictIsStatedForEveryAttempt(t *testing.T) {
+	site := newSite(t, "node-a", "node-b")
+	nodeA := site.start("node-a")
+	nodeB := site.start("node-b")
+
 	role := api.RoleMaster
-
-	_, err := service.Create(context.Background(), api.RegistrationRequest{
-		UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Scenario service", Role: &role,
-	})
-	require.NoError(t, err)
-
-	require.Equal(t, []events.Event{
-		Requested{
-			UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Scenario service", Role: "Master",
-			Machine: "node-a", IP: "127.0.0.1",
-		},
-		Confirmed{
-			UnitType: 7, UnitID: 42, OriginMachine: "node-a", ConfirmingMachine: "node-a",
-		},
-		Accepted{
-			UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Scenario service", Role: "Master",
-			Machine: "node-a", IP: "127.0.0.1",
-		},
-	}, recorder.events())
-}
-
-func TestCreateRecordsNothingWhenValidationFails(t *testing.T) {
-	service, recorder := newRecordingService(t)
-
-	_, err := service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: " "})
-	require.Error(t, err)
-
-	invalidRole := "master"
-	_, err = service.Create(context.Background(), api.RegistrationRequest{
-		UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker", Role: &invalidRole,
-	})
-	require.Error(t, err)
-
-	require.Empty(t, recorder.events(), "a request that was never persisted is not a fact")
-}
-
-func TestCreateExactRetryRecordsNoDuplicatePhaseEvent(t *testing.T) {
-	service, recorder := newRecordingService(t)
-	request := api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Scenario service"}
-
-	first, err := service.Create(context.Background(), request)
-	require.NoError(t, err)
-	require.Equal(t, CreateResultNew, first)
-	afterFirst := recorder.types()
-
-	retry, err := service.Create(context.Background(), request)
-	require.NoError(t, err)
-	require.Equal(t, CreateResultRetry, retry)
-
-	require.Equal(t, afterFirst, recorder.types(), "an exact retry changes nothing, so it reports nothing")
-	require.Equal(t, []events.Type{
-		TypeRequested,
-		TypeConfirmed,
-		TypeAccepted,
-	}, recorder.types())
-}
-
-func TestCreateKeyConflictRecordsWarningAndPreservesState(t *testing.T) {
-	recorder := &recordingRecorder{}
-	store := newMemoryStore()
-	owner, err := newService(Location{Machine: "node-a", IP: "127.0.0.1"}, &heldCoordinator{}, recorder, store)
-	require.NoError(t, err)
-	intruder, err := newService(Location{Machine: "node-b", IP: "127.0.0.2"}, &heldCoordinator{}, recorder, store)
-	require.NoError(t, err)
-
-	role := api.RoleMaster
-	_, err = owner.Create(context.Background(), api.RegistrationRequest{
-		UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "First", Role: &role,
-	})
-	require.NoError(t, err)
+	nodeA.create(t, api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "First", Role: &role})
 
 	attempt := api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Second"}
-	_, err = intruder.Create(context.Background(), attempt)
-	require.ErrorIs(t, err, ErrConflict)
+	for range 2 {
+		_, err := nodeB.service.Create(context.Background(), attempt)
+		require.ErrorIs(t, err, ErrConflict)
+	}
 
-	recorded := recorder.events()
-	require.Len(t, recorded, 2)
+	require.Equal(t, []events.Type{TypeConflict, TypeConflict}, nodeB.recorder.types(),
+		"every rejected occurrence is stated, not just the first")
 	require.Equal(t, Conflict{
 		UnitType: 7, UnitID: 42,
 		Existing:  Fields{UnitTypeNameAdvertised: "First", Role: "Master", Machine: "node-a", IP: "127.0.0.1"},
 		Attempted: Fields{UnitTypeNameAdvertised: "Second", Machine: "node-b", IP: "127.0.0.2"},
 		Reason:    ReasonKeyConflict,
-	}, recorded[1])
-	require.Equal(t, []string{events.TagWarning}, recorded[1].(events.Tagged).Tags())
+	}, nodeB.recorder.events()[0])
 
-	// The stored request is untouched by the rejected attempt.
-	view, found, err := owner.Get(context.Background(), Key{UnitType: 7, UnitID: 42})
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, "First", view.UnitTypeNameAdvertised)
-	require.Equal(t, "node-a", view.Machine)
-
-	// Every rejected occurrence is reported, not just the first.
-	_, err = intruder.Create(context.Background(), attempt)
-	require.ErrorIs(t, err, ErrConflict)
-	require.Equal(t, []events.Type{
-		TypeRequested,
-		TypeConflict,
-		TypeConflict,
-	}, recorder.types())
+	require.Equal(t, []events.Type{TypeRequested}, nodeA.recorder.types(),
+		"the machine holding the key was not involved and states nothing")
 }
 
-func TestConfirmRejectionRecordsWarningInsteadOfAcceptance(t *testing.T) {
-	recorder := &recordingRecorder{}
-	coordinator := &heldCoordinator{}
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, recorder)
-	require.NoError(t, err)
-	_, err = service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker"})
-	require.NoError(t, err)
+// TestRejectedRequestsStateNothingOnAValidationFailure checks a request the
+// platform never stored states nothing: there was no transition to report.
+func TestRejectedRequestsStateNothingOnAValidationFailure(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
 
-	reason := "unit_not_supported"
-	coordinator.confirmWith(t, api.RegistrationStatusRejected, &reason)
-
-	recorded := recorder.events()
-	require.Len(t, recorded, 2)
-	require.Equal(t, Rejected{
-		UnitType: 1, UnitID: 2, OriginMachine: "node-a", RejectingMachine: "node-a", Reason: reason,
-	}, recorded[1])
-	require.Equal(t, []string{events.TagWarning}, recorded[1].(events.Tagged).Tags())
+	_, err := nodeA.service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: ""})
+	require.Error(t, err)
+	require.Empty(t, nodeA.recorder.types())
 }
 
-func TestConfirmRecordsNothingWithoutAStateChange(t *testing.T) {
-	tests := []struct {
-		name string
-		// create reports whether the request exists before the confirmation.
-		create bool
-		// settle drives the request into its resting state.
-		settle func(t *testing.T, coordinator *heldCoordinator)
-	}{
-		{
-			name:   "unknown request",
-			create: false,
-			settle: func(*testing.T, *heldCoordinator) {},
-		},
-		{
-			name:   "already accepted request",
-			create: true,
-			settle: func(t *testing.T, coordinator *heldCoordinator) {
-				coordinator.confirmWith(t, api.RegistrationStatusAccepted, nil)
-			},
-		},
-		{
-			name:   "instance that already rejected",
-			create: true,
-			settle: func(t *testing.T, coordinator *heldCoordinator) {
-				reason := "unit_not_supported"
-				coordinator.confirmWith(t, api.RegistrationStatusRejected, &reason)
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			recorder := &recordingRecorder{}
-			coordinator := &heldCoordinator{}
-			service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, recorder)
-			require.NoError(t, err)
-			if test.create {
-				_, err = service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker"})
-				require.NoError(t, err)
-			}
-			test.settle(t, coordinator)
-			settled := recorder.types()
+// TestCreateReportsARecordingFailureWithContext pins the trade-off: when a
+// transition cannot be reported, the caller is told the platform failed. The
+// store is not rolled back to match, so the transition outlives its lost event.
+func TestCreateReportsARecordingFailureWithContext(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	nodeA.recorder.err = errors.New("sink is gone")
 
-			require.NoError(t, service.Confirm(context.Background(), Key{UnitType: 1, UnitID: 2}, api.RegistrationStatusAccepted, nil))
-			require.Equal(t, settled, recorder.types())
-		})
-	}
-}
-
-func TestCreateReportsRecordingFailureWithContext(t *testing.T) {
-	recorder := &recordingRecorder{err: errors.New("sink is gone")}
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, SingleInstanceCoordinator{}, recorder)
-	require.NoError(t, err)
-
-	// The store has already accepted the request when recording fails. The
-	// failure is surfaced, not swallowed, and the request is not rolled back.
-	_, err = service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker"})
+	_, err := nodeA.service.Create(context.Background(), unitRequest())
 	require.ErrorContains(t, err, "registration: record platform.registration.requested")
 	require.ErrorContains(t, err, "sink is gone")
 	require.NotErrorIs(t, err, ErrConflict, "a recording failure must not read as a client conflict")
 
-	_, found, err := service.Get(context.Background(), Key{UnitType: 1, UnitID: 2})
-	require.NoError(t, err)
-	require.True(t, found)
+	nodeA.recorder.err = nil
+	require.Equal(t, CreateResultRetry, nodeA.create(t, unitRequest()),
+		"the request was stored: only saying so failed")
 }
 
-// TestCreateConflictReportsRecordingFailureInsteadOfConflict pins a deliberate
-// trade-off: when the conflict warning cannot be recorded, the caller is told
-// the platform failed rather than being handed a clean 409, because the
-// rejected attempt would otherwise leave no trace at all.
-func TestCreateConflictReportsRecordingFailureInsteadOfConflict(t *testing.T) {
-	// Fails only once the first request's three events are recorded.
-	recorder := &recordingRecorder{err: errors.New("sink is gone"), failAfter: 3}
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, SingleInstanceCoordinator{}, recorder)
-	require.NoError(t, err)
-	_, err = service.Create(context.Background(), api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "First"})
-	require.NoError(t, err)
+// TestConflictReportsARecordingFailureInsteadOfTheConflict pins the same
+// trade-off where it costs the most: a clean 409 would be a nicer answer, but
+// the refused attempt would then leave no trace anywhere at all.
+func TestConflictReportsARecordingFailureInsteadOfTheConflict(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	nodeA.create(t, unitRequest())
 
-	_, err = service.Create(context.Background(), api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Second"})
+	nodeA.recorder.err = errors.New("sink is gone")
+	nodeA.recorder.failAfter = len(nodeA.recorder.types())
+
+	_, err := nodeA.service.Create(context.Background(), api.RegistrationRequest{
+		UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Payments",
+	})
 	require.ErrorContains(t, err, "registration: record platform.registration.conflict")
 	require.ErrorContains(t, err, "sink is gone")
 	require.NotErrorIs(t, err, ErrConflict)
 }
 
-func TestConfirmReportsRecordingFailureWithContext(t *testing.T) {
-	recorder := &recordingRecorder{err: errors.New("sink is gone"), failAfter: 1}
-	coordinator := &heldCoordinator{}
-	service, err := NewService(Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, recorder)
-	require.NoError(t, err)
-	_, err = service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker"})
-	require.NoError(t, err)
+// TestReconcileReportsARecordingFailureWithContext checks the reconciler makes
+// the same trade-off as the service, and reports which pass failed.
+func TestReconcileReportsARecordingFailureWithContext(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	nodeA.create(t, unitRequest())
 
-	confirm := coordinator.confirmFunc(t)
-	err = confirm(context.Background(), api.RegistrationStatusAccepted, nil)
+	nodeA.recorder.err = errors.New("sink is gone")
+	nodeA.recorder.failAfter = len(nodeA.recorder.types())
+
+	err := nodeA.reconciler.Reconcile(context.Background())
+	require.ErrorContains(t, err, "registration: reconcile 7/42")
 	require.ErrorContains(t, err, "registration: record platform.registration.confirmed")
 	require.ErrorContains(t, err, "sink is gone")
+}
+
+// TestReconcileReportsEveryFailingRequest checks one unreadable record cannot
+// stop the site from deciding everything else, and that nothing is swallowed to
+// achieve that.
+func TestReconcileReportsEveryFailingRequest(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+
+	// Two records that are not this package's, under keys that are.
+	for _, key := range []Key{{UnitType: 1, UnitID: 1}, {UnitType: 2, UnitID: 2}} {
+		created, err := nodeA.service.store.requests.Create(context.Background(), key.String(), []byte("not a record"))
+		require.NoError(t, err)
+		require.True(t, created)
+	}
+	nodeA.create(t, unitRequest())
+
+	err := nodeA.reconciler.Reconcile(context.Background())
+	require.Error(t, err)
+
+	// The healthy request was decided anyway, in the same pass that failed.
+	require.Equal(t, api.RegistrationStatusAccepted, nodeA.get(t, unitKey).Status)
+}
+
+// TestReasonsAreBoundedAndMachineReadable checks every reason this package can
+// state is one a client can act on: short, and made of the characters a code is
+// made of rather than of prose.
+func TestReasonsAreBoundedAndMachineReadable(t *testing.T) {
+	reasons := []string{
+		ReasonKeyConflict,
+		ReasonUnsupportedVersion,
+		ReasonInvalidProposal,
+		ReasonFingerprintMismatch,
+		ReasonUnknownOrigin,
+		ReasonAcceptedKeyConflict,
+	}
+	for _, reason := range reasons {
+		t.Run(reason, func(t *testing.T) {
+			require.NotEmpty(t, reason)
+			require.LessOrEqual(t, len(reason), 64, "a reason is bounded")
+			for _, r := range reason {
+				require.True(t,
+					(r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.',
+					"reason %q is not machine-readable at %q", reason, r)
+			}
+		})
+	}
 }

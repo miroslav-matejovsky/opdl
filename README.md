@@ -65,10 +65,14 @@ separately (`connected`, `degraded`, `disconnected`). A single-machine site is a
 one-member fabric and is connected on its own. A site boots in any order: a
 machine whose peers are not up yet starts alone and merges when they arrive.
 
-**Startup order.** The event sink opens first, then the fabric, and only then the
-public API: a machine that cannot start its fabric never serves traffic. Shutdown
-reverses it: HTTP intake stops and drains, the fabric closes and records
-`platform.fabric.stopped`, and the event sink closes last.
+**Startup order.** The event sink opens first, then the fabric, then registration
+opens its collections and its reconciler runs one pass, and only then the public
+API. A machine that cannot start its fabric, or cannot reconcile, never serves
+traffic: a restarted machine owes the site's outstanding requests its answer
+before it answers anyone's questions about them. Shutdown reverses it: HTTP
+intake stops and drains, reconciliation stops and its pass in flight finishes,
+the fabric closes and records `platform.fabric.stopped`, and the event sink
+closes last. Nothing is left reading a fabric that is going away.
 
 **No redundancy.** One fabric member per machine, with no primary/secondary
 instance, election, or fencing. Olric may partition or replicate internally;
@@ -81,10 +85,53 @@ adapter behind the fabric here, not an API anything else depends on.
 ### Registration
 
 A client asks the platform to register a unit, keyed by unit type and unit ID.
-The request is persisted, then confirmed by every expected platform instance,
-and only then accepted. An identical repeat request is an idempotent retry;
-reusing a key with different immutable fields is a conflict and is refused with
-the stored request untouched. State is in memory today, local to one machine.
+`POST /registrations` takes the request and answers `202`: the request is a
+proposal, and `202` does not mean the unit is registered. The client then polls
+`GET /registrations/{unit_type}/{unit_id}/status` on the machine it asked, which
+is its only confirmation mechanism. There is no request id: the unit key locates
+the request, and nothing client-visible is generated.
+
+**The acceptance boundary is every expected platform instance.** A request is
+accepted only once every machine in the site's static deployment topology,
+including the origin, has recorded acceptance of that exact proposal. It is not a
+quorum, and it is not current live membership: an expected machine that is down
+keeps the request pending, indefinitely, rather than being dropped from the vote.
+There is no timeout, expiry, or forced acceptance. This is the point of the
+design, not a limitation of it.
+
+**Each machine runs a reconciler.** It scans the site's requests once at startup
+and periodically after (`registration.reconcile_interval`, default 1s), validates
+each proposal, and records its own confirmation. Nothing is delivered to it and
+no instance coordinates the others: every decision is derived from the site's
+state, so a pass is a correction rather than a step, and repeated passes and
+restarts converge on the same result. Every write is create-if-absent, which is
+what makes that safe.
+
+**Creating the accepted registration is the single commit point.** The origin
+machine commits once the site has agreed. Status is `accepted` if and only if
+that record exists, so acceptance never races the confirmations that granted it.
+Registration is create-only: an accepted registration is never updated or moved,
+and changing one will require explicit removal, which is a later use case.
+
+**Conflicts.** An identical repeat request is an idempotent retry. Any other
+difference on a claimed key, including a different advertised name or role from
+the same machine, is a conflict: it is refused with `409`, the stored state is
+untouched, and a `warning`-tagged `platform.registration.conflict` is recorded.
+The unit key is unique across the whole site fabric and is never scoped by
+machine, so the same key from another machine is a conflict too. Without a caller
+identity, a byte-for-byte identical second unit on one machine is
+indistinguishable from a retry and is answered as one; that is an explicit
+limitation of this phase.
+
+**State lives on the fabric**, in three collections owned by the registration
+package (`registration-requests`, `registration-confirmations`, `registrations`),
+so every machine of a site holds it. `GET /registrations` therefore answers on any
+machine and lists pending, accepted, and rejected requests alike, each with its
+progress across every expected instance. Status is the origin's alone: another
+machine holds the same request and answers `404`, because it is not who was asked.
+
+State is in memory and is not replayed after a full-site shutdown. Different
+sites have separate fabrics, and cross-site uniqueness is not enforced.
 
 ### Domain events
 

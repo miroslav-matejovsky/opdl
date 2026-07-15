@@ -4,124 +4,136 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"sort"
-	"strings"
-	"sync"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/fabric"
 )
 
-const maxReasonLength = 64
+// ErrConflict reports an attempt to claim a registration key that is already
+// held by a different proposal.
+var ErrConflict = errors.New("registration key conflict")
 
-var (
-	// ErrConflict reports an attempt to create an existing registration with
-	// different immutable request or origin fields.
-	ErrConflict = errors.New("registration key conflict")
-)
-
-// Key is the immutable, site-local identity of one registration request.
-type Key struct {
-	// UnitType is the unit type identifier.
-	UnitType uint8
-	// UnitID is the unit identifier within UnitType.
-	UnitID uint16
-}
-
-// Location is the trusted platform descriptor identity where a registration
-// request originates.
-type Location struct {
-	// Machine is the immutable descriptor machine name.
-	Machine string
-	// IP is the immutable descriptor IP address.
-	IP string
-}
-
-// Coordinator starts registration confirmation after a request is persisted.
-// The service provides confirm so coordinators cannot alter request data.
-type Coordinator interface {
-	Trigger(context.Context, Key, func(context.Context, string, *string) error) error
-}
-
-// SingleInstanceCoordinator accepts each request as the only expected platform
-// instance. Tests can inject a coordinator that holds the supplied confirmation
-// callback to keep a new registration visibly pending.
-type SingleInstanceCoordinator struct{}
-
-// Trigger writes this platform instance's accepted confirmation.
-func (SingleInstanceCoordinator) Trigger(ctx context.Context, _ Key, confirm func(context.Context, string, *string) error) error {
-	return confirm(ctx, api.RegistrationStatusAccepted, nil)
-}
-
-// Recorder records the facts a registration produces. The service records at
-// the state transition that owns each fact, so an event exists if and only if
-// the transition happened. events.Recorder and events.NopRecorder implement it.
+// Recorder records the facts a registration produces. The service and the
+// reconciler each record at the transition that owns the fact, so an event
+// exists if and only if the transition happened. events.Recorder and
+// events.NopRecorder implement it.
 type Recorder interface {
 	// Record stores one event or returns an error with context.
 	Record(ctx context.Context, event events.Event) error
 }
 
-// CreateResult distinguishes a newly persisted request from an exact retry.
+// CreateResult distinguishes a newly created request from an exact retry.
 type CreateResult string
 
 const (
-	// CreateResultNew reports that a request was persisted for the first time.
+	// CreateResultNew reports that a request claimed its key for the first time.
 	CreateResultNew CreateResult = "new"
 	// CreateResultRetry reports an exact idempotent retry of an existing request.
 	CreateResultRetry CreateResult = "retry"
 )
 
-// Service creates, confirms, and projects registration requests.
-type Service struct {
-	location    Location
-	store       *memoryStore
-	coordinator Coordinator
-	recorder    Recorder
-}
-
-// NewService creates a local registration service with isolated in-memory state.
-func NewService(location Location, coordinator Coordinator, recorder Recorder) (*Service, error) {
-	return newService(location, coordinator, recorder, newMemoryStore())
-}
-
-func newService(location Location, coordinator Coordinator, recorder Recorder, store *memoryStore) (*Service, error) {
-	if err := validateLocation(location); err != nil {
-		return nil, err
-	}
-	if coordinator == nil {
-		return nil, errors.New("registration: coordinator is required")
-	}
-	if recorder == nil {
-		return nil, errors.New("registration: recorder is required")
-	}
-	if store == nil {
-		return nil, errors.New("registration: store is required")
-	}
-	return &Service{location: location, coordinator: coordinator, recorder: recorder, store: store}, nil
-}
-
-// Create validates and persists a request. A matching existing request is an
-// idempotent retry; every immutable mismatch returns ErrConflict.
+// Service is the registration use case as the public API calls it: it takes
+// requests, and it answers what the site currently holds.
 //
-// Only a first persist records a requested event: an exact retry changes no
-// state and so produces no event, and a request that fails validation is never
-// persisted and produces none either. A conflict records its warning before the
-// error reaches the caller, because the rejected attempt leaves no other trace.
+// It decides nothing. Taking a request writes a proposal and says so; whether
+// that proposal becomes a registration is the site's answer, reached by every
+// instance's Reconciler, and this type only reports it. The split is deliberate:
+// a client's call must not be able to accept its own registration.
+type Service struct {
+	store      *store
+	location   Location
+	members    []fabric.Member
+	reconciler *Reconciler
+	recorder   Recorder
+}
+
+// Open builds the registration service and reconciler one platform process runs.
+//
+// Both are returned because the runtime owns both: the service is what the HTTP
+// API calls, and the reconciler is what the runtime must run an initial pass of
+// before opening that API and must stop before closing the fabric. They share
+// one view of the site's collections, and the identity they work as is the
+// fabric's own local member, so a machine can only ever answer as itself.
+func Open(f fabric.Fabric, recorder Recorder) (*Service, *Reconciler, error) {
+	if recorder == nil {
+		return nil, nil, errors.New("registration: recorder is required")
+	}
+	store, err := openStore(f)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	members := f.Members()
+	if len(members) == 0 {
+		return nil, nil, errors.New("registration: the fabric expects no members")
+	}
+	// The expected membership is the acceptance set, so a member the platform
+	// could not recognize a request from is a deployment that cannot register
+	// anything. That is a startup failure, not a per-request surprise.
+	for _, member := range members {
+		if err := validateLocation(Location{Machine: member.Machine, IP: member.IP}); err != nil {
+			return nil, nil, fmt.Errorf("registration: expected member %q: %w", member.Machine, err)
+		}
+	}
+	self, ok := fabric.Self(members)
+	if !ok {
+		return nil, nil, errors.New("registration: the fabric has no local member")
+	}
+
+	reconciler := &Reconciler{store: store, self: self, members: members, recorder: recorder}
+	service := &Service{
+		store:      store,
+		location:   Location{Machine: self.Machine, IP: self.IP},
+		members:    members,
+		reconciler: reconciler,
+		recorder:   recorder,
+	}
+	return service, reconciler, nil
+}
+
+// Create takes a registration request and returns whether it claimed its key or
+// repeated an existing claim. It does not register anything: the request is a
+// proposal, and the site decides.
+//
+// The origin is this machine's own descriptor identity, never the client's
+// claim. An identical repeat is idempotent, and every other difference on a key
+// that is already claimed is a conflict, whether it came from this machine or
+// another one.
+//
+// Only a first claim records a requested event: a retry changes no state and so
+// states nothing, and a request that fails validation was never stored. A
+// conflict records its warning before the error reaches the caller, because the
+// refused attempt leaves no other trace of itself anywhere.
+//
+// Without a caller identity, an identical second unit registering the same key
+// from the same machine is indistinguishable from a retry, and is answered as
+// one. That is a known limitation of this phase: nothing in the request tells
+// the platform who is asking.
 func (s *Service) Create(ctx context.Context, request api.RegistrationRequest) (CreateResult, error) {
 	if err := validateRequest(request); err != nil {
 		return "", err
 	}
-	key := Key{UnitType: request.UnitType, UnitID: request.UnitID}
-	candidate := record{key: key, request: copyRequest(request), location: s.location}
-	result, existing, err := s.store.create(ctx, candidate)
+	candidate := requestRecord{
+		Version:                recordVersion,
+		UnitType:               request.UnitType,
+		UnitID:                 request.UnitID,
+		UnitTypeNameAdvertised: request.UnitTypeNameAdvertised,
+		Role:                   copyString(request.Role),
+		OriginMachine:          s.location.Machine,
+		OriginIP:               s.location.IP,
+	}
+	candidate.Fingerprint = fingerprintOf(candidate)
+
+	result, existing, err := s.store.createRequest(ctx, candidate)
 	if err != nil {
 		if !errors.Is(err, ErrConflict) {
 			return "", err
 		}
 		if recordErr := s.record(ctx, Conflict{
-			UnitType:  key.UnitType,
-			UnitID:    key.UnitID,
+			UnitType:  candidate.UnitType,
+			UnitID:    candidate.UnitID,
 			Existing:  eventFields(existing),
 			Attempted: eventFields(candidate),
 			Reason:    ReasonKeyConflict,
@@ -133,108 +145,65 @@ func (s *Service) Create(ctx context.Context, request api.RegistrationRequest) (
 	if result == CreateResultRetry {
 		return result, nil
 	}
-	if err := s.record(ctx, Requested{
-		UnitType:               key.UnitType,
-		UnitID:                 key.UnitID,
-		UnitTypeNameAdvertised: candidate.request.UnitTypeNameAdvertised,
-		Role:                   roleValue(candidate.request.Role),
-		Machine:                candidate.location.Machine,
-		IP:                     candidate.location.IP,
-	}); err != nil {
-		return "", err
-	}
-	if err := s.coordinator.Trigger(ctx, key, func(confirmCtx context.Context, status string, reason *string) error {
-		return s.Confirm(confirmCtx, key, status, reason)
-	}); err != nil {
-		return "", fmt.Errorf("registration: coordinate %d/%d: %w", key.UnitType, key.UnitID, err)
-	}
-	return result, nil
-}
-
-// Confirm records this platform instance's result for a pending request. A
-// rejected request remains visible; acceptance promotes it to the accepted store.
-//
-// Events follow the state change, not the call: a confirmation that changes
-// nothing, because the request is unknown, already accepted, or already
-// rejected by this instance, records nothing. Acceptance by the last expected
-// instance records the instance's confirmation and then the request's
-// acceptance, in that order.
-func (s *Service) Confirm(ctx context.Context, key Key, status string, reason *string) error {
-	if status != api.RegistrationStatusAccepted && status != api.RegistrationStatusRejected {
-		return fmt.Errorf("registration: invalid confirmation status %q", status)
-	}
-	if err := validateReason(reason); err != nil {
-		return err
-	}
-	outcome, err := s.store.confirm(ctx, key, confirmation{location: s.location, status: status, reason: copyString(reason)})
-	if err != nil {
-		return err
-	}
-	if !outcome.confirmed {
-		return nil
-	}
-	if status == api.RegistrationStatusRejected {
-		return s.record(ctx, Rejected{
-			UnitType:         key.UnitType,
-			UnitID:           key.UnitID,
-			OriginMachine:    outcome.record.location.Machine,
-			RejectingMachine: s.location.Machine,
-			Reason:           reasonValue(reason),
-		})
-	}
-	if err := s.record(ctx, Confirmed{
-		UnitType:          key.UnitType,
-		UnitID:            key.UnitID,
-		OriginMachine:     outcome.record.location.Machine,
-		ConfirmingMachine: s.location.Machine,
-	}); err != nil {
-		return err
-	}
-	if !outcome.accepted {
-		return nil
-	}
-	return s.record(ctx, Accepted{
-		UnitType:               key.UnitType,
-		UnitID:                 key.UnitID,
-		UnitTypeNameAdvertised: outcome.record.request.UnitTypeNameAdvertised,
-		Role:                   roleValue(outcome.record.request.Role),
-		Machine:                outcome.record.location.Machine,
-		IP:                     outcome.record.location.IP,
+	return result, s.record(ctx, Requested{
+		UnitType:               candidate.UnitType,
+		UnitID:                 candidate.UnitID,
+		UnitTypeNameAdvertised: candidate.UnitTypeNameAdvertised,
+		Role:                   roleValue(candidate.Role),
+		Machine:                candidate.OriginMachine,
+		IP:                     candidate.OriginIP,
 	})
 }
 
-// record stores one event. A failure is returned with context rather than
-// swallowed, and it replaces whatever the operation would otherwise have
-// returned, including ErrConflict: a platform that cannot report what it did is
-// failing, and saying so beats answering as if nothing happened. The store is
-// not rolled back to match, so a transition can outlive its lost event.
-func (s *Service) record(ctx context.Context, event events.Event) error {
-	if err := s.recorder.Record(ctx, event); err != nil {
-		return fmt.Errorf("registration: record %s: %w", event.EventType(), err)
-	}
-	return nil
-}
-
-// Get returns a registration view only when this service owns the request's
-// origin location. Other platform machines must return not found.
+// Get returns a registration view, and reports not found unless this machine is
+// the request's origin. A client checks its request where it made it: another
+// machine holds the same state but is not who was asked.
+//
+// It reconciles the key before answering, so a client polling its own request
+// drives it forward instead of waiting for a scheduled pass. That is why a read
+// here can write: it can record this instance's confirmation and commit the
+// registration. It cannot report accepted early, though, because accepted is
+// still the accepted record existing and nothing else.
 func (s *Service) Get(ctx context.Context, key Key) (api.Registration, bool, error) {
-	record, confirmations, found, err := s.store.find(ctx, key)
-	if err != nil || !found || record.location != s.location {
+	if err := s.reconciler.advance(ctx, key); err != nil {
 		return api.Registration{}, false, err
 	}
-	return project(record, confirmations), true, nil
+	request, found, err := s.store.request(ctx, key)
+	if err != nil || !found {
+		return api.Registration{}, false, err
+	}
+	if request.location() != s.location {
+		return api.Registration{}, false, nil
+	}
+	view, err := s.project(ctx, request)
+	if err != nil {
+		return api.Registration{}, false, err
+	}
+	return view, true, nil
 }
 
-// List returns every registration request in deterministic origin-machine, unit
-// type, and unit ID order.
+// List returns every registration request in the site, pending, accepted, and
+// rejected alike, in deterministic origin-machine, unit-type, unit-ID order.
+//
+// It answers on any machine, unlike Get: the list is the site's state, and every
+// machine holds it. It enumerates requests rather than registrations, so a
+// request that has not been accepted, or never will be, is visible rather than
+// missing.
+//
+// It reconciles nothing. A list is a question about the site, and answering one
+// question about every request must not turn into deciding every request.
 func (s *Service) List(ctx context.Context) ([]api.Registration, error) {
-	records, err := s.store.list(ctx)
+	requests, err := s.store.allRequests(ctx)
 	if err != nil {
 		return nil, err
 	}
-	registrations := make([]api.Registration, 0, len(records))
-	for _, item := range records {
-		registrations = append(registrations, project(item.record, item.confirmations))
+	registrations := make([]api.Registration, 0, len(requests))
+	for _, request := range requests {
+		view, err := s.project(ctx, request)
+		if err != nil {
+			return nil, err
+		}
+		registrations = append(registrations, view)
 	}
 	sort.Slice(registrations, func(i, j int) bool {
 		if registrations[i].Machine != registrations[j].Machine {
@@ -248,217 +217,128 @@ func (s *Service) List(ctx context.Context) ([]api.Registration, error) {
 	return registrations, nil
 }
 
-func validateLocation(location Location) error {
-	if strings.TrimSpace(location.Machine) == "" {
-		return errors.New("registration: location machine is blank")
+// project derives one registration view from a stored proposal and the site's
+// current state. Status and List both use it, so the two can never disagree
+// about a request.
+//
+// The instance projection is built from the site's whole expected membership,
+// not from the confirmations that happen to exist: an instance that has not
+// answered is the interesting case, and it appears as pending rather than not at
+// all.
+func (s *Service) project(ctx context.Context, request requestRecord) (api.Registration, error) {
+	decisions, err := s.store.decisions(ctx, request, s.members)
+	if err != nil {
+		return api.Registration{}, err
 	}
-	if net.ParseIP(location.IP) == nil {
-		return fmt.Errorf("registration: location IP %q is invalid", location.IP)
-	}
-	return nil
-}
-
-func validateRequest(request api.RegistrationRequest) error {
-	if strings.TrimSpace(request.UnitTypeNameAdvertised) == "" {
-		return errors.New("registration: unit type name advertised is blank")
-	}
-	if request.Role != nil && *request.Role != api.RoleMaster && *request.Role != api.RoleSlave {
-		return fmt.Errorf("registration: role %q is invalid", *request.Role)
-	}
-	return nil
-}
-
-func validateReason(reason *string) error {
-	if reason == nil {
-		return nil
-	}
-	if *reason == "" || len(*reason) > maxReasonLength {
-		return errors.New("registration: reason length is invalid")
-	}
-	for _, r := range *reason {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != '-' && r != '.' {
-			return errors.New("registration: reason is not machine-readable")
+	// Expected members are ordered by machine, so the instance projection is
+	// too, and the reason chosen below is the first rejection in that order.
+	instances := make([]api.PlatformInstanceRegistrationStatus, 0, len(s.members))
+	for _, member := range s.members {
+		instance := api.PlatformInstanceRegistrationStatus{
+			Machine: member.Machine,
+			IP:      member.IP,
+			Status:  api.RegistrationStatusPending,
 		}
-	}
-	return nil
-}
-
-type record struct {
-	key      Key
-	request  api.RegistrationRequest
-	location Location
-}
-
-type confirmation struct {
-	location Location
-	status   string
-	reason   *string
-}
-
-type listedRecord struct {
-	record        record
-	confirmations []confirmation
-}
-
-// confirmOutcome is what a confirmation changed in the store. The service needs
-// it to record events at transitions only, and it carries the stored record so
-// the caller reports the committed data rather than the client's copy.
-type confirmOutcome struct {
-	// confirmed reports that this instance's decision was newly stored.
-	confirmed bool
-	// accepted reports that the request became accepted by this decision.
-	accepted bool
-	// record is the stored request the decision applies to.
-	record record
-}
-
-type memoryStore struct {
-	mu            sync.RWMutex
-	pending       map[Key]record
-	accepted      map[Key]record
-	confirmations map[Key]map[string]confirmation
-}
-
-func newMemoryStore() *memoryStore {
-	return &memoryStore{
-		pending:       map[Key]record{},
-		accepted:      map[Key]record{},
-		confirmations: map[Key]map[string]confirmation{},
-	}
-}
-
-// create stores candidate unless its key is taken. On ErrConflict it returns the
-// stored record that holds the key, so the caller can report both sides of the
-// conflict; the stored record is never modified.
-func (s *memoryStore) create(ctx context.Context, candidate record) (CreateResult, record, error) {
-	if err := ctx.Err(); err != nil {
-		return "", record{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if existing, ok := s.pending[candidate.key]; ok {
-		return compareRecord(existing, candidate)
-	}
-	if existing, ok := s.accepted[candidate.key]; ok {
-		return compareRecord(existing, candidate)
-	}
-	s.pending[candidate.key] = candidate
-	return CreateResultNew, candidate, nil
-}
-
-func compareRecord(existing, candidate record) (CreateResult, record, error) {
-	if existing.location == candidate.location && existing.request.UnitTypeNameAdvertised == candidate.request.UnitTypeNameAdvertised && sameString(existing.request.Role, candidate.request.Role) {
-		return CreateResultRetry, existing, nil
-	}
-	return "", existing, ErrConflict
-}
-
-// confirm stores one instance's decision for a pending request and reports what
-// changed. A decision on an unknown or already accepted request, or a second
-// decision from an instance that already rejected it, changes nothing.
-func (s *memoryStore) confirm(ctx context.Context, key Key, result confirmation) (confirmOutcome, error) {
-	if err := ctx.Err(); err != nil {
-		return confirmOutcome{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pending, ok := s.pending[key]
-	if !ok {
-		return confirmOutcome{}, nil
-	}
-	if s.confirmations[key] == nil {
-		s.confirmations[key] = map[string]confirmation{}
-	}
-	if existing, ok := s.confirmations[key][result.location.Machine]; ok && existing.status == api.RegistrationStatusRejected {
-		return confirmOutcome{}, nil
-	}
-	s.confirmations[key][result.location.Machine] = result
-	outcome := confirmOutcome{confirmed: true, record: pending}
-	if result.status == api.RegistrationStatusAccepted {
-		s.accepted[key] = pending
-		delete(s.pending, key)
-		outcome.accepted = true
-	}
-	return outcome, nil
-}
-
-func (s *memoryStore) find(ctx context.Context, key Key) (record, []confirmation, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return record{}, nil, false, err
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if item, ok := s.pending[key]; ok {
-		return item, copiedConfirmations(s.confirmations[key]), true, nil
-	}
-	if item, ok := s.accepted[key]; ok {
-		return item, copiedConfirmations(s.confirmations[key]), true, nil
-	}
-	return record{}, nil, false, nil
-}
-
-func (s *memoryStore) list(ctx context.Context) ([]listedRecord, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	items := make([]listedRecord, 0, len(s.pending)+len(s.accepted))
-	for key, item := range s.pending {
-		items = append(items, listedRecord{record: item, confirmations: copiedConfirmations(s.confirmations[key])})
-	}
-	for key, item := range s.accepted {
-		items = append(items, listedRecord{record: item, confirmations: copiedConfirmations(s.confirmations[key])})
-	}
-	return items, nil
-}
-
-func copiedConfirmations(source map[string]confirmation) []confirmation {
-	result := make([]confirmation, 0, len(source))
-	for _, item := range source {
-		result = append(result, confirmation{location: item.location, status: item.status, reason: copyString(item.reason)})
-	}
-	return result
-}
-
-func project(record record, confirmations []confirmation) api.Registration {
-	instance := api.PlatformInstanceRegistrationStatus{
-		Machine: record.location.Machine,
-		IP:      record.location.IP,
-		Status:  api.RegistrationStatusPending,
-	}
-	status := api.RegistrationStatusPending
-	for _, confirmation := range confirmations {
-		if confirmation.location == record.location {
-			instance.Status = confirmation.status
-			instance.Reason = copyString(confirmation.reason)
-			status = confirmation.status
-			break
+		if decision, decided := decisions[member.Machine]; decided {
+			instance.Status = decision.Status
+			if decision.Status == api.RegistrationStatusRejected {
+				instance.Reason = copyString(decision.Reason)
+			}
 		}
+		instances = append(instances, instance)
 	}
-	instances := []api.PlatformInstanceRegistrationStatus{instance}
-	sort.Slice(instances, func(i, j int) bool { return instances[i].Machine < instances[j].Machine })
+
+	accepted, committed, err := s.store.accepted(ctx, request.key())
+	if err != nil {
+		return api.Registration{}, err
+	}
+	if committed && accepted.Fingerprint == request.Fingerprint {
+		if err := validateAccepted(accepted); err != nil {
+			return api.Registration{}, err
+		}
+		return api.Registration{
+			UnitType:               accepted.UnitType,
+			UnitID:                 accepted.UnitID,
+			UnitTypeNameAdvertised: accepted.UnitTypeNameAdvertised,
+			Role:                   copyString(accepted.Role),
+			Machine:                accepted.OriginMachine,
+			IP:                     accepted.OriginIP,
+			Status:                 api.RegistrationStatusAccepted,
+			PlatformInstances:      instances,
+		}, nil
+	}
+
+	status, reason := overall(instances)
 	return api.Registration{
-		UnitType:               record.request.UnitType,
-		UnitID:                 record.request.UnitID,
-		UnitTypeNameAdvertised: record.request.UnitTypeNameAdvertised,
-		Role:                   copyString(record.request.Role),
-		Machine:                record.location.Machine,
-		IP:                     record.location.IP,
+		UnitType:               request.UnitType,
+		UnitID:                 request.UnitID,
+		UnitTypeNameAdvertised: request.UnitTypeNameAdvertised,
+		Role:                   copyString(request.Role),
+		Machine:                request.OriginMachine,
+		IP:                     request.OriginIP,
 		Status:                 status,
-		Reason:                 copyString(instance.Reason),
+		Reason:                 reason,
 		PlatformInstances:      instances,
-	}
+	}, nil
 }
 
-// registrationFields projects a stored record onto the immutable fields a key
-// conflict is decided on.
-func eventFields(item record) Fields {
+// overall derives a request's status from what the expected instances have
+// decided: rejected once any of them has refused it, and pending until then.
+//
+// Accepted is deliberately not derivable here. A request is accepted because its
+// registration record exists, not because the confirmations look complete, so
+// this cannot report acceptance and cannot race the commit that grants it.
+func overall(instances []api.PlatformInstanceRegistrationStatus) (status string, reason *string) {
+	for _, instance := range instances {
+		if instance.Status == api.RegistrationStatusRejected {
+			return api.RegistrationStatusRejected, copyString(instance.Reason)
+		}
+	}
+	return api.RegistrationStatusPending, nil
+}
+
+// validateAccepted checks a committed registration is one this instance can
+// report. A registration that cannot be validated is reported as a failure
+// rather than served: the accepted record is the platform's answer to "is this
+// unit registered", and answering it wrongly is worse than not answering.
+func validateAccepted(record acceptedRecord) error {
+	if record.Version != recordVersion {
+		return fmt.Errorf("registration: registration %s has unsupported record version %d", record.key(), record.Version)
+	}
+	if err := validateRequest(api.RegistrationRequest{
+		UnitType:               record.UnitType,
+		UnitID:                 record.UnitID,
+		UnitTypeNameAdvertised: record.UnitTypeNameAdvertised,
+		Role:                   record.Role,
+	}); err != nil {
+		return fmt.Errorf("registration: registration %s: %w", record.key(), err)
+	}
+	if err := validateLocation(record.location()); err != nil {
+		return fmt.Errorf("registration: registration %s: %w", record.key(), err)
+	}
+	return nil
+}
+
+// record states one fact. A failure is returned with context rather than
+// swallowed, and it replaces whatever the operation would otherwise have
+// returned, including ErrConflict: a platform that cannot report what it did is
+// failing, and saying so beats answering as if nothing happened. The store is
+// not rolled back to match, so a transition can outlive its lost event.
+func (s *Service) record(ctx context.Context, event events.Event) error {
+	if err := s.recorder.Record(ctx, event); err != nil {
+		return fmt.Errorf("registration: record %s: %w", event.EventType(), err)
+	}
+	return nil
+}
+
+// eventFields projects a stored proposal onto the immutable fields a
+// registration key is claimed on.
+func eventFields(request requestRecord) Fields {
 	return Fields{
-		UnitTypeNameAdvertised: item.request.UnitTypeNameAdvertised,
-		Role:                   roleValue(item.request.Role),
-		Machine:                item.location.Machine,
-		IP:                     item.location.IP,
+		UnitTypeNameAdvertised: request.UnitTypeNameAdvertised,
+		Role:                   roleValue(request.Role),
+		Machine:                request.OriginMachine,
+		IP:                     request.OriginIP,
 	}
 }
 
@@ -469,32 +349,4 @@ func roleValue(role *string) string {
 		return ""
 	}
 	return *role
-}
-
-// reasonValue flattens an optional bounded reason for an event payload.
-func reasonValue(reason *string) string {
-	if reason == nil {
-		return ""
-	}
-	return *reason
-}
-
-func copyRequest(request api.RegistrationRequest) api.RegistrationRequest {
-	request.Role = copyString(request.Role)
-	return request
-}
-
-func copyString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	valueCopy := *value
-	return &valueCopy
-}
-
-func sameString(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }
