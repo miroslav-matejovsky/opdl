@@ -1,8 +1,10 @@
 # Architecture linting. Run go-arch-lint in every module that ships an
 # architecture spec (.go-arch-lint.yml), enforcing the package dependency rules
-# declared there. Uses `go run ...@latest` so no prior tool install is required,
-# matching the deadcode task.
+# declared there. Uses an installed tool when available and falls back to
+# `go run ...@latest` for clean environments.
 . (Join-Path $PSScriptRoot "modules.ps1")
+
+$archTool = Get-Command go-arch-lint -ErrorAction SilentlyContinue
 
 $ran = $false
 foreach ($m in $Modules) {
@@ -14,7 +16,12 @@ foreach ($m in $Modules) {
     Write-Host "--- $m ---"
     Push-Location $moduleDir
     try {
-        go run github.com/fe3dback/go-arch-lint@latest check --project-path $moduleDir
+        if ($null -ne $archTool) {
+            & $archTool.Source check --project-path $moduleDir
+        }
+        else {
+            go run github.com/fe3dback/go-arch-lint@latest check --project-path $moduleDir
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "go-arch-lint failed in module '$m'"
         }

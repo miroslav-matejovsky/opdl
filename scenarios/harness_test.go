@@ -209,7 +209,9 @@ func startProcess(t *testing.T, cmd *exec.Cmd) *process {
 		// Whatever went wrong, the child does not outlive the scenario, and the
 		// scenario does not return while it is still writing to the buffer.
 		_ = cmd.Process.Kill()
-		p.wait()
+		// Cleanup deliberately kills the child, so its output and exit error are
+		// not assertions about the scenario result.
+		_, _ = p.wait()
 	})
 	return p
 }
