@@ -133,6 +133,29 @@ machine holds the same request and answers `404`, because it is not who was aske
 State is in memory and is not replayed after a full-site shutdown. Different
 sites have separate fabrics, and cross-site uniqueness is not enforced.
 
+> **Known defect.** Registration's uniqueness rests on the fabric's
+> create-if-absent, which the Olric adapter does not keep for a moment after a
+> machine joins a site that already holds data. See
+> [docs/backlog/fabric.md](docs/backlog/fabric.md).
+
+#### End to end
+
+A client registering a unit against a two-machine site, with node B still
+starting:
+
+| # | Where | What happens |
+| --- | --- | --- |
+| 1 | client → node A | `POST /registrations` with the unit key and advertised name. |
+| 2 | node A | Claims the key on the fabric with one atomic create, stamps its own descriptor identity as the origin, states `requested`, and answers **202**. Nothing is registered yet. |
+| 3 | node A | Its reconciler validates the proposal and records its own confirmation, stating `confirmed`. One of two expected instances have accepted. |
+| 4 | client → node A | `GET /registrations/{unit_type}/{unit_id}/status` → **pending**, with `platform_instances` showing node A accepted and node B pending. The client polls; this is its only confirmation mechanism. |
+| 5 | node B | Starts, joins the fabric, and finds the request by scanning: nothing was delivered to it. Its reconciler validates the same record, reaches the same verdict, and records its confirmation. |
+| 6 | node A | Sees every expected instance has accepted and creates the registration record. That create is the commit, and it states `accepted`. |
+| 7 | client → node A | Status → **accepted**. `GET /registrations` on either machine now lists it. |
+
+Node B never becomes the origin, and never answers node A's status endpoint. If
+node B had never started, step 4 would simply remain the answer, indefinitely.
+
 ### Domain events
 
 Events are how the platform states what it did, and they are a first-class
