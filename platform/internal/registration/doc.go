@@ -28,35 +28,61 @@
 //     about every request in the site, and commits the ones this instance
 //     originated once the site has agreed. Every instance runs exactly one,
 //     nothing is delivered to it, and there is no leader.
-//   - store is the state, on three fabric collections shared by the site. See
-//     records.go for what is stored and why it is keyed the way it is.
+//   - store is the state on fabric collections shared by every machine of the
+//     site. Today it uses one current request and accepted view; Stage 4 changes
+//     it to retain immutable proposals and repairable current views. See
+//     records.go for the storage vocabulary and keys.
 //
-// # Why repeating itself is safe
+// # Target contender model
 //
-// Every write is create-if-absent, and every decision is derived from the site's
-// current state rather than from a step in a sequence. A reconciliation pass is
-// therefore a correction, not a transition: passes may repeat, overlap a status
-// lookup, or resume after a restart, and all reach the same state. This is what
-// lets an unreliable schedule be enough, and it is why no pass has to happen for
-// the site to stay consistent.
+// Olric Create is one-winner only while fabric membership is stable. A member
+// join can temporarily let a different proposal overwrite a current view, so a
+// registration must not use one successful Create as its only proof of a unique
+// claim. Stage 4 retains every distinct proposal under its fingerprint. The
+// reconciler then groups those contenders by unit key and derives one winner:
 //
-// Creating the accepted registration record is the single commit point. There is
-// no transaction across the three collections, and none is needed: status is
-// accepted if and only if that record exists, so acceptance cannot race the
-// confirmations that granted it.
+//   - An accepted proposal observed before any competitor is the incumbent and
+//     remains the winner.
+//   - If no contender is accepted, the earliest platform-observed request time
+//     wins.
+//   - Equal request times use the proposal fingerprint as a deterministic
+//     tie-break.
+//
+// The request time comes from the receiving platform machine. Machines do not
+// coordinate clocks, so "first" is best effort for a true cross-machine race;
+// this package makes no linearizable global first-writer claim. That trade-off is
+// deliberate for the site's static topology and low expected contention.
+//
+// Until all contenders are visible, a proposal can be pending or briefly appear
+// accepted. Once membership is stable and the contenders have been scanned, the
+// winning proposal is the site's registration and every loser is rejected with
+// reason registration_key_conflict. Reconciliation repairs current request and
+// accepted views to match that winner. A pass remains a correction: repeated,
+// overlapping, and restarted passes derive the same final state from retained
+// records. This is the contract Stage 4 implements; the current implementation
+// still has the join limitation.
 //
 // # Create-only
 //
-// A registration key is claimed once and never updated, moved, or removed. An
-// identical repeat is an idempotent retry; every other difference on a claimed
-// key is a conflict, including a different advertised name or role from the same
-// machine. The key is unique across the whole site fabric and is never scoped by
-// machine. Changing a registration will require explicit removal, which is a
-// later use case.
+// In the target model, each proposal is immutable and is never removed or
+// altered. An identical repeat is an idempotent retry; a different proposal that
+// is already visible is refused with 409. During the membership-change window,
+// a different proposal can be accepted provisionally and is later rejected by
+// reconciliation. The key is site-local and never scoped by machine. Explicit
+// removal remains a later use case.
 //
 // Without a caller identity, a byte-for-byte identical second unit on one
 // machine is indistinguishable from a retry and is answered as one. That is an
 // explicit limitation of this phase: nothing in a request says who is asking.
+//
+// # Querying and reporting conflicts
+//
+// Stage 5 makes GET /registrations list every retained proposal, including
+// rejected losers, and adds GET /registrations/conflicts to group the contenders
+// for one key and identify the winner and losers. It is a domain query rather
+// than a health endpoint: a resolved registration conflict does not make the
+// process unavailable. Notifications, acknowledgement, retention, and removal
+// are not part of this release.
 //
 // # What this package states
 //
@@ -64,11 +90,11 @@
 // at the transition that owns it, by the instance that owns that transition: a
 // first claim is requested, each instance's own acceptance is confirmed, the
 // origin's commit is accepted, an instance's refusal is rejected, and a refused
-// claim is conflict. Transitions that do not happen produce no event, so a
-// retry, a validation failure, and a repeated scan are all silent, which is what
-// makes the events evidence of behavior rather than of calls. A recording
-// failure surfaces to the caller as the operation's error, and the store is not
-// rolled back to match it.
+// claim is conflict. Stage 4 can make a provisional transition visible before
+// reconciliation corrects it, so events are not the conflict-reporting
+// mechanism. Stage 5's query API is authoritative once contenders have
+// converged. A recording failure surfaces to the caller as the operation's
+// error, and the store is not rolled back to match it.
 //
 // # Not in this phase
 //

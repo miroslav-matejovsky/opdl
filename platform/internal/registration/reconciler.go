@@ -58,11 +58,11 @@ const DefaultInterval = time.Second
 //
 // # Why it can repeat itself safely
 //
-// Every write is create-if-absent, so a pass that runs again, a pass that
-// overlaps a status lookup, and a process that restarts and rescans all reach
-// the same state and state their facts once. That is what makes an unreliable
-// schedule enough: a pass is a correction, not a step, and no pass has to happen
-// for the site to stay consistent.
+// With stable membership, create-if-absent makes a repeated pass, a pass that
+// overlaps a status lookup, and a restarted process reach the same state and
+// state their facts once. A member join can violate that Create behavior. The
+// contender model described in the package documentation restores convergence by
+// deriving the final state from retained proposals instead of one Create result.
 type Reconciler struct {
 	store    *store
 	self     fabric.Member
@@ -271,8 +271,9 @@ func (r *Reconciler) knownOrigin(location Location) bool {
 // it. That is the whole promise of the two-phase design, and weakening it here
 // would be the only way to break it.
 //
-// Creating the record is the commit. Its existence is what accepted means, so
-// the state changes exactly once no matter how many passes run.
+// With stable membership, creating the record is the commit and its existence
+// means accepted. A membership transition can falsely create a competing record;
+// contender reconciliation will make this projection match the selected winner.
 func (r *Reconciler) commit(ctx context.Context, request requestRecord) error {
 	decisions, err := r.store.decisions(ctx, request, r.members)
 	if err != nil {

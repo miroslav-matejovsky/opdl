@@ -40,10 +40,12 @@ carries the data is decided by runtime composition alone.
 Its only capability in this release is a **named collection**: a map of string
 keys to byte values, shared by a site, with create-if-absent, atomic swap, get,
 and weakly consistent enumeration. There is no publish, subscribe, or request
-yet. The package documents exactly what every adapter owes a caller (byte
-ownership, per-key atomicity, enumeration weakness, membership stability,
+yet. Create has one-winner semantics only while membership is stable: during an
+Olric join it can briefly report a false win and overwrite the current value.
+The package documents exactly what every adapter owes a caller (byte ownership,
+stable-membership per-key atomicity, enumeration weakness, membership stability,
 behavior after close, context cancellation), and a single contract test suite
-runs against every adapter to hold them to it.
+runs against every adapter to hold them to its stable-membership guarantees.
 
 | Adapter | Purpose |
 | --- | --- |
@@ -84,6 +86,11 @@ adapter behind the fabric here, not an API anything else depends on.
 
 ### Registration
 
+> **Implementation staging.** The contender and conflict-query contract below is
+> defined in Stage 3. Stages 4 and 5 move storage and the HTTP API to that model;
+> until then, the current runtime still has the join limitation described in
+> [docs/backlog/fabric.md](docs/backlog/fabric.md).
+
 A client asks the platform to register a unit, keyed by unit type and unit ID.
 `POST /registrations` takes the request and answers `202`: the request is a
 proposal, and `202` does not mean the unit is registered. The client then polls
@@ -99,46 +106,47 @@ keeps the request pending, indefinitely, rather than being dropped from the vote
 There is no timeout, expiry, or forced acceptance. This is the point of the
 design, not a limitation of it.
 
-**Each machine runs a reconciler.** It scans the site's requests once at startup
+**Each machine runs a reconciler.** It scans the site's proposals once at startup
 and periodically after (`registration.reconcile_interval`, default 1s), validates
-each proposal, and records its own confirmation. Nothing is delivered to it and
-no instance coordinates the others: every decision is derived from the site's
-state, so a pass is a correction rather than a step, and repeated passes and
-restarts converge on the same result. Every write is create-if-absent, which is
-what makes that safe.
+them, and records its own confirmation. Nothing is delivered to it and no
+instance coordinates the others: every decision is derived from the site's state,
+so a pass is a correction rather than a step.
 
-**Creating the accepted registration is the single commit point.** The origin
-machine commits once the site has agreed. Status is `accepted` if and only if
-that record exists, so acceptance never races the confirmations that granted it.
-Registration is create-only: an accepted registration is never updated or moved,
-and changing one will require explicit removal, which is a later use case.
+**Contenders converge to one registration.** Every distinct proposal for a unit
+key is retained. An already accepted proposal is the incumbent and stays the
+winner. If competing proposals race before either is accepted, the earliest
+platform-observed request time wins; equal times use the proposal fingerprint as
+a deterministic tie-break. Platform clocks are not coordinated, so this is a
+best-effort first-writer rule, not a linearizable global ordering. Once all
+contenders are visible and membership is stable, the winning proposal is the
+registration and every loser is `rejected` with reason
+`registration_key_conflict`. A different proposal may be visible or briefly
+accepted before that correction completes.
 
-**Conflicts.** An identical repeat request is an idempotent retry. Any other
-difference on a claimed key, including a different advertised name or role from
-the same machine, is a conflict: it is refused with `409`, the stored state is
-untouched, and a `warning`-tagged `platform.registration.conflict` is recorded.
-The unit key is unique across the whole site fabric and is never scoped by
-machine, so the same key from another machine is a conflict too. Without a caller
-identity, a byte-for-byte identical second unit on one machine is
-indistinguishable from a retry and is answered as one; that is an explicit
-limitation of this phase.
+**Conflicts.** An identical repeat request remains an idempotent retry. A
+different proposal that is already visible is refused with `409`. A proposal that
+wins falsely during a join is retained rather than erased, then rejected by the
+reconciler if it loses selection. The unit key is site-local and never scoped by
+machine. Without caller identity, a byte-for-byte identical second unit on one
+machine is indistinguishable from a retry.
 
-**State lives on the fabric**, in three collections owned by the registration
-package (`registration-requests`, `registration-confirmations`, `registrations`),
-so every machine of a site holds it. `GET /registrations` therefore answers on any
-machine and lists pending, accepted, and rejected requests alike, each with its
-progress across every expected instance. Status is the origin's alone: another
-machine holds the same request and answers `404`, because it is not who was asked.
+**State lives on the fabric.** The registration package retains proposals,
+confirmations, acceptance evidence, and repairable current views, so a false
+create cannot erase a contender. `GET /registrations` will list every retained
+proposal, including rejected losers. `GET /registrations/conflicts` will group a
+key's contenders and identify its winner and losers. The latter is a domain query,
+not a health endpoint: a resolved conflict does not make a process unavailable.
+Stages 4 and 5 implement these storage and query changes. Notifications,
+acknowledgement, retention, and removal remain later work.
 
 State is in memory and is not replayed after a full-site shutdown. Different
 sites have separate fabrics, and cross-site uniqueness is not enforced.
 
-> **Known defect.** Registration's uniqueness rests on the fabric's
-> create-if-absent, which the Olric adapter does not keep for a moment after a
-> machine joins a site that already holds data. See
-> [docs/backlog/fabric.md](docs/backlog/fabric.md).
+> **Fabric limitation.** Olric's join behavior is the reason registration retains
+> contenders and reconciles them. See [docs/backlog/fabric.md](docs/backlog/fabric.md)
+> for the measured behavior and mitigation rationale.
 
-#### End to end
+#### End to end: uncontested proposal
 
 A client registering a unit against a two-machine site, with node B still
 starting:
@@ -146,15 +154,18 @@ starting:
 | # | Where | What happens |
 | --- | --- | --- |
 | 1 | client → node A | `POST /registrations` with the unit key and advertised name. |
-| 2 | node A | Claims the key on the fabric with one atomic create, stamps its own descriptor identity as the origin, states `requested`, and answers **202**. Nothing is registered yet. |
+| 2 | node A | Retains the proposal under its fingerprint, stamps its own descriptor identity as the origin, creates a repairable current view, states `requested`, and answers **202**. Nothing is registered yet. |
 | 3 | node A | Its reconciler validates the proposal and records its own confirmation, stating `confirmed`. One of two expected instances have accepted. |
 | 4 | client → node A | `GET /registrations/{unit_type}/{unit_id}/status` → **pending**, with `platform_instances` showing node A accepted and node B pending. The client polls; this is its only confirmation mechanism. |
 | 5 | node B | Starts, joins the fabric, and finds the request by scanning: nothing was delivered to it. Its reconciler validates the same record, reaches the same verdict, and records its confirmation. |
-| 6 | node A | Sees every expected instance has accepted and creates the registration record. That create is the commit, and it states `accepted`. |
+| 6 | node A | Sees every expected instance has accepted, records acceptance evidence, and projects the uncontested proposal as the registration. It states `accepted`. |
 | 7 | client → node A | Status → **accepted**. `GET /registrations` on either machine now lists it. |
 
 Node B never becomes the origin, and never answers node A's status endpoint. If
 node B had never started, step 4 would simply remain the answer, indefinitely.
+If a competing proposal appears while membership changes, the reconciler retains
+both, selects the incumbent or best-effort first contender, and rejects the
+loser instead of treating one Create result as final proof of uniqueness.
 
 ### Domain events
 

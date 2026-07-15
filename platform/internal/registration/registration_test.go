@@ -310,8 +310,8 @@ func TestAnotherMachineCannotTakeAnAcceptedKey(t *testing.T) {
 }
 
 // TestConcurrentDistinctRequestsProduceOneWinner checks the claim is one atomic
-// act against the site, so a race produces a winner and conflicts rather than
-// two registrations or a torn one.
+// act against the stable in-memory site, so a race produces a winner and
+// conflicts rather than two registrations or a torn one.
 func TestConcurrentDistinctRequestsProduceOneWinner(t *testing.T) {
 	site := newSite(t, "node-a", "node-b")
 	nodeA := site.start("node-a")

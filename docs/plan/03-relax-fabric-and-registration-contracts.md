@@ -65,6 +65,20 @@ avoids adding an ambiguous `unregistered` state.
 4. Write test names and fixtures for the stages that follow before changing
    storage.
 
+## Follow-on test design
+
+| Test | Fixture | Expected observation |
+| --- | --- | --- |
+| `TestReconcileKeepsAcceptedIncumbent` | `acceptedIncumbent` and later contender | The incumbent remains accepted; the later proposal is rejected. |
+| `TestReconcileChoosesEarliestPendingContender` | `twoPendingContenders` with injected distinct times | The earlier observed proposal wins. |
+| `TestReconcileBreaksEqualTimesByFingerprint` | `sameTimeContenders` with an injected clock | Every member chooses the same fingerprint. |
+| `TestReconcileRejectsTemporaryAcceptance` | `temporarilyAcceptedLoser` | A provisional acceptance becomes rejected with `registration_key_conflict`. |
+| `TestJoinConvergesRetainedContenders` | `lateJoinOlricSite` with node A data before node B starts | Both proposals remain observable and the winner projection is restored after the join. |
+| `TestListAndConflictQueryExposeResolution` | `resolvedConflict` | List returns both proposals; the conflict query groups winner and loser. |
+
+Fixtures use a controllable service clock and retained proposal records. The
+Olric test waits on observable state, never a fixed delay.
+
 ## Exit criteria
 
 - Documentation makes no unconditional exactly-one-winner claim across joins.
@@ -73,3 +87,9 @@ avoids adding an ambiguous `unregistered` state.
   records.
 - API visibility and intentionally deferred reporting features are explicit.
 
+## Implementation result
+
+Completed on 2026-07-15. Fabric and registration documentation now state the
+stable-membership Create guarantee, contender convergence, best-effort ordering,
+and the planned conflict query. The fabric contract test names now state their
+stable-membership scope. Stages 4 and 5 implement storage and HTTP behavior.

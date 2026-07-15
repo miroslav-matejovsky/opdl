@@ -27,12 +27,13 @@
 //     reuse or modify its slice the moment the call returns. Get, Swap, and
 //     Entries return copies the caller owns and may modify freely; mutating one
 //     never changes what the fabric holds.
-//   - Per-key atomicity. Create and Swap are atomic for one key: concurrent
-//     Creates of the same key produce exactly one winner, and a Swap reports the
-//     value it actually replaced. There is no atomicity across two keys and no
-//     transaction: two keys can never be written as one unit. See the known
-//     limitation below: the Olric adapter does not keep this promise for a
-//     moment after a member joins.
+//   - Stable-membership per-key atomicity. While the site's membership is not
+//     changing, Create and Swap are atomic for one key: concurrent Creates of
+//     the same key produce exactly one winner, and a Swap reports the value it
+//     actually replaced. There is no atomicity across two keys and no
+//     transaction: two keys can never be written as one unit. A caller must not
+//     extend the stable-membership Create guarantee across a member join; see
+//     the membership-change limitation below.
 //   - Weakly consistent enumeration. Entries reports the keys it observes while
 //     it runs. It is not a snapshot: a write concurrent with an enumeration may
 //     or may not appear, and different keys may be observed at different
@@ -54,25 +55,27 @@
 //     error. Whether a canceled write took effect is not defined: a caller that
 //     must know re-reads the key.
 //
-// # Known limitation: create-if-absent does not survive a join
+// # Membership-change limitation
 //
-// The per-key atomicity above is a promise this package makes and the Olric
-// adapter currently breaks. For a brief window after a member joins, while Olric
-// moves partition fragments to it, Create can report an existing key as absent,
-// win, and overwrite the value that was there. Get stays correct throughout, so
-// the fabric can contradict itself: a caller may read a key and then
-// successfully create it.
+// During a member join, Olric can briefly report an existing key as absent to
+// Create, allow a false winner, and overwrite the value that was there. Get was
+// observed to remain correct in the reproduced window, but callers must not use
+// that observation to recover a global create-if-absent guarantee. The fabric
+// can therefore contradict a caller that reads a key and then successfully
+// creates it.
 //
 // The adapter uses Olric's API correctly. Olric is an AP store whose atomic
-// operations hold "when the cluster is stable", and a join is when it is not, so
-// this is a gap between what this package promises and what that backend can
-// give. It is not reproduced by the memory adapter, and the contract suite does
-// not catch it because every case there runs against one stable member.
+// operations hold "when the cluster is stable", and a join is when it is not.
+// This package therefore promises Create's one-winner behavior only for stable
+// membership. The shared contract suite covers that stable case; it deliberately
+// does not claim to exercise a membership transition.
 //
-// A caller that needs a key claimed exactly once, as registration does, is
-// exposed only when a machine joins a site that already holds data. See
-// docs/backlog/fabric.md for the measurements, the reproduction, and why there
-// is no cheap fix. Do not read the promise above as currently true on Olric.
+// A caller that needs a site-wide unique claim must preserve every contender and
+// reconcile them after membership stabilizes. Registration is adopting that
+// model: an accepted incumbent wins; otherwise the first platform-observed
+// contender wins with a deterministic fingerprint tie-break. See
+// docs/backlog/fabric.md for the measurements and rationale. Do not read Create
+// as a linearizable site-wide claim primitive.
 //
 // # No redundancy
 //

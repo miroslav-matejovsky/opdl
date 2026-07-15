@@ -136,7 +136,7 @@ func collection(t *testing.T, f fabric.Fabric) fabric.Collection {
 }
 
 func TestContract(t *testing.T) {
-	run(t, "create stores a value only when the key is absent", func(t *testing.T, a adapter) {
+	run(t, "on stable membership, create stores a value only when the key is absent", func(t *testing.T, a adapter) {
 		ctx := context.Background()
 		c := collection(t, a.open(t, testDescriptor()))
 
@@ -284,7 +284,7 @@ func TestContract(t *testing.T) {
 		require.Equal(t, []byte("original"), again, "the fabric must return copies")
 	})
 
-	run(t, "concurrent creates of one key produce exactly one winner", func(t *testing.T, a adapter) {
+	run(t, "on stable membership, concurrent creates of one key produce exactly one winner", func(t *testing.T, a adapter) {
 		ctx := context.Background()
 		c := collection(t, a.open(t, testDescriptor()))
 

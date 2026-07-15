@@ -15,11 +15,11 @@ import (
 // works in records and keys, so what the site's state looks like on the wire is
 // one file's business.
 //
-// There is no transaction across the three. Each write is atomic for its own
-// key and nothing more, which is why every write here is create-if-absent and
-// why creating the accepted record is the one commit point: a request and its
-// confirmations can be written again harmlessly, and only one create of a
-// registration can ever win.
+// There is no transaction across the three. The current implementation uses
+// create-if-absent for each key, which is safe only while membership is stable.
+// A member join can make an Olric Create falsely win, so Stage 4 changes this
+// state to retain contenders and treats current request and accepted records as
+// repairable projections rather than uniqueness proof.
 type store struct {
 	requests      fabric.Collection
 	confirmations fabric.Collection
@@ -50,10 +50,11 @@ func openStore(f fabric.Fabric) (*store, error) {
 
 // createRequest claims a registration key for candidate.
 //
-// The claim is one atomic create-if-absent against the site, which is what makes
-// two machines proposing one key at the same moment produce a winner and a
-// conflict rather than two registrations. A request record is never removed, so
-// the same claim also guards keys that have already been accepted.
+// While membership is stable, the claim is one atomic create-if-absent against
+// the site, which makes two machines proposing one key produce a winner and a
+// conflict rather than two registrations. A member join can violate that
+// property, so this method is not the eventual uniqueness mechanism described
+// in registration's package documentation.
 //
 // A losing create is not automatically a conflict: it is a conflict only if the
 // record holding the key asks for something else. An identical proposal is an
@@ -189,9 +190,9 @@ func (s *store) decisions(ctx context.Context, request requestRecord, members []
 	return decisions, nil
 }
 
-// createAccepted commits a registration, reporting whether this call committed
-// it. This is the site's single commit point, and it is create-only: a key that
-// holds a registration holds it for the site's life.
+// createAccepted creates the current accepted projection, reporting whether this
+// call created it. It is a single commit point only while membership is stable;
+// contender retention makes it repairable after a join.
 func (s *store) createAccepted(ctx context.Context, record acceptedRecord) (bool, error) {
 	value, err := encode(record)
 	if err != nil {

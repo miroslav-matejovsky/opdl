@@ -21,8 +21,10 @@ const (
 	// collectionRequests holds one proposal per registration key: what was
 	// asked for, where it was asked, and the fingerprint of that exact
 	// proposal. A record here is a request, not a registration. It is never
-	// removed or modified, so the key it occupies is the site's create-if-absent
-	// guard for both pending and accepted registrations.
+	// removed or modified. In the current implementation its key is the site's
+	// create-if-absent guard for both pending and accepted registrations, but
+	// that guard is valid only while membership is stable. Contender retention
+	// replaces it as the uniqueness basis.
 	collectionRequests = "registration-requests"
 	// collectionConfirmations holds one record per (registration key, proposal
 	// fingerprint, platform instance): that instance's decision on that exact
