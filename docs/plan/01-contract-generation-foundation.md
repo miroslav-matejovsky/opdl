@@ -1,13 +1,13 @@
 # Stage 1: Contract generation foundation
 
-Estimate: 2-3 engineer-days.
+Estimate: 3-5 engineer-days.
 
 ## Goal
 
 Extend the generated API pipeline so it can accurately describe the upcoming
-registration operations without changing the current status endpoint yet. This
-stage is tooling-only and must leave existing runtime behavior and SDK calls
-working.
+registration request, request-status, and process-list operations without
+changing the current status endpoint yet. This stage is tooling-only and must
+leave existing runtime behavior and SDK calls working.
 
 ## Instructions
 
@@ -15,6 +15,7 @@ working.
    registration operations:
 
    - A stable OpenAPI `operationId`.
+   - Typed path parameters with required flags and numeric constraints.
    - An optional JSON request body type and required flag.
    - More than one documented response status.
    - An optional JSON response body per status.
@@ -31,6 +32,7 @@ working.
 
    - `operationId` values.
    - Required `application/json` request bodies.
+   - Required path parameters for `unit_type` and `unit_id`.
    - Multiple response status codes.
    - Top-level array response schemas.
    - Reusable component schemas for struct item types.
@@ -48,8 +50,13 @@ working.
 5. Add focused generator tests using synthetic request and response types. Cover:
 
    - A required request body.
+   - Different request and response schemas for one operation, where the server
+     adds read-only response fields.
+   - A route with bounded `uint8` and `uint16` path parameters.
    - A struct response.
    - A top-level array of structs.
+   - A response object containing a nested array of platform-instance status
+     objects.
    - Two success responses for one operation.
    - `uint8` and `uint16` bounds.
    - An optional string field.
@@ -68,8 +75,8 @@ working.
 
 ## Acceptance
 
-- The generator can represent the complete registration contract without
-  hand-editing OpenAPI.
+- The generator can represent the complete three-operation registration contract
+  without hand-editing OpenAPI.
 - Top-level arrays and bounded unsigned integers are correct in generated YAML.
 - Kiota generation still produces a compiling SDK.
 - Existing status behavior remains unchanged.

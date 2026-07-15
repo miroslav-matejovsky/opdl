@@ -1,6 +1,6 @@
 # Stage 4: Platform fabric foundation and Olric adapter
 
-Estimate: 5-7 engineer-days.
+Estimate: 7-10 engineer-days.
 
 ## Goal
 
@@ -31,16 +31,21 @@ lifecycle are tested.
    backend-neutral API. The first capability is a named distributed collection:
 
    - Open a collection by stable name.
+   - Atomically create one byte value only when its string key is absent and
+     report whether creation won.
    - Atomically swap one byte value by string key and report the previous value
      and whether it existed.
    - Read one value by key.
    - Enumerate the current key/value entries without promising collection-wide
      snapshot isolation.
+   - Return the immutable expected site-member identities derived from the
+     deployment descriptor, including self.
    - Report `connected`, `degraded`, or `disconnected` state.
    - Drain and close with context.
 
    Define exact ownership and copy semantics for byte slices, per-key atomicity,
-   weakly consistent enumeration, calls after close, and context cancellation.
+   weakly consistent enumeration, stable member identity, calls after close, and
+   context cancellation.
    Do not expose Olric types, DMaps, iterators, memberlist, or network addresses
    through these interfaces. Do not add Publish, Subscribe, Request, or Handle
    yet.
@@ -59,6 +64,8 @@ lifecycle are tested.
    - Translation between fabric collections and DMap operations.
    - Iterator closure and byte-value copying.
    - Member inspection and connection-state calculation.
+   - Mapping live Olric members back to descriptor fabric member identities for
+     diagnostics. Expected membership still comes from the descriptor.
    - Backend error wrapping and shutdown.
 
    Pin the selected Olric version in `platform/go.mod`. Start with the version
@@ -69,7 +76,8 @@ lifecycle are tested.
    resolved fabric topology section. It must identify:
 
    - This machine's fabric identity and IP address.
-   - Deterministically ordered fabric peers in the same project and environment.
+   - Deterministically ordered fabric peers in the same project, environment,
+     and site.
    - Peer site, machine, and IP fields for validation and diagnostics.
 
    Keep the descriptor transport-neutral. The Olric adapter derives its default
@@ -82,10 +90,13 @@ lifecycle are tested.
    - Machine IP addresses must be unique within one project when fixed platform
      ports are derived from them.
    - A machine must not list itself as a join peer.
-   - Fabric peers must remain inside the descriptor's project and environment.
+   - Fabric peers must remain inside the descriptor's project, environment, and
+     site. Machines in other sites must not be join peers.
    - Derived Olric client and memberlist addresses must be valid host and port
      pairs.
    - Output ordering must be deterministic regardless of HCL declaration order.
+   - Member machine names must be unique in the site and stable enough to key a
+     confirmation.
 
 7. Mirror the descriptor change in `builder/deployment` and
    `platform/deployment`. Update descriptor validation, conformance signatures,
@@ -100,6 +111,10 @@ lifecycle are tested.
    derived from the fabric topology descriptor. Only runtime composition and the
    Olric adapter may consume this configuration. Validate the composed adapter
    configuration before opening listeners.
+
+   These runtime network overrides must not change registration `machine` or
+   `ip`. Registration location always uses the embedded descriptor identity and
+   IP.
 
 9. Configure the Olric adapter for the first-use-case constraints:
 
@@ -125,11 +140,12 @@ lifecycle are tested.
    - If fabric startup fails, do not start the public API.
 
 11. Write one reusable adapter contract test suite and run it against the memory
-    and Olric adapters. Cover atomic swap, get, enumeration, missing keys,
-    concurrent same-key access, cancellation, calls after close, state, and
-    cleanup. Add focused tests for descriptor derivation, conformance, config
-    precedence, invalid addresses, startup cancellation, and clean stop. Use
-    dynamic ports in Olric integration tests. Do not use fixed sleeps.
+    and Olric adapters. Cover create-if-absent, atomic swap, get, enumeration,
+    missing keys, concurrent same-key creation, cancellation, calls after close,
+    expected-member identity and ordering, state, and cleanup. Add focused tests
+    for descriptor derivation, conformance, config precedence, invalid addresses,
+    startup cancellation, and clean stop. Use dynamic ports in Olric integration
+    tests. Do not use fixed sleeps.
 
 12. Add a two-machine scenario blueprint using distinct loopback IP addresses.
     Build both machine packages and start both with isolated API addresses and
@@ -153,10 +169,13 @@ lifecycle are tested.
 
 - Registration and HTTP code cannot import Olric or its configuration types.
 - Both memory and Olric implementations pass the same fabric contract tests.
+- Both expose the same statically expected site members even when some are
+  currently disconnected.
 - Every built machine receives deterministic fabric topology derived from the
-  project topology.
+  site portion of the project topology.
 - A standalone deployment starts as a one-member fabric.
 - Two scenario machines form one fabric without dynamic discovery.
+- Machines from different sites do not join the same fabric.
 - Public HTTP does not start when the production fabric is unavailable.
 - No new `distdata` package or dependency is introduced.
 - Per-machine service redundancy remains absent.

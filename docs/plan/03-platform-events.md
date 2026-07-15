@@ -1,6 +1,6 @@
 # Stage 3: Platform events
 
-Estimate: 3-4 engineer-days.
+Estimate: 3-5 engineer-days.
 
 ## Goal
 
@@ -20,6 +20,8 @@ registration behavior and verify it in black-box scenarios.
    - Monotonic sequence within one process run.
    - UTC `occurred_at` timestamp.
    - Source subsystem.
+   - Optional deterministic tags. Use a sorted, duplicate-free string list and
+     omit it when empty.
    - Node identity from the embedded deployment descriptor: project,
      environment, site, machine, and role.
    - Typed event data encoded as JSON.
@@ -28,19 +30,33 @@ registration behavior and verify it in black-box scenarios.
 
 3. Add only these event types initially:
 
-   - `platform.registration.created` with all four registration fields.
-   - `platform.registration.updated` with the accepted new registration fields.
+   - `platform.registration.requested` with the four client fields plus
+     server-derived origin machine and IP.
+   - `platform.registration.confirmed` with unit key, origin machine, and
+     confirming machine. The internal proposal fingerprint is not exposed as a
+     request identifier in the event.
+   - `platform.registration.accepted` with all six committed registration fields
+     after every expected platform instance confirmed.
+   - `platform.registration.rejected`, tagged `warning`, with unit key, origin,
+     rejecting machine, and bounded reason.
+   - `platform.registration.conflict`, tagged `warning`, with `unit_type`,
+     `unit_id`, stored or pending fields, attempted fields, and bounded reason
+     `registration_key_conflict`.
    - `platform.fabric.started` with adapter name, local member address, and
      current member count. Stage 4 emits it.
    - `platform.fabric.stopped` with the adapter name. Stage 4 emits it.
 
-   Exact retries do not emit a change event. Failed validation does not emit a
-   registration event.
+   Exact retries do not emit another requested or accepted event. Failed input
+   validation does not emit a registration event. A key conflict emits the
+   warning event for every rejected occurrence but does not change request or
+   accepted state.
 
 4. Define a small recorder interface near the registration service. Inject it
    into the registration use case so the domain operation records a successful
-   state change after the store accepts it. Provide a no-op implementation for
-   tests that do not inspect events.
+   request creation, each platform confirmation, final acceptance, rejection,
+   and conflict at their owning state transitions. On a typed key conflict,
+   record the warning event before returning 409 to HTTP. Provide a no-op
+   implementation for tests that do not inspect events.
 
 5. Add a JSONL sink under `platform/internal/events/jsonl`:
 
@@ -66,9 +82,9 @@ registration behavior and verify it in black-box scenarios.
    - Preserve original shutdown and sink errors with context.
 
 8. Add deterministic unit tests for event envelope stamping, sequence, JSONL
-   encoding, concurrent writes, and close behavior. Add registration tests that
-   distinguish created, updated, unchanged, and failed operations by emitted
-   events.
+   encoding, tag normalization, concurrent writes, and close behavior. Add
+   registration tests that distinguish requested, confirmed, accepted, rejected,
+   exact retry, key conflict, and validation failures by emitted events.
 
 9. Add a small scenario-side JSONL reader and event matcher under `scenarios`.
    Keep it limited to polling a file for event type, node, and selected payload
@@ -76,13 +92,14 @@ registration behavior and verify it in black-box scenarios.
    expectation or baseline framework.
 
 10. Configure an events directory in the single-machine scenario. Register a
-    unit, wait for `platform.registration.created`, and assert its node envelope
-    and payload. Update the same unit and assert one ordered
-    `platform.registration.updated`. Repeat the exact update and prove no third
-    registration change event exists by reading the synchronously flushed file
-    after the HTTP response. The scenario may then force-stop its child process
-    on platforms where a graceful child interrupt is not portable. Keep graceful
-    shutdown and close-order assertions in in-process lifecycle tests.
+    unit and assert the ordered sequence `platform.registration.requested`,
+    `platform.registration.confirmed`, and `platform.registration.accepted`.
+    Envelope node, payload machine, and payload IP must match the embedded
+    descriptor. Repeat the exact request and prove no duplicate phase event
+    exists by reading the synchronously flushed file after the HTTP response. The
+    scenario may then force-stop its child process on platforms where a graceful
+    child interrupt is not portable. Keep graceful shutdown and close-order
+    assertions in in-process lifecycle tests.
 
 11. Document the event envelope, current catalog, storage behavior, and
     limitations in a platform-local document such as `platform/internal/events/doc.go`
@@ -93,8 +110,11 @@ registration behavior and verify it in black-box scenarios.
 
 ## Acceptance
 
-- Registration creates and actual updates produce deterministic JSONL events.
-- Exact retries and rejected requests do not produce false change events.
+- Request, per-instance confirmation, and final acceptance produce deterministic
+  ordered JSONL events.
+- Exact retries do not produce duplicate phase events.
+- Key conflicts produce a `warning`-tagged conflict event containing existing
+  and attempted data while preserving state.
 - Event records identify the deployment machine that accepted the request.
 - Scenarios use events as behavioral evidence.
 - In-process shutdown tests prove the HTTP server and event sink close cleanly.
@@ -106,7 +126,7 @@ registration behavior and verify it in black-box scenarios.
   context and document the event delivery as best effort for this phase. Do not
   attempt rollback across the store and file.
 - Abrupt process termination may lose operating system buffers even after a Go
-  flush. Scenarios should request orderly shutdown before final exact-count
-  assertions.
+  flush. Scenarios should read synchronously flushed events while processes are
+  live before force-stop cleanup.
 - Event ids must not depend only on low-resolution timestamps. Combine time with
   process-local uniqueness or use a suitable standard identifier implementation.
