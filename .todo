@@ -10,4 +10,4 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
 - authentication for services as a platform feature
 - authorization for services as a platform feature
 - put shutdown timeout to the platform configuration file, scan for other constants that should be configurable, no defaults in code
-- fabric contract suite failed once at 140s (`platform/internal/fabric`, TestContract, olric adapter) directly after a cold-cache `task all`; never reproduced in 15+ runs since, including under concurrent olric load and under cold-compile load, and it passes in ~0.5s normally. 140s is close to two members hitting the 60s StartTimeout, which is the signature of the startup-hang class of bug. If it returns, capture the failing subtest name (note: subtest result lines are indented, so do not anchor grep on `^---`).
+- remove redundant machine and ip in the deployment descriptor fabric section, they are already in the main section
