@@ -30,6 +30,36 @@ func TestLoadComposesDescriptorAndAddress(t *testing.T) {
 	require.Equal(t, "127.0.0.1:9090", cfg.Address())
 }
 
+func TestLoadReadsOptionalEventsDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		want     string
+	}{
+		{name: "absent disables recording", contents: `{"address": "127.0.0.1:9090"}`, want: ""},
+		{name: "empty disables recording", contents: `{"events_dir": ""}`, want: ""},
+		{name: "blank disables recording", contents: `{"events_dir": "   "}`, want: ""},
+		{name: "configured directory", contents: `{"events_dir": "/var/log/opdl"}`, want: "/var/log/opdl"},
+		{name: "surrounding space is trimmed", contents: `{"events_dir": " /var/log/opdl "}`, want: "/var/log/opdl"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := config.Load(writeConfig(t, test.contents))
+			require.NoError(t, err)
+			require.Equal(t, test.want, cfg.EventsDir())
+		})
+	}
+}
+
+// TestLoadAcceptsUnwritableEventsDir documents that a configured path is not
+// checked here. Only opening it proves it is usable, so the runtime validates
+// it by constructing the sink at startup.
+func TestLoadAcceptsUnwritableEventsDir(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, `{"events_dir": "\\\\no-such-host\\share"}`))
+	require.NoError(t, err)
+	require.Equal(t, `\\no-such-host\share`, cfg.EventsDir())
+}
+
 func TestLoadMissingFileFallsBackToDefaultAddress(t *testing.T) {
 	cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.json"))
 	require.NoError(t, err)
@@ -65,4 +95,11 @@ func TestSummaryShowsDescriptorAndAddress(t *testing.T) {
 	require.Contains(t, s, "platform configuration (machine=mock)")
 	require.Contains(t, s, "deployment descriptor")
 	require.Contains(t, s, "address      127.0.0.1:9090")
+	require.Contains(t, s, "events_dir   (disabled)")
+}
+
+func TestSummaryShowsConfiguredEventsDir(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, `{"events_dir": "/var/log/opdl"}`))
+	require.NoError(t, err)
+	require.Contains(t, cfg.Summary(), "events_dir   /var/log/opdl")
 }

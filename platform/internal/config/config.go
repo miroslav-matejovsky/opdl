@@ -23,16 +23,53 @@ const defaultAddress = "127.0.0.1:8080"
 // deployment descriptor (see package embedded, which the builder stages before
 // compiling) and the platform's JSON configuration file, which supplies settings
 // a user may override without rebuilding the binary. For now that is the address
-// the platform's API listens on.
+// the platform's API listens on and where it records events.
 type Config struct {
 	descriptor deployment.Descriptor
 	address    string
+	eventsDir  string
+	fabric     Fabric
 }
 
 // file is the schema of the platform's JSON configuration file. It carries the
 // settings a user may set without touching the embedded deployment descriptor.
 type file struct {
 	Address string `json:"address"`
+	// EventsDir is optional: empty disables event recording.
+	EventsDir string `json:"events_dir"`
+	// Fabric is optional: every field falls back to the descriptor's topology.
+	Fabric Fabric `json:"fabric"`
+}
+
+// Fabric carries per-adapter runtime overrides for the platform fabric. It is
+// keyed by adapter because the settings are adapter-specific by nature; the
+// fabric abstraction itself has nothing to configure.
+type Fabric struct {
+	// Olric configures the embedded Olric adapter.
+	Olric FabricOlric `json:"olric"`
+}
+
+// FabricOlric are the Olric adapter's runtime overrides.
+//
+// They exist for development hosts where the deployment's real addresses are not
+// bindable, and for scenarios that run several machines on one host. Production
+// needs none of them: the adapter derives everything from the descriptor.
+//
+// These settings move sockets and nothing else. None of them changes which
+// machine this is: identity, and therefore a registration's machine and IP, come
+// from the embedded descriptor alone and are never configurable at a site.
+type FabricOlric struct {
+	// ClientAddress overrides the member's client host:port.
+	ClientAddress string `json:"client_address"`
+	// MemberlistAddress overrides the member's membership host:port.
+	MemberlistAddress string `json:"memberlist_address"`
+	// Join overrides the memberlist addresses of the peers to seed from. An
+	// explicit empty list is not an override; omit the field to keep the peers
+	// the descriptor derived.
+	Join []string `json:"join"`
+	// StartTimeout overrides the readiness bound, as a Go duration such as
+	// "45s". Empty keeps the adapter's default.
+	StartTimeout string `json:"start_timeout"`
 }
 
 // Load composes a Config from the platform's embedded deployment descriptor and
@@ -48,7 +85,7 @@ func Load(configPath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	return &Config{descriptor: d, address: f.Address}, nil
+	return &Config{descriptor: d, address: f.Address, eventsDir: f.EventsDir, fabric: f.Fabric}, nil
 }
 
 // loadFile reads and validates the JSON configuration file. A file that does not
@@ -72,6 +109,16 @@ func loadFile(path string) (file, error) {
 	if err := validateAddress(f.Address); err != nil {
 		return file{}, fmt.Errorf("configuration file %s: %w", path, err)
 	}
+	// An events directory is not validated here. A path is only known to be
+	// usable once it is opened, so the runtime validates it by constructing the
+	// sink at startup rather than trusting a check that could go stale.
+	f.EventsDir = strings.TrimSpace(f.EventsDir)
+	// Fabric overrides are not validated here either: what makes an address
+	// usable is the adapter's business, so the composed adapter configuration is
+	// validated at startup, before any listener opens.
+	f.Fabric.Olric.ClientAddress = strings.TrimSpace(f.Fabric.Olric.ClientAddress)
+	f.Fabric.Olric.MemberlistAddress = strings.TrimSpace(f.Fabric.Olric.MemberlistAddress)
+	f.Fabric.Olric.StartTimeout = strings.TrimSpace(f.Fabric.Olric.StartTimeout)
 	return f, nil
 }
 
@@ -98,6 +145,15 @@ func (c *Config) Descriptor() deployment.Descriptor { return c.descriptor }
 // Address returns the host:port the platform's API listens on.
 func (c *Config) Address() string { return c.address }
 
+// EventsDir returns the directory the platform records events into. An empty
+// string means event recording is disabled.
+func (c *Config) EventsDir() string { return c.eventsDir }
+
+// Fabric returns the fabric adapter overrides from the configuration file. Only
+// runtime composition reads it: it is how a site moves the fabric's sockets, and
+// no domain package has any business knowing a backend is configurable.
+func (c *Config) Fabric() Fabric { return c.fabric }
+
 // Summary renders the effective configuration as a human-readable block for
 // logging at startup.
 func (c *Config) Summary() string {
@@ -114,7 +170,54 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t redundancy=%t\n", d.Features.Chaos, d.Features.Redundancy)
+	fmt.Fprintf(&b, "    fabric       %s\n", fabricSummary(d.Fabric))
 	fmt.Fprintf(&b, "  configuration file (JSON, user-provided):\n")
-	fmt.Fprintf(&b, "    address      %s", c.address)
+	fmt.Fprintf(&b, "    address      %s\n", c.address)
+	fmt.Fprintf(&b, "    events_dir   %s\n", eventsDirSummary(c.eventsDir))
+	fmt.Fprintf(&b, "    fabric.olric %s", olricSummary(c.fabric.Olric))
 	return b.String()
+}
+
+// fabricSummary renders the derived fabric membership: who this machine is on
+// the fabric and which peers it expects to meet.
+func fabricSummary(f deployment.Fabric) string {
+	if len(f.Peers) == 0 {
+		return fmt.Sprintf("%s (%s), one-member site", f.Machine, f.IP)
+	}
+	peers := make([]string, 0, len(f.Peers))
+	for _, peer := range f.Peers {
+		peers = append(peers, fmt.Sprintf("%s (%s)", peer.Machine, peer.IP))
+	}
+	return fmt.Sprintf("%s (%s), peers: %s", f.Machine, f.IP, strings.Join(peers, ", "))
+}
+
+// olricSummary renders the fabric adapter overrides, so a startup log shows
+// whether a machine is running on its deployment addresses or on local ones.
+func olricSummary(o FabricOlric) string {
+	overrides := make([]string, 0, 4)
+	if o.ClientAddress != "" {
+		overrides = append(overrides, "client="+o.ClientAddress)
+	}
+	if o.MemberlistAddress != "" {
+		overrides = append(overrides, "memberlist="+o.MemberlistAddress)
+	}
+	if o.Join != nil {
+		overrides = append(overrides, "join="+strings.Join(o.Join, ","))
+	}
+	if o.StartTimeout != "" {
+		overrides = append(overrides, "start_timeout="+o.StartTimeout)
+	}
+	if len(overrides) == 0 {
+		return "(derived from deployment)"
+	}
+	return strings.Join(overrides, " ")
+}
+
+// eventsDirSummary renders an unset events directory as an explicit statement
+// that recording is off, so the startup block never shows a blank value.
+func eventsDirSummary(dir string) string {
+	if dir == "" {
+		return "(disabled)"
+	}
+	return dir
 }

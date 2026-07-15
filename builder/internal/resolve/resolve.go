@@ -2,6 +2,8 @@ package resolve
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/builder/deployment"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
@@ -50,5 +52,36 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 			Chaos:      p.Features.Chaos,
 			Redundancy: p.Features.Redundancy,
 		},
+		Fabric: fabric(site, machine),
+	}
+}
+
+// fabric derives one machine's fabric topology from its site. The fabric spans
+// exactly one site, so the peers are that site's other machines and nothing
+// else: a machine in another site, environment, or project is never a peer and
+// forms its own fabric.
+//
+// Peers are ordered by machine name rather than by declaration, so the same
+// topology always derives the same descriptor no matter how the blueprint was
+// authored.
+func fabric(site blueprint.Site, machine blueprint.Machine) deployment.Fabric {
+	peers := make([]deployment.FabricPeer, 0, len(site.Machines))
+	for _, peer := range site.Machines {
+		if peer.Name == machine.Name {
+			continue
+		}
+		peers = append(peers, deployment.FabricPeer{
+			Site:    site.Name,
+			Machine: peer.Name,
+			IP:      peer.IP,
+		})
+	}
+	slices.SortFunc(peers, func(a, b deployment.FabricPeer) int {
+		return strings.Compare(a.Machine, b.Machine)
+	})
+	return deployment.Fabric{
+		Machine: machine.Name,
+		IP:      machine.IP,
+		Peers:   peers,
 	}
 }
