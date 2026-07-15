@@ -19,6 +19,14 @@ func validDescriptor() deployment.Descriptor {
 		IP:          "10.0.1.10",
 		Services:    []string{"sensor-services"},
 		Features:    deployment.Features{Chaos: true},
+		Fabric: deployment.Fabric{
+			Machine: "sensor",
+			IP:      "10.0.1.10",
+			Peers: []deployment.FabricPeer{
+				{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
+				{Site: "north", Machine: "historian", IP: "10.0.1.12"},
+			},
+		},
 	}
 }
 
@@ -40,6 +48,58 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing role", func(d *deployment.Descriptor) { d.Role = "" }, "role is required"},
 		{"invalid ip", func(d *deployment.Descriptor) { d.IP = "not-an-ip" }, "not a valid IP address"},
 		{"no services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
+		{
+			"fabric identity is not this machine",
+			func(d *deployment.Descriptor) { d.Fabric.Machine = "other" },
+			`fabric machine "other" must be this machine "sensor"`,
+		},
+		{
+			"fabric ip is not this machine's ip",
+			func(d *deployment.Descriptor) { d.Fabric.IP = "10.0.9.9" },
+			`fabric ip "10.0.9.9" must be this machine's ip "10.0.1.10"`,
+		},
+		{
+			"peer from another site",
+			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Site = "south" },
+			`fabric peer "gateway" is in site "south", not this machine's site "north"`,
+		},
+		{
+			"machine lists itself as a peer",
+			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Machine = "sensor" },
+			`fabric peer "sensor" is duplicated or is this machine itself`,
+		},
+		{
+			"duplicate peer",
+			func(d *deployment.Descriptor) { d.Fabric.Peers[1].Machine = "gateway" },
+			"is duplicated",
+		},
+		{
+			"peer with empty machine",
+			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Machine = " " },
+			"fabric peer with empty machine",
+		},
+		{
+			"peer with invalid ip",
+			func(d *deployment.Descriptor) { d.Fabric.Peers[0].IP = "nope" },
+			`fabric peer "gateway": ip "nope" is not a valid IP address`,
+		},
+		{
+			"peer reusing this machine's ip",
+			func(d *deployment.Descriptor) { d.Fabric.Peers[0].IP = "10.0.1.10" },
+			`ip "10.0.1.10" is already used by another member`,
+		},
+		{
+			"peers sharing an ip",
+			func(d *deployment.Descriptor) { d.Fabric.Peers[1].IP = "10.0.1.11" },
+			`ip "10.0.1.11" is already used by another member`,
+		},
+		{
+			"peers out of order",
+			func(d *deployment.Descriptor) {
+				d.Fabric.Peers[0], d.Fabric.Peers[1] = d.Fabric.Peers[1], d.Fabric.Peers[0]
+			},
+			`fabric peers are not ordered by machine: "gateway" after "historian"`,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,4 +108,12 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			require.ErrorContains(t, d.Validate(), tc.errText)
 		})
 	}
+}
+
+// TestDescriptorValidateAcceptsOneMemberFabric checks a single-machine site is a
+// valid deployment: it forms a fabric with itself and no peers.
+func TestDescriptorValidateAcceptsOneMemberFabric(t *testing.T) {
+	d := validDescriptor()
+	d.Fabric.Peers = nil
+	require.NoError(t, d.Validate())
 }

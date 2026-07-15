@@ -22,10 +22,44 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches enabled on the machine.
 	Features Features `json:"features"`
+	// Fabric is the resolved platform fabric topology for this machine.
+	Fabric Fabric `json:"fabric"`
 }
 
 // Features are the capability switches carried from the project onto a machine.
 type Features struct {
 	Chaos      bool `json:"chaos"`
 	Redundancy bool `json:"redundancy"`
+}
+
+// Fabric is this machine's resolved view of the platform fabric: who it is on
+// the fabric, and the peers it forms that fabric with. The builder derives it
+// from the project topology and stages it here, so the platform boots knowing
+// its membership and discovers nothing at runtime.
+//
+// It is transport-neutral: identities and addresses only, with no ports, adapter
+// names, or protocol settings. A fabric adapter derives what it needs from these
+// addresses, which is what lets the backend be replaced without changing the
+// deployment contract.
+type Fabric struct {
+	// Machine is this machine's fabric member identity, always equal to the
+	// descriptor's Machine.
+	Machine string `json:"machine"`
+	// IP is the address this machine's fabric member is reached on, always equal
+	// to the descriptor's IP.
+	IP string `json:"ip"`
+	// Peers are the other fabric members of this machine's site, ordered by
+	// machine name. A machine never lists itself, and the fabric spans exactly
+	// one site. A single-machine site has no peers and forms a one-member fabric.
+	Peers []FabricPeer `json:"peers"`
+}
+
+// FabricPeer is one other fabric member this machine expects to meet.
+type FabricPeer struct {
+	// Site is the peer's site, always equal to this machine's site.
+	Site string `json:"site"`
+	// Machine is the peer's machine identity.
+	Machine string `json:"machine"`
+	// IP is the address the peer's fabric member is reached on.
+	IP string `json:"ip"`
 }

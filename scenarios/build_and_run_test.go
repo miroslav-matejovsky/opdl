@@ -4,13 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"net"
 	"net/http"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -26,51 +21,13 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 	ctx := context.Background()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
-	blueprintsDir := filepath.Join(scenariosDir, "testdata")
-	builderDir := filepath.Join(scenariosDir, "..", "builder")
 	outDir := t.TempDir()
+	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "scenario")
 
-	// Flags must precede the positional project argument: Go's flag package
-	// stops parsing flags at the first non-flag argument.
-	build := exec.CommandContext(ctx, "go", "run", "./cmd/opdl", "build",
-		"-examples", blueprintsDir, "-out", outDir, "scenario")
-	build.Dir = builderDir
-	output, err := build.CombinedOutput()
-	require.NoError(t, err, "builder build failed:\n%s", output)
+	platform := startMachine(ctx, t, machineBinary(outDir, "scenario", "node"), outDir, "node")
+	url := platform.url
+	eventsDir := platform.eventsDir
 
-	binaryName := "node"
-	if runtime.GOOS == "windows" {
-		binaryName += ".exe"
-	}
-	binaryPath := filepath.Join(outDir, "scenario", "local", "node", binaryName)
-	require.FileExists(t, binaryPath)
-
-	// Point the binary at a JSON configuration file that pins a free loopback
-	// address, so the scenario controls where the API listens without colliding
-	// with other tests, and an events directory to observe what it did.
-	port := freePort(t)
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	eventsDir := filepath.Join(outDir, "events")
-	configPath := filepath.Join(outDir, "config.json")
-	require.NoError(t, os.WriteFile(configPath, eventsConfig(addr, eventsDir), 0o644))
-
-	var out bytes.Buffer
-	run := exec.CommandContext(ctx, binaryPath, "-config", configPath)
-	run.Stdout = &out
-	run.Stderr = &out
-	require.NoError(t, run.Start())
-	stopped := false
-	stop := func() {
-		if stopped {
-			return
-		}
-		stopped = true
-		_ = run.Process.Kill()
-		_ = run.Wait()
-	}
-	defer stop()
-
-	url := "http://" + addr
 	require.Eventually(t, func() bool {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, url+"/registrations", http.NoBody)
 		if reqErr != nil {
@@ -186,14 +143,13 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 	requireSingleEvent(t, afterRetry, "platform.registration.requested")
 	requireSingleEvent(t, afterRetry, "platform.registration.accepted")
 
-	// Stop the process before reading its captured output: Wait joins the exec
-	// copier goroutines, so the buffer is safe to read only afterwards. Events
-	// are read above while the process is live: a force stop is not portable
-	// enough to rely on for flushing, and graceful shutdown is covered by the
-	// platform's in-process lifecycle tests.
-	stop()
-	require.Contains(t, out.String(), "platform configuration")
-	require.Contains(t, out.String(), "events_dir   "+eventsDir)
+	// Events are read above while the process is live: a force stop is not
+	// portable enough to rely on for flushing, and graceful shutdown is covered
+	// by the platform's in-process lifecycle tests.
+	logs := platform.logs()
+	require.Contains(t, logs, "platform configuration")
+	require.Contains(t, logs, "events_dir   "+eventsDir)
+	require.Contains(t, logs, "one-member site", "a standalone deployment is a fabric of one")
 }
 
 type registration struct {
@@ -207,16 +163,4 @@ type registration struct {
 		IP      string `json:"ip"`
 		Status  string `json:"status"`
 	} `json:"platform_instances"`
-}
-
-// freePort reserves an ephemeral port, then releases it so the platform can bind
-// it. A brief race window is acceptable for a scenario test.
-func freePort(t *testing.T) int {
-	t.Helper()
-	var lc net.ListenConfig
-	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := l.Addr().(*net.TCPAddr).Port
-	require.NoError(t, l.Close())
-	return port
 }

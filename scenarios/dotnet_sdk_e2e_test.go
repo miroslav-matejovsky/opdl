@@ -1,14 +1,11 @@
 package scenarios
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -37,46 +34,11 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
-	blueprintsDir := filepath.Join(scenariosDir, "testdata")
-	builderDir := filepath.Join(scenariosDir, "..", "builder")
 	outDir := t.TempDir()
+	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "scenario")
 
-	// Build the single machine in the "scenario" blueprint. Flags must precede the
-	// positional project argument: Go's flag package stops at the first non-flag.
-	build := exec.CommandContext(ctx, "go", "run", "./cmd/opdl", "build",
-		"-examples", blueprintsDir, "-out", outDir, "scenario")
-	build.Dir = builderDir
-	output, err := build.CombinedOutput()
-	require.NoError(t, err, "builder build failed:\n%s", output)
-
-	binaryName := "node"
-	if runtime.GOOS == "windows" {
-		binaryName += ".exe"
-	}
-	binaryPath := filepath.Join(outDir, "scenario", "local", "node", binaryName)
-	require.FileExists(t, binaryPath)
-
-	// Pin a free loopback address so the SDK knows where to reach the platform.
-	port := freePort(t)
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	configPath := filepath.Join(outDir, "config.json")
-	require.NoError(t, os.WriteFile(configPath, fmt.Appendf(nil, `{"address": %q}`, addr), 0o644))
-
-	var out bytes.Buffer
-	run := exec.CommandContext(ctx, binaryPath, "-config", configPath)
-	run.Stdout = &out
-	run.Stderr = &out
-	require.NoError(t, run.Start())
-	stopped := false
-	stop := func() {
-		if stopped {
-			return
-		}
-		stopped = true
-		_ = run.Process.Kill()
-		_ = run.Wait()
-	}
-	defer stop()
+	platform := startMachine(ctx, t, machineBinary(outDir, "scenario", "node"), outDir, "node")
+	addr := strings.TrimPrefix(platform.url, "http://")
 
 	// Wait until the platform answers before handing off to the .NET tests, so they
 	// do not have to carry their own start-up retry.

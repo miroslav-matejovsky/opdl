@@ -93,6 +93,36 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 	require.ErrorContains(t, p.Validate(), "duplicate site")
 }
 
+// TestProjectValidateDuplicateIP checks an IP identifies exactly one machine.
+// The platform derives its fabric addresses from a machine's IP on fixed ports,
+// so two machines sharing one would derive the same addresses.
+func TestProjectValidateDuplicateIP(t *testing.T) {
+	t.Run("within one site", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].Machines = append(p.Sites[0].Machines, blueprint.Machine{
+			Name:     "gateway",
+			Role:     "gateway-node",
+			IP:       "10.0.1.10",
+			Services: []string{"core-services"},
+		})
+		require.ErrorContains(t, p.Validate(), `machines "sensor" and "gateway" share ip "10.0.1.10"`)
+	})
+
+	t.Run("across sites", func(t *testing.T) {
+		p := validProject()
+		p.Sites = append(p.Sites, blueprint.Site{
+			Name: "south",
+			Machines: []blueprint.Machine{{
+				Name:     "south-node",
+				Role:     "sensor-node",
+				IP:       "10.0.1.10",
+				Services: []string{"sensor-services"},
+			}},
+		})
+		require.ErrorContains(t, p.Validate(), `share ip "10.0.1.10"`)
+	})
+}
+
 func TestFeatures(t *testing.T) {
 	f := blueprint.Features{Chaos: true}
 	require.True(t, f.Chaos)

@@ -73,6 +73,7 @@ func (p *Project) Validate() error {
 
 	siteNames := make(map[string]bool, len(p.Sites))
 	machineNames := make(map[string]bool)
+	machineIPs := make(map[string]string)
 	for _, site := range p.Sites {
 		if strings.TrimSpace(site.Name) == "" {
 			return fmt.Errorf("project %q: site with empty name", p.Name)
@@ -89,6 +90,14 @@ func (p *Project) Validate() error {
 			if err := p.validateMachine(site, machine, machineNames); err != nil {
 				return err
 			}
+			// An IP must identify exactly one machine in the project. The
+			// platform derives its fabric addresses from a machine's IP on fixed
+			// ports, so two machines sharing an IP would derive the same
+			// addresses and could not both bind them.
+			if owner, taken := machineIPs[machine.IP]; taken {
+				return fmt.Errorf("project %q: machines %q and %q share ip %q", p.Name, owner, machine.Name, machine.IP)
+			}
+			machineIPs[machine.IP] = machine.Name
 		}
 	}
 	return nil

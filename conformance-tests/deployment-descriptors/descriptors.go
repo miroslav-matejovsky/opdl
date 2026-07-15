@@ -39,16 +39,34 @@ func checkContractsMatch() error {
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
 // produces marshals to JSON the platform reads back with every field intact.
 func checkRoundTrip() error {
+	// A machine's fabric block restates the machine's own site, name, and IP, so
+	// those values appear both at the top level and under fabric. They are named
+	// here so the two stay one identity rather than four matching literals.
+	const (
+		site        = "north"
+		machine     = "sensor"
+		machineIP   = "10.0.1.10"
+		peerMachine = "gateway"
+		peerIP      = "10.0.1.11"
+	)
+
 	built := builderdeployment.Descriptor{
 		Platform:    "opdl",
 		Project:     "customer-a",
 		Environment: "production",
-		Site:        "north",
-		Machine:     "sensor",
+		Site:        site,
+		Machine:     machine,
 		Role:        "sensor-node",
-		IP:          "10.0.1.10",
+		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    builderdeployment.Features{Chaos: true, Redundancy: true},
+		Fabric: builderdeployment.Fabric{
+			Machine: machine,
+			IP:      machineIP,
+			Peers: []builderdeployment.FabricPeer{
+				{Site: site, Machine: peerMachine, IP: peerIP},
+			},
+		},
 	}
 
 	data, err := json.Marshal(built)
@@ -65,12 +83,19 @@ func checkRoundTrip() error {
 		Platform:    "opdl",
 		Project:     "customer-a",
 		Environment: "production",
-		Site:        "north",
-		Machine:     "sensor",
+		Site:        site,
+		Machine:     machine,
 		Role:        "sensor-node",
-		IP:          "10.0.1.10",
+		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    platformdeployment.Features{Chaos: true, Redundancy: true},
+		Fabric: platformdeployment.Fabric{
+			Machine: machine,
+			IP:      machineIP,
+			Peers: []platformdeployment.FabricPeer{
+				{Site: site, Machine: peerMachine, IP: peerIP},
+			},
+		},
 	}
 	if !reflect.DeepEqual(got, want) {
 		return fmt.Errorf("builder descriptor did not round-trip into the platform descriptor:\n  got:  %+v\n  want: %+v", got, want)

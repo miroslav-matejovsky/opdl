@@ -23,11 +23,60 @@ single source the OpenAPI specification and the .NET SDK are generated from.
 ### Deployment descriptor
 
 Each built binary embeds one `deployment.Descriptor` (project, environment,
-site, machine, role, IP, services, features). The platform trusts it as its own
-identity: it is what a registration's origin and an event's node are taken from,
-so a client cannot claim to be somewhere it is not. Only settings a site may
-change without a rebuild live in the platform's JSON configuration file: the
-listen address and the events directory.
+site, machine, role, IP, services, features, and its resolved fabric topology).
+The platform trusts it as its own identity: it is what a registration's origin,
+an event's node, and a fabric member are taken from, so a client cannot claim to
+be somewhere it is not. Only settings a site may change without a rebuild live in
+the platform's JSON configuration file: the listen address, the events directory,
+and fabric adapter overrides.
+
+### Fabric
+
+The fabric (`platform/internal/fabric`) is the platform's distribution boundary:
+the one abstraction through which platform code shares state across the machines
+of a site. Platform code depends on the `fabric.Fabric` interface; which backend
+carries the data is decided by runtime composition alone.
+
+Its only capability in this release is a **named collection**: a map of string
+keys to byte values, shared by a site, with create-if-absent, atomic swap, get,
+and weakly consistent enumeration. There is no publish, subscribe, or request
+yet. The package documents exactly what every adapter owes a caller (byte
+ownership, per-key atomicity, enumeration weakness, membership stability,
+behavior after close, context cancellation), and a single contract test suite
+runs against every adapter to hold them to it.
+
+| Adapter | Purpose |
+| --- | --- |
+| `fabric/olric` | Production. An Olric member embedded in the platform process. The only package that imports Olric. |
+| `fabric/memory` | In-process, for tests and for holding the production adapter to the same contract. Never composed at runtime. |
+
+**Bootstrap is derived, not discovered.** The builder resolves each machine's
+fabric topology from the site portion of the project blueprint, so a machine
+boots knowing its site's membership. The Olric adapter derives its addresses from
+those topology IPs on fixed ports: `3320` for the client surface and `3322` for
+membership, seeding from its peers' IPs on `3322`. That is why a project may not
+give two machines the same IP. The `fabric.olric` section of the configuration
+file overrides those addresses for development hosts and for scenarios; overrides
+move sockets only and never change which machine a process is.
+
+Expected membership always comes from the descriptor, so a member that is
+currently unreachable still belongs to the site; `State` reports reachability
+separately (`connected`, `degraded`, `disconnected`). A single-machine site is a
+one-member fabric and is connected on its own. A site boots in any order: a
+machine whose peers are not up yet starts alone and merges when they arrive.
+
+**Startup order.** The event sink opens first, then the fabric, and only then the
+public API: a machine that cannot start its fabric never serves traffic. Shutdown
+reverses it: HTTP intake stops and drains, the fabric closes and records
+`platform.fabric.stopped`, and the event sink closes last.
+
+**No redundancy.** One fabric member per machine, with no primary/secondary
+instance, election, or fencing. Olric may partition or replicate internally;
+that is a backend detail and not a platform guarantee, and it must not be read as
+service redundancy.
+
+The v1 `distdata` package is deprecated and deliberately not ported: Olric is an
+adapter behind the fabric here, not an API anything else depends on.
 
 ### Registration
 
@@ -56,6 +105,7 @@ full list documented at the top:
 | Package | Events |
 | --- | --- |
 | `platform/internal/registration` | `requested`, `confirmed`, `accepted`, `rejected`, `conflict` |
+| `platform/internal/fabric` | `started`, `stopped` |
 
 Recording is synchronous and each record is flushed before the emitting
 operation returns, so a scenario that has read an HTTP response can already read
