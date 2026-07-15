@@ -42,6 +42,16 @@ func testFabric() fabric.Fabric {
 	return memory.Open(testDescriptor)
 }
 
+// testLoop is a reconciler loop that is not running. serve stops it like any
+// other, which is all these tests need: what they check is the runtime's
+// teardown ordering, and reconciliation's own behavior is the registration
+// package's to prove.
+func testLoop() *reconcilerLoop {
+	done := make(chan struct{})
+	close(done)
+	return &reconcilerLoop{cancel: func() {}, done: done}
+}
+
 // probeEvent is a real domain event, so these tests exercise the recorder the
 // runtime actually composes rather than a double.
 func probeEvent() events.Event {
@@ -93,7 +103,7 @@ func TestServeStopsServerAndClosesRecorderOnSignal(t *testing.T) {
 	addr := freeAddress(t)
 
 	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), testFabric(), rec) }()
+	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), testFabric(), rec) }()
 	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
 		"server never became reachable")
 
@@ -124,7 +134,7 @@ func TestServeClosesRecorderWhenServerCannotStart(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = listener.Close() }()
 
-	err = serve(context.Background(), newTestServer(listener.Addr().String()), testFabric(), rec)
+	err = serve(context.Background(), newTestServer(listener.Addr().String()), testLoop(), testFabric(), rec)
 	require.ErrorContains(t, err, "serve HTTP", "a server that cannot start must report why")
 
 	// Dependencies are released even on the failure path.
@@ -140,7 +150,7 @@ func TestServeReportsShutdownAndCloseFailuresTogether(t *testing.T) {
 	addr := freeAddress(t)
 
 	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), testFabric(), failing) }()
+	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), testFabric(), failing) }()
 	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
 		"server never became reachable")
 	cancel()
@@ -260,6 +270,27 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	})
 }
 
+// TestReconcileIntervalDefaultsAndValidates checks a schedule that would never
+// fire is refused at startup. Reconciliation is what accepts registrations, so a
+// platform that silently never ran it would leave every request pending.
+func TestReconcileIntervalDefaultsAndValidates(t *testing.T) {
+	interval, err := reconcileInterval(config.Registration{})
+	require.NoError(t, err)
+	require.Equal(t, registration.DefaultInterval, interval, "an absent setting is the package's default")
+
+	interval, err = reconcileInterval(config.Registration{ReconcileInterval: "250ms"})
+	require.NoError(t, err)
+	require.Equal(t, 250*time.Millisecond, interval)
+
+	_, err = reconcileInterval(config.Registration{ReconcileInterval: "often"})
+	require.ErrorContains(t, err, `reconcile interval "often"`)
+
+	for _, invalid := range []string{"0s", "-1s"} {
+		_, err = reconcileInterval(config.Registration{ReconcileInterval: invalid})
+		require.ErrorContains(t, err, "not positive", invalid)
+	}
+}
+
 // TestStopFabricRecordsStoppedBeforeTheSinkCloses checks the shutdown order the
 // runtime promises: the fabric is closed and says so while the sink can still
 // take the event.
@@ -294,7 +325,7 @@ func TestServeRecordsFabricStoppedOnShutdown(t *testing.T) {
 	member := testFabric()
 
 	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), member, rec) }()
+	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), member, rec) }()
 	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
 		"server never became reachable")
 	cancel()

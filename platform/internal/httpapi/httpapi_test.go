@@ -4,22 +4,28 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
+	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/fabric/memory"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
-func TestHandlerCreatesPendingRegistrationThenListsAndGetsIt(t *testing.T) {
-	service, coordinator := newHeldService(t)
-	srv := httptest.NewServer(httpapi.NewHandler(service))
+// TestHandlerServesARequestFromPendingToAccepted is the API's side of the
+// two-phase story: 202 does not mean registered, the status endpoint says
+// pending while an expected machine has not answered, and it turns to accepted
+// once that machine does.
+func TestHandlerServesARequestFromPendingToAccepted(t *testing.T) {
+	site := newSite(t, "node-a", "node-b")
+	srv := httptest.NewServer(httpapi.NewHandler(site.start("node-a")))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/registrations", nil, "")
@@ -32,51 +38,66 @@ func TestHandlerCreatesPendingRegistrationThenListsAndGetsIt(t *testing.T) {
 	response = do(t, http.MethodPost, srv.URL+"/registrations", []byte(`{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing", "role": "Master"}`), "application/json")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusAccepted, response.StatusCode)
+	require.Zero(t, response.ContentLength, "202 says the request was taken, not that anything was registered")
 
+	// node-b is expected and is not running, so the site cannot accept this.
 	response = do(t, http.MethodGet, srv.URL+"/registrations/7/42/status", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusOK, response.StatusCode)
 	view := decodeRegistration(t, response)
 	require.Equal(t, api.RegistrationStatusPending, view.Status)
-	require.Equal(t, api.RegistrationStatusPending, view.PlatformInstances[0].Status)
+	require.Equal(t, api.RegistrationStatusAccepted, instanceStatus(t, view, "node-a").Status)
+	require.Equal(t, api.RegistrationStatusPending, instanceStatus(t, view, "node-b").Status)
 
 	response = do(t, http.MethodGet, srv.URL+"/registrations", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	var registrations []api.Registration
 	require.NoError(t, json.NewDecoder(response.Body).Decode(&registrations))
-	require.Len(t, registrations, 1)
+	require.Len(t, registrations, 1, "a pending request is listed like any other")
 	require.Equal(t, api.RegistrationStatusPending, registrations[0].Status)
 
-	coordinator.confirmWith(t, api.RegistrationStatusAccepted, nil)
+	// Start the machine the site was waiting for and let it answer.
+	site.start("node-b")
+	site.reconcile()
+
 	response = do(t, http.MethodGet, srv.URL+"/registrations/7/42/status", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	view = decodeRegistration(t, response)
 	require.Equal(t, api.RegistrationStatusAccepted, view.Status)
 	require.Equal(t, "node-a", view.Machine)
 	require.Equal(t, "127.0.0.1", view.IP)
-	require.Equal(t, api.RegistrationStatusAccepted, view.PlatformInstances[0].Status)
 	require.Equal(t, api.RoleMaster, *view.Role)
+	require.Equal(t, api.RegistrationStatusAccepted, instanceStatus(t, view, "node-a").Status)
+	require.Equal(t, api.RegistrationStatusAccepted, instanceStatus(t, view, "node-b").Status)
 }
 
-type heldCoordinator struct {
-	mu       sync.Mutex
-	callback func(context.Context, string, *string) error
-}
+// TestHandlerReturnsNotFoundAwayFromTheOrigin checks the status endpoint is the
+// origin's: another machine of the site holds the same request and still answers
+// 404, because it is not who the client asked.
+func TestHandlerReturnsNotFoundAwayFromTheOrigin(t *testing.T) {
+	site := newSite(t, "node-a", "node-b")
+	origin := httptest.NewServer(httpapi.NewHandler(site.start("node-a")))
+	defer origin.Close()
+	other := httptest.NewServer(httpapi.NewHandler(site.start("node-b")))
+	defer other.Close()
 
-func (c *heldCoordinator) Trigger(_ context.Context, _ registration.Key, confirm func(context.Context, string, *string) error) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.callback = confirm
-	return nil
-}
+	response := do(t, http.MethodPost, origin.URL+"/registrations", []byte(`{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing"}`), "application/json")
+	require.Equal(t, http.StatusAccepted, response.StatusCode)
+	require.NoError(t, response.Body.Close())
+	site.reconcile()
 
-func (c *heldCoordinator) confirmWith(t *testing.T, status string, reason *string) {
-	t.Helper()
-	c.mu.Lock()
-	confirm := c.callback
-	c.mu.Unlock()
-	require.NotNil(t, confirm)
-	require.NoError(t, confirm(context.Background(), status, reason))
+	response = do(t, http.MethodGet, other.URL+"/registrations/7/42/status", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusNotFound, response.StatusCode)
+
+	// The list, unlike the status, is the site's state and answers anywhere.
+	response = do(t, http.MethodGet, other.URL+"/registrations", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	var registrations []api.Registration
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&registrations))
+	require.Len(t, registrations, 1)
+	require.Equal(t, "node-a", registrations[0].Machine)
+	require.Equal(t, api.RegistrationStatusAccepted, registrations[0].Status)
 }
 
 func TestHandlerRejectsInvalidOrSpoofedRequests(t *testing.T) {
@@ -137,19 +158,79 @@ func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 	}
 }
 
-func newService(t *testing.T) *registration.Service {
+// site is the handler tests' deployment: the machines of one site sharing one
+// in-process fabric, so a test can serve one machine's API while deciding which
+// of the machines it waits for are running.
+type site struct {
+	t       *testing.T
+	shared  *memory.Site
+	peers   []deployment.FabricPeer
+	running []*registration.Reconciler
+}
+
+// newSite declares a site of machines and starts none of them. Machine i is at
+// 127.0.0.(i+1).
+func newSite(t *testing.T, machines ...string) *site {
 	t.Helper()
-	service, err := registration.NewService(registration.Location{Machine: "node-a", IP: "127.0.0.1"}, registration.SingleInstanceCoordinator{}, events.NopRecorder{})
-	require.NoError(t, err)
+	s := &site{t: t, shared: memory.NewSite()}
+	for i, machine := range machines {
+		s.peers = append(s.peers, deployment.FabricPeer{
+			Site: "local", Machine: machine, IP: fmt.Sprintf("127.0.0.%d", i+1),
+		})
+	}
+	return s
+}
+
+// start brings one expected machine up and returns the service its HTTP API
+// would serve.
+func (s *site) start(machine string) *registration.Service {
+	s.t.Helper()
+	descriptor := deployment.Descriptor{Site: "local"}
+	for _, peer := range s.peers {
+		if peer.Machine == machine {
+			descriptor.Machine, descriptor.IP = peer.Machine, peer.IP
+			continue
+		}
+		descriptor.Fabric.Peers = append(descriptor.Fabric.Peers, peer)
+	}
+	require.NotEmpty(s.t, descriptor.Machine, "%s is not a machine of this site", machine)
+
+	f := s.shared.Open(descriptor)
+	service, reconciler, err := registration.Open(f, events.NopRecorder{})
+	require.NoError(s.t, err)
+	s.t.Cleanup(func() { _ = f.Close(context.Background()) })
+	s.running = append(s.running, reconciler)
 	return service
 }
 
-func newHeldService(t *testing.T) (*registration.Service, *heldCoordinator) {
+// reconcile lets the site settle, which is what its schedulers do on their own.
+func (s *site) reconcile() {
+	s.t.Helper()
+	for range 2 {
+		for _, reconciler := range s.running {
+			require.NoError(s.t, reconciler.Reconcile(context.Background()))
+		}
+	}
+}
+
+// newService builds the registration a one-machine site's platform serves. Its
+// own answer is the whole site's, so a request it takes is accepted as soon as
+// anything looks at it, which is all these tests need from the domain.
+func newService(t *testing.T) *registration.Service {
 	t.Helper()
-	coordinator := &heldCoordinator{}
-	service, err := registration.NewService(registration.Location{Machine: "node-a", IP: "127.0.0.1"}, coordinator, events.NopRecorder{})
-	require.NoError(t, err)
-	return service, coordinator
+	return newSite(t, "node-a").start("node-a")
+}
+
+// instanceStatus returns one platform instance's entry in a registration view.
+func instanceStatus(t *testing.T, view api.Registration, machine string) api.PlatformInstanceRegistrationStatus {
+	t.Helper()
+	for _, instance := range view.PlatformInstances {
+		if instance.Machine == machine {
+			return instance
+		}
+	}
+	require.FailNow(t, "no platform instance entry", "machine %s not in %v", machine, view.PlatformInstances)
+	return api.PlatformInstanceRegistrationStatus{}
 }
 
 func do(t *testing.T, method, url string, body []byte, contentType string) *http.Response {

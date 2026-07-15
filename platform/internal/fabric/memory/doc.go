@@ -7,6 +7,19 @@
 // backend happens to do; this package is what keeps them honest, which is why it
 // implements the atomicity and copy rules strictly rather than conveniently.
 //
+// # Several members in one process
+//
+// Open builds a member of a site of its own. Site builds members that share
+// their collections, so a test can run the machines of one site together and
+// have them really share state: one machine's write is another's read, and each
+// keeps its own descriptor identity, membership, and lifecycle. That makes
+// site-wide behavior testable in one process, at one adapter's speed, without a
+// network.
+//
+// Shared collections do not make the members reachable to each other. They never
+// connected, so State still reports what it can honestly see, and a shared site
+// of two reads as disconnected.
+//
 // It is not a production fallback. It shares nothing between processes, so a
 // machine running it is a site of one that believes it is whole. Runtime
 // composition never selects it.

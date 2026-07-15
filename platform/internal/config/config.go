@@ -25,10 +25,11 @@ const defaultAddress = "127.0.0.1:8080"
 // a user may override without rebuilding the binary. For now that is the address
 // the platform's API listens on and where it records events.
 type Config struct {
-	descriptor deployment.Descriptor
-	address    string
-	eventsDir  string
-	fabric     Fabric
+	descriptor   deployment.Descriptor
+	address      string
+	eventsDir    string
+	fabric       Fabric
+	registration Registration
 }
 
 // file is the schema of the platform's JSON configuration file. It carries the
@@ -39,6 +40,21 @@ type file struct {
 	EventsDir string `json:"events_dir"`
 	// Fabric is optional: every field falls back to the descriptor's topology.
 	Fabric Fabric `json:"fabric"`
+	// Registration is optional: every field falls back to a built-in default.
+	Registration Registration `json:"registration"`
+}
+
+// Registration carries the runtime settings of the registration use case.
+type Registration struct {
+	// ReconcileInterval overrides how often this platform instance scans the
+	// site's registration requests, as a Go duration such as "500ms". Empty
+	// keeps the built-in default.
+	//
+	// It is a latency setting, not a correctness one. Every registration
+	// decision is idempotent and derived from the site's state, so a shorter
+	// interval accepts requests sooner and a longer one costs less; neither
+	// changes what the site decides.
+	ReconcileInterval string `json:"reconcile_interval"`
 }
 
 // Fabric carries per-adapter runtime overrides for the platform fabric. It is
@@ -85,7 +101,13 @@ func Load(configPath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	return &Config{descriptor: d, address: f.Address, eventsDir: f.EventsDir, fabric: f.Fabric}, nil
+	return &Config{
+		descriptor:   d,
+		address:      f.Address,
+		eventsDir:    f.EventsDir,
+		fabric:       f.Fabric,
+		registration: f.Registration,
+	}, nil
 }
 
 // loadFile reads and validates the JSON configuration file. A file that does not
@@ -119,6 +141,7 @@ func loadFile(path string) (file, error) {
 	f.Fabric.Olric.ClientAddress = strings.TrimSpace(f.Fabric.Olric.ClientAddress)
 	f.Fabric.Olric.MemberlistAddress = strings.TrimSpace(f.Fabric.Olric.MemberlistAddress)
 	f.Fabric.Olric.StartTimeout = strings.TrimSpace(f.Fabric.Olric.StartTimeout)
+	f.Registration.ReconcileInterval = strings.TrimSpace(f.Registration.ReconcileInterval)
 	return f, nil
 }
 
@@ -154,6 +177,9 @@ func (c *Config) EventsDir() string { return c.eventsDir }
 // no domain package has any business knowing a backend is configurable.
 func (c *Config) Fabric() Fabric { return c.fabric }
 
+// Registration returns the registration settings from the configuration file.
+func (c *Config) Registration() Registration { return c.registration }
+
 // Summary renders the effective configuration as a human-readable block for
 // logging at startup.
 func (c *Config) Summary() string {
@@ -174,8 +200,18 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "  configuration file (JSON, user-provided):\n")
 	fmt.Fprintf(&b, "    address      %s\n", c.address)
 	fmt.Fprintf(&b, "    events_dir   %s\n", eventsDirSummary(c.eventsDir))
-	fmt.Fprintf(&b, "    fabric.olric %s", olricSummary(c.fabric.Olric))
+	fmt.Fprintf(&b, "    fabric.olric %s\n", olricSummary(c.fabric.Olric))
+	fmt.Fprintf(&b, "    registration %s", registrationSummary(c.registration))
 	return b.String()
+}
+
+// registrationSummary renders the registration settings, so a startup log shows
+// whether this machine reconciles on its own schedule or the built-in one.
+func registrationSummary(r Registration) string {
+	if r.ReconcileInterval == "" {
+		return "(defaults)"
+	}
+	return "reconcile_interval=" + r.ReconcileInterval
 }
 
 // fabricSummary renders the derived fabric membership: who this machine is on

@@ -103,3 +103,22 @@ func TestSummaryShowsConfiguredEventsDir(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, cfg.Summary(), "events_dir   /var/log/opdl")
 }
+
+// TestLoadReadsOptionalReconcileInterval checks the setting is carried through
+// as written. What makes an interval usable is the registration package's
+// business, so it is validated where it is composed rather than here.
+func TestLoadReadsOptionalReconcileInterval(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, `{"registration": {"reconcile_interval": " 250ms "}}`))
+	require.NoError(t, err)
+	require.Equal(t, config.Registration{ReconcileInterval: "250ms"}, cfg.Registration())
+	require.Contains(t, cfg.Summary(), "registration reconcile_interval=250ms")
+}
+
+// TestLoadDefaultsTheReconcileInterval checks an absent setting stays absent, so
+// composition applies its own default rather than a blank.
+func TestLoadDefaultsTheReconcileInterval(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, `{}`))
+	require.NoError(t, err)
+	require.Empty(t, cfg.Registration().ReconcileInterval)
+	require.Contains(t, cfg.Summary(), "registration (defaults)")
+}

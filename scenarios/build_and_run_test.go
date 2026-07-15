@@ -151,16 +151,3 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 	require.Contains(t, logs, "events_dir   "+eventsDir)
 	require.Contains(t, logs, "one-member site", "a standalone deployment is a fabric of one")
 }
-
-type registration struct {
-	UnitType          uint8  `json:"unit_type"`
-	UnitID            uint16 `json:"unit_id"`
-	Machine           string `json:"machine"`
-	IP                string `json:"ip"`
-	Status            string `json:"status"`
-	PlatformInstances []struct {
-		Machine string `json:"machine"`
-		IP      string `json:"ip"`
-		Status  string `json:"status"`
-	} `json:"platform_instances"`
-}

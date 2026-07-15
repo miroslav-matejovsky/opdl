@@ -13,8 +13,9 @@ import (
 // fabric: two machines of one site, each built with nothing but its own
 // descriptor, meeting without being told about each other at runtime.
 //
-// It checks only that both members start and form one fabric. Registration is
-// still process-local, so nothing here shares state across the two.
+// It checks only that both members start and form one fabric, and that the
+// fabric is ready before the API is. What the two then carry between them is
+// TestTwoMachineRegistration's subject.
 func TestTwoMachineFabric(t *testing.T) {
 	ctx := context.Background()
 	scenariosDir, err := filepath.Abs(".")
@@ -70,7 +71,12 @@ func TestTwoMachineFabric(t *testing.T) {
 	requireOnlyNodeInLog(t, second.eventsDir, nodeB)
 
 	// The startup order the platform promises: the fabric is ready before the
-	// public API accepts anything.
+	// public API accepts anything. Both machines have to have finished starting
+	// for the order to be readable at all, and reading a machine's logs stops
+	// it, so the wait comes first.
+	for _, m := range []*machine{first, second} {
+		waitForAPI(ctx, t, m)
+	}
 	for _, m := range []*machine{first, second} {
 		logs := m.logs()
 		fabricAt := strings.Index(logs, "fabric member")

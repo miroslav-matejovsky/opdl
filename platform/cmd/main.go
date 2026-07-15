@@ -74,14 +74,26 @@ func run(args []string) error {
 		return errors.Join(err, closeRecorder(rec))
 	}
 
-	registrations, err := registration.NewService(
-		registration.Location{Machine: descriptor.Machine, IP: descriptor.IP},
-		registration.SingleInstanceCoordinator{},
-		rec,
-	)
+	// Registration opens its collections on the running fabric, so its state is
+	// the site's from the first request rather than this process's.
+	registrations, reconciler, err := registration.Open(member, rec)
 	if err != nil {
 		return errors.Join(fmt.Errorf("registration service: %w", err), stopFabric(ctx, member, rec), closeRecorder(rec))
 	}
+
+	// The reconciler runs its first pass before the API opens. This machine may
+	// have restarted into a site that has been deciding without it, and it owes
+	// those requests its answer; serving first would answer questions about a
+	// site this instance has not yet looked at.
+	interval, err := reconcileInterval(cfg.Registration())
+	if err != nil {
+		return errors.Join(err, stopFabric(ctx, member, rec), closeRecorder(rec))
+	}
+	if err := reconciler.Reconcile(ctx); err != nil {
+		return errors.Join(fmt.Errorf("initial registration reconciliation: %w", err), stopFabric(ctx, member, rec), closeRecorder(rec))
+	}
+	loop := startReconciler(ctx, reconciler, interval)
+	fmt.Printf("platform: reconciling registrations every %s\n", interval)
 
 	addr := cfg.Address()
 	fmt.Printf("platform: listening on %s\n", addr)
@@ -90,7 +102,55 @@ func run(args []string) error {
 		Handler:           httpapi.NewHandler(registrations),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	return serve(ctx, srv, member, rec)
+	return serve(ctx, srv, loop, member, rec)
+}
+
+// reconcileInterval resolves how often this machine reconciles: what the
+// configuration file says, or the registration package's default.
+func reconcileInterval(cfg config.Registration) (time.Duration, error) {
+	if cfg.ReconcileInterval == "" {
+		return registration.DefaultInterval, nil
+	}
+	interval, err := time.ParseDuration(cfg.ReconcileInterval)
+	if err != nil {
+		return 0, fmt.Errorf("registration: reconcile interval %q: %w", cfg.ReconcileInterval, err)
+	}
+	if interval <= 0 {
+		return 0, fmt.Errorf("registration: reconcile interval %s is not positive", interval)
+	}
+	return interval, nil
+}
+
+// reconcilerLoop is the running periodic reconciliation, as the runtime holds
+// it: something to stop, and something to wait for having stopped.
+type reconcilerLoop struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// startReconciler runs periodic reconciliation in the background.
+//
+// A failed pass is reported and the loop continues: the next pass sees the same
+// site and may well succeed, while a platform that stopped reconciling would
+// leave every request pending without saying so.
+func startReconciler(ctx context.Context, reconciler *registration.Reconciler, interval time.Duration) *reconcilerLoop {
+	loopCtx, cancel := context.WithCancel(ctx)
+	loop := &reconcilerLoop{cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(loop.done)
+		_ = reconciler.Run(loopCtx, interval, func(err error) {
+			fmt.Fprintln(os.Stderr, "platform: reconcile registrations:", err)
+		})
+	}()
+	return loop
+}
+
+// stop ends reconciliation and waits for the pass in flight to finish. Waiting
+// is the point: it is what lets the fabric close underneath knowing nothing is
+// still reading it.
+func (l *reconcilerLoop) stop() {
+	l.cancel()
+	<-l.done
 }
 
 // newRecorder builds the platform's event recorder. An empty dir disables
@@ -191,16 +251,18 @@ func stopFabric(ctx context.Context, f fabric.Fabric, rec recorder) error {
 //
 // Order matters and is the reverse of startup. HTTP intake stops first and
 // in-flight requests drain, so no handler is left calling a closed fabric. Then
-// the fabric closes and reports that it stopped, because that fact still has to
-// reach the sink. The recorder closes last. Every failure is reported; none
-// hides another.
-func serve(ctx context.Context, srv *http.Server, f fabric.Fabric, rec recorder) error {
+// reconciliation stops and its pass in flight finishes, for the same reason: it
+// is the other thing that reads the fabric. Only then does the fabric close and
+// report that it stopped, because that fact still has to reach the sink. The
+// recorder closes last. Every failure is reported; none hides another.
+func serve(ctx context.Context, srv *http.Server, loop *reconcilerLoop, f fabric.Fabric, rec recorder) error {
 	listen := make(chan error, 1)
 	go func() { listen <- srv.ListenAndServe() }()
 
 	select {
 	case err := <-listen:
 		// The server stopped without being asked to, e.g. its address is taken.
+		loop.stop()
 		return errors.Join(listenError(err), stopFabric(ctx, f, rec), closeRecorder(rec))
 	case <-ctx.Done():
 	}
@@ -211,6 +273,7 @@ func serve(ctx context.Context, srv *http.Server, f fabric.Fabric, rec recorder)
 	if err != nil {
 		err = fmt.Errorf("shut down HTTP server: %w", err)
 	}
+	loop.stop()
 	return errors.Join(err, listenError(<-listen), stopFabric(ctx, f, rec), closeRecorder(rec))
 }
 
