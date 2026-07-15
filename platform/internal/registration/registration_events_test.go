@@ -77,7 +77,7 @@ func TestRejectionIsStatedAsAWarning(t *testing.T) {
 	}
 	value, err := encode(tampered)
 	require.NoError(t, err)
-	created, err := nodeA.service.store.requests.Create(context.Background(), unitKey.String(), value)
+	created, err := nodeA.service.store.contenderRecords.Create(context.Background(), contenderKey(unitKey, tampered.Fingerprint), value)
 	require.NoError(t, err)
 	require.True(t, created)
 
@@ -155,28 +155,11 @@ func TestValidationRefusesUntrustworthyProposals(t *testing.T) {
 
 			proposal := valid
 			proposal.Fingerprint = fingerprintOf(proposal)
-			require.Empty(t, nodeA.reconciler.validate(proposal, false),
+			require.Empty(t, nodeA.reconciler.validate(proposal),
 				"the unbroken proposal must be acceptable")
-			require.Equal(t, test.reason, nodeA.reconciler.validate(test.break_(proposal), false))
+			require.Equal(t, test.reason, nodeA.reconciler.validate(test.break_(proposal)))
 		})
 	}
-}
-
-// TestValidationRefusesAProposalOnAnAcceptedKey checks a key that already holds
-// a registration refuses a different proposal rather than leaving it pending
-// forever. Registration is create-only: the accepted record wins.
-func TestValidationRefusesAProposalOnAnAcceptedKey(t *testing.T) {
-	site := newSite(t, "node-a")
-	nodeA := site.start("node-a")
-
-	other := requestRecord{
-		Version: recordVersion, UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Payments",
-		OriginMachine: "node-a", OriginIP: "127.0.0.1",
-	}
-	other.Fingerprint = fingerprintOf(other)
-
-	require.Empty(t, nodeA.reconciler.validate(other, false), "the key is free")
-	require.Equal(t, ReasonAcceptedKeyConflict, nodeA.reconciler.validate(other, true))
 }
 
 // TestASettledRegistrationIsLeftAlone checks a pass does no work for a
@@ -302,7 +285,7 @@ func TestReconcileReportsEveryFailingRequest(t *testing.T) {
 
 	// Two records that are not this package's, under keys that are.
 	for _, key := range []Key{{UnitType: 1, UnitID: 1}, {UnitType: 2, UnitID: 2}} {
-		created, err := nodeA.service.store.requests.Create(context.Background(), key.String(), []byte("not a record"))
+		created, err := nodeA.service.store.contenderRecords.Create(context.Background(), contenderKey(key, "corrupt"), []byte("not a record"))
 		require.NoError(t, err)
 		require.True(t, created)
 	}
@@ -325,7 +308,6 @@ func TestReasonsAreBoundedAndMachineReadable(t *testing.T) {
 		ReasonInvalidProposal,
 		ReasonFingerprintMismatch,
 		ReasonUnknownOrigin,
-		ReasonAcceptedKeyConflict,
 	}
 	for _, reason := range reasons {
 		t.Run(reason, func(t *testing.T) {

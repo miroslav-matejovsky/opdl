@@ -4,26 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/fabric"
 )
 
-// store is registration's state as it lives on the platform fabric: three named
-// collections, shared by every machine of the site.
-//
-// It is the only place that knows the collections exist. Everything above it
-// works in records and keys, so what the site's state looks like on the wire is
-// one file's business.
-//
-// There is no transaction across the three. The current implementation uses
-// create-if-absent for each key, which is safe only while membership is stable.
-// A member join can make an Olric Create falsely win, so Stage 4 changes this
-// state to retain contenders and treats current request and accepted records as
-// repairable projections rather than uniqueness proof.
+// store owns registration's fabric collections. Immutable contenders and
+// acceptance markers are the source of truth; request and accepted records are
+// projections that reconciliation can overwrite after a membership change.
 type store struct {
-	requests      fabric.Collection
-	confirmations fabric.Collection
-	registrations fabric.Collection
+	contenderRecords fabric.Collection
+	requests         fabric.Collection
+	confirmations    fabric.Collection
+	acceptances      fabric.Collection
+	registrations    fabric.Collection
 }
 
 // openStore opens registration's collections on f. Opening is idempotent, so a
@@ -33,6 +28,10 @@ func openStore(f fabric.Fabric) (*store, error) {
 	if f == nil {
 		return nil, errors.New("registration: fabric is required")
 	}
+	contenders, err := f.Collection(collectionContenders)
+	if err != nil {
+		return nil, fmt.Errorf("registration: open %s: %w", collectionContenders, err)
+	}
 	requests, err := f.Collection(collectionRequests)
 	if err != nil {
 		return nil, fmt.Errorf("registration: open %s: %w", collectionRequests, err)
@@ -41,59 +40,73 @@ func openStore(f fabric.Fabric) (*store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("registration: open %s: %w", collectionConfirmations, err)
 	}
+	acceptances, err := f.Collection(collectionAcceptances)
+	if err != nil {
+		return nil, fmt.Errorf("registration: open %s: %w", collectionAcceptances, err)
+	}
 	registrations, err := f.Collection(collectionRegistrations)
 	if err != nil {
 		return nil, fmt.Errorf("registration: open %s: %w", collectionRegistrations, err)
 	}
-	return &store{requests: requests, confirmations: confirmations, registrations: registrations}, nil
+	return &store{
+		contenderRecords: contenders,
+		requests:         requests,
+		confirmations:    confirmations,
+		acceptances:      acceptances,
+		registrations:    registrations,
+	}, nil
 }
 
-// createRequest claims a registration key for candidate.
-//
-// While membership is stable, the claim is one atomic create-if-absent against
-// the site, which makes two machines proposing one key produce a winner and a
-// conflict rather than two registrations. A member join can violate that
-// property, so this method is not the eventual uniqueness mechanism described
-// in registration's package documentation.
-//
-// A losing create is not automatically a conflict: it is a conflict only if the
-// record holding the key asks for something else. An identical proposal is an
-// idempotent retry, and the stored record is returned either way, so a caller
-// reports what the site actually holds rather than what the client sent.
+// createRequest records candidate as an immutable contender. A visible current
+// projection still rejects a different proposal immediately, but a contender
+// that races that read is retained and returns new rather than being silently
+// erased by a false Create win during a member join.
 func (s *store) createRequest(ctx context.Context, candidate requestRecord) (CreateResult, requestRecord, error) {
-	value, err := encode(candidate)
-	if err != nil {
-		return "", requestRecord{}, err
-	}
-	created, err := s.requests.Create(ctx, candidate.key().String(), value)
-	if err != nil {
-		return "", requestRecord{}, fmt.Errorf("registration: create request %s: %w", candidate.key(), err)
-	}
-	if created {
-		return CreateResultNew, candidate, nil
-	}
-
 	existing, found, err := s.request(ctx, candidate.key())
 	if err != nil {
 		return "", requestRecord{}, err
 	}
-	if !found {
-		// The key was taken a moment ago and holds nothing now. Nothing removes
-		// a request, so this cannot happen against a healthy site; saying so
-		// beats retrying into a loop or inventing a state.
-		return "", requestRecord{}, fmt.Errorf("registration: request %s was created by another writer but cannot be read", candidate.key())
-	}
-	if !existing.sameProposal(candidate) {
+	if found && !existing.sameProposal(candidate) {
 		return "", existing, ErrConflict
 	}
-	return CreateResultRetry, existing, nil
+
+	value, err := encode(candidate)
+	if err != nil {
+		return "", requestRecord{}, err
+	}
+	key := contenderKey(candidate.key(), candidate.Fingerprint)
+	created, err := s.contenderRecords.Create(ctx, key, value)
+	if err != nil {
+		return "", requestRecord{}, fmt.Errorf("registration: create contender %s: %w", key, err)
+	}
+	if !created {
+		existing, found, err := s.contender(ctx, candidate.key(), candidate.Fingerprint)
+		if err != nil {
+			return "", requestRecord{}, err
+		}
+		if !found {
+			return "", requestRecord{}, fmt.Errorf("registration: contender %s was created by another writer but cannot be read", key)
+		}
+		if !existing.sameProposal(candidate) {
+			return "", existing, fmt.Errorf("registration: contender %s has a different proposal", key)
+		}
+		return CreateResultRetry, existing, nil
+	}
+
+	// This view makes an already visible conflict cheap to reject. It is not
+	// authoritative: a false Create win can overwrite it, and reconciliation
+	// restores the selected contender from the immutable collection.
+	if _, err := s.requests.Create(ctx, candidate.key().String(), value); err != nil {
+		return "", requestRecord{}, fmt.Errorf("registration: create request projection %s: %w", candidate.key(), err)
+	}
+	return CreateResultNew, candidate, nil
 }
 
-// request returns the proposal stored under key.
+// request returns the current request projection stored under key.
 func (s *store) request(ctx context.Context, key Key) (requestRecord, bool, error) {
 	value, found, err := s.requests.Get(ctx, key.String())
 	if err != nil {
-		return requestRecord{}, false, fmt.Errorf("registration: read request %s: %w", key, err)
+		return requestRecord{}, false, fmt.Errorf("registration: read request projection %s: %w", key, err)
 	}
 	if !found {
 		return requestRecord{}, false, nil
@@ -103,24 +116,38 @@ func (s *store) request(ctx context.Context, key Key) (requestRecord, bool, erro
 		return requestRecord{}, false, err
 	}
 	if record.key() != key {
-		return requestRecord{}, false, fmt.Errorf("registration: request stored under %s carries key %s", key, record.key())
+		return requestRecord{}, false, fmt.Errorf("registration: request projection stored under %s carries key %s", key, record.key())
 	}
 	return record, true, nil
 }
 
-// allRequests returns every registration request in the site, ordered by key.
-//
-// It enumerates requests rather than registrations, because a request that is
-// pending or rejected is not in the registrations collection and is exactly what
-// a caller asking "what is going on" needs to see.
-//
-// Enumeration is weakly consistent: it is not a snapshot of the site, and a
-// request created while it runs may or may not appear. Every record it does
-// return is whole.
-func (s *store) allRequests(ctx context.Context) ([]requestRecord, error) {
-	entries, err := s.requests.Entries(ctx)
+// contender returns the immutable contender identified by key and fingerprint.
+func (s *store) contender(ctx context.Context, key Key, fingerprint string) (requestRecord, bool, error) {
+	storageKey := contenderKey(key, fingerprint)
+	value, found, err := s.contenderRecords.Get(ctx, storageKey)
 	if err != nil {
-		return nil, fmt.Errorf("registration: enumerate requests: %w", err)
+		return requestRecord{}, false, fmt.Errorf("registration: read contender %s: %w", storageKey, err)
+	}
+	if !found {
+		return requestRecord{}, false, nil
+	}
+	var record requestRecord
+	if err := decode(value, &record); err != nil {
+		return requestRecord{}, false, err
+	}
+	if record.key() != key || record.Fingerprint != fingerprint {
+		return requestRecord{}, false, fmt.Errorf("registration: contender stored under %s carries %s/%s", storageKey, record.key(), record.Fingerprint)
+	}
+	return record, true, nil
+}
+
+// allRequests returns every immutable contender in deterministic key, observed
+// time, and fingerprint order. Enumeration is weakly consistent, so a contender
+// written while it runs can appear on a later reconciliation pass instead.
+func (s *store) allRequests(ctx context.Context) ([]requestRecord, error) {
+	entries, err := s.contenderRecords.Entries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("registration: enumerate contenders: %w", err)
 	}
 	records := make([]requestRecord, 0, len(entries))
 	for _, entry := range entries {
@@ -128,20 +155,56 @@ func (s *store) allRequests(ctx context.Context) ([]requestRecord, error) {
 		if err := decode(entry.Value, &record); err != nil {
 			return nil, err
 		}
-		if record.key().String() != entry.Key {
-			return nil, fmt.Errorf("registration: request stored under %s carries key %s", entry.Key, record.key())
+		if entry.Key != contenderKey(record.key(), record.Fingerprint) {
+			return nil, fmt.Errorf("registration: contender stored under %s carries %s/%s", entry.Key, record.key(), record.Fingerprint)
 		}
 		records = append(records, record)
 	}
+	sortContenders(records)
 	return records, nil
+}
+
+// contenders returns the contenders observed for one registration key.
+func (s *store) contenders(ctx context.Context, key Key) ([]requestRecord, error) {
+	entries, err := s.contenderRecords.Entries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("registration: enumerate contenders: %w", err)
+	}
+	prefix := key.String() + "/"
+	contenders := make([]requestRecord, 0, len(entries))
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Key, prefix) {
+			continue
+		}
+		var record requestRecord
+		if err := decode(entry.Value, &record); err != nil {
+			return nil, err
+		}
+		if entry.Key != contenderKey(record.key(), record.Fingerprint) {
+			return nil, fmt.Errorf("registration: contender stored under %s carries %s/%s", entry.Key, record.key(), record.Fingerprint)
+		}
+		contenders = append(contenders, record)
+	}
+	sortContenders(contenders)
+	return contenders, nil
+}
+
+// sortContenders orders contenders without relying on weak enumeration order.
+func sortContenders(contenders []requestRecord) {
+	sort.Slice(contenders, func(i, j int) bool {
+		left, right := contenders[i], contenders[j]
+		if left.key() != right.key() {
+			return left.key().String() < right.key().String()
+		}
+		if !left.ObservedAt.Equal(right.ObservedAt) {
+			return left.ObservedAt.Before(right.ObservedAt)
+		}
+		return left.Fingerprint < right.Fingerprint
+	})
 }
 
 // createConfirmation records one instance's decision about one proposal, unless
 // that instance has already decided about it.
-//
-// It reports whether this call was the one that recorded the decision, which is
-// how a repeated scan or a restarted process states its confirmation once
-// instead of once per pass.
 func (s *store) createConfirmation(ctx context.Context, record confirmationRecord) (bool, error) {
 	value, err := encode(record)
 	if err != nil {
@@ -159,13 +222,7 @@ func (s *store) createConfirmation(ctx context.Context, record confirmationRecor
 func (r confirmationRecord) key() Key { return Key{UnitType: r.UnitType, UnitID: r.UnitID} }
 
 // decisions returns the decisions the expected platform instances have recorded
-// about request, keyed by machine. An instance that has not decided is absent
-// from the result rather than present as pending.
-//
-// It reads each expected instance's confirmation by name, at the current
-// proposal's fingerprint. A confirmation of any other proposal therefore cannot
-// appear here at all: it is not that a stale decision is found and discarded, it
-// is that nothing ever asks for it.
+// about request, keyed by machine.
 func (s *store) decisions(ctx context.Context, request requestRecord, members []fabric.Member) (map[string]confirmationRecord, error) {
 	decisions := make(map[string]confirmationRecord, len(members))
 	for _, member := range members {
@@ -182,34 +239,129 @@ func (s *store) decisions(ctx context.Context, request requestRecord, members []
 			return nil, err
 		}
 		if record.Machine != member.Machine || record.Fingerprint != request.Fingerprint || record.key() != request.key() {
-			return nil, fmt.Errorf("registration: confirmation stored under %s carries %s/%s/%s",
-				key, record.key(), record.Fingerprint, record.Machine)
+			return nil, fmt.Errorf("registration: confirmation stored under %s carries %s/%s/%s", key, record.key(), record.Fingerprint, record.Machine)
 		}
 		decisions[member.Machine] = record
 	}
 	return decisions, nil
 }
 
-// createAccepted creates the current accepted projection, reporting whether this
-// call created it. It is a single commit point only while membership is stable;
-// contender retention makes it repairable after a join.
-func (s *store) createAccepted(ctx context.Context, record acceptedRecord) (bool, error) {
+// createAcceptance records immutable evidence that request was accepted.
+func (s *store) createAcceptance(ctx context.Context, record acceptanceRecord) (bool, error) {
 	value, err := encode(record)
 	if err != nil {
 		return false, err
 	}
-	created, err := s.registrations.Create(ctx, record.key().String(), value)
+	key := acceptanceKey(record.key(), record.Fingerprint)
+	created, err := s.acceptances.Create(ctx, key, value)
 	if err != nil {
-		return false, fmt.Errorf("registration: create registration %s: %w", record.key(), err)
+		return false, fmt.Errorf("registration: create acceptance %s: %w", key, err)
 	}
 	return created, nil
 }
 
-// accepted returns the committed registration under key.
+// acceptance returns immutable acceptance evidence for request.
+func (s *store) acceptance(ctx context.Context, request requestRecord) (acceptanceRecord, bool, error) {
+	key := acceptanceKey(request.key(), request.Fingerprint)
+	value, found, err := s.acceptances.Get(ctx, key)
+	if err != nil {
+		return acceptanceRecord{}, false, fmt.Errorf("registration: read acceptance %s: %w", key, err)
+	}
+	if !found {
+		return acceptanceRecord{}, false, nil
+	}
+	var record acceptanceRecord
+	if err := decode(value, &record); err != nil {
+		return acceptanceRecord{}, false, err
+	}
+	if record.key() != request.key() || record.Fingerprint != request.Fingerprint {
+		return acceptanceRecord{}, false, fmt.Errorf("registration: acceptance stored under %s carries %s/%s", key, record.key(), record.Fingerprint)
+	}
+	return record, true, nil
+}
+
+// winner selects the incumbent accepted before every competing contender was
+// observed. If none qualifies, it uses observed time and fingerprint order. The
+// returned bool reports whether the selected contender has acceptance evidence.
+func (s *store) winner(ctx context.Context, contenders []requestRecord) (requestRecord, bool, error) {
+	if len(contenders) == 0 {
+		return requestRecord{}, false, errors.New("registration: select winner from no contenders")
+	}
+	ordered := append([]requestRecord(nil), contenders...)
+	sortContenders(ordered)
+
+	type accepted struct {
+		request requestRecord
+		marker  acceptanceRecord
+	}
+	incumbents := make([]accepted, 0, len(ordered))
+	markers := make(map[string]acceptanceRecord, len(ordered))
+	for _, contender := range ordered {
+		marker, found, err := s.acceptance(ctx, contender)
+		if err != nil {
+			return requestRecord{}, false, err
+		}
+		if !found {
+			continue
+		}
+		markers[contender.Fingerprint] = marker
+		incumbent := true
+		for _, other := range ordered {
+			if contender.Fingerprint == other.Fingerprint {
+				continue
+			}
+			if !marker.AcceptedAt.Before(other.ObservedAt) {
+				incumbent = false
+				break
+			}
+		}
+		if incumbent {
+			incumbents = append(incumbents, accepted{request: contender, marker: marker})
+		}
+	}
+	if len(incumbents) != 0 {
+		sort.Slice(incumbents, func(i, j int) bool {
+			if !incumbents[i].marker.AcceptedAt.Equal(incumbents[j].marker.AcceptedAt) {
+				return incumbents[i].marker.AcceptedAt.Before(incumbents[j].marker.AcceptedAt)
+			}
+			return incumbents[i].request.Fingerprint < incumbents[j].request.Fingerprint
+		})
+		return incumbents[0].request, true, nil
+	}
+	winner := ordered[0]
+	_, acceptedWinner := markers[winner.Fingerprint]
+	return winner, acceptedWinner, nil
+}
+
+// setRequest repairs the current request projection to request.
+func (s *store) setRequest(ctx context.Context, request requestRecord) error {
+	value, err := encode(request)
+	if err != nil {
+		return err
+	}
+	if _, _, err := s.requests.Swap(ctx, request.key().String(), value); err != nil {
+		return fmt.Errorf("registration: repair request projection %s: %w", request.key(), err)
+	}
+	return nil
+}
+
+// setAccepted repairs the current accepted projection to record.
+func (s *store) setAccepted(ctx context.Context, record acceptedRecord) error {
+	value, err := encode(record)
+	if err != nil {
+		return err
+	}
+	if _, _, err := s.registrations.Swap(ctx, record.key().String(), value); err != nil {
+		return fmt.Errorf("registration: repair accepted projection %s: %w", record.key(), err)
+	}
+	return nil
+}
+
+// accepted returns the current accepted projection under key.
 func (s *store) accepted(ctx context.Context, key Key) (acceptedRecord, bool, error) {
 	value, found, err := s.registrations.Get(ctx, key.String())
 	if err != nil {
-		return acceptedRecord{}, false, fmt.Errorf("registration: read registration %s: %w", key, err)
+		return acceptedRecord{}, false, fmt.Errorf("registration: read accepted projection %s: %w", key, err)
 	}
 	if !found {
 		return acceptedRecord{}, false, nil
@@ -219,7 +371,7 @@ func (s *store) accepted(ctx context.Context, key Key) (acceptedRecord, bool, er
 		return acceptedRecord{}, false, err
 	}
 	if record.key() != key {
-		return acceptedRecord{}, false, fmt.Errorf("registration: registration stored under %s carries key %s", key, record.key())
+		return acceptedRecord{}, false, fmt.Errorf("registration: accepted projection stored under %s carries key %s", key, record.key())
 	}
 	return record, true, nil
 }

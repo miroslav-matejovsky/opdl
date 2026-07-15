@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
@@ -47,6 +48,7 @@ type Service struct {
 	members    []fabric.Member
 	reconciler *Reconciler
 	recorder   Recorder
+	now        func() time.Time
 }
 
 // Open builds the registration service and reconciler one platform process runs.
@@ -57,8 +59,17 @@ type Service struct {
 // one view of the site's collections, and the identity they work as is the
 // fabric's own local member, so a machine can only ever answer as itself.
 func Open(f fabric.Fabric, recorder Recorder) (*Service, *Reconciler, error) {
+	return openWithClock(f, recorder, time.Now)
+}
+
+// openWithClock builds registration with now as its platform-observed clock.
+// It is kept internal so tests can make contender selection deterministic.
+func openWithClock(f fabric.Fabric, recorder Recorder, now func() time.Time) (*Service, *Reconciler, error) {
 	if recorder == nil {
 		return nil, nil, errors.New("registration: recorder is required")
+	}
+	if now == nil {
+		return nil, nil, errors.New("registration: clock is required")
 	}
 	store, err := openStore(f)
 	if err != nil {
@@ -82,13 +93,14 @@ func Open(f fabric.Fabric, recorder Recorder) (*Service, *Reconciler, error) {
 		return nil, nil, errors.New("registration: the fabric has no local member")
 	}
 
-	reconciler := &Reconciler{store: store, self: self, members: members, recorder: recorder}
+	reconciler := &Reconciler{store: store, self: self, members: members, recorder: recorder, now: now}
 	service := &Service{
 		store:      store,
 		location:   Location{Machine: self.Machine, IP: self.IP},
 		members:    members,
 		reconciler: reconciler,
 		recorder:   recorder,
+		now:        now,
 	}
 	return service, reconciler, nil
 }
@@ -99,8 +111,9 @@ func Open(f fabric.Fabric, recorder Recorder) (*Service, *Reconciler, error) {
 //
 // The origin is this machine's own descriptor identity, never the client's
 // claim. An identical repeat is idempotent, and every other difference on a key
-// that is already claimed is a conflict, whether it came from this machine or
-// another one.
+// that is already visible is a conflict, whether it came from this machine or
+// another one. A concurrent contender may be retained provisionally and later
+// lose deterministic reconciliation.
 //
 // Only a first claim records a requested event: a retry changes no state and so
 // states nothing, and a request that fails validation was never stored. A
@@ -123,6 +136,7 @@ func (s *Service) Create(ctx context.Context, request api.RegistrationRequest) (
 		Role:                   copyString(request.Role),
 		OriginMachine:          s.location.Machine,
 		OriginIP:               s.location.IP,
+		ObservedAt:             s.now().UTC(),
 	}
 	candidate.Fingerprint = fingerprintOf(candidate)
 
@@ -163,16 +177,17 @@ func (s *Service) Create(ctx context.Context, request api.RegistrationRequest) (
 // drives it forward instead of waiting for a scheduled pass. That is why a read
 // here can write: it can record this instance's confirmation and commit the
 // registration. It cannot report accepted early, though, because accepted is
-// still the accepted record existing and nothing else.
+// still the immutable acceptance marker existing and nothing else.
 func (s *Service) Get(ctx context.Context, key Key) (api.Registration, bool, error) {
 	if err := s.reconciler.advance(ctx, key); err != nil {
 		return api.Registration{}, false, err
 	}
-	request, found, err := s.store.request(ctx, key)
-	if err != nil || !found {
+	contenders, err := s.store.contenders(ctx, key)
+	if err != nil {
 		return api.Registration{}, false, err
 	}
-	if request.location() != s.location {
+	request, found := contenderFromOrigin(contenders, s.location)
+	if !found {
 		return api.Registration{}, false, nil
 	}
 	view, err := s.project(ctx, request)
@@ -180,6 +195,18 @@ func (s *Service) Get(ctx context.Context, key Key) (api.Registration, bool, err
 		return api.Registration{}, false, err
 	}
 	return view, true, nil
+}
+
+// contenderFromOrigin returns the deterministic first contender submitted to
+// one platform origin. Without caller identity, two distinct concurrent
+// proposals from the same origin remain indistinguishable to the status route.
+func contenderFromOrigin(contenders []requestRecord, location Location) (requestRecord, bool) {
+	for _, contender := range contenders {
+		if contender.location() == location {
+			return contender, true
+		}
+	}
+	return requestRecord{}, false
 }
 
 // List returns every registration request in the site, pending, accepted, and
@@ -226,6 +253,38 @@ func (s *Service) List(ctx context.Context) ([]api.Registration, error) {
 // answered is the interesting case, and it appears as pending rather than not at
 // all.
 func (s *Service) project(ctx context.Context, request requestRecord) (api.Registration, error) {
+	contenders, err := s.store.contenders(ctx, request.key())
+	if err != nil {
+		return api.Registration{}, err
+	}
+	winner, accepted, err := s.store.winner(ctx, contenders)
+	if err != nil {
+		return api.Registration{}, err
+	}
+	if winner.Fingerprint != request.Fingerprint {
+		reason := ReasonKeyConflict
+		instances := make([]api.PlatformInstanceRegistrationStatus, 0, len(s.members))
+		for _, member := range s.members {
+			instances = append(instances, api.PlatformInstanceRegistrationStatus{
+				Machine: member.Machine,
+				IP:      member.IP,
+				Status:  api.RegistrationStatusRejected,
+				Reason:  copyString(&reason),
+			})
+		}
+		return api.Registration{
+			UnitType:               request.UnitType,
+			UnitID:                 request.UnitID,
+			UnitTypeNameAdvertised: request.UnitTypeNameAdvertised,
+			Role:                   copyString(request.Role),
+			Machine:                request.OriginMachine,
+			IP:                     request.OriginIP,
+			Status:                 api.RegistrationStatusRejected,
+			Reason:                 &reason,
+			PlatformInstances:      instances,
+		}, nil
+	}
+
 	decisions, err := s.store.decisions(ctx, request, s.members)
 	if err != nil {
 		return api.Registration{}, err
@@ -248,21 +307,14 @@ func (s *Service) project(ctx context.Context, request requestRecord) (api.Regis
 		instances = append(instances, instance)
 	}
 
-	accepted, committed, err := s.store.accepted(ctx, request.key())
-	if err != nil {
-		return api.Registration{}, err
-	}
-	if committed && accepted.Fingerprint == request.Fingerprint {
-		if err := validateAccepted(accepted); err != nil {
-			return api.Registration{}, err
-		}
+	if accepted {
 		return api.Registration{
-			UnitType:               accepted.UnitType,
-			UnitID:                 accepted.UnitID,
-			UnitTypeNameAdvertised: accepted.UnitTypeNameAdvertised,
-			Role:                   copyString(accepted.Role),
-			Machine:                accepted.OriginMachine,
-			IP:                     accepted.OriginIP,
+			UnitType:               request.UnitType,
+			UnitID:                 request.UnitID,
+			UnitTypeNameAdvertised: request.UnitTypeNameAdvertised,
+			Role:                   copyString(request.Role),
+			Machine:                request.OriginMachine,
+			IP:                     request.OriginIP,
 			Status:                 api.RegistrationStatusAccepted,
 			PlatformInstances:      instances,
 		}, nil
@@ -286,7 +338,7 @@ func (s *Service) project(ctx context.Context, request requestRecord) (api.Regis
 // decided: rejected once any of them has refused it, and pending until then.
 //
 // Accepted is deliberately not derivable here. A request is accepted because its
-// registration record exists, not because the confirmations look complete, so
+// immutable acceptance marker exists, not because the confirmations look complete, so
 // this cannot report acceptance and cannot race the commit that grants it.
 func overall(instances []api.PlatformInstanceRegistrationStatus) (status string, reason *string) {
 	for _, instance := range instances {
@@ -295,28 +347,6 @@ func overall(instances []api.PlatformInstanceRegistrationStatus) (status string,
 		}
 	}
 	return api.RegistrationStatusPending, nil
-}
-
-// validateAccepted checks a committed registration is one this instance can
-// report. A registration that cannot be validated is reported as a failure
-// rather than served: the accepted record is the platform's answer to "is this
-// unit registered", and answering it wrongly is worse than not answering.
-func validateAccepted(record acceptedRecord) error {
-	if record.Version != recordVersion {
-		return fmt.Errorf("registration: registration %s has unsupported record version %d", record.key(), record.Version)
-	}
-	if err := validateRequest(api.RegistrationRequest{
-		UnitType:               record.UnitType,
-		UnitID:                 record.UnitID,
-		UnitTypeNameAdvertised: record.UnitTypeNameAdvertised,
-		Role:                   record.Role,
-	}); err != nil {
-		return fmt.Errorf("registration: registration %s: %w", record.key(), err)
-	}
-	if err := validateLocation(record.location()); err != nil {
-		return fmt.Errorf("registration: registration %s: %w", record.key(), err)
-	}
-	return nil
 }
 
 // record states one fact. A failure is returned with context rather than

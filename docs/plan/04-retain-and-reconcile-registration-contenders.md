@@ -22,9 +22,8 @@ leader election, or a new storage backend.
    as repairable views. Reconciliation may `Swap` them to the chosen winner.
    Correctness must come from immutable contender history, not from a false
    `Create` result.
-6. Because fabric data is currently in-memory and not migrated across a
-   full-site restart, increment internal record versions directly. Do not build
-   a migration framework.
+6. Because fabric data is currently in-memory and this is a POC, keep the
+   internal record version unchanged. Do not build a migration framework.
 
 ## Request path
 
@@ -78,3 +77,13 @@ leader election, or a new storage backend.
 - No coordination service, distributed lock, quorum, or leader is introduced.
 - `task fast` passes.
 
+## Implementation result
+
+Completed on 2026-07-15. Contenders and acceptance markers are immutable,
+while current request and accepted records are repaired projections. Winner
+selection uses an accepted incumbent, then observed UTC time and fingerprint.
+The service injects its clock for deterministic tests. Unit coverage includes
+incumbent, ordering, temporary acceptance, and restart cases; a two-member
+Olric regression verifies a rejoined member's false projection is repaired.
+The internal record version remains 1 for this POC. Conflict visibility through
+a dedicated HTTP query remains Stage 5.

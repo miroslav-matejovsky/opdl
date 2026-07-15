@@ -86,10 +86,8 @@ adapter behind the fabric here, not an API anything else depends on.
 
 ### Registration
 
-> **Implementation staging.** The contender and conflict-query contract below is
-> defined in Stage 3. Stages 4 and 5 move storage and the HTTP API to that model;
-> until then, the current runtime still has the join limitation described in
-> [docs/backlog/fabric.md](docs/backlog/fabric.md).
+> **Implementation staging.** Stage 4 retains contenders and reconciles them to
+> repair the known join limitation. Stage 5 adds the dedicated conflict query.
 
 A client asks the platform to register a unit, keyed by unit type and unit ID.
 `POST /registrations` takes the request and answers `202`: the request is a
@@ -132,11 +130,11 @@ machine is indistinguishable from a retry.
 
 **State lives on the fabric.** The registration package retains proposals,
 confirmations, acceptance evidence, and repairable current views, so a false
-create cannot erase a contender. `GET /registrations` will list every retained
-proposal, including rejected losers. `GET /registrations/conflicts` will group a
-key's contenders and identify its winner and losers. The latter is a domain query,
-not a health endpoint: a resolved conflict does not make a process unavailable.
-Stages 4 and 5 implement these storage and query changes. Notifications,
+create cannot erase a contender. `GET /registrations` lists every retained
+proposal, including rejected losers. Stage 5 adds `GET /registrations/conflicts`
+to group a key's contenders and identify its winner and losers. The latter is a
+domain query, not a health endpoint: a resolved conflict does not make a process
+unavailable. Notifications,
 acknowledgement, retention, and removal remain later work.
 
 State is in memory and is not replayed after a full-site shutdown. Different

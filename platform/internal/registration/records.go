@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // This file owns registration's storage vocabulary: the collections it keeps its
@@ -18,22 +19,24 @@ import (
 // here appears in the public API, and no other package may depend on it.
 
 const (
-	// collectionRequests holds one proposal per registration key: what was
-	// asked for, where it was asked, and the fingerprint of that exact
-	// proposal. A record here is a request, not a registration. It is never
-	// removed or modified. In the current implementation its key is the site's
-	// create-if-absent guard for both pending and accepted registrations, but
-	// that guard is valid only while membership is stable. Contender retention
-	// replaces it as the uniqueness basis.
+	// collectionContenders holds every immutable proposal. Its key includes the
+	// proposal fingerprint, so a false Create win on one contender can never
+	// overwrite another contender for the same registration key.
+	collectionContenders = "registration-contenders"
+	// collectionRequests holds the repairable current request projection under a
+	// registration key. It is used for the cheap visible-conflict preflight, not
+	// as proof that no other contender exists.
 	collectionRequests = "registration-requests"
 	// collectionConfirmations holds one record per (registration key, proposal
 	// fingerprint, platform instance): that instance's decision on that exact
 	// proposal. The fingerprint is in the key, so a decision can never be read
 	// as applying to a proposal it was not made on.
 	collectionConfirmations = "registration-confirmations"
-	// collectionRegistrations holds only accepted registrations. Creating a
-	// record here is the site's single commit point: a registration is accepted
-	// when, and only when, its record exists.
+	// collectionAcceptances holds one immutable acceptance marker per contender.
+	// It is the evidence that a contender was accepted, independent of the
+	// repairable accepted projection.
+	collectionAcceptances = "registration-acceptances"
+	// collectionRegistrations holds the repairable current accepted projection.
 	collectionRegistrations = "registrations"
 )
 
@@ -70,10 +73,12 @@ type Location struct {
 }
 
 // requestRecord is one stored proposal: the client's request fields, the origin
-// the platform derived for it, and the fingerprint of that combination.
+// the platform derived for it, its observed time, and the fingerprint of its
+// immutable claim fields.
 //
-// It is written once and never updated. Registration is create-only, so the
-// proposal a key was created with is the proposal it keeps for the site's life.
+// It is written once and never updated. ObservedAt is deliberately not part of
+// Fingerprint: an identical retry is still the same proposal, and retains the
+// time it was first observed.
 type requestRecord struct {
 	// Version is the record encoding version.
 	Version int `json:"version"`
@@ -89,6 +94,10 @@ type requestRecord struct {
 	OriginMachine string `json:"origin_machine"`
 	// OriginIP is the descriptor IP of that machine.
 	OriginIP string `json:"origin_ip"`
+	// ObservedAt is the UTC time the receiving platform first recorded this
+	// proposal. It provides a best-effort ordering for contenders that race
+	// before any is accepted.
+	ObservedAt time.Time `json:"observed_at"`
 	// Fingerprint is the proposal's deterministic content fingerprint.
 	Fingerprint string `json:"fingerprint"`
 }
@@ -135,8 +144,8 @@ type confirmationRecord struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
-// acceptedRecord is one committed registration. Its existence is what accepted
-// means; nothing else in the site is authoritative for that.
+// acceptedRecord is the repairable current accepted projection. Immutable
+// acceptance evidence, not this view, decides whether a proposal is accepted.
 type acceptedRecord struct {
 	// Version is the record encoding version.
 	Version int `json:"version"`
@@ -156,13 +165,28 @@ type acceptedRecord struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
+// acceptanceRecord is immutable evidence that one contender reached acceptance.
+// The marker survives a false overwrite of the current accepted projection and
+// lets reconciliation preserve an incumbent that accepted before a competitor
+// was observed.
+type acceptanceRecord struct {
+	// Version is the record encoding version.
+	Version int `json:"version"`
+	// UnitType is the accepted unit type identifier.
+	UnitType uint8 `json:"unit_type"`
+	// UnitID is the accepted unit identifier.
+	UnitID uint16 `json:"unit_id"`
+	// Fingerprint identifies the accepted contender.
+	Fingerprint string `json:"fingerprint"`
+	// AcceptedAt is the UTC time the origin recorded acceptance.
+	AcceptedAt time.Time `json:"accepted_at"`
+}
+
+// key returns the registration key the marker is about.
+func (r acceptanceRecord) key() Key { return Key{UnitType: r.UnitType, UnitID: r.UnitID} }
+
 // key returns the registration key the record belongs to.
 func (r acceptedRecord) key() Key { return Key{UnitType: r.UnitType, UnitID: r.UnitID} }
-
-// location returns the origin the registration was accepted from.
-func (r acceptedRecord) location() Location {
-	return Location{Machine: r.OriginMachine, IP: r.OriginIP}
-}
 
 // acceptedFrom builds the committed registration for an accepted proposal. The
 // accepted record is a copy of the proposal, not a reference to it: what was
@@ -189,6 +213,16 @@ func acceptedFrom(request requestRecord) acceptedRecord {
 // approve data it was not made on.
 func confirmationKey(key Key, fingerprint, machine string) string {
 	return key.String() + "/" + fingerprint + "/" + machine
+}
+
+// contenderKey locates one immutable proposal for key.
+func contenderKey(key Key, fingerprint string) string {
+	return key.String() + "/" + fingerprint
+}
+
+// acceptanceKey locates the immutable acceptance marker for one contender.
+func acceptanceKey(key Key, fingerprint string) string {
+	return contenderKey(key, fingerprint)
 }
 
 // fingerprintOf computes a proposal's deterministic content fingerprint from the

@@ -29,8 +29,7 @@
 //     originated once the site has agreed. Every instance runs exactly one,
 //     nothing is delivered to it, and there is no leader.
 //   - store is the state on fabric collections shared by every machine of the
-//     site. Today it uses one current request and accepted view; Stage 4 changes
-//     it to retain immutable proposals and repairable current views. See
+//     site. It retains immutable proposals and repairable current views. See
 //     records.go for the storage vocabulary and keys.
 //
 // # Target contender model
@@ -38,8 +37,8 @@
 // Olric Create is one-winner only while fabric membership is stable. A member
 // join can temporarily let a different proposal overwrite a current view, so a
 // registration must not use one successful Create as its only proof of a unique
-// claim. Stage 4 retains every distinct proposal under its fingerprint. The
-// reconciler then groups those contenders by unit key and derives one winner:
+// claim. This package retains every distinct proposal under its fingerprint.
+// The reconciler then groups those contenders by unit key and derives one winner:
 //
 //   - An accepted proposal observed before any competitor is the incumbent and
 //     remains the winner.
@@ -59,8 +58,7 @@
 // reason registration_key_conflict. Reconciliation repairs current request and
 // accepted views to match that winner. A pass remains a correction: repeated,
 // overlapping, and restarted passes derive the same final state from retained
-// records. This is the contract Stage 4 implements; the current implementation
-// still has the join limitation.
+// records. This corrects the known join limitation after membership stabilizes.
 //
 // # Create-only
 //
@@ -90,7 +88,7 @@
 // at the transition that owns it, by the instance that owns that transition: a
 // first claim is requested, each instance's own acceptance is confirmed, the
 // origin's commit is accepted, an instance's refusal is rejected, and a refused
-// claim is conflict. Stage 4 can make a provisional transition visible before
+// claim is conflict. Reconciliation can make a provisional transition visible before
 // reconciliation corrects it, so events are not the conflict-reporting
 // mechanism. Stage 5's query API is authoritative once contenders have
 // converged. A recording failure surfaces to the caller as the operation's
