@@ -10,11 +10,11 @@
 // It runs the checks in api-specifications and deployment-descriptors, the
 // packages that own the conformance logic. Run it directly:
 //
-//	go run ./conformance/cmd
+//	go run ./conformance-tests/cmd
 //
 // The same logic also runs via go test (main_test.go in this package), which is
 // how it is wired into the workspace's regular test suite: go test
-// ./conformance/cmd.
+// ./conformance-tests/cmd.
 package main
 
 import (
@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"os"
 
-	apispecifications "github.com/miroslav-matejovsky/opdl/conformance/api-specifications"
-	deploymentdescriptors "github.com/miroslav-matejovsky/opdl/conformance/deployment-descriptors"
+	apispecifications "github.com/miroslav-matejovsky/opdl/conformance-tests/api-specifications"
+	deploymentdescriptors "github.com/miroslav-matejovsky/opdl/conformance-tests/deployment-descriptors"
 )
 
 func main() {

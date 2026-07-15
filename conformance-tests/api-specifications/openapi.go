@@ -15,8 +15,8 @@ import (
 
 // contractPath is the OpenAPI specification this package generates. It is relative
 // to the working directory go test and go run set to a package's own directory, so
-// this resolves correctly from both this package (conformance/api-specifications)
-// and conformance/cmd, the two directories that invoke this generation — both two
+// this resolves correctly from both this package (conformance-tests/api-specifications)
+// and conformance-tests/cmd, the two directories that invoke this generation — both two
 // levels below the repository root.
 var contractPath = filepath.Join("..", "..", "api-specifications", "openapi.yaml")
 

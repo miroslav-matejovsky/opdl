@@ -72,7 +72,7 @@ type Error struct {
 }
 
 // PathParameter describes one parameter embedded in an operation path. Type is
-// a zero value of the Go type used to parse it; the conformance module derives
+// a zero value of the Go type used to parse it; the conformance-tests module derives
 // its OpenAPI schema and numeric bounds from that type.
 type PathParameter struct {
 	// Name is the path placeholder name, without braces.
@@ -134,7 +134,7 @@ type Contract struct {
 }
 
 // Describe returns the platform's API contract. It is the single source the
-// conformance module generates the OpenAPI specification from: change the API
+// conformance-tests module generates the OpenAPI specification from: change the API
 // here and regenerate api-specifications/openapi.yaml.
 func Describe() Contract {
 	return Contract{

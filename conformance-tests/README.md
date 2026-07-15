@@ -1,4 +1,4 @@
-# Conformance
+# Conformance Tests
 
 Verifies that the independent representations of a shared contract stay
 compatible across the workspace's modules, by regenerating the specification
@@ -32,8 +32,8 @@ could be a `main` on its own. Test files exist only where they earn their keep:
   and, via `main_test.go`, the entry point the workspace's test suite drives:
 
   ```
-  go run ./conformance/cmd    # regenerate the API specification artifacts and verify the descriptors
-  go test ./conformance/cmd   # the same, via the go test runner
+  go run ./conformance-tests/cmd    # regenerate the API specification artifacts and verify the descriptors
+  go test ./conformance-tests/cmd   # the same, via the go test runner
   ```
 
 This module ships no runtime code that another module imports; `cmd` is its only

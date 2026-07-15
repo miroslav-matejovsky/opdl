@@ -28,7 +28,7 @@ leave existing runtime behavior and SDK calls working.
    update `platform/api` tests to prove its method, path, operation id, request
    absence, and response contract.
 
-3. Extend `conformance/api-specifications` to generate:
+3. Extend `conformance-tests/api-specifications` to generate:
 
    - `operationId` values.
    - Required `application/json` request bodies.
@@ -65,13 +65,13 @@ leave existing runtime behavior and SDK calls working.
 6. Regenerate `api-specifications/openapi.yaml`,
    `api-specifications/openapi.md`, and the .NET client. At this stage the
    generated public API must still contain only the existing status endpoint.
-   This can be done via conformance module.
+   This can be done via conformance-tests module.
 
 7. Update `api-specifications/README.md` if its description of supported request
    or response shapes is no longer accurate.
 
 8. Run focused Go tests for `platform/api` and
-   `conformance/api-specifications`, then run `task all`.
+   `conformance-tests/api-specifications`, then run `task all`.
 
 ## Acceptance
 

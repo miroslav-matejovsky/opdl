@@ -9,10 +9,10 @@ import (
 )
 
 // The dotnet SDK client is generated from api-specifications/openapi.yaml by Kiota,
-// driven from here so the conformance module owns every generated specification
+// driven from here so the conformance-tests module owns every generated specification
 // artifact. The generated code lives under sdk-dotnet; these constants pin the
 // Kiota invocation. See contractPath for why this relative path works from both
-// this package and conformance/cmd.
+// this package and conformance-tests/cmd.
 var dotnetClientDir = filepath.Join("..", "..", "sdk-dotnet", "src", "Opdl.Sdk", "Client")
 
 const (

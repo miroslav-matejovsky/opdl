@@ -6,7 +6,7 @@ package deployment
 //
 // It mirrors the builder's deployment descriptor field for field. The platform
 // keeps its own copy so the runtime does not depend on the build tool; the
-// conformance module checks the two representations stay compatible.
+// conformance-tests module checks the two representations stay compatible.
 type Descriptor struct {
 	// Platform identifies the product line the binary is built from.
 	Platform string `json:"platform"`

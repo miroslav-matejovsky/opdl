@@ -10,7 +10,7 @@
 // specification — rather than checking them for staleness, so the checked-in
 // artifacts are always exactly what the current source produces.
 //
-// The conformance command (conformance/cmd) is what drives Run as this module's
+// The conformance command (conformance-tests/cmd) is what drives Run as this module's
 // main check, both as a runnable program and through go test. This package's own
 // tests are unit tests of its internal check logic in isolation.
 package apispecifications

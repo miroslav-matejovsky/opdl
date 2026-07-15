@@ -8,7 +8,7 @@
 // confirms the two types share a JSON shape and that a built descriptor round-trips
 // through the platform's type.
 //
-// The conformance command (conformance/cmd) is what drives Run as this module's
+// The conformance command (conformance-tests/cmd) is what drives Run as this module's
 // main check, both as a runnable program and through go test. This package's own
 // tests are unit tests of its internal check logic in isolation.
 package deploymentdescriptors

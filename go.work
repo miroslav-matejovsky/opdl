@@ -7,7 +7,7 @@ use ./builder
 use ./platform
 
 // Cross-module compatibility and specification verification.
-use ./conformance
+use ./conformance-tests
 
 // Full end-to-end scenarios that demonstrate the capabilities of the platform and its extensions.
 use ./scenarios

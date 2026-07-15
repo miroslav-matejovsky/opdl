@@ -4,15 +4,15 @@ import (
 	"errors"
 	"testing"
 
-	apispecifications "github.com/miroslav-matejovsky/opdl/conformance/api-specifications"
-	deploymentdescriptors "github.com/miroslav-matejovsky/opdl/conformance/deployment-descriptors"
+	apispecifications "github.com/miroslav-matejovsky/opdl/conformance-tests/api-specifications"
+	deploymentdescriptors "github.com/miroslav-matejovsky/opdl/conformance-tests/deployment-descriptors"
 )
 
 // TestAPISpecification is the module's main API specification check, driving the
 // same apispecifications.Run entry point main() calls. It always regenerates the
 // OpenAPI specification and the .NET client generated from it, in that order:
 //
-//	go test ./conformance/cmd
+//	go test ./conformance-tests/cmd
 func TestAPISpecification(t *testing.T) {
 	err := apispecifications.Run(t.Context())
 

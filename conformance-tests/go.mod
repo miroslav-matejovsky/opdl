@@ -1,4 +1,4 @@
-module github.com/miroslav-matejovsky/opdl/conformance
+module github.com/miroslav-matejovsky/opdl/conformance-tests
 
 go 1.26.5
 
