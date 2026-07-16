@@ -1,0 +1,47 @@
+version: 3
+
+allow:
+  depOnAnyVendor: true
+  deepScan: false
+
+excludeFiles:
+  - "_test\\.go$"
+
+components:
+  api: { in: api }
+  cmd: { in: cmd }
+  deployment: { in: deployment }
+  embedded: { in: embedded }
+  app: { in: internal/app }
+  config: { in: internal/config }
+  events: { in: internal/events }
+  events-jsonl: { in: internal/events/jsonl }
+  fabric: { in: internal/fabric }
+  fabric-memory: { in: internal/fabric/memory }
+  fabric-olric: { in: internal/fabric/olric }
+  httpapi: { in: internal/httpapi }
+  registration: { in: internal/registration }
+
+deps:
+  cmd:
+    mayDependOn: [app]
+  embedded:
+    mayDependOn: [deployment]
+  app:
+    mayDependOn: [config, deployment, events, events-jsonl, fabric, fabric-memory, fabric-olric, httpapi, registration]
+  config:
+    mayDependOn: [deployment, embedded]
+  events:
+    mayDependOn: [deployment]
+  events-jsonl:
+    mayDependOn: [events]
+  fabric:
+    mayDependOn: [deployment, events]
+  fabric-memory:
+    mayDependOn: [deployment, fabric]
+  fabric-olric:
+    mayDependOn: [deployment, fabric]
+  httpapi:
+    mayDependOn: [api, registration]
+  registration:
+    mayDependOn: [api, events, fabric]

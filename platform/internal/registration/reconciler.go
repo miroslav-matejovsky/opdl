@@ -32,12 +32,6 @@ const (
 	ReasonUnknownOrigin = "unknown_origin"
 )
 
-// DefaultInterval is how often a reconciler scans the site when the platform's
-// configuration does not say. It is a latency choice, not a correctness one:
-// scanning more often accepts requests sooner, and scanning never would leave
-// every request pending forever.
-const DefaultInterval = time.Second
-
 // Reconciler is one platform instance's part in site-wide registration.
 //
 // Every instance runs exactly one. It answers for itself and commits for the

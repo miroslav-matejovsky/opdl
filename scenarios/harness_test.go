@@ -3,6 +3,8 @@ package scenarios
 import (
 	"bytes"
 	"context"
+	"flag"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -31,6 +33,15 @@ const (
 	// point it signals from.
 	markerWaitTimeout = 90 * time.Second
 )
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if testing.Short() {
+		fmt.Println("skipping scenario suite in -short mode")
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 // buildProject drives the builder CLI to build every machine of a blueprint into
 // outDir. It is the same command a customer runs.
@@ -94,7 +105,7 @@ func prepareMachine(t *testing.T, binaryPath, workDir, name string) *machine {
 
 	addr := freeAddress(t)
 	eventsDir := filepath.Join(workDir, "events-"+name)
-	configPath := filepath.Join(workDir, "config-"+name+".json")
+	configPath := filepath.Join(workDir, "config-"+name+".toml")
 	require.NoError(t, os.WriteFile(configPath, eventsConfig(addr, eventsDir), 0o644))
 
 	return &machine{
@@ -244,7 +255,7 @@ func (p *process) logs() string { return p.output.String() }
 func freeAddress(t *testing.T) string {
 	t.Helper()
 	var listen net.ListenConfig
-	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	addr := listener.Addr().String()
 	require.NoError(t, listener.Close())

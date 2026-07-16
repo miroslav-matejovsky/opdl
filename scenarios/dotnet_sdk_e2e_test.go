@@ -1,7 +1,6 @@
 package scenarios
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,15 +39,12 @@ const pendingObservedMarker = "pending-observed"
 // machines, and the .NET test are external processes, exactly as a user would run
 // them.
 func TestDotnetSDKEndToEnd(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping dotnet SDK end-to-end scenario in -short mode")
-	}
 	dotnet, err := exec.LookPath("dotnet")
 	if err != nil {
 		t.Skip("dotnet not installed; skipping dotnet SDK end-to-end scenario")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
 	outDir := t.TempDir()

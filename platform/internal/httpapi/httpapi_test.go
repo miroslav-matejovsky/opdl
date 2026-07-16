@@ -217,7 +217,7 @@ func (s *site) reconcile() {
 	s.t.Helper()
 	for range 2 {
 		for _, reconciler := range s.running {
-			require.NoError(s.t, reconciler.Reconcile(context.Background()))
+			require.NoError(s.t, reconciler.Reconcile(s.t.Context()))
 		}
 	}
 }
@@ -244,7 +244,7 @@ func instanceStatus(t *testing.T, view api.Registration, machine string) api.Pla
 
 func do(t *testing.T, method, url string, body []byte, contentType string) *http.Response {
 	t.Helper()
-	request, err := http.NewRequestWithContext(context.Background(), method, url, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(t.Context(), method, url, bytes.NewReader(body))
 	require.NoError(t, err)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)

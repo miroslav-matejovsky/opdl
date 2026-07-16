@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -65,7 +65,7 @@ func probeEvent() events.Event {
 func freeAddress(t *testing.T) string {
 	t.Helper()
 	var listen net.ListenConfig
-	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	addr := listener.Addr().String()
 	require.NoError(t, listener.Close())
@@ -95,7 +95,7 @@ func get(ctx context.Context, addr string) bool {
 }
 
 func TestServeStopsServerAndClosesRecorderOnSignal(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	dir := t.TempDir()
 	rec, err := newRecorder(testDescriptor, dir)
@@ -103,7 +103,7 @@ func TestServeStopsServerAndClosesRecorderOnSignal(t *testing.T) {
 	addr := freeAddress(t)
 
 	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), testFabric(), rec) }()
+	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), testFabric(), rec, 10*time.Second) }()
 	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
 		"server never became reachable")
 
@@ -116,10 +116,9 @@ func TestServeStopsServerAndClosesRecorderOnSignal(t *testing.T) {
 		t.Fatal("serve did not return after its context was canceled")
 	}
 
-	require.False(t, get(context.Background(), addr), "server still accepts requests after shutdown")
-
+	require.False(t, get(t.Context(), addr), "server still accepts requests after shutdown")
 	// The sink is closed, so a late event is reported rather than dropped.
-	err = rec.Record(context.Background(), probeEvent())
+	err = rec.Record(t.Context(), probeEvent())
 	require.ErrorContains(t, err, "append to closed events file")
 }
 
@@ -130,27 +129,27 @@ func TestServeClosesRecorderWhenServerCannotStart(t *testing.T) {
 
 	// Hold the address so ListenAndServe fails immediately.
 	var listen net.ListenConfig
-	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { _ = listener.Close() }()
 
-	err = serve(context.Background(), newTestServer(listener.Addr().String()), testLoop(), testFabric(), rec)
+	err = serve(t.Context(), newTestServer(listener.Addr().String()), testLoop(), testFabric(), rec, 10*time.Second)
 	require.ErrorContains(t, err, "serve HTTP", "a server that cannot start must report why")
 
 	// Dependencies are released even on the failure path.
 	require.ErrorContains(t,
-		rec.Record(context.Background(), probeEvent()),
+		rec.Record(t.Context(), probeEvent()),
 		"append to closed events file")
 }
 
 func TestServeReportsShutdownAndCloseFailuresTogether(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	failing := failingRecorder{err: errors.New("sink is gone")}
 	addr := freeAddress(t)
 
 	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), testFabric(), failing) }()
+	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), testFabric(), failing, 10*time.Second) }()
 	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
 		"server never became reachable")
 	cancel()
@@ -176,7 +175,7 @@ func TestNewRecorderDisabledWithoutEventsDir(t *testing.T) {
 	rec, err := newRecorder(testDescriptor, "")
 	require.NoError(t, err)
 	require.Equal(t, events.NopRecorder{}, rec)
-	require.NoError(t, rec.Record(context.Background(), probeEvent()))
+	require.NoError(t, rec.Record(t.Context(), probeEvent()))
 	require.NoError(t, rec.Close())
 }
 
@@ -189,7 +188,7 @@ func TestNewRecorderNamesTheFileAfterThisMachine(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = rec.Close() }()
 
-	require.NoError(t, rec.Record(context.Background(), probeEvent()))
+	require.NoError(t, rec.Record(t.Context(), probeEvent()))
 
 	entries, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	require.NoError(t, err)
@@ -234,6 +233,7 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		require.Equal(t, "10.0.1.10:3322", cfg.MemberlistAddress)
 		require.Equal(t, []string{"10.0.1.11:3322"}, cfg.Join)
 		require.Equal(t, fabricolric.DefaultStartTimeout, cfg.StartTimeout)
+		require.Equal(t, 10*time.Second, cfg.ShutdownGrace)
 	})
 
 	t.Run("overrides move sockets", func(t *testing.T) {
@@ -242,12 +242,14 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 			MemberlistAddress: "127.0.0.1:4002",
 			Join:              []string{"127.0.0.1:4102"},
 			StartTimeout:      "45s",
+			ShutdownGrace:     "15s",
 		})
 		require.NoError(t, err)
 		require.Equal(t, "127.0.0.1:4001", cfg.ClientAddress)
 		require.Equal(t, "127.0.0.1:4002", cfg.MemberlistAddress)
 		require.Equal(t, []string{"127.0.0.1:4102"}, cfg.Join)
 		require.Equal(t, 45*time.Second, cfg.StartTimeout)
+		require.Equal(t, 15*time.Second, cfg.ShutdownGrace)
 	})
 
 	t.Run("a partial override keeps the rest of the deployment", func(t *testing.T) {
@@ -268,27 +270,11 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		_, err := olricConfig(descriptor, config.FabricOlric{StartTimeout: "soon"})
 		require.ErrorContains(t, err, `start timeout "soon"`)
 	})
-}
 
-// TestReconcileIntervalDefaultsAndValidates checks a schedule that would never
-// fire is refused at startup. Reconciliation is what accepts registrations, so a
-// platform that silently never ran it would leave every request pending.
-func TestReconcileIntervalDefaultsAndValidates(t *testing.T) {
-	interval, err := reconcileInterval(config.Registration{})
-	require.NoError(t, err)
-	require.Equal(t, registration.DefaultInterval, interval, "an absent setting is the package's default")
-
-	interval, err = reconcileInterval(config.Registration{ReconcileInterval: "250ms"})
-	require.NoError(t, err)
-	require.Equal(t, 250*time.Millisecond, interval)
-
-	_, err = reconcileInterval(config.Registration{ReconcileInterval: "often"})
-	require.ErrorContains(t, err, `reconcile interval "often"`)
-
-	for _, invalid := range []string{"0s", "-1s"} {
-		_, err = reconcileInterval(config.Registration{ReconcileInterval: invalid})
-		require.ErrorContains(t, err, "not positive", invalid)
-	}
+	t.Run("an unparsable shutdown grace is reported", func(t *testing.T) {
+		_, err := olricConfig(descriptor, config.FabricOlric{ShutdownGrace: "soon"})
+		require.ErrorContains(t, err, `shutdown grace "soon"`)
+	})
 }
 
 // TestStopFabricRecordsStoppedBeforeTheSinkCloses checks the shutdown order the
@@ -300,7 +286,7 @@ func TestStopFabricRecordsStoppedBeforeTheSinkCloses(t *testing.T) {
 	require.NoError(t, err)
 	member := testFabric()
 
-	require.NoError(t, stopFabric(context.Background(), member, rec))
+	require.NoError(t, stopFabric(t.Context(), member, rec, 10*time.Second))
 	require.NoError(t, rec.Close())
 
 	data, err := os.ReadFile(filepath.Join(dir, jsonl.FileName(events.NodeFromDescriptor(testDescriptor))))
@@ -316,7 +302,7 @@ func TestStopFabricRecordsStoppedBeforeTheSinkCloses(t *testing.T) {
 // TestServeRecordsFabricStoppedOnShutdown checks the whole ordered teardown: the
 // server stops, the fabric reports it stopped, and only then does the sink close.
 func TestServeRecordsFabricStoppedOnShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	dir := t.TempDir()
 	rec, err := newRecorder(testDescriptor, dir)
@@ -325,7 +311,7 @@ func TestServeRecordsFabricStoppedOnShutdown(t *testing.T) {
 	member := testFabric()
 
 	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), member, rec) }()
+	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), member, rec, 10*time.Second) }()
 	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
 		"server never became reachable")
 	cancel()
@@ -335,25 +321,35 @@ func TestServeRecordsFabricStoppedOnShutdown(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"type":"platform.fabric.stopped"`,
 		"the stopped event must reach the sink before it closes")
-	require.False(t, get(context.Background(), addr))
+	require.False(t, get(t.Context(), addr))
 }
 
 func TestRunReportsMissingConfigFlag(t *testing.T) {
-	require.Error(t, run([]string{"-unknown"}))
+	require.Error(t, Run([]string{"-unknown"}))
 }
 
 func TestRunReportsUnusableConfigFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	require.NoError(t, os.WriteFile(path, []byte("{"), 0o644))
-	require.ErrorContains(t, run([]string{"-config", path}), "invalid configuration file")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[invalid"), 0o644))
+	require.ErrorContains(t, Run([]string{"-config", path}), "invalid configuration file")
 }
 
 func TestRunReportsUnusableEventsDir(t *testing.T) {
 	dir := t.TempDir()
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
-	path := filepath.Join(dir, "config.json")
-	require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, `{"events_dir": %q}`, blocked), 0o644))
+	path := filepath.Join(dir, "config.toml")
+	contents := fmt.Sprintf(`address = "127.0.0.1:8080"
+events_dir = %q
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+[registration]
+reconcile_interval = "1s"
+[fabric.olric]
+start_timeout = "30s"
+shutdown_grace = "10s"
+`, blocked)
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 
-	require.ErrorContains(t, run([]string{"-config", path}), "event sink")
+	require.ErrorContains(t, Run([]string{"-config", path}), "event sink")
 }

@@ -91,13 +91,14 @@ func requireIntegration(t *testing.T) {
 // purpose: the fabric must be usable before its site is whole.
 func openOlric(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
 	f, err := fabricolric.Open(ctx, descriptor, fabricolric.Config{
 		ClientAddress:     freeAddress(t),
 		MemberlistAddress: freeAddress(t),
 		StartTimeout:      60 * time.Second,
+		ShutdownGrace:     10 * time.Second,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -112,7 +113,7 @@ func openOlric(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric {
 func freeAddress(t *testing.T) string {
 	t.Helper()
 	var listen net.ListenConfig
-	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	address := listener.Addr().String()
 	require.NoError(t, listener.Close())
@@ -137,7 +138,7 @@ func collection(t *testing.T, f fabric.Fabric) fabric.Collection {
 
 func TestContract(t *testing.T) {
 	run(t, "on stable membership, create stores a value only when the key is absent", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		c := collection(t, a.open(t, testDescriptor()))
 
 		created, err := c.Create(ctx, "k", []byte("first"))
@@ -155,14 +156,14 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "get reports a missing key as absent, not as an error", func(t *testing.T, a adapter) {
-		value, found, err := collection(t, a.open(t, testDescriptor())).Get(context.Background(), "missing")
+		value, found, err := collection(t, a.open(t, testDescriptor())).Get(t.Context(), "missing")
 		require.NoError(t, err)
 		require.False(t, found)
 		require.Nil(t, value)
 	})
 
 	run(t, "swap replaces a value and reports the previous one", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		c := collection(t, a.open(t, testDescriptor()))
 
 		previous, existed, err := c.Swap(ctx, "k", []byte("first"))
@@ -181,7 +182,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "an empty value is stored, not treated as absent", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		c := collection(t, a.open(t, testDescriptor()))
 
 		created, err := c.Create(ctx, "k", []byte{})
@@ -199,7 +200,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "entries enumerates the collection ordered by key", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		f := a.open(t, testDescriptor())
 		c := collection(t, f)
 
@@ -217,7 +218,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "collections are isolated from each other", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		f := a.open(t, testDescriptor())
 		first, err := f.Collection("first-" + t.Name())
 		require.NoError(t, err)
@@ -233,7 +234,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "opening the same collection twice is the same collection", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		f := a.open(t, testDescriptor())
 		name := "shared-" + t.Name()
 		first, err := f.Collection(name)
@@ -255,7 +256,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "a blank key is rejected", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		c := collection(t, a.open(t, testDescriptor()))
 		_, err := c.Create(ctx, "", []byte("v"))
 		require.ErrorContains(t, err, "key is required")
@@ -264,7 +265,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "the caller owns the bytes it writes and reads", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		c := collection(t, a.open(t, testDescriptor()))
 
 		written := []byte("original")
@@ -285,7 +286,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "on stable membership, concurrent creates of one key produce exactly one winner", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		c := collection(t, a.open(t, testDescriptor()))
 
 		const writers = 16
@@ -344,18 +345,18 @@ func TestContract(t *testing.T) {
 		// Only this member is up, so no peer is reachable. The fabric still
 		// works: state describes the site, not whether calls succeed.
 		f := a.open(t, testDescriptor())
-		state, err := f.State(context.Background())
+		state, err := f.State(t.Context())
 		require.NoError(t, err)
 		require.Equal(t, fabric.StateDisconnected, state)
 
-		_, err = collection(t, f).Create(context.Background(), "k", []byte("v"))
+		_, err = collection(t, f).Create(t.Context(), "k", []byte("v"))
 		require.NoError(t, err, "a disconnected fabric still serves its own member")
 	})
 
 	run(t, "a one-member site is connected on its own", func(t *testing.T, a adapter) {
 		// A standalone deployment is whole, not permanently disconnected.
 		f := a.open(t, soloDescriptor())
-		state, err := f.State(context.Background())
+		state, err := f.State(t.Context())
 		require.NoError(t, err)
 		require.Equal(t, fabric.StateConnected, state)
 		require.Len(t, f.Members(), 1)
@@ -363,7 +364,7 @@ func TestContract(t *testing.T) {
 
 	run(t, "a canceled context fails a call", func(t *testing.T, a adapter) {
 		c := collection(t, a.open(t, testDescriptor()))
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
 		_, err := c.Create(ctx, "k", []byte("v"))
@@ -377,7 +378,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "calls after close report the fabric is closed", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		f := a.open(t, testDescriptor())
 		c := collection(t, f)
 		require.NoError(t, f.Close(ctx))
@@ -397,7 +398,7 @@ func TestContract(t *testing.T) {
 	})
 
 	run(t, "close is idempotent", func(t *testing.T, a adapter) {
-		ctx := context.Background()
+		ctx := t.Context()
 		f := a.open(t, testDescriptor())
 		require.NoError(t, f.Close(ctx))
 		require.NoError(t, f.Close(ctx), "a second close is not an error")
@@ -407,7 +408,7 @@ func TestContract(t *testing.T) {
 		// Membership is a deployment fact, not a live query, so shutdown code
 		// can still report which site it was part of.
 		f := a.open(t, testDescriptor())
-		require.NoError(t, f.Close(context.Background()))
+		require.NoError(t, f.Close(t.Context()))
 		require.Len(t, f.Members(), 2)
 	})
 }

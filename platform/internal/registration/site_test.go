@@ -84,7 +84,7 @@ func (s *site) restart(machine string) *instance {
 	s.t.Helper()
 	running, ok := s.running[machine]
 	require.True(s.t, ok, "%s is not running", machine)
-	require.NoError(s.t, running.fabric.Close(context.Background()))
+	require.NoError(s.t, running.fabric.Close(s.t.Context()))
 	delete(s.running, machine)
 	return s.launch(machine, running.recorder)
 }
@@ -135,7 +135,7 @@ func (s *site) reconcile() {
 			if !ok {
 				continue
 			}
-			require.NoError(s.t, running.reconciler.Reconcile(context.Background()))
+			require.NoError(s.t, running.reconciler.Reconcile(s.t.Context()))
 		}
 	}
 }
@@ -152,7 +152,7 @@ func (s *site) reconcile() {
 func (s *site) reject(from *instance, machine string, key Key, reason string) {
 	s.t.Helper()
 	request := s.storedRequest(from, key)
-	created, err := from.service.store.createConfirmation(context.Background(), confirmationRecord{
+	created, err := from.service.store.createConfirmation(s.t.Context(), confirmationRecord{
 		Version:     recordVersion,
 		UnitType:    key.UnitType,
 		UnitID:      key.UnitID,
@@ -168,7 +168,7 @@ func (s *site) reject(from *instance, machine string, key Key, reason string) {
 // storedRequest returns the proposal the site holds under key.
 func (s *site) storedRequest(from *instance, key Key) requestRecord {
 	s.t.Helper()
-	request, found, err := from.service.store.request(context.Background(), key)
+	request, found, err := from.service.store.request(s.t.Context(), key)
 	require.NoError(s.t, err)
 	require.True(s.t, found, "the site holds no request for %s", key)
 	return request
@@ -178,7 +178,7 @@ func (s *site) storedRequest(from *instance, key Key) requestRecord {
 // keyed by machine. A machine that has not decided is absent.
 func (s *site) decisions(from *instance, key Key) map[string]confirmationRecord {
 	s.t.Helper()
-	decisions, err := from.service.store.decisions(context.Background(), s.storedRequest(from, key), from.service.members)
+	decisions, err := from.service.store.decisions(s.t.Context(), s.storedRequest(from, key), from.service.members)
 	require.NoError(s.t, err)
 	return decisions
 }
@@ -187,7 +187,7 @@ func (s *site) decisions(from *instance, key Key) map[string]confirmationRecord 
 // has committed one at all.
 func (s *site) accepted(from *instance, key Key) (acceptedRecord, bool) {
 	s.t.Helper()
-	record, found, err := from.service.store.accepted(context.Background(), key)
+	record, found, err := from.service.store.accepted(s.t.Context(), key)
 	require.NoError(s.t, err)
 	return record, found
 }
@@ -195,7 +195,7 @@ func (s *site) accepted(from *instance, key Key) (acceptedRecord, bool) {
 // create submits a request to this machine and requires it to be taken.
 func (i *instance) create(t *testing.T, request api.RegistrationRequest) CreateResult {
 	t.Helper()
-	result, err := i.service.Create(context.Background(), request)
+	result, err := i.service.Create(t.Context(), request)
 	require.NoError(t, err)
 	return result
 }
@@ -204,7 +204,7 @@ func (i *instance) create(t *testing.T, request api.RegistrationRequest) CreateR
 // Like the status endpoint it backs, it reconciles the key before answering.
 func (i *instance) get(t *testing.T, key Key) api.Registration {
 	t.Helper()
-	view, found, err := i.service.Get(context.Background(), key)
+	view, found, err := i.service.Get(t.Context(), key)
 	require.NoError(t, err)
 	require.True(t, found, "%s does not hold a request for %s", i.service.location.Machine, key)
 	return view
@@ -213,7 +213,7 @@ func (i *instance) get(t *testing.T, key Key) api.Registration {
 // list returns this machine's view of every request in the site.
 func (i *instance) list(t *testing.T) []api.Registration {
 	t.Helper()
-	registrations, err := i.service.List(context.Background())
+	registrations, err := i.service.List(t.Context())
 	require.NoError(t, err)
 	return registrations
 }

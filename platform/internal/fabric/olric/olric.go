@@ -17,12 +17,9 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/fabric"
 )
 
-// shutdownGrace bounds tearing down a member whose startup failed, so a failed
-// Open cannot hang on a backend that will not stop.
-const shutdownGrace = 10 * time.Second
-
 // Fabric is a fabric backed by an embedded Olric member.
 type Fabric struct {
+	cfg     Config
 	members []fabric.Member
 	// clientAddresses maps an expected member's client address to its machine,
 	// which is how a live Olric member is recognized as a descriptor identity.
@@ -68,7 +65,7 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 	if err != nil {
 		return nil, fmt.Errorf("olric: create member: %w", err)
 	}
-	f := &Fabric{members: members, clientAddresses: addresses, db: db, serve: make(chan error, 1)}
+	f := &Fabric{cfg: cfg, members: members, clientAddresses: addresses, db: db, serve: make(chan error, 1)}
 	go func() { f.serve <- db.Start() }()
 
 	fail := func(cause error) error {
@@ -93,7 +90,7 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 // still has to leave nothing running: a leaked member keeps its sockets and
 // breaks whatever starts next.
 func (f *Fabric) abandon(ctx context.Context) error {
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), f.cfg.ShutdownGrace)
 	defer cancel()
 	return f.shutdown(stopCtx)
 }

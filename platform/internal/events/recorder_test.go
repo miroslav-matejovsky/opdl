@@ -64,7 +64,7 @@ func fixedRecorder() (*Recorder, *stubSink) {
 func TestRecorderStampsEnvelopeOntoPayload(t *testing.T) {
 	recorder, sink := fixedRecorder()
 
-	require.NoError(t, recorder.Record(context.Background(), plainEvent{Detail: "started"}))
+	require.NoError(t, recorder.Record(t.Context(), plainEvent{Detail: "started"}))
 
 	stored := sink.stored()
 	require.Len(t, stored, 1)
@@ -82,7 +82,7 @@ func TestRecorderNumbersEventsMonotonicallyWithinOneRun(t *testing.T) {
 	recorder, sink := fixedRecorder()
 
 	for range 3 {
-		require.NoError(t, recorder.Record(context.Background(), plainEvent{}))
+		require.NoError(t, recorder.Record(t.Context(), plainEvent{}))
 	}
 
 	stored := sink.stored()
@@ -99,7 +99,7 @@ func TestRecorderStampsOccurredAtInUTC(t *testing.T) {
 	occurred := time.Date(2026, 7, 15, 12, 0, 0, 0, local)
 	recorder := newRecorder(sink, func() time.Time { return occurred }, func() string { return "id" })
 
-	require.NoError(t, recorder.Record(context.Background(), plainEvent{}))
+	require.NoError(t, recorder.Record(t.Context(), plainEvent{}))
 
 	stored := sink.stored()
 	require.Len(t, stored, 1)
@@ -110,8 +110,8 @@ func TestRecorderStampsOccurredAtInUTC(t *testing.T) {
 func TestRecorderStampsNormalizedTagsAndOmitsThemWhenAbsent(t *testing.T) {
 	recorder, sink := fixedRecorder()
 
-	require.NoError(t, recorder.Record(context.Background(), taggedEvent{tags: []string{"warning", "warning", " audit "}}))
-	require.NoError(t, recorder.Record(context.Background(), plainEvent{}))
+	require.NoError(t, recorder.Record(t.Context(), taggedEvent{tags: []string{"warning", "warning", " audit "}}))
+	require.NoError(t, recorder.Record(t.Context(), plainEvent{}))
 
 	stored := sink.stored()
 	require.Len(t, stored, 2)
@@ -128,7 +128,7 @@ func TestRecorderStampsNormalizedTagsAndOmitsThemWhenAbsent(t *testing.T) {
 // names its file after it.
 func TestRecorderEnvelopeCarriesNoNode(t *testing.T) {
 	recorder, sink := fixedRecorder()
-	require.NoError(t, recorder.Record(context.Background(), plainEvent{}))
+	require.NoError(t, recorder.Record(t.Context(), plainEvent{}))
 
 	encoded, err := json.Marshal(sink.stored()[0])
 	require.NoError(t, err)
@@ -139,14 +139,14 @@ func TestRecorderReportsSinkFailureWithContext(t *testing.T) {
 	sink := &stubSink{appendErr: errors.New("disk gone")}
 	recorder := NewRecorder(sink)
 
-	err := recorder.Record(context.Background(), plainEvent{})
+	err := recorder.Record(t.Context(), plainEvent{})
 	require.ErrorContains(t, err, "events: record platform.test.plain")
 	require.ErrorContains(t, err, "disk gone")
 }
 
 func TestRecorderRejectsMissingEvent(t *testing.T) {
 	recorder, _ := fixedRecorder()
-	require.ErrorContains(t, recorder.Record(context.Background(), nil), "event is required")
+	require.ErrorContains(t, recorder.Record(t.Context(), nil), "event is required")
 }
 
 func TestRecorderConcurrentRecordsAreSequencedAndComplete(t *testing.T) {
@@ -159,7 +159,7 @@ func TestRecorderConcurrentRecordsAreSequencedAndComplete(t *testing.T) {
 	var group sync.WaitGroup
 	for range writers {
 		group.Go(func() {
-			failures <- recorder.Record(context.Background(), plainEvent{})
+			failures <- recorder.Record(t.Context(), plainEvent{})
 		})
 	}
 	group.Wait()
@@ -188,7 +188,7 @@ func TestRecorderCloseClosesSinkAndReportsItsError(t *testing.T) {
 
 func TestNopRecorderDiscardsEverything(t *testing.T) {
 	var nop NopRecorder
-	require.NoError(t, nop.Record(context.Background(), plainEvent{}))
+	require.NoError(t, nop.Record(t.Context(), plainEvent{}))
 	require.NoError(t, nop.Close())
 }
 

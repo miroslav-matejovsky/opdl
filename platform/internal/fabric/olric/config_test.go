@@ -35,6 +35,7 @@ func TestDefaultConfigDerivesEverythingFromTheDescriptor(t *testing.T) {
 		MemberlistAddress: "10.0.1.10:3322",
 		Join:              []string{"10.0.1.11:3322", "10.0.1.12:3322"},
 		StartTimeout:      fabricolric.DefaultStartTimeout,
+		ShutdownGrace:     10 * time.Second,
 	}, cfg)
 	require.NoError(t, cfg.Validate())
 }
@@ -102,6 +103,8 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{"zero start timeout", func(c *fabricolric.Config) { c.StartTimeout = 0 }, "start timeout must be positive"},
 		{"negative start timeout", func(c *fabricolric.Config) { c.StartTimeout = -time.Second }, "start timeout must be positive"},
+		{"zero shutdown grace", func(c *fabricolric.Config) { c.ShutdownGrace = 0 }, "shutdown grace must be positive"},
+		{"negative shutdown grace", func(c *fabricolric.Config) { c.ShutdownGrace = -time.Second }, "shutdown grace must be positive"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

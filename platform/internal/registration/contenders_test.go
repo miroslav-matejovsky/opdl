@@ -1,7 +1,6 @@
 package registration
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -69,9 +68,9 @@ func TestReconcileBreaksEqualObservedTimesByFingerprint(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, want.Fingerprint, projection.Fingerprint)
 	for _, node := range []*instance{nodeA, nodeB} {
-		contenders, err := node.service.store.contenders(context.Background(), unitKey)
+		contenders, err := node.service.store.contenders(t.Context(), unitKey)
 		require.NoError(t, err)
-		winner, _, err := node.service.store.winner(context.Background(), contenders)
+		winner, _, err := node.service.store.winner(t.Context(), contenders)
 		require.NoError(t, err)
 		require.Equal(t, want.Fingerprint, winner.Fingerprint)
 	}
@@ -126,7 +125,7 @@ func TestConflictsExposeDeterministicWinnerAndLoserViews(t *testing.T) {
 	writeAcceptance(t, nodeA, first, testTime(15))
 	site.reconcile()
 
-	conflicts, err := nodeA.service.Conflicts(context.Background())
+	conflicts, err := nodeA.service.Conflicts(t.Context())
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
 	conflict := conflicts[0]
@@ -152,7 +151,7 @@ func TestConflictsAreEmptyWithoutCompetingContenders(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
 
-	conflicts, err := nodeA.service.Conflicts(context.Background())
+	conflicts, err := nodeA.service.Conflicts(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, conflicts)
 }
@@ -172,7 +171,7 @@ func writeContender(t *testing.T, node *instance, request api.RegistrationReques
 	record.Fingerprint = fingerprintOf(record)
 	value, err := encode(record)
 	require.NoError(t, err)
-	created, err := node.service.store.contenderRecords.Create(context.Background(), contenderKey(record.key(), record.Fingerprint), value)
+	created, err := node.service.store.contenderRecords.Create(t.Context(), contenderKey(record.key(), record.Fingerprint), value)
 	require.NoError(t, err)
 	require.True(t, created)
 	return record
@@ -180,7 +179,7 @@ func writeContender(t *testing.T, node *instance, request api.RegistrationReques
 
 func writeAcceptance(t *testing.T, node *instance, request requestRecord, acceptedAt time.Time) {
 	t.Helper()
-	created, err := node.service.store.createAcceptance(context.Background(), acceptanceRecord{
+	created, err := node.service.store.createAcceptance(t.Context(), acceptanceRecord{
 		Version:     recordVersion,
 		UnitType:    request.UnitType,
 		UnitID:      request.UnitID,

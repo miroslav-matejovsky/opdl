@@ -58,6 +58,7 @@
   "cSpell.words": [
     "builderdeployment",
     "deadcode",
+    "fabricolric",
     "fe3dback",
     "gocache",
     "gohcl",
@@ -65,6 +66,7 @@
     "gopls",
     "gotest",
     "gotestsum",
+    "GOWORK",
     "hclparse",
     "httpapi",
     "Kiota",
@@ -75,10 +77,14 @@
     "miroslav",
     "olric",
     "opdl",
+    "pkgname",
     "platformapi",
     "platformdeployment",
     "slnx",
     "stretchr",
-    "taskfile"
+    "taskfile",
+    "testname",
+    "unioned",
+    "Xunit"
   ]
 }

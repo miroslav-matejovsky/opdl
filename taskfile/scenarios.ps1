@@ -7,7 +7,7 @@
 # run there.
 . (Join-Path $PSScriptRoot "modules.ps1")
 
-Write-Host "--- platform (integration) ---"
+Write-Host "--- platform (integration tests) ---"
 Push-Location (Join-Path $RepoRoot "platform")
 try {
     gotestsum --format pkgname ./...
@@ -22,7 +22,7 @@ finally {
 Write-Host "--- scenarios ---"
 Push-Location (Join-Path $RepoRoot "scenarios")
 try {
-    gotestsum --format pkgname ./...
+    gotestsum --format testname ./...
     if ($LASTEXITCODE -ne 0) {
         throw "scenarios failed (exit $LASTEXITCODE)"
     }
