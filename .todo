@@ -9,4 +9,3 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
 - redundancy (primary/secondary) is not a feature, it is essential for platform reliability and zero-downtime upgrades, so we need to implement it in the platform
 - authentication for services as a platform feature
 - authorization for services as a platform feature
-- migrate dotnet to 10
