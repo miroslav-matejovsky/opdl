@@ -10,7 +10,7 @@
 Write-Host "--- platform (integration tests) ---"
 Push-Location (Join-Path $RepoRoot "platform")
 try {
-    gotestsum --format testname ./...
+    gotestsum --format pkgname ./...
     if ($LASTEXITCODE -ne 0) {
         throw "platform integration tests failed (exit $LASTEXITCODE)"
     }
