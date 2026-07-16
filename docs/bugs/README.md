@@ -2,7 +2,7 @@
 
 Observed defects awaiting a fix. One bug per file. These are confirmed wrong behaviors
 seen in real captures, distinct from the optional enhancements in
-[`../backlog/`](../backlog/README.md).
+[`../backlog/README.md`](../backlog/README.md).
 
 Each file is self-contained and follows a loose shape:
 

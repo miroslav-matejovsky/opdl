@@ -11,8 +11,8 @@ Start with the [documentation index](docs/README.md).
 
 - [Architecture](docs/01-architecture.md)
 - [Registration](docs/02-registration.md)
-- [Implementation plans](docs/plan/)
-- [Backlog](docs/backlog/)
+- [Backlog](docs/backlog/README.md)
+- [Bugs](docs/bugs/README.md)
 
 ## Repository
 
