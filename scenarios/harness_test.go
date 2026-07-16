@@ -3,6 +3,8 @@ package scenarios
 import (
 	"bytes"
 	"context"
+	"flag"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -32,12 +34,13 @@ const (
 	markerWaitTimeout = 90 * time.Second
 )
 
-// requireScenario skips scenario tests when running in -short mode (unit gate).
-func requireScenario(t *testing.T) {
-	t.Helper()
+func TestMain(m *testing.M) {
+	flag.Parse()
 	if testing.Short() {
-		t.Skip("skipping scenario in -short mode")
+		fmt.Println("skipping scenario suite in -short mode")
+		os.Exit(0)
 	}
+	os.Exit(m.Run())
 }
 
 // buildProject drives the builder CLI to build every machine of a blueprint into

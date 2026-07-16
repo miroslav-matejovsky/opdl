@@ -39,7 +39,6 @@ const pendingObservedMarker = "pending-observed"
 // machines, and the .NET test are external processes, exactly as a user would run
 // them.
 func TestDotnetSDKEndToEnd(t *testing.T) {
-	requireScenario(t)
 	dotnet, err := exec.LookPath("dotnet")
 	if err != nil {
 		t.Skip("dotnet not installed; skipping dotnet SDK end-to-end scenario")

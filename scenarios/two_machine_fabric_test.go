@@ -16,7 +16,6 @@ import (
 // fabric is ready before the API is. What the two then carry between them is
 // TestTwoMachineRegistration's subject.
 func TestTwoMachineFabric(t *testing.T) {
-	requireScenario(t)
 	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)

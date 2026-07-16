@@ -13,4 +13,4 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
   even some unit tests in internal/app package might be introduced
 - introduce arch-lint in the platform module
 - migrate dotnet to 10
-- are scenarios running twice in task all? investigate and fix
+- too many tests marked as integration tests - can we move then to short unit tests? if not why?

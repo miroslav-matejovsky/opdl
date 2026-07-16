@@ -18,7 +18,6 @@ import (
 // them is not running: it waits, it says it is waiting, and it says which
 // machine it is waiting for.
 func TestTwoMachineRegistration(t *testing.T) {
-	requireScenario(t)
 	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
