@@ -31,12 +31,10 @@ Closing the gap means:
 - Regenerating the contract and the SDK. Kiota then emits C# enums, which is the
   point of doing it.
 
-**Why it is deferred.** Stage 6 of the registration plan lists "status enum" in
-its contract review, but it is the plan's only mention of an enum: no stage
-builds one, and no acceptance criterion requires one. Adding it at the end of
-that plan would have been a cross-cutting retype of a working contract for value
-that is real but not required, so the divergence was recorded here instead of
-being absorbed silently.
+**Why it is deferred.** The registration convergence stages did not require new
+status or role values. Retyping the working contract and generated SDK would
+have been unrelated cross-cutting work, so the divergence remains explicit here
+instead of being absorbed into the convergence fix.
 
 **Worth knowing before scheduling it.** Kiota's generated enums reject values
 they do not know, so adding a status or role value later becomes a breaking

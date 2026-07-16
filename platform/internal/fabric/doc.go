@@ -71,11 +71,11 @@
 // does not claim to exercise a membership transition.
 //
 // A caller that needs a site-wide unique claim must preserve every contender and
-// reconcile them after membership stabilizes. Registration is adopting that
+// reconcile them after membership stabilizes. Registration implements that
 // model: an accepted incumbent wins; otherwise the first platform-observed
 // contender wins with a deterministic fingerprint tie-break. See
-// docs/backlog/fabric.md for the measurements and rationale. Do not read Create
-// as a linearizable site-wide claim primitive.
+// docs/01-architecture.md for the measurements and rationale. Do not read
+// Create as a linearizable site-wide claim primitive.
 //
 // # No redundancy
 //

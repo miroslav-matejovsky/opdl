@@ -194,8 +194,9 @@ func requireSingleEvent(t *testing.T, records []eventRecord, eventType string) e
 
 // requireFirstEvent returns the first record of eventType, failing when there is
 // none. Prefer requireSingleEvent: a phase event states a transition, and a
-// transition happens once, so "the first of them" is only the right question
-// where a known defect can restate one. Every use owes a reason.
+// transition happens once under stable fabric membership. "The first of them"
+// is only the right question where a membership change can restate one. Every
+// use owes a reason.
 func requireFirstEvent(t *testing.T, records []eventRecord, eventType string) eventRecord {
 	t.Helper()
 	matched := eventsOfType(records, eventType)

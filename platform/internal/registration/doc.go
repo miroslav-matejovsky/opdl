@@ -32,7 +32,7 @@
 //     site. It retains immutable proposals and repairable current views. See
 //     records.go for the storage vocabulary and keys.
 //
-// # Target contender model
+// # Contender model
 //
 // Olric Create is one-winner only while fabric membership is stable. A member
 // join can temporarily let a different proposal overwrite a current view, so a
@@ -62,7 +62,7 @@
 //
 // # Create-only
 //
-// In the target model, each proposal is immutable and is never removed or
+// Each proposal is immutable and is never removed or
 // altered. An identical repeat is an idempotent retry; a different proposal that
 // is already visible is refused with 409. During the membership-change window,
 // a different proposal can be accepted provisionally and is later rejected by

@@ -3,14 +3,9 @@
 Actionable items and known unfinished work.
 Do not use this file for tracking progress or track finished work. If work is finished, then its finished; remove it from this file.
 Keep this file short; the structured backlog of lower-priority follow-ups lives in
-`docs/backlog/` (start at `docs/backlog/README.md`), and the architecture overview in `README.md`.
+`docs/backlog/` (start at `docs/backlog/README.md`), and the architecture overview in
+`docs/01-architecture.md`.
 
-- run `task all` for the Stage 6 change: the tool sandbox's command classifier went down
-  before the final gate could run. Verified before that: `go test -race` on the platform
-  packages, `go vet` in scenarios, `dotnet build`, conformance regeneration (empty diff),
-  `TestDotnetSDKEndToEnd` twice, and the architecture boundaries. Not yet run: the four
-  scenarios together after `startMachine` was split into `prepareMachine`+`start`, and
-  fmt/lint/deadcode/arch/tidy/validate/sdk-dotnet.
 - different approach might be "organization -> site -> group -> unit"
 - redundancy (primary/secondary) is not a feature, it is essential for platform reliability and zero-downtime upgrades, so we need to implement it in the platform
 - authentication for services as a platform feature

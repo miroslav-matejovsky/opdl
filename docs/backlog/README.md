@@ -9,5 +9,8 @@ decision, or a known issue to schedule.
 
 | Subsystem | Items |
 | --- | --- |
-| [Platform fabric](fabric.md) | Olric join behavior and registration's eventual-conflict mitigation |
 | [API contract](api-contract.md) | Closed value sets (`status`, `role`) are described as free strings |
+
+The Olric membership-change limitation is implemented and documented as
+architecture, not tracked as unfinished work. See
+[Architecture: Membership-change limitation](../01-architecture.md#membership-change-limitation).

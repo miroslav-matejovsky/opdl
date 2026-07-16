@@ -32,6 +32,7 @@
 // the behavior it claims to describe. Today that is:
 //
 //   - internal/registration: requested, confirmed, accepted, rejected, conflict.
+//   - internal/fabric: started, stopped.
 //
 // A package declares an event by implementing Event: a small struct of payload
 // fields that knows its own Type and the Source subsystem it comes from. An

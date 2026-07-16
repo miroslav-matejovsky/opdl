@@ -28,10 +28,12 @@ func TestJoinConvergesRetainedContenders(t *testing.T) {
 	fabricB := openContenderFabric(t, nodeB, bConfig)
 	serviceA, reconcilerA, err := Open(fabricA, events.NopRecorder{})
 	require.NoError(t, err)
-	_, reconcilerB, err := Open(fabricB, events.NopRecorder{})
+	serviceB, reconcilerB, err := Open(fabricB, events.NopRecorder{})
 	require.NoError(t, err)
 
-	_, err = serviceA.Create(ctx, api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "First"})
+	firstRequest := api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "First"}
+	secondRequest := api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Second"}
+	_, err = serviceA.Create(ctx, firstRequest)
 	require.NoError(t, err)
 	first := onlyContender(t, serviceA, unitKey)
 	var marker acceptanceRecord
@@ -44,6 +46,12 @@ func TestJoinConvergesRetainedContenders(t *testing.T) {
 		marker, found, acceptanceErr = serviceA.store.acceptance(ctx, first)
 		return acceptanceErr == nil && found
 	}, 30*time.Second, 100*time.Millisecond, "the initial contender was not accepted before rejoin")
+
+	_, err = serviceB.Create(ctx, secondRequest)
+	require.ErrorIs(t, err, ErrConflict,
+		"a conflict visible at request time must be refused immediately")
+	require.Len(t, contendersFor(t, serviceA, unitKey), 1,
+		"a refused conflict must not be retained")
 
 	require.NoError(t, fabricB.Close(ctx))
 	rejoinedFabricB := openContenderFabric(t, nodeB, bConfig)
@@ -92,6 +100,37 @@ func TestJoinConvergesRetainedContenders(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, api.RegistrationStatusRejected, loser.Status)
 	require.Equal(t, ReasonKeyConflict, *loser.Reason)
+
+	wantList := []api.Registration{winner, loser}
+	listedA, err := serviceA.List(ctx)
+	require.NoError(t, err)
+	require.Equal(t, wantList, listedA)
+	listedB, err := rejoinedServiceB.List(ctx)
+	require.NoError(t, err)
+	require.Equal(t, wantList, listedB)
+
+	wantConflicts, err := serviceA.Conflicts(ctx)
+	require.NoError(t, err)
+	require.Len(t, wantConflicts, 1)
+	require.Equal(t, winner, wantConflicts[0].Winner)
+	require.Equal(t, []api.Registration{loser}, wantConflicts[0].Losers)
+	gotConflicts, err := rejoinedServiceB.Conflicts(ctx)
+	require.NoError(t, err)
+	require.Equal(t, wantConflicts, gotConflicts)
+
+	// Reopen registration on the joined member and run another pass. This is a
+	// reconciler restart, not a fabric-member restart: the in-memory backend does
+	// not promise that partitions survive losing their owner.
+	restartedServiceB, restartedReconcilerB, err := Open(rejoinedFabricB, events.NopRecorder{})
+	require.NoError(t, err)
+	require.NoError(t, reconcilerA.Reconcile(ctx))
+	require.NoError(t, restartedReconcilerB.Reconcile(ctx))
+	restartedList, err := restartedServiceB.List(ctx)
+	require.NoError(t, err)
+	require.Equal(t, wantList, restartedList)
+	restartedConflicts, err := restartedServiceB.Conflicts(ctx)
+	require.NoError(t, err)
+	require.Equal(t, wantConflicts, restartedConflicts)
 }
 
 func contenderDescriptors() (nodeA, nodeB deployment.Descriptor) {
@@ -122,8 +161,14 @@ func openContenderFabric(t *testing.T, descriptor deployment.Descriptor, config 
 
 func onlyContender(t *testing.T, service *Service, key Key) requestRecord {
 	t.Helper()
-	contenders, err := service.store.contenders(context.Background(), key)
-	require.NoError(t, err)
+	contenders := contendersFor(t, service, key)
 	require.Len(t, contenders, 1)
 	return contenders[0]
+}
+
+func contendersFor(t *testing.T, service *Service, key Key) []requestRecord {
+	t.Helper()
+	contenders, err := service.store.contenders(context.Background(), key)
+	require.NoError(t, err)
+	return contenders
 }
