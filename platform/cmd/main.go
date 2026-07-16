@@ -43,7 +43,7 @@ type recorder interface {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
-	configPath := fs.String("config", "config.json", "path to the platform JSON configuration file")
+	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

@@ -343,8 +343,8 @@ func TestRunReportsMissingConfigFlag(t *testing.T) {
 }
 
 func TestRunReportsUnusableConfigFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	require.NoError(t, os.WriteFile(path, []byte("{"), 0o644))
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[invalid"), 0o644))
 	require.ErrorContains(t, run([]string{"-config", path}), "invalid configuration file")
 }
 
@@ -352,8 +352,8 @@ func TestRunReportsUnusableEventsDir(t *testing.T) {
 	dir := t.TempDir()
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
-	path := filepath.Join(dir, "config.json")
-	require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, `{"events_dir": %q}`, blocked), 0o644))
+	path := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, "events_dir = %q\n", blocked), 0o644))
 
 	require.ErrorContains(t, run([]string{"-config", path}), "event sink")
 }

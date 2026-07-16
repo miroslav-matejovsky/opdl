@@ -1,0 +1,23 @@
+# OPDL Platform Runtime Configuration
+#
+# This file configures the runtime settings for an individual OPDL platform instance.
+# A user may override runtime settings without rebuilding the binary or touching the
+# embedded deployment descriptor.
+
+# The host:port address where the platform serves its public registration HTTP API.
+address = "127.0.0.1:8080"
+
+# Directory path where domain events (`platform.registration.*`, `platform.fabric.*`) are recorded
+# in JSONL format. If set to an empty string (""), event recording is disabled.
+events_dir = ""
+
+# Optional registration overrides:
+# [registration]
+# reconcile_interval = "1s"
+
+# Optional fabric adapter overrides (used when running multiple instances on a local development host):
+# [fabric.olric]
+# client_address = "127.0.0.1:3320"
+# memberlist_address = "127.0.0.1:3322"
+# join = ["127.0.0.1:3322"]
+# start_timeout = "30s"

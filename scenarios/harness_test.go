@@ -94,7 +94,7 @@ func prepareMachine(t *testing.T, binaryPath, workDir, name string) *machine {
 
 	addr := freeAddress(t)
 	eventsDir := filepath.Join(workDir, "events-"+name)
-	configPath := filepath.Join(workDir, "config-"+name+".json")
+	configPath := filepath.Join(workDir, "config-"+name+".toml")
 	require.NoError(t, os.WriteFile(configPath, eventsConfig(addr, eventsDir), 0o644))
 
 	return &machine{

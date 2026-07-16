@@ -207,5 +207,5 @@ func requireFirstEvent(t *testing.T, records []eventRecord, eventType string) ev
 // eventsConfig renders a platform configuration file that pins the listen
 // address and records events into eventsDir.
 func eventsConfig(addr, eventsDir string) []byte {
-	return fmt.Appendf(nil, "{\"address\": %q, \"events_dir\": %q}", addr, eventsDir)
+	return fmt.Appendf(nil, "address = %q\nevents_dir = %q\n", addr, eventsDir)
 }

@@ -99,7 +99,7 @@ tasks:
 # ---- running stuff ----
 
   run:
-    desc: Run the platform runtime with the neutral mock descriptor and platform/config.json
+    desc: Run the platform runtime with the neutral mock descriptor and platform/config.toml
     silent: true
     dir: platform
     cmds:
