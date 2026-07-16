@@ -11,4 +11,3 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
 - authorization for services as a platform feature
 - introduce arch-lint in the platform module
 - migrate dotnet to 10
-- too many tests marked as integration tests (skipped in short) in platform - can we move then to short unit tests? if not why?
