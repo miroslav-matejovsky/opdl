@@ -7,9 +7,6 @@ project "customer-a" {
   # or to test the resilience of the system in production in a controlled way, with the customer aware of the test and its potential impact on their operations
   features {
     chaos = true
-    # redundancy is enabling two instances of platform services to run in parallel on the same machine, to provide redundancy in case one instance fails.
-    # This is useful for critical services that need to be highly available, but it also increases resource usage and complexity.
-    redundancy = true
   }
 
   site "north" {
@@ -17,12 +14,36 @@ project "customer-a" {
       role     = "sensor-node"
       ip       = "10.0.1.10"
       services = ["sensor-services"]
+      platform {
+        instance "primary" {
+          api_address = "10.0.1.10:8080"
+          fabric_client_address = "10.0.1.10:3320"
+          fabric_memberlist_address = "10.0.1.10:3322"
+        }
+        instance "secondary" {
+          api_address = "10.0.1.10:8081"
+          fabric_client_address = "10.0.1.10:3321"
+          fabric_memberlist_address = "10.0.1.10:3323"
+        }
+      }
     }
 
     machine "local-server" {
       role     = "local-server"
       ip       = "10.0.1.11"
       services = ["core-services"]
+      platform {
+        instance "primary" {
+          api_address = "10.0.1.11:8080"
+          fabric_client_address = "10.0.1.11:3320"
+          fabric_memberlist_address = "10.0.1.11:3322"
+        }
+        instance "secondary" {
+          api_address = "10.0.1.11:8081"
+          fabric_client_address = "10.0.1.11:3321"
+          fabric_memberlist_address = "10.0.1.11:3323"
+        }
+      }
     }
   }
 
@@ -31,16 +52,48 @@ project "customer-a" {
       role     = "master-server"
       ip       = "10.0.2.10"
       services = ["core-services"]
+      platform {
+        instance "primary" {
+          api_address = "10.0.2.10:8080"
+          fabric_client_address = "10.0.2.10:3320"
+          fabric_memberlist_address = "10.0.2.10:3322"
+        }
+        instance "secondary" {
+          api_address = "10.0.2.10:8081"
+          fabric_client_address = "10.0.2.10:3321"
+          fabric_memberlist_address = "10.0.2.10:3323"
+        }
+      }
     }
     machine "slave" {
       role     = "slave-server"
       ip       = "10.0.2.11"
       services = ["core-services"]
+      platform {
+        instance "primary" {
+          api_address = "10.0.2.11:8080"
+          fabric_client_address = "10.0.2.11:3320"
+          fabric_memberlist_address = "10.0.2.11:3322"
+        }
+        instance "secondary" {
+          api_address = "10.0.2.11:8081"
+          fabric_client_address = "10.0.2.11:3321"
+          fabric_memberlist_address = "10.0.2.11:3323"
+        }
+      }
     }
     machine "integration" {
       role     = "integration-server"
       ip       = "10.0.2.12"
       services = ["integration-services"]
+      platform {
+        secondary_enabled = false
+        instance "primary" {
+          api_address = "10.0.2.12:8080"
+          fabric_client_address = "10.0.2.12:3320"
+          fabric_memberlist_address = "10.0.2.12:3322"
+        }
+      }
     }
   }
 }

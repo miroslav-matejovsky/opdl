@@ -22,14 +22,31 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches enabled on the machine.
 	Features Features `json:"features"`
+	// PlatformInstances are the active platform processes configured on this
+	// machine, ordered primary then optional secondary.
+	PlatformInstances []PlatformInstance `json:"platform_instances"`
 	// Fabric is the resolved platform fabric topology for this machine.
 	Fabric Fabric `json:"fabric"`
 }
 
 // Features are the capability switches carried from the project onto a machine.
 type Features struct {
-	Chaos      bool `json:"chaos"`
-	Redundancy bool `json:"redundancy"`
+	Chaos bool `json:"chaos"`
+}
+
+const (
+	// PlatformInstancePrimary is the required platform process identity.
+	PlatformInstancePrimary = "primary"
+	// PlatformInstanceSecondary is the optional redundant process identity.
+	PlatformInstanceSecondary = "secondary"
+)
+
+// PlatformInstance is one active platform process and its explicit endpoints.
+type PlatformInstance struct {
+	Name                    string `json:"name"`
+	APIAddress              string `json:"api_address"`
+	FabricClientAddress     string `json:"fabric_client_address"`
+	FabricMemberlistAddress string `json:"fabric_memberlist_address"`
 }
 
 // Fabric is this machine's resolved view of the platform fabric: the peers it
@@ -38,10 +55,8 @@ type Features struct {
 // it from the project topology and stages it here, so the platform boots knowing
 // its membership and discovers nothing at runtime.
 //
-// It is transport-neutral: identities and addresses only, with no ports, adapter
-// names, or protocol settings. A fabric adapter derives what it needs from these
-// addresses, which is what lets the backend be replaced without changing the
-// deployment contract.
+// It carries explicit client and membership endpoints. Production code does not
+// derive ports. Adapter-specific lifecycle tuning remains runtime configuration.
 type Fabric struct {
 	// Peers are the other fabric members of this machine's site, ordered by
 	// machine name. A machine never lists itself, and the fabric spans exactly
@@ -55,6 +70,12 @@ type FabricPeer struct {
 	Site string `json:"site"`
 	// Machine is the peer's machine identity.
 	Machine string `json:"machine"`
+	// Instance is the peer platform process identity: primary or secondary.
+	Instance string `json:"instance"`
 	// IP is the address the peer's fabric member is reached on.
 	IP string `json:"ip"`
+	// FabricClientAddress is the peer's explicit Olric client endpoint.
+	FabricClientAddress string `json:"fabric_client_address"`
+	// FabricMemberlistAddress is the peer's explicit membership endpoint.
+	FabricMemberlistAddress string `json:"fabric_memberlist_address"`
 }

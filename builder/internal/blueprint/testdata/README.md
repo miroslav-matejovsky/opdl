@@ -4,4 +4,7 @@ This folder contains sample data fragments that demonstrate the topology wire co
 
 ## Contents
 
-- `project.hcl`: A representative authored topology project formatted as HCL. It illustrates the HCL structure that project blueprints author, including project identity, feature switches, sites, and machines with their assigned services.
+- `project.hcl`: A representative authored topology project formatted as HCL.
+  It illustrates project identity, feature switches, sites, machines, assigned
+  services, explicit primary/secondary endpoints, and a machine that disables
+  its secondary instance.

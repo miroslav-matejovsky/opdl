@@ -10,21 +10,12 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/fabric"
 )
 
 const (
 	// Name is this adapter's implementation name, reported as operational
 	// metadata on fabric events.
 	Name = "olric"
-
-	// ClientPort is the fixed port the member serves its client surface on. It
-	// is derived from the machine's topology IP, which is why a project may not
-	// give two machines the same IP.
-	ClientPort = 3320
-	// MemberlistPort is the fixed port the member gossips membership on, and the
-	// port peers are seeded at.
-	MemberlistPort = 3322
 
 	// DefaultStartTimeout bounds readiness. It is generous on purpose: a member
 	// whose peers are not up yet pays a memberlist join timeout (about ten
@@ -53,35 +44,41 @@ type Config struct {
 	ShutdownGrace time.Duration
 }
 
-// DefaultConfig derives the production configuration from a machine's resolved
-// deployment descriptor: the member's own addresses from its descriptor IP,
-// and its seeds from its fabric peers' IPs. This is the whole production
-// bootstrap, and it needs nothing beyond the descriptor the machine was built
-// with.
+// DefaultConfig reads the primary process's explicit production endpoints from
+// the resolved deployment descriptor. Stage 3 will select primary or secondary
+// at process startup. No endpoint or port is invented here.
 func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
-	client, err := fabric.Address(descriptor.IP, ClientPort)
-	if err != nil {
-		return Config{}, fmt.Errorf("olric: client address: %w", err)
+	var primary deployment.PlatformInstance
+	found := false
+	for _, instance := range descriptor.PlatformInstances {
+		if instance.Name == deployment.PlatformInstancePrimary {
+			primary, found = instance, true
+			break
+		}
 	}
-	memberlist, err := fabric.Address(descriptor.IP, MemberlistPort)
-	if err != nil {
-		return Config{}, fmt.Errorf("olric: memberlist address: %w", err)
+	if !found {
+		return Config{}, fmt.Errorf("olric: primary platform instance is absent from deployment descriptor")
 	}
 	join := make([]string, 0, len(descriptor.Fabric.Peers))
 	for _, peer := range descriptor.Fabric.Peers {
-		address, err := fabric.Address(peer.IP, MemberlistPort)
-		if err != nil {
-			return Config{}, fmt.Errorf("olric: peer %q: %w", peer.Machine, err)
+		// Until Stage 2 makes fabric membership instance-aware, the existing one
+		// process per machine joins the explicit primary endpoints only.
+		if peer.Instance != deployment.PlatformInstancePrimary {
+			continue
 		}
-		join = append(join, address)
+		join = append(join, peer.FabricMemberlistAddress)
 	}
-	return Config{
-		ClientAddress:     client,
-		MemberlistAddress: memberlist,
+	config := Config{
+		ClientAddress:     primary.FabricClientAddress,
+		MemberlistAddress: primary.FabricMemberlistAddress,
 		Join:              join,
 		StartTimeout:      DefaultStartTimeout,
 		ShutdownGrace:     10 * time.Second,
-	}, nil
+	}
+	if err := config.Validate(); err != nil {
+		return Config{}, fmt.Errorf("olric: deployment endpoints: %w", err)
+	}
+	return config, nil
 }
 
 // Validate checks the composed configuration before any listener is opened, so

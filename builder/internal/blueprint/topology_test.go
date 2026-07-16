@@ -14,7 +14,7 @@ func validProject() *blueprint.Project {
 	return &blueprint.Project{
 		Name:        "customer-a",
 		Environment: "production",
-		Features:    blueprint.Features{Chaos: true, Redundancy: true},
+		Features:    blueprint.Features{Chaos: true},
 		Sites: []blueprint.Site{{
 			Name: "north",
 			Machines: []blueprint.Machine{{
@@ -22,6 +22,10 @@ func validProject() *blueprint.Project {
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
+				Platform: []blueprint.Platform{{Instances: []blueprint.PlatformInstance{
+					{Name: "primary", APIAddress: "10.0.1.10:8080", FabricClientAddress: "10.0.1.10:3320", FabricMemberlistAddress: "10.0.1.10:3322"},
+					{Name: "secondary", APIAddress: "10.0.1.10:8081", FabricClientAddress: "10.0.1.10:3321", FabricMemberlistAddress: "10.0.1.10:3323"},
+				}}},
 			}},
 		}},
 	}
@@ -88,14 +92,17 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 			Role:     "sensor-node",
 			IP:       "10.0.1.12",
 			Services: []string{"sensor-services"},
+			Platform: []blueprint.Platform{{Instances: []blueprint.PlatformInstance{
+				{Name: "primary", APIAddress: "10.0.1.12:8080", FabricClientAddress: "10.0.1.12:3320", FabricMemberlistAddress: "10.0.1.12:3322"},
+				{Name: "secondary", APIAddress: "10.0.1.12:8081", FabricClientAddress: "10.0.1.12:3321", FabricMemberlistAddress: "10.0.1.12:3323"},
+			}}},
 		}},
 	})
 	require.ErrorContains(t, p.Validate(), "duplicate site")
 }
 
 // TestProjectValidateDuplicateIP checks an IP identifies exactly one machine.
-// The platform derives its fabric addresses from a machine's IP on fixed ports,
-// so two machines sharing one would derive the same addresses.
+// Machine identity remains unique even though process endpoints are explicit.
 func TestProjectValidateDuplicateIP(t *testing.T) {
 	t.Run("within one site", func(t *testing.T) {
 		p := validProject()
@@ -104,6 +111,7 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 			Role:     "gateway-node",
 			IP:       "10.0.1.10",
 			Services: []string{"core-services"},
+			Platform: validProject().Sites[0].Machines[0].Platform,
 		})
 		require.ErrorContains(t, p.Validate(), `machines "sensor" and "gateway" share ip "10.0.1.10"`)
 	})
@@ -117,6 +125,7 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
+				Platform: validProject().Sites[0].Machines[0].Platform,
 			}},
 		})
 		require.ErrorContains(t, p.Validate(), `share ip "10.0.1.10"`)
@@ -126,7 +135,48 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 func TestFeatures(t *testing.T) {
 	f := blueprint.Features{Chaos: true}
 	require.True(t, f.Chaos)
-	require.False(t, f.Redundancy)
+}
+
+func TestPlatformSecondaryDefaultsEnabled(t *testing.T) {
+	p := validProject()
+	require.True(t, p.Sites[0].Machines[0].Platform[0].SecondaryIsEnabled())
+	require.Equal(t, []string{"primary", "secondary"}, []string{
+		p.Sites[0].Machines[0].PlatformInstances()[0].Name,
+		p.Sites[0].Machines[0].PlatformInstances()[1].Name,
+	})
+}
+
+func TestPlatformSecondaryCanBeDisabled(t *testing.T) {
+	p := validProject()
+	disabled := false
+	p.Sites[0].Machines[0].Platform[0].SecondaryEnabled = &disabled
+	p.Sites[0].Machines[0].Platform[0].Instances = p.Sites[0].Machines[0].Platform[0].Instances[:1]
+	require.NoError(t, p.Validate())
+	require.Len(t, p.Sites[0].Machines[0].PlatformInstances(), 1)
+}
+
+func TestPlatformValidationFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*blueprint.Machine)
+		errText string
+	}{
+		{"missing platform block", func(m *blueprint.Machine) { m.Platform = nil }, "exactly one platform block is required"},
+		{"missing primary", func(m *blueprint.Machine) { m.Platform[0].Instances = m.Platform[0].Instances[1:] }, "primary platform instance is required"},
+		{"missing enabled secondary", func(m *blueprint.Machine) { m.Platform[0].Instances = m.Platform[0].Instances[:1] }, "secondary platform instance is enabled but not defined"},
+		{"missing endpoint", func(m *blueprint.Machine) { m.Platform[0].Instances[0].APIAddress = "" }, "api_address"},
+		{"invalid endpoint port", func(m *blueprint.Machine) { m.Platform[0].Instances[0].APIAddress = "10.0.1.10:70000" }, "out of range"},
+		{"duplicate endpoint", func(m *blueprint.Machine) {
+			m.Platform[0].Instances[1].APIAddress = m.Platform[0].Instances[0].APIAddress
+		}, "already used"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := validProject()
+			test.mutate(&p.Sites[0].Machines[0])
+			require.ErrorContains(t, p.Validate(), test.errText)
+		})
+	}
 }
 
 type topologyFile struct {
@@ -144,6 +194,20 @@ func decodeHCL(t *testing.T, src string) blueprint.Project {
 	require.False(t, diags.HasErrors(), diags.Error())
 	require.Len(t, tf.Projects, 1)
 	return tf.Projects[0]
+}
+
+func TestProjectHCLRejectsRemovedRedundancyFeature(t *testing.T) {
+	parser := hclparse.NewParser()
+	file, diags := parser.ParseHCL([]byte(`project "old" {
+	  environment = "production"
+	  features { redundancy = true }
+	}`), "test.hcl")
+	require.False(t, diags.HasErrors(), diags.Error())
+
+	var tf topologyFile
+	diags = gohcl.DecodeBody(file.Body, nil, &tf)
+	require.True(t, diags.HasErrors())
+	require.Contains(t, diags.Error(), "Unsupported argument")
 }
 
 func TestProjectHCLValidationFailures(t *testing.T) {
@@ -207,6 +271,18 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      role     = "node"
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
+			      platform {
+			        instance "primary" {
+			          api_address = "10.0.1.10:8080"
+			          fabric_client_address = "10.0.1.10:3320"
+			          fabric_memberlist_address = "10.0.1.10:3322"
+			        }
+			        instance "secondary" {
+			          api_address = "10.0.1.10:8081"
+			          fabric_client_address = "10.0.1.10:3321"
+			          fabric_memberlist_address = "10.0.1.10:3323"
+			        }
+			      }
 			    }
 			  }
 			  site "south" {

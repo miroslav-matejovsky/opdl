@@ -136,11 +136,13 @@ func TestJoinConvergesRetainedContenders(t *testing.T) {
 func contenderDescriptors() (nodeA, nodeB deployment.Descriptor) {
 	nodeA = deployment.Descriptor{
 		Site: "contender-regression", Machine: "node-a", IP: "127.0.0.11",
-		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{{Site: "contender-regression", Machine: "node-b", IP: "127.0.0.12"}}},
+		PlatformInstances: []deployment.PlatformInstance{{Name: "primary", APIAddress: "127.0.0.11:8080", FabricClientAddress: "127.0.0.11:3320", FabricMemberlistAddress: "127.0.0.11:3322"}},
+		Fabric:            deployment.Fabric{Peers: []deployment.FabricPeer{{Site: "contender-regression", Machine: "node-b", Instance: "primary", IP: "127.0.0.12", FabricClientAddress: "127.0.0.12:3320", FabricMemberlistAddress: "127.0.0.12:3322"}}},
 	}
 	nodeB = deployment.Descriptor{
 		Site: "contender-regression", Machine: "node-b", IP: "127.0.0.12",
-		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{{Site: "contender-regression", Machine: "node-a", IP: "127.0.0.11"}}},
+		PlatformInstances: []deployment.PlatformInstance{{Name: "primary", APIAddress: "127.0.0.12:8080", FabricClientAddress: "127.0.0.12:3320", FabricMemberlistAddress: "127.0.0.12:3322"}},
+		Fabric:            deployment.Fabric{Peers: []deployment.FabricPeer{{Site: "contender-regression", Machine: "node-a", Instance: "primary", IP: "127.0.0.11", FabricClientAddress: "127.0.0.11:3320", FabricMemberlistAddress: "127.0.0.11:3322"}}},
 	}
 	return nodeA, nodeB
 }

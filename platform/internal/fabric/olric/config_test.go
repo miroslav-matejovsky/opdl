@@ -10,23 +10,38 @@ import (
 	fabricolric "github.com/miroslav-matejovsky/opdl/platform/internal/fabric/olric"
 )
 
+func primaryInstances(ip string) []deployment.PlatformInstance {
+	return []deployment.PlatformInstance{{
+		Name: "primary", APIAddress: ip + ":8080",
+		FabricClientAddress: ip + ":3320", FabricMemberlistAddress: ip + ":3322",
+	}}
+}
+
+func primaryPeer(machine, ip string) deployment.FabricPeer {
+	return deployment.FabricPeer{
+		Site: "north", Machine: machine, Instance: "primary", IP: ip,
+		FabricClientAddress: ip + ":3320", FabricMemberlistAddress: ip + ":3322",
+	}
+}
+
 func descriptor() deployment.Descriptor {
 	return deployment.Descriptor{
-		Site:    "north",
-		Machine: "node-a",
-		IP:      "10.0.1.10",
+		Site:              "north",
+		Machine:           "node-a",
+		IP:                "10.0.1.10",
+		PlatformInstances: primaryInstances("10.0.1.10"),
 		Fabric: deployment.Fabric{
 			Peers: []deployment.FabricPeer{
-				{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
-				{Site: "north", Machine: "node-c", IP: "10.0.1.12"},
+				primaryPeer("node-b", "10.0.1.11"),
+				primaryPeer("node-c", "10.0.1.12"),
 			},
 		},
 	}
 }
 
 // TestDefaultConfigDerivesEverythingFromTheDescriptor pins the production
-// bootstrap: a machine's own addresses and its seeds come from the topology it
-// was built with, on fixed ports, and nothing else is needed to join a site.
+// bootstrap: a machine's own addresses and its seeds are explicit descriptor
+// facts, and nothing else is needed to join a site.
 func TestDefaultConfigDerivesEverythingFromTheDescriptor(t *testing.T) {
 	cfg, err := fabricolric.DefaultConfig(descriptor())
 	require.NoError(t, err)
@@ -43,7 +58,8 @@ func TestDefaultConfigDerivesEverythingFromTheDescriptor(t *testing.T) {
 // TestDefaultConfigForOneMemberSiteSeedsNobody checks a standalone machine
 // starts a fabric rather than waiting to join one.
 func TestDefaultConfigForOneMemberSiteSeedsNobody(t *testing.T) {
-	cfg, err := fabricolric.DefaultConfig(deployment.Descriptor{IP: "127.0.0.1"})
+	d := deployment.Descriptor{PlatformInstances: []deployment.PlatformInstance{{Name: "primary", APIAddress: "127.0.0.1:8080", FabricClientAddress: "127.0.0.1:3320", FabricMemberlistAddress: "127.0.0.1:3322"}}}
+	cfg, err := fabricolric.DefaultConfig(d)
 	require.NoError(t, err)
 	require.Empty(t, cfg.Join)
 	require.NoError(t, cfg.Validate())
@@ -58,13 +74,15 @@ func TestDefaultStartTimeoutOutlastsAJoinAttempt(t *testing.T) {
 }
 
 func TestDefaultConfigRejectsInvalidTopologyAddresses(t *testing.T) {
-	_, err := fabricolric.DefaultConfig(deployment.Descriptor{IP: "not-an-ip"})
+	badLocal := descriptor()
+	badLocal.PlatformInstances[0].FabricClientAddress = "not-an-address"
+	_, err := fabricolric.DefaultConfig(badLocal)
 	require.ErrorContains(t, err, "client address")
 
 	bad := descriptor()
-	bad.Fabric.Peers[1].IP = "nope"
+	bad.Fabric.Peers[1].FabricMemberlistAddress = "nope"
 	_, err = fabricolric.DefaultConfig(bad)
-	require.ErrorContains(t, err, `peer "node-c"`)
+	require.ErrorContains(t, err, "join address")
 }
 
 func TestConfigValidate(t *testing.T) {

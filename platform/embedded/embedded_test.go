@@ -16,4 +16,6 @@ func TestDeploymentDecodes(t *testing.T) {
 	require.NotEmpty(t, d.Platform)
 	require.NotEmpty(t, d.Machine)
 	require.NotEmpty(t, d.Services)
+	require.Len(t, d.PlatformInstances, 2)
+	require.Equal(t, "primary", d.PlatformInstances[0].Name)
 }

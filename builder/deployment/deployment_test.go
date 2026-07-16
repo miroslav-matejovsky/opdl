@@ -19,10 +19,14 @@ func validDescriptor() deployment.Descriptor {
 		IP:          "10.0.1.10",
 		Services:    []string{"sensor-services"},
 		Features:    deployment.Features{Chaos: true},
+		PlatformInstances: []deployment.PlatformInstance{
+			{Name: "primary", APIAddress: "10.0.1.10:8080", FabricClientAddress: "10.0.1.10:3320", FabricMemberlistAddress: "10.0.1.10:3322"},
+			{Name: "secondary", APIAddress: "10.0.1.10:8081", FabricClientAddress: "10.0.1.10:3321", FabricMemberlistAddress: "10.0.1.10:3323"},
+		},
 		Fabric: deployment.Fabric{
 			Peers: []deployment.FabricPeer{
-				{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
-				{Site: "north", Machine: "historian", IP: "10.0.1.12"},
+				{Site: "north", Machine: "gateway", Instance: "primary", IP: "10.0.1.11", FabricClientAddress: "10.0.1.11:3320", FabricMemberlistAddress: "10.0.1.11:3322"},
+				{Site: "north", Machine: "historian", Instance: "primary", IP: "10.0.1.12", FabricClientAddress: "10.0.1.12:3320", FabricMemberlistAddress: "10.0.1.12:3322"},
 			},
 		},
 	}
@@ -46,6 +50,10 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing role", func(d *deployment.Descriptor) { d.Role = "" }, "role is required"},
 		{"invalid ip", func(d *deployment.Descriptor) { d.IP = "not-an-ip" }, "not a valid IP address"},
 		{"no services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
+		{"no platform instances", func(d *deployment.Descriptor) { d.PlatformInstances = nil }, "platform_instances must contain primary"},
+		{"secondary before primary", func(d *deployment.Descriptor) { d.PlatformInstances[0].Name = "secondary" }, `expected "primary"`},
+		{"missing platform endpoint", func(d *deployment.Descriptor) { d.PlatformInstances[0].APIAddress = "" }, "api_address"},
+		{"duplicate platform endpoint", func(d *deployment.Descriptor) { d.PlatformInstances[1].APIAddress = d.PlatformInstances[0].APIAddress }, "used by both"},
 		{
 			"peer from another site",
 			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Site = "south" },
@@ -54,7 +62,7 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{
 			"machine lists itself as a peer",
 			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Machine = "sensor" },
-			`fabric peer "sensor" is duplicated or is this machine itself`,
+			`fabric peer "sensor"/"primary" is this machine itself`,
 		},
 		{
 			"duplicate peer",
@@ -74,19 +82,19 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{
 			"peer reusing this machine's ip",
 			func(d *deployment.Descriptor) { d.Fabric.Peers[0].IP = "10.0.1.10" },
-			`ip "10.0.1.10" is already used by another member`,
+			`ip "10.0.1.10" is already used by machine "sensor"`,
 		},
 		{
 			"peers sharing an ip",
 			func(d *deployment.Descriptor) { d.Fabric.Peers[1].IP = "10.0.1.11" },
-			`ip "10.0.1.11" is already used by another member`,
+			`ip "10.0.1.11" is already used by machine "gateway"`,
 		},
 		{
 			"peers out of order",
 			func(d *deployment.Descriptor) {
 				d.Fabric.Peers[0], d.Fabric.Peers[1] = d.Fabric.Peers[1], d.Fabric.Peers[0]
 			},
-			`fabric peers are not ordered by machine: "gateway" after "historian"`,
+			`fabric peers are not ordered`,
 		},
 	}
 	for _, tc := range tests {
@@ -103,5 +111,14 @@ func TestDescriptorValidateFailures(t *testing.T) {
 func TestDescriptorValidateAcceptsOneMemberFabric(t *testing.T) {
 	d := validDescriptor()
 	d.Fabric.Peers = nil
+	require.NoError(t, d.Validate())
+}
+
+func TestDescriptorValidateAcceptsTwoPeerInstancesOnOneMachine(t *testing.T) {
+	d := validDescriptor()
+	d.Fabric.Peers = []deployment.FabricPeer{
+		{Site: "north", Machine: "gateway", Instance: "primary", IP: "10.0.1.11", FabricClientAddress: "10.0.1.11:3320", FabricMemberlistAddress: "10.0.1.11:3322"},
+		{Site: "north", Machine: "gateway", Instance: "secondary", IP: "10.0.1.11", FabricClientAddress: "10.0.1.11:3321", FabricMemberlistAddress: "10.0.1.11:3323"},
+	}
 	require.NoError(t, d.Validate())
 }

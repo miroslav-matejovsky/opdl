@@ -34,14 +34,28 @@ artifacts and then regenerate `sdk-dotnet` from that contract.
 ## Deployment descriptor
 
 Every built platform binary embeds one `deployment.Descriptor`. It contains the
-project, environment, site, machine, role, IP, services, features, and resolved
-fabric peers.
+project, environment, site, machine, role, IP, services, features, explicit
+primary and optional secondary platform endpoints, and resolved fabric peers.
+The descriptor is the deployment source of truth. Production code defines no
+default API or fabric ports.
+
+Blueprint authors may use this allocation for consistency, but the builder and
+runtime never apply it implicitly:
+
+| Instance | HTTP API | Olric client | Olric memberlist |
+| --- | ---: | ---: | ---: |
+| Primary | 8080 | 3320 | 3322 |
+| Secondary | 8081 | 3321 | 3323 |
+
+Every enabled instance must state all three complete host:port addresses in the
+blueprint. The resolved descriptor carries those exact values.
 
 The runtime trusts the descriptor as its identity. Registration origins, event
 nodes, and fabric members come from it. A client cannot claim a different
 machine or site. Runtime JSON configuration contains only site-adjustable
-settings: the HTTP listen address, events directory, reconciliation interval,
-and fabric socket overrides.
+settings: controlled per-instance socket overrides, the events directory,
+reconciliation interval, and lifecycle timeouts. Socket overrides are an
+operational fallback for exceptional production fixes, not a second topology.
 
 ## Runtime boundaries
 
@@ -102,10 +116,11 @@ fabric member that owns a partition or a full-site shutdown.
 
 ## Bootstrap and lifecycle
 
-Fabric topology is derived, not discovered. The builder resolves each machine's
-site peers. The Olric adapter uses topology IPs on fixed ports: `3320` for its
-client surface and `3322` for membership. Runtime overrides move sockets for
-development and tests but never change machine identity.
+Fabric topology is derived, not discovered. The builder resolves every
+machine's explicit platform instance endpoints and site peers. The Olric adapter
+reads those endpoints from the descriptor. Runtime overrides can move one named
+instance's sockets for an exceptional production fix, development, or tests,
+but never change deployment identity.
 
 Startup order is strict:
 
@@ -138,8 +153,10 @@ a durable replay mechanism or the authoritative conflict query.
 
 ## No redundancy
 
-There is one platform and one fabric member per machine. OPDL currently has no
-primary/secondary instance, election, fencing, failover, or zero-downtime
-upgrade mechanism. Backend partitioning or replication must not be interpreted
-as service redundancy.
+The descriptor now models primary and optional secondary platform instances,
+with secondary enabled by default in authored topology. The current runtime
+still launches its primary process only. Later implementation stages add
+instance-aware fabric membership, concurrent process lifecycle, SDK failover,
+and rolling upgrades. Backend partitioning or replication must not be
+interpreted as completed platform redundancy.
 

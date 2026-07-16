@@ -1,12 +1,9 @@
 # OPDL Platform Runtime Configuration
 #
-# This file configures the runtime settings for an individual OPDL platform instance.
-# All required runtime settings must be explicitly specified; the runtime does not apply implicit defaults.
-# A user may modify runtime settings without rebuilding the binary or touching the
-# embedded deployment descriptor.
-
-# The host:port address where the platform serves its public registration HTTP API.
-address = "127.0.0.1:8080"
+# The embedded deployment descriptor is the source of truth for process identity
+# and production endpoints. This file contains common runtime settings and a
+# controlled fallback for exceptional endpoint corrections in production.
+# All required common settings must be explicitly specified.
 
 # Directory path where domain events (`platform.registration.*`, `platform.fabric.*`) are recorded
 # in JSONL format. If set to an empty string (""), event recording is disabled.
@@ -29,7 +26,11 @@ start_timeout = "30s"
 # Maximum duration allowed for tearing down the Olric instance during shutdown.
 shutdown_grace = "10s"
 
-# Optional socket overrides (used when running multiple instances on a local development host):
-# client_address = "127.0.0.1:3320"
-# memberlist_address = "127.0.0.1:3322"
-# join = ["127.0.0.1:3322"]
+# Optional overrides are scoped to one descriptor instance. Omitted values use
+# the embedded descriptor. These examples are intentionally commented out.
+# [instances.primary]
+# api_address = "127.0.0.1:9080"
+# [instances.primary.fabric.olric]
+# client_address = "127.0.0.1:4320"
+# memberlist_address = "127.0.0.1:4322"
+# join = ["127.0.0.2:3322"]

@@ -10,12 +10,11 @@
 // # Bootstrap comes from the descriptor
 //
 // A machine's fabric topology is compiled in by the builder, so a member knows
-// its site's membership at startup and discovers nothing. This adapter derives
-// its addresses from those topology IPs on fixed ports: the client surface on
-// ClientPort and membership on MemberlistPort. Peers are seeded from the
-// descriptor's peer IPs on the same memberlist port. Config carries overrides
-// for development and for scenarios that put several machines on one host; they
-// move sockets only and never change who the machine is.
+// its site's membership at startup and discovers nothing. The descriptor carries
+// explicit client and membership endpoints for every platform instance. This
+// adapter invents no production address or port. Config carries controlled
+// instance-specific overrides for production fixes, development, and scenarios;
+// they move sockets only and never change machine or instance identity.
 //
 // # Startup and readiness
 //

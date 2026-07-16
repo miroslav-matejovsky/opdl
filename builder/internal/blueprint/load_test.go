@@ -15,7 +15,6 @@ func TestLoad(t *testing.T) {
 	require.Equal(t, "customer-a", p.Name)
 	require.Equal(t, "production", p.Environment)
 	require.True(t, p.Features.Chaos)
-	require.True(t, p.Features.Redundancy)
 
 	require.Len(t, p.Sites, 2)
 	require.Equal(t, "north", p.Sites[0].Name)
@@ -26,6 +25,8 @@ func TestLoad(t *testing.T) {
 	require.Equal(t, "sensor-node", m1.Role)
 	require.Equal(t, "10.0.1.10", m1.IP)
 	require.Equal(t, []string{"sensor-services"}, m1.Services)
+	require.Len(t, m1.PlatformInstances(), 2)
+	require.Equal(t, "10.0.1.10:8080", m1.PlatformInstances()[0].APIAddress)
 
 	require.Equal(t, "control-room", p.Sites[1].Name)
 	require.Len(t, p.Sites[1].Machines, 3)

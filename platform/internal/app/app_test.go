@@ -31,7 +31,10 @@ var testDescriptor = deployment.Descriptor{
 	Machine:     "node",
 	Role:        "all-in-one",
 	IP:          "127.0.0.1",
-	Fabric:      deployment.Fabric{},
+	PlatformInstances: []deployment.PlatformInstance{
+		{Name: "primary", APIAddress: "127.0.0.1:8080", FabricClientAddress: "127.0.0.1:3320", FabricMemberlistAddress: "127.0.0.1:3322"},
+	},
+	Fabric: deployment.Fabric{},
 }
 
 // testFabric is an in-process fabric. The lifecycle these tests check is the
@@ -221,8 +224,11 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		Site:    "north",
 		Machine: "node-a",
 		IP:      "10.0.1.10",
+		PlatformInstances: []deployment.PlatformInstance{
+			{Name: "primary", APIAddress: "10.0.1.10:8080", FabricClientAddress: "10.0.1.10:3320", FabricMemberlistAddress: "10.0.1.10:3322"},
+		},
 		Fabric: deployment.Fabric{
-			Peers: []deployment.FabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
+			Peers: []deployment.FabricPeer{{Site: "north", Machine: "node-b", Instance: "primary", IP: "10.0.1.11", FabricClientAddress: "10.0.1.11:3320", FabricMemberlistAddress: "10.0.1.11:3322"}},
 		},
 	}
 
@@ -339,8 +345,7 @@ func TestRunReportsUnusableEventsDir(t *testing.T) {
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
 	path := filepath.Join(dir, "config.toml")
-	contents := fmt.Sprintf(`address = "127.0.0.1:8080"
-events_dir = %q
+	contents := fmt.Sprintf(`events_dir = %q
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 [registration]

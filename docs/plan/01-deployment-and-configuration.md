@@ -2,19 +2,25 @@
 
 Estimate: 5 person-days.
 
+Status: Complete.
+
 ## Objective
 
 Replace the unused redundancy feature flag with an explicit per-machine
 platform instance topology. Make all production endpoints concrete in the
 resolved descriptor and allow instance-specific runtime socket overrides.
+Production code provides no endpoint defaults.
 
 ## Implementation steps
 
 1. Change the authored blueprint model in `builder/internal/blueprint`.
-   Add the Stage 0 machine-level platform settings. Represent omitted
-   `secondary_enabled` separately from explicit `false`, then resolve omission
-   to `true`. Reject duplicate platform blocks and unknown instance concepts
-   through normal HCL decoding and validation.
+   Add a machine-level platform block containing explicit primary and optional
+   secondary endpoint blocks. Represent omitted `secondary_enabled` separately
+   from explicit `false`, then resolve omission to `true`. Because production
+   endpoints have no defaults, every machine must provide the platform block
+   and all endpoints for every enabled instance. Reject duplicate platform
+   blocks and unknown instance concepts through normal HCL decoding and
+   validation.
 2. Remove `Redundancy` from `blueprint.Features`, builder deployment
    `Features`, platform deployment `Features`, summaries, fixtures, examples,
    and conformance signatures. Keep the unrelated `Chaos` feature unchanged.
@@ -22,9 +28,10 @@ resolved descriptor and allow instance-specific runtime socket overrides.
    modules. Use closed instance names, not arbitrary strings accepted without
    validation. The resolved local list must contain primary first and no more
    than one secondary.
-4. Resolve API, Olric client, and Olric memberlist addresses from the machine IP
-   and approved ports. Carry corresponding instance identity and endpoints in
-   each fabric peer record. Sort by machine, then primary before secondary.
+4. Copy explicitly authored API, Olric client, and Olric memberlist addresses
+   into the resolved descriptor. Carry corresponding instance identity and
+   endpoints in each fabric peer record. Sort by machine, then primary before
+   secondary. Do not derive production endpoints from recommended ports.
 5. Validate the complete site endpoint set during builder resolution. Reject
    malformed host:port values, duplicate instance names, duplicate addresses,
    missing primary, secondary without primary, more than two entries, a peer
@@ -46,7 +53,7 @@ resolved descriptor and allow instance-specific runtime socket overrides.
 
 ## Suggested resolved shape
 
-Final field names come from Stage 0. The shape should express these facts:
+The accepted shape expresses these facts:
 
 ```json
 {
@@ -69,12 +76,14 @@ Final field names come from Stage 0. The shape should express these facts:
 }
 ```
 
-Do not treat this example as the final JSON contract until Stage 0 approves the
-names. Avoid a separate `redundancy_enabled` field in the resolved descriptor.
+The shown port numbers are recommendations for authored descriptors, not
+runtime or builder defaults. Avoid a separate `redundancy_enabled` field in the
+resolved descriptor.
 
 ## Tests
 
-- Blueprint omission produces primary and secondary.
+- Omitted `secondary_enabled` produces primary and secondary.
+- A missing endpoint fails validation instead of receiving a generated port.
 - Explicit disable produces primary only for that machine and leaves other
   machines redundant by default.
 - The old project `features.redundancy` attribute is rejected and is absent from
@@ -109,6 +118,7 @@ foundational work in progress.
 ## Exit criteria
 
 - The unused feature flag is fully removed.
+- Production code contains no default API or fabric port allocation.
 - Every descriptor explicitly describes exactly one or two platform instances.
 - Secondary is enabled by default and can be disabled only per machine.
 - Descriptor defaults and TOML override precedence are tested and documented.

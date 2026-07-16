@@ -48,10 +48,12 @@ Use these terms consistently:
 not mean leader/follower or active/passive. Both processes run the API,
 reconciler, event recorder, and fabric member.
 
-The authored machine topology should have an optional platform block with a
-`secondary_enabled` setting. Omission resolves to `true`. The resolved embedded
-descriptor should contain the actual one- or two-instance list and explicit API
-and fabric endpoints. It should not contain a redundancy feature flag.
+The authored machine topology has a platform block with explicit instance
+endpoints and an optional `secondary_enabled` setting. Omission resolves to
+`true`. The resolved embedded descriptor contains the actual one- or
+two-instance list and explicit API and fabric endpoints. It does not contain a
+redundancy feature flag. Production code defines no endpoint defaults. Port
+numbers shown in documentation are recommendations only.
 
 Each process selects one embedded instance identity at startup. Two independent
 OS processes are required. Running both instances inside one process would not
@@ -85,17 +87,17 @@ Estimates are implementation person-days and include tests and documentation.
 They assume one engineer familiar with Go and .NET, available review, and no
 long delay resolving Stage 0 decisions.
 
-| Stage | Scope | Estimate | Depends on |
-| --- | --- | ---: | --- |
-| [0](00-decisions-and-contract.md) | Resolve contracts and terminology | 2 days | None |
-| [1](01-deployment-and-configuration.md) | Blueprint, descriptor, endpoints, and overrides | 5 days | Stage 0 |
-| [2](02-instance-aware-fabric.md) | Instance-aware fabric membership and single-process-loss data safety | 6 days | Stage 1 |
-| [3](03-active-active-runtime.md) | Two independently managed active runtime processes | 5 days | Stages 1-2 |
-| [4](04-registration-and-api.md) | Machine-scoped registration over redundant executors | 6 days | Stages 1-3 |
-| [5](05-dotnet-sdk.md) | Consumer-transparent active-active routing and failover | 6 days | Stage 4 |
-| [6](06-packaging-and-upgrades.md) | Launch metadata and rolling-upgrade procedure | 5 days | Stages 3-5 |
-| [7](07-system-validation.md) | Failure scenarios, conformance, and final documentation | 5 days | Stages 1-6 |
-|  | Total | 40 days |  |
+| Stage | Scope | Estimate | Status | Depends on |
+| --- | --- | ---: | --- | --- |
+| [0](00-decisions-and-contract.md) | Resolve remaining contracts and terminology | 2 days | In progress | None |
+| [1](01-deployment-and-configuration.md) | Blueprint, descriptor, endpoints, and overrides | 5 days | Complete | Stage 0 decisions 1-5 resolved |
+| [2](02-instance-aware-fabric.md) | Instance-aware fabric membership and single-process-loss data safety | 6 days | Blocked on Stage 0 decision 4 | Stage 1 |
+| [3](03-active-active-runtime.md) | Two independently managed active runtime processes | 5 days | Blocked on Stage 0 decision 5 | Stages 1-2 |
+| [4](04-registration-and-api.md) | Machine-scoped registration over redundant executors | 6 days | Blocked on Stage 0 decisions | Stages 1-3 |
+| [5](05-dotnet-sdk.md) | Consumer-transparent active-active routing and failover | 6 days | Blocked on Stage 0 decisions | Stage 4 |
+| [6](06-packaging-and-upgrades.md) | Launch metadata and rolling-upgrade procedure | 5 days | Blocked on Stage 0 decisions | Stages 3-5 |
+| [7](07-system-validation.md) | Failure scenarios, conformance, and final documentation | 5 days | Not started | Stages 1-6 |
+|  | Total | 40 days |  |  |
 
 The estimates exclude implementing an OS-specific service manager. If OPDL must
 own Windows Service or systemd installation and orchestration, add a separate
@@ -127,6 +129,7 @@ Every stage must preserve these rules:
 
 ## Delivery rule
 
-Do not begin Stage 1 until the blocking choices in Stage 0 are recorded. Each
-later stage may be implemented as a small reviewable change, but the feature is
-not production-ready until Stage 7 passes.
+Stage 1 is complete. The unresolved items in Stage 0 block the later stages
+named there. Each later stage may be
+implemented as a small reviewable change, but the feature is not
+production-ready until Stage 7 passes.

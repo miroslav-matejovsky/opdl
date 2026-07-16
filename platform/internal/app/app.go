@@ -45,6 +45,10 @@ func Run(args []string) error {
 	}
 	fmt.Println(cfg.Summary())
 	descriptor := cfg.Descriptor()
+	instance, err := cfg.Instance(deployment.PlatformInstancePrimary)
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -60,7 +64,7 @@ func Run(args []string) error {
 	// The fabric starts before the public API, and a machine that cannot join
 	// its site does not serve: answering requests while disconnected from the
 	// fabric would be answering for a site this machine is not part of.
-	member, err := startFabric(ctx, descriptor, cfg.Fabric().Olric, rec)
+	member, err := startFabric(ctx, descriptor, instance.Fabric().Olric, rec)
 	if err != nil {
 		return errors.Join(err, closeRecorder(rec))
 	}
@@ -89,7 +93,7 @@ func Run(args []string) error {
 	loop := startReconciler(ctx, reconciler, interval)
 	fmt.Printf("platform: reconciling registrations every %s\n", interval)
 
-	addr := cfg.Address()
+	addr := instance.Address()
 	fmt.Printf("platform: listening on %s\n", addr)
 	srv := &http.Server{
 		Addr:              addr,
@@ -147,10 +151,10 @@ func newRecorder(descriptor deployment.Descriptor, dir string) (recorder, error)
 }
 
 // startFabric opens the platform fabric for this machine and records that it is
-// ready. Production settings come from the descriptor's topology; the
-// configuration file may move the sockets, which is checked before any listener
-// opens. A machine that cannot start its fabric returns an error and never
-// reaches the public API.
+// ready. Production endpoints come from the descriptor; the configuration file
+// may move this named instance's sockets as a controlled fallback. The composed
+// result is checked before any listener opens. A machine that cannot start its
+// fabric returns an error and never reaches the public API.
 func startFabric(ctx context.Context, descriptor deployment.Descriptor, overrides config.FabricOlric, rec recorder) (fabric.Fabric, error) {
 	cfg, err := olricConfig(descriptor, overrides)
 	if err != nil {

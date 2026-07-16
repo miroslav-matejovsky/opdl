@@ -42,7 +42,7 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 		return nil, err
 	}
 	members := fabric.MembersFromDescriptor(descriptor)
-	addresses, err := clientAddresses(members, cfg.ClientAddress)
+	addresses, err := clientAddresses(descriptor, members, cfg.ClientAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -253,21 +253,24 @@ func (c Config) olricConfig() (*olricconfig.Config, error) {
 // a live Olric member can be recognized as a descriptor identity.
 //
 // Self is keyed by the address this member actually listens on, because that is
-// known exactly and may have been overridden. A peer is keyed by the production
-// default derived from its topology IP, which is all the descriptor can say
-// about it: a peer that overrides its own client address is not recognized here,
-// and a development setup that does so reads as less reachable than it is. That
-// is a deliberate limit of overrides, not of the fabric.
-func clientAddresses(members []fabric.Member, selfAddress string) (map[string]string, error) {
+// known exactly and may have been overridden. Until Stage 2 expands Member with
+// instance identity, each peer is keyed by its explicit primary client endpoint.
+func clientAddresses(descriptor deployment.Descriptor, members []fabric.Member, selfAddress string) (map[string]string, error) {
+	peerAddresses := make(map[string]string)
+	for _, peer := range descriptor.Fabric.Peers {
+		if peer.Instance == deployment.PlatformInstancePrimary {
+			peerAddresses[peer.Machine] = peer.FabricClientAddress
+		}
+	}
 	addresses := make(map[string]string, len(members))
 	for _, member := range members {
 		if member.Self {
 			addresses[selfAddress] = member.Machine
 			continue
 		}
-		address, err := fabric.Address(member.IP, ClientPort)
-		if err != nil {
-			return nil, fmt.Errorf("olric: member %q: %w", member.Machine, err)
+		address, found := peerAddresses[member.Machine]
+		if !found {
+			return nil, fmt.Errorf("olric: member %q has no primary client endpoint in deployment descriptor", member.Machine)
 		}
 		addresses[address] = member.Machine
 	}

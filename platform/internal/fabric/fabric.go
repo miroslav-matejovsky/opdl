@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"slices"
 	"strings"
 
@@ -108,7 +107,10 @@ type Collection interface {
 // so "who belongs to this fabric" has exactly one definition and comes from the
 // descriptor rather than from anything observed at runtime.
 //
-// The result is ordered by machine name and includes self, so every member of a
+// Stage 1 descriptors expose both platform instances, but the runtime still
+// runs one primary fabric member per machine until Stage 2 makes membership
+// instance-aware. Secondary peer records are therefore ignored here. The
+// result is ordered by machine name and includes self, so every member of a
 // site derives an identical list.
 func MembersFromDescriptor(descriptor deployment.Descriptor) []Member {
 	members := make([]Member, 0, len(descriptor.Fabric.Peers)+1)
@@ -119,6 +121,9 @@ func MembersFromDescriptor(descriptor deployment.Descriptor) []Member {
 		Self:    true,
 	})
 	for _, peer := range descriptor.Fabric.Peers {
+		if peer.Instance == deployment.PlatformInstanceSecondary {
+			continue
+		}
 		members = append(members, Member{
 			Site:    peer.Site,
 			Machine: peer.Machine,
@@ -173,18 +178,4 @@ func ValidateKey(name, key string) error {
 		return fmt.Errorf("fabric: collection %q: key is required", name)
 	}
 	return nil
-}
-
-// Address renders a member address on port for a backend that needs one. The
-// descriptor is transport-neutral, so an adapter derives its own addresses from
-// a member IP with this, and a bad IP is reported rather than producing an
-// address that cannot bind.
-func Address(ip string, port int) (string, error) {
-	if net.ParseIP(ip) == nil {
-		return "", fmt.Errorf("fabric: %q is not a valid IP address", ip)
-	}
-	if port < 1 || port > 65535 {
-		return "", fmt.Errorf("fabric: port %d is out of range 1-65535", port)
-	}
-	return net.JoinHostPort(ip, fmt.Sprint(port)), nil
 }

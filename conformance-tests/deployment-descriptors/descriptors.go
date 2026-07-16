@@ -58,10 +58,15 @@ func checkRoundTrip() error {
 		Role:        "sensor-node",
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
-		Features:    builderdeployment.Features{Chaos: true, Redundancy: true},
+		Features:    builderdeployment.Features{Chaos: true},
+		PlatformInstances: []builderdeployment.PlatformInstance{
+			{Name: builderdeployment.PlatformInstancePrimary, APIAddress: "10.0.1.10:8080", FabricClientAddress: "10.0.1.10:3320", FabricMemberlistAddress: "10.0.1.10:3322"},
+			{Name: builderdeployment.PlatformInstanceSecondary, APIAddress: "10.0.1.10:8081", FabricClientAddress: "10.0.1.10:3321", FabricMemberlistAddress: "10.0.1.10:3323"},
+		},
 		Fabric: builderdeployment.Fabric{
 			Peers: []builderdeployment.FabricPeer{
-				{Site: site, Machine: peerMachine, IP: peerIP},
+				{Site: site, Machine: peerMachine, Instance: builderdeployment.PlatformInstancePrimary, IP: peerIP, FabricClientAddress: "10.0.1.11:3320", FabricMemberlistAddress: "10.0.1.11:3322"},
+				{Site: site, Machine: peerMachine, Instance: builderdeployment.PlatformInstanceSecondary, IP: peerIP, FabricClientAddress: "10.0.1.11:3321", FabricMemberlistAddress: "10.0.1.11:3323"},
 			},
 		},
 	}
@@ -85,10 +90,15 @@ func checkRoundTrip() error {
 		Role:        "sensor-node",
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
-		Features:    platformdeployment.Features{Chaos: true, Redundancy: true},
+		Features:    platformdeployment.Features{Chaos: true},
+		PlatformInstances: []platformdeployment.PlatformInstance{
+			{Name: platformdeployment.PlatformInstancePrimary, APIAddress: "10.0.1.10:8080", FabricClientAddress: "10.0.1.10:3320", FabricMemberlistAddress: "10.0.1.10:3322"},
+			{Name: platformdeployment.PlatformInstanceSecondary, APIAddress: "10.0.1.10:8081", FabricClientAddress: "10.0.1.10:3321", FabricMemberlistAddress: "10.0.1.10:3323"},
+		},
 		Fabric: platformdeployment.Fabric{
 			Peers: []platformdeployment.FabricPeer{
-				{Site: site, Machine: peerMachine, IP: peerIP},
+				{Site: site, Machine: peerMachine, Instance: platformdeployment.PlatformInstancePrimary, IP: peerIP, FabricClientAddress: "10.0.1.11:3320", FabricMemberlistAddress: "10.0.1.11:3322"},
+				{Site: site, Machine: peerMachine, Instance: platformdeployment.PlatformInstanceSecondary, IP: peerIP, FabricClientAddress: "10.0.1.11:3321", FabricMemberlistAddress: "10.0.1.11:3323"},
 			},
 		},
 	}

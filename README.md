@@ -5,12 +5,19 @@ describes the machines. The builder resolves and embeds each machine's deploymen
 descriptor, then packages the platform runtime. Machine identity is compiled in,
 not configured at the deployment site.
 
+OPDL targets on-premises, highly regulated production environments. The
+embedded deployment descriptor is the system's source of truth so deployments
+are explicit, auditable, and reproducible with as few runtime moving parts as
+possible. Runtime configuration is an operational fallback for exceptional
+production fixes, not a second source of deployment topology.
+
 ## Documentation
 
 Start with the [documentation index](docs/README.md).
 
 - [Architecture](docs/01-architecture.md)
 - [Registration](docs/02-registration.md)
+- [Platform redundancy implementation plan](docs/plan/README.md)
 - [Backlog](docs/backlog/README.md)
 - [Bugs](docs/bugs/README.md)
 

@@ -23,7 +23,7 @@ func TestTwoMachineFabric(t *testing.T) {
 	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "two-machine")
 
 	// The site's members, as the blueprint declares them. Each machine derives
-	// its fabric addresses from its own IP, so both bind the fixed ports on one
+	// its fabric addresses from its descriptor, so both bind their explicit ports on one
 	// host without any runtime override.
 	nodeA := eventNode{
 		Project: "two-machine", Environment: "development",

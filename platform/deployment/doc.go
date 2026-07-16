@@ -1,6 +1,6 @@
 // Package deployment is the platform's view of the deployment descriptor: one
 // machine's deployment definition (identity, hosted services, enabled features,
-// and peer fabric topology).
+// explicit platform instance endpoints, and peer fabric topology).
 //
 // It is the platform side of the build output contract the builder produces. The
 // platform keeps its own copy of the descriptor types rather than importing the

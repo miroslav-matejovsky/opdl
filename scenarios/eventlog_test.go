@@ -207,8 +207,7 @@ func requireFirstEvent(t *testing.T, records []eventRecord, eventType string) ev
 // eventsConfig renders a platform configuration file that pins the listen
 // address and records events into eventsDir, with all required runtime options explicitly set.
 func eventsConfig(addr, eventsDir string) []byte {
-	return []byte(fmt.Sprintf(`address = %q
-events_dir = %q
+	return []byte(fmt.Sprintf(`events_dir = %q
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 [registration]
@@ -216,5 +215,7 @@ reconcile_interval = "250ms"
 [fabric.olric]
 start_timeout = "30s"
 shutdown_grace = "10s"
-`, addr, eventsDir))
+[instances.primary]
+api_address = %q
+`, eventsDir, addr))
 }

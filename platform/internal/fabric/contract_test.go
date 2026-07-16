@@ -32,9 +32,13 @@ func testDescriptor() deployment.Descriptor {
 		Site:    testSite,
 		Machine: "node-a",
 		IP:      "127.0.0.1",
+		PlatformInstances: []deployment.PlatformInstance{
+			{Name: "primary", APIAddress: "127.0.0.1:8080", FabricClientAddress: "127.0.0.1:3320", FabricMemberlistAddress: "127.0.0.1:3322"},
+		},
 		Fabric: deployment.Fabric{
 			Peers: []deployment.FabricPeer{
-				{Site: testSite, Machine: "node-b", IP: "127.0.0.2"},
+				{Site: testSite, Machine: "node-b", Instance: "primary", IP: "127.0.0.2", FabricClientAddress: "127.0.0.2:3320", FabricMemberlistAddress: "127.0.0.2:3322"},
+				{Site: testSite, Machine: "node-b", Instance: "secondary", IP: "127.0.0.2", FabricClientAddress: "127.0.0.2:3321", FabricMemberlistAddress: "127.0.0.2:3323"},
 			},
 		},
 	}
@@ -43,7 +47,12 @@ func testDescriptor() deployment.Descriptor {
 // soloTopology is a single-machine site, which must form a fabric of one rather
 // than a fabric that is missing everybody.
 func soloDescriptor() deployment.Descriptor {
-	return deployment.Descriptor{Site: testSite, Machine: "node-a", IP: "127.0.0.1"}
+	return deployment.Descriptor{
+		Site: testSite, Machine: "node-a", IP: "127.0.0.1",
+		PlatformInstances: []deployment.PlatformInstance{
+			{Name: "primary", APIAddress: "127.0.0.1:8080", FabricClientAddress: "127.0.0.1:3320", FabricMemberlistAddress: "127.0.0.1:3322"},
+		},
+	}
 }
 
 // adapter is one implementation under test. Every adapter answers identically:
@@ -327,7 +336,7 @@ func TestContract(t *testing.T) {
 		require.Equal(t, []fabric.Member{
 			{Site: testSite, Machine: "node-a", IP: "127.0.0.1", Self: true},
 			{Site: testSite, Machine: "node-b", IP: "127.0.0.2"},
-		}, members, "the unreachable peer is still an expected member")
+		}, members, "the primary peer is expected and the Stage 1 secondary is not yet a runtime member")
 
 		self, ok := fabric.Self(members)
 		require.True(t, ok)

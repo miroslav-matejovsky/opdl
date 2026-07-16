@@ -66,11 +66,13 @@ func TestTwoMembersFormOneFabricAndShareState(t *testing.T) {
 	// production addresses do not collide and no override is needed.
 	nodeA := deployment.Descriptor{
 		Site: site, Machine: "node-a", IP: "127.0.0.1",
-		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{{Site: site, Machine: "node-b", IP: "127.0.0.2"}}},
+		PlatformInstances: primaryInstances("127.0.0.1"),
+		Fabric:            deployment.Fabric{Peers: []deployment.FabricPeer{primaryPeer("node-b", "127.0.0.2")}},
 	}
 	nodeB := deployment.Descriptor{
 		Site: site, Machine: "node-b", IP: "127.0.0.2",
-		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{{Site: site, Machine: "node-a", IP: "127.0.0.1"}}},
+		PlatformInstances: primaryInstances("127.0.0.2"),
+		Fabric:            deployment.Fabric{Peers: []deployment.FabricPeer{primaryPeer("node-a", "127.0.0.1")}},
 	}
 
 	configFor := func(descriptor deployment.Descriptor) fabricolric.Config {
@@ -129,7 +131,8 @@ func TestOpenStartsAloneWhenPeersAreDown(t *testing.T) {
 	requireIntegration(t)
 	descriptor := deployment.Descriptor{
 		Site: site, Machine: "node-a", IP: "127.0.0.1",
-		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{{Site: site, Machine: "node-b", IP: "127.0.0.2"}}},
+		PlatformInstances: primaryInstances("127.0.0.1"),
+		Fabric:            deployment.Fabric{Peers: []deployment.FabricPeer{primaryPeer("node-b", "127.0.0.2")}},
 	}
 	f := open(t, descriptor, fabricolric.Config{
 		ClientAddress:     freePort(t),

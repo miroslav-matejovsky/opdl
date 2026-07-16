@@ -49,11 +49,27 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		IP:          machine.IP,
 		Services:    append([]string(nil), machine.Services...),
 		Features: deployment.Features{
-			Chaos:      p.Features.Chaos,
-			Redundancy: p.Features.Redundancy,
+			Chaos: p.Features.Chaos,
 		},
-		Fabric: fabric(site, machine),
+		PlatformInstances: platformInstances(machine),
+		Fabric:            fabric(site, machine),
 	}
+}
+
+// platformInstances projects the authored endpoint topology onto the deployment
+// contract. Blueprint validation guarantees canonical input is complete.
+func platformInstances(machine blueprint.Machine) []deployment.PlatformInstance {
+	instances := machine.PlatformInstances()
+	resolved := make([]deployment.PlatformInstance, 0, len(instances))
+	for _, instance := range instances {
+		resolved = append(resolved, deployment.PlatformInstance{
+			Name:                    instance.Name,
+			APIAddress:              instance.APIAddress,
+			FabricClientAddress:     instance.FabricClientAddress,
+			FabricMemberlistAddress: instance.FabricMemberlistAddress,
+		})
+	}
+	return resolved
 }
 
 // fabric derives one machine's fabric topology from its site. The fabric spans
@@ -65,19 +81,27 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 // topology always derives the same descriptor no matter how the blueprint was
 // authored.
 func fabric(site blueprint.Site, machine blueprint.Machine) deployment.Fabric {
-	peers := make([]deployment.FabricPeer, 0, len(site.Machines))
+	peers := make([]deployment.FabricPeer, 0, len(site.Machines)*2)
 	for _, peer := range site.Machines {
 		if peer.Name == machine.Name {
 			continue
 		}
-		peers = append(peers, deployment.FabricPeer{
-			Site:    site.Name,
-			Machine: peer.Name,
-			IP:      peer.IP,
-		})
+		for _, instance := range peer.PlatformInstances() {
+			peers = append(peers, deployment.FabricPeer{
+				Site:                    site.Name,
+				Machine:                 peer.Name,
+				Instance:                instance.Name,
+				IP:                      peer.IP,
+				FabricClientAddress:     instance.FabricClientAddress,
+				FabricMemberlistAddress: instance.FabricMemberlistAddress,
+			})
+		}
 	}
 	slices.SortFunc(peers, func(a, b deployment.FabricPeer) int {
-		return strings.Compare(a.Machine, b.Machine)
+		if compared := strings.Compare(a.Machine, b.Machine); compared != 0 {
+			return compared
+		}
+		return strings.Compare(a.Instance, b.Instance)
 	})
 	return deployment.Fabric{
 		Peers: peers,

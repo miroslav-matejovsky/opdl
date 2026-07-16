@@ -15,7 +15,13 @@ import (
 // test can tell derived ordering from declaration order.
 func twoSiteProject() *blueprint.Project {
 	machine := func(name, ip string) blueprint.Machine {
-		return blueprint.Machine{Name: name, Role: "node", IP: ip, Services: []string{"core-services"}}
+		return blueprint.Machine{
+			Name: name, Role: "node", IP: ip, Services: []string{"core-services"},
+			Platform: []blueprint.Platform{{Instances: []blueprint.PlatformInstance{
+				{Name: "primary", APIAddress: ip + ":8080", FabricClientAddress: ip + ":3320", FabricMemberlistAddress: ip + ":3322"},
+				{Name: "secondary", APIAddress: ip + ":8081", FabricClientAddress: ip + ":3321", FabricMemberlistAddress: ip + ":3323"},
+			}}},
+		}
 	}
 	return &blueprint.Project{
 		Name:        "customer-a",
@@ -49,7 +55,7 @@ func project() *blueprint.Project {
 	return &blueprint.Project{
 		Name:        "customer-a",
 		Environment: "production",
-		Features:    blueprint.Features{Chaos: true, Redundancy: true},
+		Features:    blueprint.Features{Chaos: true},
 		Sites: []blueprint.Site{{
 			Name: "north",
 			Machines: []blueprint.Machine{{
@@ -57,6 +63,10 @@ func project() *blueprint.Project {
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
+				Platform: []blueprint.Platform{{Instances: []blueprint.PlatformInstance{
+					{Name: "primary", APIAddress: "10.0.1.10:8080", FabricClientAddress: "10.0.1.10:3320", FabricMemberlistAddress: "10.0.1.10:3322"},
+					{Name: "secondary", APIAddress: "10.0.1.10:8081", FabricClientAddress: "10.0.1.10:3321", FabricMemberlistAddress: "10.0.1.10:3323"},
+				}}},
 			}},
 		}},
 	}
@@ -77,7 +87,10 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.Equal(t, "10.0.1.10", m.IP)
 	require.Equal(t, []string{"sensor-services"}, m.Services)
 	require.True(t, m.Features.Chaos)
-	require.True(t, m.Features.Redundancy)
+	require.Equal(t, []deployment.PlatformInstance{
+		{Name: "primary", APIAddress: "10.0.1.10:8080", FabricClientAddress: "10.0.1.10:3320", FabricMemberlistAddress: "10.0.1.10:3322"},
+		{Name: "secondary", APIAddress: "10.0.1.10:8081", FabricClientAddress: "10.0.1.10:3321", FabricMemberlistAddress: "10.0.1.10:3323"},
+	}, m.PlatformInstances)
 }
 
 // TestBuildDerivesOneMemberFabricForSingleMachineSite checks a standalone
@@ -100,8 +113,10 @@ func TestBuildDerivesFabricPeersFromTheSiteOnly(t *testing.T) {
 	sensor := machineByName(t, plan, "sensor")
 	require.Equal(t, deployment.Fabric{
 		Peers: []deployment.FabricPeer{
-			{Site: "north", Machine: "archive", IP: "10.0.1.12"},
-			{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
+			{Site: "north", Machine: "archive", Instance: "primary", IP: "10.0.1.12", FabricClientAddress: "10.0.1.12:3320", FabricMemberlistAddress: "10.0.1.12:3322"},
+			{Site: "north", Machine: "archive", Instance: "secondary", IP: "10.0.1.12", FabricClientAddress: "10.0.1.12:3321", FabricMemberlistAddress: "10.0.1.12:3323"},
+			{Site: "north", Machine: "gateway", Instance: "primary", IP: "10.0.1.11", FabricClientAddress: "10.0.1.11:3320", FabricMemberlistAddress: "10.0.1.11:3322"},
+			{Site: "north", Machine: "gateway", Instance: "secondary", IP: "10.0.1.11", FabricClientAddress: "10.0.1.11:3321", FabricMemberlistAddress: "10.0.1.11:3323"},
 		},
 	}, sensor.Fabric, "peers are the site's other machines, ordered by name")
 
@@ -138,4 +153,17 @@ func TestBuildValidatesDescriptors(t *testing.T) {
 func TestBuildRequiresPlatformName(t *testing.T) {
 	_, err := resolve.Build(project(), "")
 	require.ErrorContains(t, err, "platform is required")
+}
+
+func TestBuildCanDisableSecondaryPerMachine(t *testing.T) {
+	p := project()
+	disabled := false
+	p.Sites[0].Machines[0].Platform[0].SecondaryEnabled = &disabled
+	p.Sites[0].Machines[0].Platform[0].Instances = p.Sites[0].Machines[0].Platform[0].Instances[:1]
+
+	plan, err := resolve.Build(p, "acme-opdl")
+	require.NoError(t, err)
+	require.Equal(t, []deployment.PlatformInstance{
+		{Name: "primary", APIAddress: "10.0.1.10:8080", FabricClientAddress: "10.0.1.10:3320", FabricMemberlistAddress: "10.0.1.10:3322"},
+	}, plan.Machines[0].PlatformInstances)
 }
