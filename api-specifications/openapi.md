@@ -65,6 +65,30 @@ Request unit registration
 | --- | --- | --- |
 | `code` | string | yes |
 
+## GET /registrations/conflicts
+
+List resolved registration conflicts
+
+**Response `200`**
+
+Type: array<`RegistrationConflict`>
+
+Items:
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `losers` | array<`Registration`> | yes |
+| `resolution_status` | string | yes |
+| `unit_id` | integer | yes |
+| `unit_type` | integer | yes |
+| `winner` | `Registration` | yes |
+
+**Response `500`** — `Error`
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `code` | string | yes |
+
 ## GET /registrations/{unit_type}/{unit_id}/status
 
 Get registration request status

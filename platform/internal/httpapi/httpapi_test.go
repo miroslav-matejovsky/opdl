@@ -34,6 +34,11 @@ func TestHandlerServesARequestFromPendingToAccepted(t *testing.T) {
 	var empty []api.Registration
 	require.NoError(t, json.NewDecoder(response.Body).Decode(&empty))
 	require.Empty(t, empty)
+	response = do(t, http.MethodGet, srv.URL+"/registrations/conflicts", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	var conflicts []api.RegistrationConflict
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&conflicts))
+	require.Empty(t, conflicts)
 
 	response = do(t, http.MethodPost, srv.URL+"/registrations", []byte(`{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing", "role": "Master"}`), "application/json")
 	defer func() { _ = response.Body.Close() }()
@@ -142,6 +147,10 @@ func TestHandlerReturnsConflictAndMethodErrors(t *testing.T) {
 	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
 	require.Equal(t, "GET, POST", response.Header.Get("Allow"))
 	response = do(t, http.MethodPost, srv.URL+"/registrations/1/2/status", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
+	require.Equal(t, http.MethodGet, response.Header.Get("Allow"))
+	response = do(t, http.MethodPost, srv.URL+"/registrations/conflicts", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
 	require.Equal(t, http.MethodGet, response.Header.Get("Allow"))

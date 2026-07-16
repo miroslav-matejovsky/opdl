@@ -127,14 +127,12 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	// Each machine confirmed the request in its own log, naming itself and the
 	// request's origin.
 	//
-	// Each should confirm exactly once, and node-a may confirm twice here. That
-	// is a known defect rather than a tolerance: node-b joins a site that is
-	// already holding node-a's confirmation, and for a moment after that join
-	// Olric's create-if-absent can report an existing key as absent and let it
-	// be created again, so node-a states its confirmation a second time. The
-	// re-created record is byte-identical, so the site's state and everything
-	// the SDK saw are unaffected. See docs/backlog/fabric.md; tightening this to
-	// exactly-one is that item's acceptance test.
+	// Node-a may confirm twice because node-b joins a site that already holds
+	// node-a's confirmation. Olric can briefly report an existing key as absent
+	// during that join, so the byte-identical record is created and stated again.
+	// Registration correctness comes from retained contenders and reconciliation,
+	// not exactly-once transition events. The query API is authoritative after
+	// convergence; see docs/01-architecture.md.
 	originConfirmed := requireFirstEvent(t, originEvents, "platform.registration.confirmed")
 	require.Equal(t, "node-a", originConfirmed.payload(t)["confirming_machine"])
 	require.Equal(t, "node-a", originConfirmed.payload(t)["origin_machine"])

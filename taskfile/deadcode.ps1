@@ -1,6 +1,8 @@
 # Dead-code detection, in two complementary layers.
 . (Join-Path $PSScriptRoot "modules.ps1")
 
+$deadcodeTool = Get-Command deadcode -ErrorAction SilentlyContinue
+
 # Collect the packages reachable from command modules. The workspace uses
 # go.work, so package dependencies do not need replace directives in go.mod.
 $reachable = New-Object System.Collections.Generic.HashSet[string]
@@ -31,7 +33,12 @@ Invoke-PerModule -Names $CmdModules -Action {
     # command is reported while third-party dependencies are left out.
     # The filter is quoted: unquoted, PowerShell splits the argument at the dot in
     # "github.com", sending deadcode a bogus package path.
-    $out = go run golang.org/x/tools/cmd/deadcode@latest -test "-filter=github.com/miroslav-matejovsky/opdl" ./... 2>&1
+    if ($null -ne $deadcodeTool) {
+        $out = & $deadcodeTool.Source -test "-filter=github.com/miroslav-matejovsky/opdl" ./... 2>&1
+    }
+    else {
+        $out = go run golang.org/x/tools/cmd/deadcode@latest -test "-filter=github.com/miroslav-matejovsky/opdl" ./... 2>&1
+    }
     if ($LASTEXITCODE -ne 0) {
         $out | Out-String -Stream | ForEach-Object { Write-Host $_ }
         throw "deadcode failed"

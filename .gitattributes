@@ -52,11 +52,11 @@ Reference.cs            linguist-generated
 # -------------------------------------------------------------------
 # Go
 # -------------------------------------------------------------------
-*.go                    text linguist-language=Go
-go.mod                  text
-go.sum                  text
-go.work                 text
-go.work.sum             text
+*.go                    text eol=lf linguist-language=Go
+go.mod                  text eol=lf
+go.sum                  text eol=lf
+go.work                 text eol=lf
+go.work.sum             text eol=lf
 
 # Go Generated/Vendored
 vendor/**               linguist-vendored
@@ -93,8 +93,8 @@ wwwroot/lib/**          linguist-vendored
 # Rust & Python
 # -------------------------------------------------------------------
 *.rs                    text eol=lf linguist-language=Rust
-Cargo.toml              text
-Cargo.lock              text
+Cargo.toml              text eol=lf
+Cargo.lock              text eol=lf
 target/**               linguist-vendored
 *_generated.rs          linguist-generated
 *_gen.rs                linguist-generated
@@ -106,8 +106,8 @@ target/**               linguist-vendored
 # -------------------------------------------------------------------
 .editorconfig           text eol=lf
 *.sh                    text eol=lf
-Makefile                text
-*.mk                    text
+Makefile                text eol=lf
+*.mk                    text eol=lf
 *.d2                    text eol=lf
 
 # -------------------------------------------------------------------

@@ -1,5 +1,9 @@
 version: "3"
 
+env:
+  GOCACHE: '{{.ROOT_DIR}}/.gocache'
+  GOLANGCI_LINT_CACHE: '{{.ROOT_DIR}}/.lintcache'
+
 tasks:
   default:
     desc: Show available tasks
@@ -7,7 +11,7 @@ tasks:
       - task --list
 
   clean:
-    desc: Remove build artifacts, .test-results, and .exe files
+    desc: Remove build artifacts, test results, and .exe files (retain tool caches)
     silent: true
     cmds:
       - pwsh -NoProfile -NonInteractive -File taskfile/clean.ps1{{if .QUIET}} > /dev/null 2>&1{{end}}

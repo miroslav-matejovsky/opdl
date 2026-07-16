@@ -30,6 +30,16 @@ func TestDescribeReportsRegistrationOperations(t *testing.T) {
 		},
 		{
 			Method:      http.MethodGet,
+			Path:        "/registrations/conflicts",
+			OperationID: "listRegistrationConflicts",
+			Summary:     "List resolved registration conflicts",
+			Responses: []api.Response{
+				{Status: http.StatusOK, Body: []api.RegistrationConflict{}},
+				{Status: http.StatusInternalServerError, Body: api.Error{}},
+			},
+		},
+		{
+			Method:      http.MethodGet,
 			Path:        "/registrations/{unit_type}/{unit_id}/status",
 			OperationID: "getRegistrationStatus",
 			Summary:     "Get registration request status",

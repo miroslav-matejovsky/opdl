@@ -14,6 +14,10 @@ const (
 	RegistrationStatusAccepted = "accepted"
 	// RegistrationStatusRejected means at least one platform instance rejected it.
 	RegistrationStatusRejected = "rejected"
+
+	// RegistrationConflictResolutionResolved means deterministic contender
+	// selection identified the proposal that survives a duplicate claim.
+	RegistrationConflictResolutionResolved = "resolved"
 )
 
 // RegistrationRequest is the client-supplied request to register one unit.
@@ -50,6 +54,22 @@ type Registration struct {
 	Reason *string `json:"reason,omitempty"`
 	// PlatformInstances is the deterministic progress view for each platform instance.
 	PlatformInstances []PlatformInstanceRegistrationStatus `json:"platform_instances"`
+}
+
+// RegistrationConflict is the resolved duplicate-claim view for one unit key.
+// Winner and Losers are registration views, so their origins, effective status,
+// and rejection reasons have the same meanings as the normal list response.
+type RegistrationConflict struct {
+	// UnitType is the unit type identifier shared by all competing proposals.
+	UnitType uint8 `json:"unit_type"`
+	// UnitID is the unit identifier shared by all competing proposals.
+	UnitID uint16 `json:"unit_id"`
+	// ResolutionStatus is resolved when Winner is the deterministic survivor.
+	ResolutionStatus string `json:"resolution_status"`
+	// Winner is the proposal that remains the registration for this unit key.
+	Winner Registration `json:"winner"`
+	// Losers are competing proposals rejected with registration_key_conflict.
+	Losers []Registration `json:"losers"`
 }
 
 // PlatformInstanceRegistrationStatus is one platform instance's progress for a
@@ -152,6 +172,16 @@ func Describe() Contract {
 					{Status: http.StatusAccepted},
 					{Status: http.StatusBadRequest, Body: Error{}},
 					{Status: http.StatusConflict, Body: Error{}},
+					{Status: http.StatusInternalServerError, Body: Error{}},
+				},
+			},
+			{
+				Method:      http.MethodGet,
+				Path:        "/registrations/conflicts",
+				OperationID: "listRegistrationConflicts",
+				Summary:     "List resolved registration conflicts",
+				Responses: []Response{
+					{Status: http.StatusOK, Body: []RegistrationConflict{}},
 					{Status: http.StatusInternalServerError, Body: Error{}},
 				},
 			},

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,9 +30,6 @@ const (
 	// ReasonUnknownOrigin means the proposal claims an origin that is not an
 	// expected platform instance of this site.
 	ReasonUnknownOrigin = "unknown_origin"
-	// ReasonAcceptedKeyConflict means the key already holds a different accepted
-	// registration.
-	ReasonAcceptedKeyConflict = "accepted_key_conflict"
 )
 
 // DefaultInterval is how often a reconciler scans the site when the platform's
@@ -52,22 +50,22 @@ const DefaultInterval = time.Second
 // For each request in the site it records this instance's decision, once, under
 // the proposal's fingerprint. For each request this instance originated, it then
 // commits the registration if every expected instance has accepted that exact
-// proposal. A request that is already committed is settled for good and is left
-// alone, so a pass costs what the site has still to decide rather than what it
-// has ever registered.
+// proposal. Acceptance evidence is immutable, but current views are repaired on
+// every pass so a false Create win during a member join cannot stay visible.
 //
 // # Why it can repeat itself safely
 //
-// Every write is create-if-absent, so a pass that runs again, a pass that
-// overlaps a status lookup, and a process that restarts and rescans all reach
-// the same state and state their facts once. That is what makes an unreliable
-// schedule enough: a pass is a correction, not a step, and no pass has to happen
-// for the site to stay consistent.
+// With stable membership, create-if-absent makes a repeated pass, a pass that
+// overlaps a status lookup, and a restarted process reach the same state and
+// state their facts once. A member join can violate that Create behavior. The
+// contender model described in the package documentation restores convergence by
+// deriving the final state from retained proposals instead of one Create result.
 type Reconciler struct {
 	store    *store
 	self     fabric.Member
 	members  []fabric.Member
 	recorder Recorder
+	now      func() time.Time
 }
 
 // Reconcile runs one pass over every registration request in the site.
@@ -80,8 +78,18 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var errs []error
+	byKey := make(map[Key][]requestRecord)
 	for _, request := range requests {
+		byKey[request.key()] = append(byKey[request.key()], request)
+	}
+	keys := make([]Key, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+
+	var errs []error
+	for _, key := range keys {
 		if err := ctx.Err(); err != nil {
 			// A canceled scan stops now and says so. Whatever it has already
 			// written stands: every write is idempotent, so the next pass
@@ -89,8 +97,8 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 			errs = append(errs, err)
 			break
 		}
-		if err := r.advanceRequest(ctx, request); err != nil {
-			errs = append(errs, fmt.Errorf("registration: reconcile %s: %w", request.key(), err))
+		if err := r.advanceContenders(ctx, byKey[key]); err != nil {
+			errs = append(errs, fmt.Errorf("registration: reconcile %s: %w", key, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -125,59 +133,55 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration, report fun
 	}
 }
 
-// advance runs one reconciliation for a single request key, so a caller that
-// cares about one registration does not pay for a scan of the site. A key with
-// no request is not an error: there is simply nothing to advance.
+// advance runs one reconciliation for a single registration key, so a caller
+// that cares about one proposal does not pay for a site scan. A key with no
+// contender is not an error.
 func (r *Reconciler) advance(ctx context.Context, key Key) error {
-	request, found, err := r.store.request(ctx, key)
-	if err != nil || !found {
-		return err
-	}
-	return r.advanceRequest(ctx, request)
-}
-
-// advanceRequest records this instance's decision about request and, when this
-// instance is the request's origin, commits it if the site has agreed.
-//
-// Only the origin commits. Any instance could compute the same answer from the
-// same records, but one writer per request keeps the commit boring: there is
-// nothing to reconcile between committers, and the accepted record's create
-// would be the tie-break anyway.
-func (r *Reconciler) advanceRequest(ctx context.Context, request requestRecord) error {
-	accepted, committed, err := r.store.accepted(ctx, request.key())
+	contenders, err := r.store.contenders(ctx, key)
 	if err != nil {
 		return err
 	}
-	// A committed proposal is settled for good: every expected instance accepted
-	// it, the origin committed it, and registration is create-only, so no later
-	// pass can reach a different answer. Leaving it alone is what keeps a pass
-	// proportional to what is still undecided rather than to everything the site
-	// has ever registered.
-	if committed && accepted.Fingerprint == request.Fingerprint {
+	if len(contenders) == 0 {
 		return nil
 	}
-	if err := r.confirm(ctx, request, committed); err != nil {
-		return err
-	}
-	if request.OriginMachine != r.self.Machine {
-		return nil
-	}
-	return r.commit(ctx, request)
+	return r.advanceContenders(ctx, contenders)
 }
 
-// confirm records this instance's decision about request, once. conflicting
-// reports that the key already holds an accepted registration of some other
-// proposal.
-//
+// advanceContenders selects one contender, repairs projections if it was
+// accepted already, and records decisions only for that selected contender.
+// Losing contenders are rejected as an effective view rather than by mutating
+// their immutable confirmation history.
+func (r *Reconciler) advanceContenders(ctx context.Context, contenders []requestRecord) error {
+	winner, accepted, err := r.store.winner(ctx, contenders)
+	if err != nil {
+		return err
+	}
+	if accepted {
+		if err := r.store.setRequest(ctx, winner); err != nil {
+			return err
+		}
+		if err := r.store.setAccepted(ctx, acceptedFrom(winner)); err != nil {
+			return err
+		}
+	}
+	if err := r.confirm(ctx, winner); err != nil {
+		return err
+	}
+	if winner.OriginMachine != r.self.Machine {
+		return nil
+	}
+	return r.commit(ctx, winner)
+}
+
 // The decision is stored under the proposal's fingerprint, so it says what this
 // instance thinks of this exact data and can never be read as approving
 // anything else. Creating it is the transition: an instance that had already
 // decided records nothing and states nothing, which is what makes a rescan and a
 // restart quiet.
-func (r *Reconciler) confirm(ctx context.Context, request requestRecord, conflicting bool) error {
+func (r *Reconciler) confirm(ctx context.Context, request requestRecord) error {
 	status := api.RegistrationStatusAccepted
 	var reason *string
-	if problem := r.validate(request, conflicting); problem != "" {
+	if problem := r.validate(request); problem != "" {
 		status, reason = api.RegistrationStatusRejected, &problem
 	}
 
@@ -212,8 +216,7 @@ func (r *Reconciler) confirm(ctx context.Context, request requestRecord, conflic
 }
 
 // validate decides whether this instance can accept request, returning a bounded
-// reason or "" when it can. conflicting reports that the key already holds an
-// accepted registration of some other proposal.
+// reason or "" when it can.
 //
 // Every instance validates independently and reaches the same answer from the
 // same record, because the answer is a function of the record and of this site's
@@ -221,7 +224,7 @@ func (r *Reconciler) confirm(ctx context.Context, request requestRecord, conflic
 // being down is not a reason to refuse a proposal. That determinism is why one
 // instance refusing while the others accept is not a state a healthy site can
 // reach, and why aggregation still has to handle it if it ever does.
-func (r *Reconciler) validate(request requestRecord, conflicting bool) string {
+func (r *Reconciler) validate(request requestRecord) string {
 	if request.Version != recordVersion {
 		return ReasonUnsupportedVersion
 	}
@@ -233,17 +236,6 @@ func (r *Reconciler) validate(request requestRecord, conflicting bool) string {
 	}
 	if !r.knownOrigin(request.location()) {
 		return ReasonUnknownOrigin
-	}
-	// A key that already holds a different accepted registration cannot take
-	// this one: registration is create-only, so the accepted record wins and the
-	// proposal is refused rather than left pending forever.
-	//
-	// The current design cannot produce this: a key's request record is created
-	// once and is what gets committed, so a key's accepted record is always this
-	// proposal's. It is checked anyway, because an instance deciding on stored
-	// data should say what it found rather than assume how it got there.
-	if conflicting {
-		return ReasonAcceptedKeyConflict
 	}
 	return ""
 }
@@ -271,8 +263,10 @@ func (r *Reconciler) knownOrigin(location Location) bool {
 // it. That is the whole promise of the two-phase design, and weakening it here
 // would be the only way to break it.
 //
-// Creating the record is the commit. Its existence is what accepted means, so
-// the state changes exactly once no matter how many passes run.
+// Acceptance is recorded once under the contender's fingerprint. The current
+// request and accepted records are then repaired as projections of that immutable
+// evidence. A membership transition can falsely create a competing projection;
+// contender reconciliation restores the selected winner.
 func (r *Reconciler) commit(ctx context.Context, request requestRecord) error {
 	decisions, err := r.store.decisions(ctx, request, r.members)
 	if err != nil {
@@ -289,9 +283,24 @@ func (r *Reconciler) commit(ctx context.Context, request requestRecord) error {
 		}
 	}
 
-	created, err := r.store.createAccepted(ctx, acceptedFrom(request))
-	if err != nil || !created {
+	created, err := r.store.createAcceptance(ctx, acceptanceRecord{
+		Version:     recordVersion,
+		UnitType:    request.UnitType,
+		UnitID:      request.UnitID,
+		Fingerprint: request.Fingerprint,
+		AcceptedAt:  r.now().UTC(),
+	})
+	if err != nil {
 		return err
+	}
+	if err := r.store.setRequest(ctx, request); err != nil {
+		return err
+	}
+	if err := r.store.setAccepted(ctx, acceptedFrom(request)); err != nil {
+		return err
+	}
+	if !created {
+		return nil
 	}
 	return r.record(ctx, Accepted{
 		UnitType:               request.UnitType,

@@ -6,6 +6,27 @@ $ErrorActionPreference = "Stop"
 # Repo root is the parent of the taskfile directory this script lives in.
 $RepoRoot = Split-Path $PSScriptRoot -Parent
 
+# Keep compiler and linter caches inside the workspace. Taskfile sets these for
+# normal task invocations; setting them here also makes the helper scripts safe
+# to run directly. The probe catches a bad path before a tool emits a less useful
+# permission error.
+$GoCache = Join-Path $RepoRoot ".gocache"
+$LintCache = Join-Path $RepoRoot ".lintcache"
+$env:GOCACHE = $GoCache
+$env:GOLANGCI_LINT_CACHE = $LintCache
+
+foreach ($cache in @($GoCache, $LintCache)) {
+    try {
+        New-Item -ItemType Directory -Force -Path $cache | Out-Null
+        $probe = Join-Path $cache ".write-probe"
+        [System.IO.File]::WriteAllText($probe, "task cache probe")
+        Remove-Item -Force -LiteralPath $probe
+    }
+    catch {
+        throw "task cache is not writable: $cache. $($_.Exception.Message)"
+    }
+}
+
 # Discover Go modules from go.work file, maintaining dependency order.
 $goWorkPath = Join-Path $RepoRoot "go.work"
 $Modules = @()

@@ -84,8 +84,11 @@ type Fabric interface {
 // consistency each method promises.
 type Collection interface {
 	// Create stores value under key only if key is absent, and reports whether
-	// this call was the one that stored it. It is atomic for key: given
-	// concurrent Creates of one key, exactly one reports true. It copies value.
+	// this call was the one that stored it. While membership is stable, it is
+	// atomic for key: given concurrent Creates of one key, exactly one reports
+	// true. A member join can temporarily violate that guarantee; callers that
+	// require site-wide uniqueness must retain and reconcile contenders. It copies
+	// value.
 	Create(ctx context.Context, key string, value []byte) (bool, error)
 	// Swap stores value under key unconditionally and returns the value it
 	// replaced, reporting false when key was absent. It is atomic for key, and
