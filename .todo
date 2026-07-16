@@ -11,3 +11,6 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
 - authorization for services as a platform feature
 - app/cmd is getting too big, move logic to internal/app package and keep app/cmd as a thin wrapper for the command line interface,
   even some unit tests in internal/app package might be introduced
+- introduce arch-lint in the platform module
+- migrate dotnet to 10
+- are scenarios running twice in task all? investigate and fix
