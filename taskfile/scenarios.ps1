@@ -10,7 +10,7 @@
 Write-Host "--- platform (integration tests) ---"
 Push-Location (Join-Path $RepoRoot "platform")
 try {
-    gotestsum --format pkgname ./...
+    gotestsum --format testname ./...
     if ($LASTEXITCODE -ne 0) {
         throw "platform integration tests failed (exit $LASTEXITCODE)"
     }
@@ -22,7 +22,7 @@ finally {
 Write-Host "--- scenarios ---"
 Push-Location (Join-Path $RepoRoot "scenarios")
 try {
-    gotestsum --format pkgname ./...
+    gotestsum --format testname ./...
     if ($LASTEXITCODE -ne 0) {
         throw "scenarios failed (exit $LASTEXITCODE)"
     }

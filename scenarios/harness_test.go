@@ -32,6 +32,14 @@ const (
 	markerWaitTimeout = 90 * time.Second
 )
 
+// requireScenario skips scenario tests when running in -short mode (unit gate).
+func requireScenario(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping scenario in -short mode")
+	}
+}
+
 // buildProject drives the builder CLI to build every machine of a blueprint into
 // outDir. It is the same command a customer runs.
 func buildProject(ctx context.Context, t *testing.T, blueprintsDir, outDir, project string) {

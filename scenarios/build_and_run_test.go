@@ -17,6 +17,7 @@ import (
 // registration API, persists a request, and reports its configuration. Both are external
 // processes; nothing here imports builder or platform Go code.
 func TestBuildAndRunSingleMachine(t *testing.T) {
+	requireScenario(t)
 	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)

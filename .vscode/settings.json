@@ -80,6 +80,7 @@
     "platformdeployment",
     "slnx",
     "stretchr",
-    "taskfile"
+    "taskfile",
+    "testname"
   ]
 }
