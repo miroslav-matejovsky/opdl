@@ -80,6 +80,7 @@
     "pkgname",
     "platformapi",
     "platformdeployment",
+    "replayable",
     "slnx",
     "stretchr",
     "taskfile",

@@ -1,12 +1,15 @@
 # Stage 2: Instance-aware fabric
 
-Estimate: 6 person-days.
+Estimate: 4 person-days.
+
+Complexity: medium.
 
 ## Objective
 
 Make fabric membership distinguish `machine/primary` from
-`machine/secondary` while preserving the existing collection abstraction. Prove
-that acknowledged state survives loss of one platform process.
+`machine/secondary` while preserving the existing collection abstraction.
+Keep fabric reachability separate from registration voting and durable local
+storage.
 
 ## Implementation steps
 
@@ -33,17 +36,10 @@ that acknowledged state survives loss of one platform process.
    voting policy.
 8. Update the in-memory adapter and shared contract fixtures so two instances
    of one machine can open independent fabric handles over shared collections.
-9. Run the Stage 0 Olric durability spike. Configure the minimum supported
-   replica setting and any write/read quorum settings needed for one-process
-   loss. Capture actual behavior for graceful leave, hard kill, restart, and
-   membership rebalance.
-10. If Olric cannot meet the approved acknowledged-state guarantee, stop this
-    stage. Record the observed failure and revise the architecture and estimate.
-    Do not hide the gap behind retry logic.
-11. Update fabric lifecycle event payloads and logs to name machine and instance
-    separately. Keep adapter metadata and collection semantics unchanged.
-12. Update `doc.go` files and the measured membership limitation. Explicitly
-    state what replication does and does not survive.
+9. Update fabric lifecycle event payloads and logs to name machine and instance
+   separately.
+10. Update `doc.go` files and the measured membership limitation. Explicitly
+    state that fabric reachability and membership do not imply durable state.
 
 ## Tests
 
@@ -56,9 +52,6 @@ that acknowledged state survives loss of one platform process.
   collection.
 - Live-member mapping reports both instances instead of collapsing by machine.
 - An unexpected member is ignored by expected-membership views.
-- Hard-killing either instance does not lose a write acknowledged before the
-  kill, within the guarantee approved in Stage 0.
-- Restarting the same instance identity rejoins and reads current state.
 - Existing create/swap ownership, cancellation, enumeration, and close contract
   suites continue to pass.
 - The known create-if-absent join regression remains covered with the expanded
@@ -66,19 +59,16 @@ that acknowledged state survives loss of one platform process.
 
 ## Fabric change limit
 
-This stage is semantically significant but intentionally narrow. It may change
-member identity, descriptor-to-adapter configuration, replication settings, and
-tests. It must not add leader election, platform failover methods, service
-routing, publish/subscribe, transactions, shared memory, or service roles to the
-fabric API.
+This stage may change member identity, descriptor-to-adapter configuration, and
+tests. It must not add durable storage, leader election, platform failover
+methods, service routing, publish/subscribe, transactions, shared memory, or
+service roles to the fabric API.
 
-## Unresolved implementation detail
+## Estimate boundary
 
-Olric replica placement may protect against any one member loss without placing
-a copy specifically on the sibling instance. That is sufficient for the
-recommended process-loss guarantee while the site remains running. It is not a
-guarantee that each machine locally owns every value. If local paired placement
-is required, Olric may be the wrong backend and the scope must be revised.
+The estimate covers member identity, explicit endpoint configuration, live
+member mapping, adapter contract updates, tests, and documentation. Durable
+state is implemented separately in Stage 3.
 
 ## Exit criteria
 
@@ -86,6 +76,6 @@ is required, Olric may be the wrong backend and the scope must be revised.
 - The collection interface remains materially unchanged.
 - Descriptor endpoints, not hard-coded runtime ports, drive production Olric
   configuration.
-- The approved single-process-loss state guarantee has an automated test.
-- Limitations are documented without implying whole-machine durability.
+- Fabric limitations are documented without implying state durability from
+  membership or reachability.
 - `task all` passes.

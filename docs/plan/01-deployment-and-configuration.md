@@ -2,6 +2,8 @@
 
 Estimate: 5 person-days.
 
+Complexity: medium.
+
 Status: Complete.
 
 ## Objective

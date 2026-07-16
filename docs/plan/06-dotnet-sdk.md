@@ -1,6 +1,8 @@
-# Stage 5: .NET SDK redundancy layer
+# Stage 6: .NET SDK redundancy layer
 
 Estimate: 6 person-days.
+
+Complexity: medium.
 
 ## Objective
 
