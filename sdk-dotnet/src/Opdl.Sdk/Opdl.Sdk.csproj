@@ -7,7 +7,7 @@
     adapter, and serializers the generated code compiles and runs against.
   -->
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Opdl.Sdk</RootNamespace>

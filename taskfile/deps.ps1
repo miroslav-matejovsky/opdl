@@ -25,3 +25,15 @@ finally {
         $env:GOWORK = $savedGoWork
     }
 }
+
+Write-Host "--- sdk-dotnet ---"
+Push-Location (Join-Path $RepoRoot "sdk-dotnet")
+try {
+    dotnet list Opdl.Sdk.slnx package --outdated
+    if ($LASTEXITCODE -ne 0) {
+        throw "task failed in module 'sdk-dotnet' (exit $LASTEXITCODE)"
+    }
+}
+finally {
+    Pop-Location
+}
