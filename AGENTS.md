@@ -107,6 +107,7 @@
 
 - Prefer table-driven tests when helpful.
 - Use `require` from `testify` for assertions.
+- Use `t.Context()` for cancellation propagation in tests.
 
 ---
 

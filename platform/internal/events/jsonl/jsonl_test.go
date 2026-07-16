@@ -2,7 +2,6 @@ package jsonl
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -101,8 +100,8 @@ func TestOpenKeepsNodesInSeparateFiles(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = second.Close() })
 
-	require.NoError(t, first.Append(context.Background(), testRecord(1)))
-	require.NoError(t, second.Append(context.Background(), testRecord(2)))
+	require.NoError(t, first.Append(t.Context(), testRecord(1)))
+	require.NoError(t, second.Append(t.Context(), testRecord(2)))
 
 	// One file per node, so a directory holding several nodes needs no identity
 	// on the records themselves.
@@ -135,8 +134,8 @@ func TestAppendWritesOneCompactLinePerRecord(t *testing.T) {
 	dir := t.TempDir()
 	sink := open(t, dir)
 
-	require.NoError(t, sink.Append(context.Background(), testRecord(1)))
-	require.NoError(t, sink.Append(context.Background(), testRecord(2)))
+	require.NoError(t, sink.Append(t.Context(), testRecord(1)))
+	require.NoError(t, sink.Append(t.Context(), testRecord(2)))
 
 	lines := readLines(t, dir)
 	require.Len(t, lines, 2)
@@ -160,7 +159,7 @@ func TestAppendFlushesBeforeReturning(t *testing.T) {
 	dir := t.TempDir()
 	sink := open(t, dir)
 
-	require.NoError(t, sink.Append(context.Background(), testRecord(1)))
+	require.NoError(t, sink.Append(t.Context(), testRecord(1)))
 
 	// Readable without closing the sink: a live scenario observes the event.
 	require.Len(t, readLines(t, dir), 1)
@@ -170,12 +169,12 @@ func TestAppendKeepsExistingFileContent(t *testing.T) {
 	dir := t.TempDir()
 	first, err := Open(dir, testNode)
 	require.NoError(t, err)
-	require.NoError(t, first.Append(context.Background(), testRecord(1)))
+	require.NoError(t, first.Append(t.Context(), testRecord(1)))
 	require.NoError(t, first.Close())
 
 	// A restart continues the same node's file rather than truncating it.
 	second := open(t, dir)
-	require.NoError(t, second.Append(context.Background(), testRecord(2)))
+	require.NoError(t, second.Append(t.Context(), testRecord(2)))
 
 	require.Len(t, readLines(t, dir), 2)
 }
@@ -189,7 +188,7 @@ func TestAppendIsSafeForConcurrentWriters(t *testing.T) {
 	var group sync.WaitGroup
 	for i := range writers {
 		group.Go(func() {
-			failures <- sink.Append(context.Background(), testRecord(uint64(i+1)))
+			failures <- sink.Append(t.Context(), testRecord(uint64(i+1)))
 		})
 	}
 	group.Wait()
@@ -219,12 +218,12 @@ func TestCloseIsIdempotentAndRejectsLaterAppends(t *testing.T) {
 	sink, err := Open(dir, testNode)
 	require.NoError(t, err)
 
-	require.NoError(t, sink.Append(context.Background(), testRecord(1)))
+	require.NoError(t, sink.Append(t.Context(), testRecord(1)))
 	require.NoError(t, sink.Close())
 	require.NoError(t, sink.Close(), "close must be safe next to a deferred close")
 
 	// A record after close is reported, never dropped silently.
-	err = sink.Append(context.Background(), testRecord(2))
+	err = sink.Append(t.Context(), testRecord(2))
 	require.ErrorContains(t, err, "append to closed events file")
 	require.ErrorContains(t, err, FileName(testNode))
 	require.Len(t, readLines(t, dir), 1)
@@ -236,7 +235,7 @@ func TestAppendReportsEncodingFailureWithFileContext(t *testing.T) {
 
 	broken := testRecord(1)
 	broken.Data = json.RawMessage(`{invalid`)
-	err := sink.Append(context.Background(), broken)
+	err := sink.Append(t.Context(), broken)
 	require.ErrorContains(t, err, "encode event for")
 	require.ErrorContains(t, err, dir)
 	require.Empty(t, readLines(t, dir))

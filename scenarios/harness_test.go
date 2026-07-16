@@ -244,7 +244,7 @@ func (p *process) logs() string { return p.output.String() }
 func freeAddress(t *testing.T) string {
 	t.Helper()
 	var listen net.ListenConfig
-	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	addr := listener.Addr().String()
 	require.NoError(t, listener.Close())

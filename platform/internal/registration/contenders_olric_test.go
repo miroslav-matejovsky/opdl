@@ -17,7 +17,7 @@ func TestJoinConvergesRetainedContenders(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Olric contender regression test in -short mode")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	nodeA, nodeB := contenderDescriptors()
 	aConfig, err := fabricolric.DefaultConfig(nodeA)
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func openContenderFabric(t *testing.T, descriptor deployment.Descriptor, config 
 	if config.ShutdownGrace == 0 {
 		config.ShutdownGrace = 10 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	opened, err := fabricolric.Open(ctx, descriptor, config)
 	require.NoError(t, err)
@@ -171,7 +171,7 @@ func onlyContender(t *testing.T, service *Service, key Key) requestRecord {
 
 func contendersFor(t *testing.T, service *Service, key Key) []requestRecord {
 	t.Helper()
-	contenders, err := service.store.contenders(context.Background(), key)
+	contenders, err := service.store.contenders(t.Context(), key)
 	require.NoError(t, err)
 	return contenders
 }

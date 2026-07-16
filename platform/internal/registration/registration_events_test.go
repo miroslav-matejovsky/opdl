@@ -1,7 +1,6 @@
 package registration
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -77,7 +76,7 @@ func TestRejectionIsStatedAsAWarning(t *testing.T) {
 	}
 	value, err := encode(tampered)
 	require.NoError(t, err)
-	created, err := nodeA.service.store.contenderRecords.Create(context.Background(), contenderKey(unitKey, tampered.Fingerprint), value)
+	created, err := nodeA.service.store.contenderRecords.Create(t.Context(), contenderKey(unitKey, tampered.Fingerprint), value)
 	require.NoError(t, err)
 	require.True(t, created)
 
@@ -178,8 +177,8 @@ func TestASettledRegistrationIsLeftAlone(t *testing.T) {
 	// to read or write, and would fail. It does neither.
 	nodeA.recorder.err = errors.New("sink is gone")
 	nodeA.recorder.failAfter = len(nodeA.recorder.types())
-	require.NoError(t, nodeA.reconciler.Reconcile(context.Background()))
-	require.NoError(t, nodeA.reconciler.Reconcile(context.Background()))
+	require.NoError(t, nodeA.reconciler.Reconcile(t.Context()))
+	require.NoError(t, nodeA.reconciler.Reconcile(t.Context()))
 }
 
 // TestKeyConflictIsStatedForEveryAttempt checks the conflict warning carries
@@ -195,7 +194,7 @@ func TestKeyConflictIsStatedForEveryAttempt(t *testing.T) {
 
 	attempt := api.RegistrationRequest{UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Second"}
 	for range 2 {
-		_, err := nodeB.service.Create(context.Background(), attempt)
+		_, err := nodeB.service.Create(t.Context(), attempt)
 		require.ErrorIs(t, err, ErrConflict)
 	}
 
@@ -218,7 +217,7 @@ func TestRejectedRequestsStateNothingOnAValidationFailure(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
 
-	_, err := nodeA.service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: ""})
+	_, err := nodeA.service.Create(t.Context(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: ""})
 	require.Error(t, err)
 	require.Empty(t, nodeA.recorder.types())
 }
@@ -231,7 +230,7 @@ func TestCreateReportsARecordingFailureWithContext(t *testing.T) {
 	nodeA := site.start("node-a")
 	nodeA.recorder.err = errors.New("sink is gone")
 
-	_, err := nodeA.service.Create(context.Background(), unitRequest())
+	_, err := nodeA.service.Create(t.Context(), unitRequest())
 	require.ErrorContains(t, err, "registration: record platform.registration.requested")
 	require.ErrorContains(t, err, "sink is gone")
 	require.NotErrorIs(t, err, ErrConflict, "a recording failure must not read as a client conflict")
@@ -252,7 +251,7 @@ func TestConflictReportsARecordingFailureInsteadOfTheConflict(t *testing.T) {
 	nodeA.recorder.err = errors.New("sink is gone")
 	nodeA.recorder.failAfter = len(nodeA.recorder.types())
 
-	_, err := nodeA.service.Create(context.Background(), api.RegistrationRequest{
+	_, err := nodeA.service.Create(t.Context(), api.RegistrationRequest{
 		UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Payments",
 	})
 	require.ErrorContains(t, err, "registration: record platform.registration.conflict")
@@ -270,7 +269,7 @@ func TestReconcileReportsARecordingFailureWithContext(t *testing.T) {
 	nodeA.recorder.err = errors.New("sink is gone")
 	nodeA.recorder.failAfter = len(nodeA.recorder.types())
 
-	err := nodeA.reconciler.Reconcile(context.Background())
+	err := nodeA.reconciler.Reconcile(t.Context())
 	require.ErrorContains(t, err, "registration: reconcile 7/42")
 	require.ErrorContains(t, err, "registration: record platform.registration.confirmed")
 	require.ErrorContains(t, err, "sink is gone")
@@ -285,13 +284,13 @@ func TestReconcileReportsEveryFailingRequest(t *testing.T) {
 
 	// Two records that are not this package's, under keys that are.
 	for _, key := range []Key{{UnitType: 1, UnitID: 1}, {UnitType: 2, UnitID: 2}} {
-		created, err := nodeA.service.store.contenderRecords.Create(context.Background(), contenderKey(key, "corrupt"), []byte("not a record"))
+		created, err := nodeA.service.store.contenderRecords.Create(t.Context(), contenderKey(key, "corrupt"), []byte("not a record"))
 		require.NoError(t, err)
 		require.True(t, created)
 	}
 	nodeA.create(t, unitRequest())
 
-	err := nodeA.reconciler.Reconcile(context.Background())
+	err := nodeA.reconciler.Reconcile(t.Context())
 	require.Error(t, err)
 
 	// The healthy request was decided anyway, in the same pass that failed.

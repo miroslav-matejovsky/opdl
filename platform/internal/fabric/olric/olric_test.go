@@ -29,7 +29,7 @@ func requireIntegration(t *testing.T) {
 func freePort(t *testing.T) string {
 	t.Helper()
 	var listen net.ListenConfig
-	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	address := listener.Addr().String()
 	require.NoError(t, listener.Close())
@@ -42,7 +42,7 @@ func open(t *testing.T, descriptor deployment.Descriptor, cfg fabricolric.Config
 	if cfg.ShutdownGrace == 0 {
 		cfg.ShutdownGrace = 10 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	f, err := fabricolric.Open(ctx, descriptor, cfg)
 	require.NoError(t, err)
@@ -60,7 +60,7 @@ func open(t *testing.T, descriptor deployment.Descriptor, cfg fabricolric.Config
 // a deployment would.
 func TestTwoMembersFormOneFabricAndShareState(t *testing.T) {
 	requireIntegration(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Distinct loopback addresses stand in for two machines, so the derived
 	// production addresses do not collide and no override is needed.
@@ -140,7 +140,7 @@ func TestOpenStartsAloneWhenPeersAreDown(t *testing.T) {
 
 	// It is up and usable, and it still expects the peer that never came.
 	require.Len(t, f.Members(), 2)
-	state, err := f.State(context.Background())
+	state, err := f.State(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, fabric.StateDisconnected, state)
 }
@@ -148,7 +148,7 @@ func TestOpenStartsAloneWhenPeersAreDown(t *testing.T) {
 // TestOpenValidatesBeforeBinding checks a bad configuration fails without
 // leaving a listener behind.
 func TestOpenValidatesBeforeBinding(t *testing.T) {
-	_, err := fabricolric.Open(context.Background(), deployment.Descriptor{Site: site, Machine: "node-a", IP: "127.0.0.1"}, fabricolric.Config{
+	_, err := fabricolric.Open(t.Context(), deployment.Descriptor{Site: site, Machine: "node-a", IP: "127.0.0.1"}, fabricolric.Config{
 		ClientAddress:     "not-an-address",
 		MemberlistAddress: "127.0.0.1:0",
 		StartTimeout:      time.Second,
@@ -160,7 +160,7 @@ func TestOpenValidatesBeforeBinding(t *testing.T) {
 // TestOpenHonorsCanceledContext checks startup is bounded by its caller.
 func TestOpenHonorsCanceledContext(t *testing.T) {
 	requireIntegration(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := fabricolric.Open(ctx, deployment.Descriptor{Site: site, Machine: "node-a", IP: "127.0.0.1"}, fabricolric.Config{
@@ -191,7 +191,7 @@ func TestOverridesMoveSocketsWithoutChangingIdentity(t *testing.T) {
 
 	// A member that moved still recognizes itself, so a one-member site with an
 	// override reads as connected rather than as missing.
-	state, err := f.State(context.Background())
+	state, err := f.State(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, fabric.StateConnected, state)
 }

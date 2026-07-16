@@ -65,7 +65,7 @@ func probeEvent() events.Event {
 func freeAddress(t *testing.T) string {
 	t.Helper()
 	var listen net.ListenConfig
-	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	addr := listener.Addr().String()
 	require.NoError(t, listener.Close())
@@ -95,7 +95,7 @@ func get(ctx context.Context, addr string) bool {
 }
 
 func TestServeStopsServerAndClosesRecorderOnSignal(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	dir := t.TempDir()
 	rec, err := newRecorder(testDescriptor, dir)
@@ -116,10 +116,9 @@ func TestServeStopsServerAndClosesRecorderOnSignal(t *testing.T) {
 		t.Fatal("serve did not return after its context was canceled")
 	}
 
-	require.False(t, get(context.Background(), addr), "server still accepts requests after shutdown")
-
+	require.False(t, get(t.Context(), addr), "server still accepts requests after shutdown")
 	// The sink is closed, so a late event is reported rather than dropped.
-	err = rec.Record(context.Background(), probeEvent())
+	err = rec.Record(t.Context(), probeEvent())
 	require.ErrorContains(t, err, "append to closed events file")
 }
 
@@ -130,21 +129,21 @@ func TestServeClosesRecorderWhenServerCannotStart(t *testing.T) {
 
 	// Hold the address so ListenAndServe fails immediately.
 	var listen net.ListenConfig
-	listener, err := listen.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { _ = listener.Close() }()
 
-	err = serve(context.Background(), newTestServer(listener.Addr().String()), testLoop(), testFabric(), rec, 10*time.Second)
+	err = serve(t.Context(), newTestServer(listener.Addr().String()), testLoop(), testFabric(), rec, 10*time.Second)
 	require.ErrorContains(t, err, "serve HTTP", "a server that cannot start must report why")
 
 	// Dependencies are released even on the failure path.
 	require.ErrorContains(t,
-		rec.Record(context.Background(), probeEvent()),
+		rec.Record(t.Context(), probeEvent()),
 		"append to closed events file")
 }
 
 func TestServeReportsShutdownAndCloseFailuresTogether(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	failing := failingRecorder{err: errors.New("sink is gone")}
 	addr := freeAddress(t)
@@ -176,7 +175,7 @@ func TestNewRecorderDisabledWithoutEventsDir(t *testing.T) {
 	rec, err := newRecorder(testDescriptor, "")
 	require.NoError(t, err)
 	require.Equal(t, events.NopRecorder{}, rec)
-	require.NoError(t, rec.Record(context.Background(), probeEvent()))
+	require.NoError(t, rec.Record(t.Context(), probeEvent()))
 	require.NoError(t, rec.Close())
 }
 
@@ -189,7 +188,7 @@ func TestNewRecorderNamesTheFileAfterThisMachine(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = rec.Close() }()
 
-	require.NoError(t, rec.Record(context.Background(), probeEvent()))
+	require.NoError(t, rec.Record(t.Context(), probeEvent()))
 
 	entries, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	require.NoError(t, err)
@@ -287,7 +286,7 @@ func TestStopFabricRecordsStoppedBeforeTheSinkCloses(t *testing.T) {
 	require.NoError(t, err)
 	member := testFabric()
 
-	require.NoError(t, stopFabric(context.Background(), member, rec, 10*time.Second))
+	require.NoError(t, stopFabric(t.Context(), member, rec, 10*time.Second))
 	require.NoError(t, rec.Close())
 
 	data, err := os.ReadFile(filepath.Join(dir, jsonl.FileName(events.NodeFromDescriptor(testDescriptor))))
@@ -303,7 +302,7 @@ func TestStopFabricRecordsStoppedBeforeTheSinkCloses(t *testing.T) {
 // TestServeRecordsFabricStoppedOnShutdown checks the whole ordered teardown: the
 // server stops, the fabric reports it stopped, and only then does the sink close.
 func TestServeRecordsFabricStoppedOnShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	dir := t.TempDir()
 	rec, err := newRecorder(testDescriptor, dir)
@@ -322,7 +321,7 @@ func TestServeRecordsFabricStoppedOnShutdown(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"type":"platform.fabric.stopped"`,
 		"the stopped event must reach the sink before it closes")
-	require.False(t, get(context.Background(), addr))
+	require.False(t, get(t.Context(), addr))
 }
 
 func TestRunReportsMissingConfigFlag(t *testing.T) {

@@ -2,7 +2,6 @@ package scenarios
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"path/filepath"
@@ -18,7 +17,7 @@ import (
 // registration API, persists a request, and reports its configuration. Both are external
 // processes; nothing here imports builder or platform Go code.
 func TestBuildAndRunSingleMachine(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
 	outDir := t.TempDir()

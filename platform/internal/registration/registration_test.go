@@ -111,7 +111,7 @@ func TestConfirmationOfAnotherProposalCannotApproveThisOne(t *testing.T) {
 	nodeA.create(t, unitRequest())
 
 	// node-b accepts, but of something else.
-	created, err := nodeA.service.store.createConfirmation(context.Background(), confirmationRecord{
+	created, err := nodeA.service.store.createConfirmation(t.Context(), confirmationRecord{
 		Version:     recordVersion,
 		UnitType:    unitKey.UnitType,
 		UnitID:      unitKey.UnitID,
@@ -204,7 +204,7 @@ func TestStatusLookupWorksOnlyOnTheOriginMachine(t *testing.T) {
 	nodeA.create(t, unitRequest())
 	site.reconcile()
 
-	_, found, err := nodeB.service.Get(context.Background(), unitKey)
+	_, found, err := nodeB.service.Get(t.Context(), unitKey)
 	require.NoError(t, err)
 	require.False(t, found, "node-b holds the request but is not who was asked")
 
@@ -266,7 +266,7 @@ func TestSameMachineDifferentProposalIsConflict(t *testing.T) {
 			nodeA.create(t, original)
 			site.reconcile()
 
-			_, err := nodeA.service.Create(context.Background(), test.attempt)
+			_, err := nodeA.service.Create(t.Context(), test.attempt)
 			require.ErrorIs(t, err, ErrConflict)
 
 			recorded := nodeA.recorder.events()
@@ -296,7 +296,7 @@ func TestAnotherMachineCannotTakeAnAcceptedKey(t *testing.T) {
 
 	// The same request, byte for byte, from the other machine. The origin is
 	// part of the claim, so this is a different claim.
-	_, err := nodeB.service.Create(context.Background(), unitRequest())
+	_, err := nodeB.service.Create(t.Context(), unitRequest())
 	require.ErrorIs(t, err, ErrConflict)
 
 	conflict := nodeB.recorder.only(t, TypeConflict).(Conflict)
@@ -334,7 +334,7 @@ func TestConcurrentDistinctRequestsProduceOneWinner(t *testing.T) {
 	for i := range attempts {
 		claim := claims[i%len(claims)]
 		group.Go(func() {
-			_, err := claim.on.service.Create(context.Background(), claim.request)
+			_, err := claim.on.service.Create(t.Context(), claim.request)
 			results <- err
 		})
 	}
@@ -412,17 +412,17 @@ func TestShutdownEndsScansWithBoundedErrors(t *testing.T) {
 	nodeA := site.start("node-a")
 	nodeA.create(t, unitRequest())
 
-	canceled, cancel := context.WithCancel(context.Background())
+	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, nodeA.reconciler.Reconcile(canceled), context.Canceled)
 	require.ErrorIs(t, nodeA.reconciler.Run(canceled, time.Second, nil), nil,
 		"a loop asked to stop has stopped, which is not a failure")
 
-	require.NoError(t, nodeA.fabric.Close(context.Background()))
-	require.ErrorIs(t, nodeA.reconciler.Reconcile(context.Background()), fabric.ErrClosed)
-	_, _, err := nodeA.service.Get(context.Background(), unitKey)
+	require.NoError(t, nodeA.fabric.Close(t.Context()))
+	require.ErrorIs(t, nodeA.reconciler.Reconcile(t.Context()), fabric.ErrClosed)
+	_, _, err := nodeA.service.Get(t.Context(), unitKey)
 	require.ErrorIs(t, err, fabric.ErrClosed)
-	_, err = nodeA.service.List(context.Background())
+	_, err = nodeA.service.List(t.Context())
 	require.ErrorIs(t, err, fabric.ErrClosed)
 }
 
@@ -431,7 +431,7 @@ func TestShutdownEndsScansWithBoundedErrors(t *testing.T) {
 func TestRunRejectsANonPositiveInterval(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	require.ErrorContains(t, nodeA.reconciler.Run(context.Background(), 0, nil), "not positive")
+	require.ErrorContains(t, nodeA.reconciler.Run(t.Context(), 0, nil), "not positive")
 }
 
 // TestOpenValidatesItsDeployment checks the platform refuses to register
@@ -460,11 +460,11 @@ func TestCreateValidatesTheRequest(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
 
-	_, err := nodeA.service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: " "})
+	_, err := nodeA.service.Create(t.Context(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: " "})
 	require.ErrorContains(t, err, "blank")
 
 	invalid := "master"
-	_, err = nodeA.service.Create(context.Background(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker", Role: &invalid})
+	_, err = nodeA.service.Create(t.Context(), api.RegistrationRequest{UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker", Role: &invalid})
 	require.ErrorContains(t, err, "role")
 
 	// Neither attempt claimed the key, so it is still free.
