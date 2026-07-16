@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -325,13 +325,13 @@ func TestServeRecordsFabricStoppedOnShutdown(t *testing.T) {
 }
 
 func TestRunReportsMissingConfigFlag(t *testing.T) {
-	require.Error(t, run([]string{"-unknown"}))
+	require.Error(t, Run([]string{"-unknown"}))
 }
 
 func TestRunReportsUnusableConfigFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(path, []byte("[invalid"), 0o644))
-	require.ErrorContains(t, run([]string{"-config", path}), "invalid configuration file")
+	require.ErrorContains(t, Run([]string{"-config", path}), "invalid configuration file")
 }
 
 func TestRunReportsUnusableEventsDir(t *testing.T) {
@@ -351,5 +351,5 @@ shutdown_grace = "10s"
 `, blocked)
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 
-	require.ErrorContains(t, run([]string{"-config", path}), "event sink")
+	require.ErrorContains(t, Run([]string{"-config", path}), "event sink")
 }
