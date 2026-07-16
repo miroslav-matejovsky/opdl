@@ -148,6 +148,6 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 	// by the platform's in-process lifecycle tests.
 	logs := platform.logs()
 	require.Contains(t, logs, "platform configuration")
-	require.Contains(t, logs, "events_dir   "+eventsDir)
+	require.Contains(t, logs, "events_dir          "+eventsDir)
 	require.Contains(t, logs, "one-member site", "a standalone deployment is a fabric of one")
 }

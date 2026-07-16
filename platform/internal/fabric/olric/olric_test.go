@@ -39,6 +39,9 @@ func freePort(t *testing.T) string {
 // open starts a member for topology with cfg and closes it when the test ends.
 func open(t *testing.T, descriptor deployment.Descriptor, cfg fabricolric.Config) *fabricolric.Fabric {
 	t.Helper()
+	if cfg.ShutdownGrace == 0 {
+		cfg.ShutdownGrace = 10 * time.Second
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	f, err := fabricolric.Open(ctx, descriptor, cfg)
@@ -149,6 +152,7 @@ func TestOpenValidatesBeforeBinding(t *testing.T) {
 		ClientAddress:     "not-an-address",
 		MemberlistAddress: "127.0.0.1:0",
 		StartTimeout:      time.Second,
+		ShutdownGrace:     time.Second,
 	})
 	require.ErrorContains(t, err, "client address")
 }
@@ -163,6 +167,7 @@ func TestOpenHonorsCanceledContext(t *testing.T) {
 		ClientAddress:     freePort(t),
 		MemberlistAddress: freePort(t),
 		StartTimeout:      60 * time.Second,
+		ShutdownGrace:     10 * time.Second,
 	})
 	require.ErrorIs(t, err, context.Canceled)
 }

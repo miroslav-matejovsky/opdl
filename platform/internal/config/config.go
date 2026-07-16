@@ -5,33 +5,29 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/embedded"
 )
 
-// defaultAddress is the listen address the platform serves on when the TOML
-// configuration file is absent or leaves it unset. It binds the loopback
-// interface so a clean checkout runs without tripping host firewall prompts.
-const defaultAddress = "127.0.0.1:8080"
-
 // Config is the platform's resolved runtime configuration: a composition of the
 // deployment descriptor (see package embedded, which the builder stages before
 // compiling) and the platform's TOML configuration file, which supplies settings
-// a user may override without rebuilding the binary. For now that is the address
-// the platform's API listens on and where it records events.
+// a user must explicitly specify without rebuilding the binary.
 type Config struct {
-	descriptor   deployment.Descriptor
-	address      string
-	eventsDir    string
-	fabric       Fabric
-	registration Registration
+	descriptor        deployment.Descriptor
+	address           string
+	eventsDir         string
+	readHeaderTimeout time.Duration
+	shutdownTimeout   time.Duration
+	fabric            Fabric
+	registration      Registration
 }
 
 // Load composes a Config from the platform's embedded deployment descriptor and
-// the TOML configuration file at configPath. A missing file is not an error: the
-// platform falls back to built-in defaults so it runs standalone. It fails fast
-// on malformed embedded data or a malformed configuration file.
+// the TOML configuration file at configPath. No defaults are allowed: the
+// configuration file must exist and carry valid settings for all required options.
 func Load(configPath string) (*Config, error) {
 	d, err := embedded.Deployment()
 	if err != nil {
@@ -41,13 +37,43 @@ func Load(configPath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	readHeaderTimeout, err := validateDuration("read_header_timeout", f.ReadHeaderTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	shutdownTimeout, err := validateDuration("shutdown_timeout", f.ShutdownTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if _, err := validateDuration("[registration] reconcile_interval", f.Registration.ReconcileInterval); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if _, err := validateDuration("[fabric.olric] start_timeout", f.Fabric.Olric.StartTimeout); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if _, err := validateDuration("[fabric.olric] shutdown_grace", f.Fabric.Olric.ShutdownGrace); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
 	return &Config{
-		descriptor:   d,
-		address:      f.Address,
-		eventsDir:    f.EventsDir,
-		fabric:       f.Fabric,
-		registration: f.Registration,
+		descriptor:        d,
+		address:           f.Address,
+		eventsDir:         f.EventsDir,
+		readHeaderTimeout: readHeaderTimeout,
+		shutdownTimeout:   shutdownTimeout,
+		fabric:            f.Fabric,
+		registration:      f.Registration,
 	}, nil
+}
+
+func validateDuration(name, s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", name, s, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid %s %s: duration must be positive", name, d)
+	}
+	return d, nil
 }
 
 // validateAddress checks addr is a host:port the platform can listen on. The host
@@ -77,6 +103,12 @@ func (c *Config) Address() string { return c.address }
 // string means event recording is disabled.
 func (c *Config) EventsDir() string { return c.eventsDir }
 
+// ReadHeaderTimeout returns the maximum duration allowed for reading HTTP request headers.
+func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout }
+
+// ShutdownTimeout returns the maximum duration allowed for graceful server and fabric shutdown.
+func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
+
 // Fabric returns the fabric adapter overrides from the configuration file. Only
 // runtime composition reads it: it is how a site moves the fabric's sockets, and
 // no domain package has any business knowing a backend is configurable.
@@ -103,19 +135,17 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    features     chaos=%t redundancy=%t\n", d.Features.Chaos, d.Features.Redundancy)
 	fmt.Fprintf(&b, "    fabric       %s\n", fabricSummary(d.Fabric))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
-	fmt.Fprintf(&b, "    address      %s\n", c.address)
-	fmt.Fprintf(&b, "    events_dir   %s\n", eventsDirSummary(c.eventsDir))
-	fmt.Fprintf(&b, "    fabric.olric %s\n", olricSummary(c.fabric.Olric))
-	fmt.Fprintf(&b, "    registration %s", registrationSummary(c.registration))
+	fmt.Fprintf(&b, "    address             %s\n", c.address)
+	fmt.Fprintf(&b, "    events_dir          %s\n", eventsDirSummary(c.eventsDir))
+	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
+	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
+	fmt.Fprintf(&b, "    fabric.olric        %s\n", olricSummary(c.fabric.Olric))
+	fmt.Fprintf(&b, "    registration        %s", registrationSummary(c.registration))
 	return b.String()
 }
 
-// registrationSummary renders the registration settings, so a startup log shows
-// whether this machine reconciles on its own schedule or the built-in one.
+// registrationSummary renders the registration settings.
 func registrationSummary(r Registration) string {
-	if r.ReconcileInterval == "" {
-		return "(defaults)"
-	}
 	return "reconcile_interval=" + r.ReconcileInterval
 }
 
@@ -135,7 +165,7 @@ func fabricSummary(f deployment.Fabric) string {
 // olricSummary renders the fabric adapter overrides, so a startup log shows
 // whether a machine is running on its deployment addresses or on local ones.
 func olricSummary(o FabricOlric) string {
-	overrides := make([]string, 0, 4)
+	overrides := make([]string, 0, 6)
 	if o.ClientAddress != "" {
 		overrides = append(overrides, "client="+o.ClientAddress)
 	}
@@ -147,6 +177,9 @@ func olricSummary(o FabricOlric) string {
 	}
 	if o.StartTimeout != "" {
 		overrides = append(overrides, "start_timeout="+o.StartTimeout)
+	}
+	if o.ShutdownGrace != "" {
+		overrides = append(overrides, "shutdown_grace="+o.ShutdownGrace)
 	}
 	if len(overrides) == 0 {
 		return "(derived from deployment)"

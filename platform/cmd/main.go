@@ -22,11 +22,6 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
-// shutdownTimeout bounds how long in-flight requests have to finish once the
-// platform is asked to stop. It is an upper bound, not a delay: an idle server
-// shuts down immediately.
-const shutdownTimeout = 10 * time.Second
-
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "platform:", err)
@@ -78,19 +73,22 @@ func run(args []string) error {
 	// the site's from the first request rather than this process's.
 	registrations, reconciler, err := registration.Open(member, rec)
 	if err != nil {
-		return errors.Join(fmt.Errorf("registration service: %w", err), stopFabric(ctx, member, rec), closeRecorder(rec))
+		return errors.Join(fmt.Errorf("registration service: %w", err), stopFabric(ctx, member, rec, cfg.ShutdownTimeout()), closeRecorder(rec))
 	}
 
 	// The reconciler runs its first pass before the API opens. This machine may
 	// have restarted into a site that has been deciding without it, and it owes
 	// those requests its answer; serving first would answer questions about a
 	// site this instance has not yet looked at.
-	interval, err := reconcileInterval(cfg.Registration())
+	interval, err := time.ParseDuration(cfg.Registration().ReconcileInterval)
 	if err != nil {
-		return errors.Join(err, stopFabric(ctx, member, rec), closeRecorder(rec))
+		return errors.Join(fmt.Errorf("registration: reconcile interval %q: %w", cfg.Registration().ReconcileInterval, err), stopFabric(ctx, member, rec, cfg.ShutdownTimeout()), closeRecorder(rec))
+	}
+	if interval <= 0 {
+		return errors.Join(fmt.Errorf("registration: reconcile interval %s is not positive", interval), stopFabric(ctx, member, rec, cfg.ShutdownTimeout()), closeRecorder(rec))
 	}
 	if err := reconciler.Reconcile(ctx); err != nil {
-		return errors.Join(fmt.Errorf("initial registration reconciliation: %w", err), stopFabric(ctx, member, rec), closeRecorder(rec))
+		return errors.Join(fmt.Errorf("initial registration reconciliation: %w", err), stopFabric(ctx, member, rec, cfg.ShutdownTimeout()), closeRecorder(rec))
 	}
 	loop := startReconciler(ctx, reconciler, interval)
 	fmt.Printf("platform: reconciling registrations every %s\n", interval)
@@ -100,25 +98,9 @@ func run(args []string) error {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           httpapi.NewHandler(registrations),
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout(),
 	}
-	return serve(ctx, srv, loop, member, rec)
-}
-
-// reconcileInterval resolves how often this machine reconciles: what the
-// configuration file says, or the registration package's default.
-func reconcileInterval(cfg config.Registration) (time.Duration, error) {
-	if cfg.ReconcileInterval == "" {
-		return registration.DefaultInterval, nil
-	}
-	interval, err := time.ParseDuration(cfg.ReconcileInterval)
-	if err != nil {
-		return 0, fmt.Errorf("registration: reconcile interval %q: %w", cfg.ReconcileInterval, err)
-	}
-	if interval <= 0 {
-		return 0, fmt.Errorf("registration: reconcile interval %s is not positive", interval)
-	}
-	return interval, nil
+	return serve(ctx, srv, loop, member, rec, cfg.ShutdownTimeout())
 }
 
 // reconcilerLoop is the running periodic reconciliation, as the runtime holds
@@ -226,14 +208,21 @@ func olricConfig(descriptor deployment.Descriptor, overrides config.FabricOlric)
 		}
 		cfg.StartTimeout = timeout
 	}
+	if overrides.ShutdownGrace != "" {
+		grace, err := time.ParseDuration(overrides.ShutdownGrace)
+		if err != nil {
+			return fabricolric.Config{}, fmt.Errorf("fabric: shutdown grace %q: %w", overrides.ShutdownGrace, err)
+		}
+		cfg.ShutdownGrace = grace
+	}
 	return cfg, nil
 }
 
 // stopFabric drains and closes the fabric within a bounded context, then records
 // that it stopped. The event is recorded while the sink is still open, so an
 // orderly shutdown is the last thing an event log shows.
-func stopFabric(ctx context.Context, f fabric.Fabric, rec recorder) error {
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+func stopFabric(ctx context.Context, f fabric.Fabric, rec recorder, timeout time.Duration) error {
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 
 	var errs []error
@@ -255,7 +244,7 @@ func stopFabric(ctx context.Context, f fabric.Fabric, rec recorder) error {
 // is the other thing that reads the fabric. Only then does the fabric close and
 // report that it stopped, because that fact still has to reach the sink. The
 // recorder closes last. Every failure is reported; none hides another.
-func serve(ctx context.Context, srv *http.Server, loop *reconcilerLoop, f fabric.Fabric, rec recorder) error {
+func serve(ctx context.Context, srv *http.Server, loop *reconcilerLoop, f fabric.Fabric, rec recorder, timeout time.Duration) error {
 	listen := make(chan error, 1)
 	go func() { listen <- srv.ListenAndServe() }()
 
@@ -263,18 +252,18 @@ func serve(ctx context.Context, srv *http.Server, loop *reconcilerLoop, f fabric
 	case err := <-listen:
 		// The server stopped without being asked to, e.g. its address is taken.
 		loop.stop()
-		return errors.Join(listenError(err), stopFabric(ctx, f, rec), closeRecorder(rec))
+		return errors.Join(listenError(err), stopFabric(ctx, f, rec, timeout), closeRecorder(rec))
 	case <-ctx.Done():
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	err := srv.Shutdown(shutdownCtx)
 	if err != nil {
 		err = fmt.Errorf("shut down HTTP server: %w", err)
 	}
 	loop.stop()
-	return errors.Join(err, listenError(<-listen), stopFabric(ctx, f, rec), closeRecorder(rec))
+	return errors.Join(err, listenError(<-listen), stopFabric(ctx, f, rec, timeout), closeRecorder(rec))
 }
 
 // listenError discards the expected end of a server that was shut down and

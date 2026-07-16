@@ -147,6 +147,9 @@ func contenderDescriptors() (nodeA, nodeB deployment.Descriptor) {
 
 func openContenderFabric(t *testing.T, descriptor deployment.Descriptor, config fabricolric.Config) *fabricolric.Fabric {
 	t.Helper()
+	if config.ShutdownGrace == 0 {
+		config.ShutdownGrace = 10 * time.Second
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	opened, err := fabricolric.Open(ctx, descriptor, config)

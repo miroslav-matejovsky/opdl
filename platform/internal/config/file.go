@@ -13,25 +13,18 @@ import (
 // file is the schema of the platform's TOML configuration file. It carries the
 // settings a user may set without touching the embedded deployment descriptor.
 type file struct {
-	Address string `toml:"address"`
-	// EventsDir is optional: empty disables event recording.
-	EventsDir string `toml:"events_dir"`
-	// Fabric is optional: every field falls back to the descriptor's topology.
-	Fabric Fabric `toml:"fabric"`
-	// Registration is optional: every field falls back to a built-in default.
-	Registration Registration `toml:"registration"`
+	Address           string       `toml:"address"`
+	EventsDir         string       `toml:"events_dir"`
+	ReadHeaderTimeout string       `toml:"read_header_timeout"`
+	ShutdownTimeout   string       `toml:"shutdown_timeout"`
+	Fabric            Fabric       `toml:"fabric"`
+	Registration      Registration `toml:"registration"`
 }
 
 // Registration carries the runtime settings of the registration use case.
 type Registration struct {
 	// ReconcileInterval overrides how often this platform instance scans the
-	// site's registration requests, as a Go duration such as "500ms". Empty
-	// keeps the built-in default.
-	//
-	// It is a latency setting, not a correctness one. Every registration
-	// decision is idempotent and derived from the site's state, so a shorter
-	// interval accepts requests sooner and a longer one costs less; neither
-	// changes what the site decides.
+	// site's registration requests, as a Go duration such as "500ms".
 	ReconcileInterval string `toml:"reconcile_interval"`
 }
 
@@ -61,42 +54,61 @@ type FabricOlric struct {
 	// explicit empty list is not an override; omit the field to keep the peers
 	// the descriptor derived.
 	Join []string `toml:"join"`
-	// StartTimeout overrides the readiness bound, as a Go duration such as
-	// "45s". Empty keeps the adapter's default.
+	// StartTimeout bounds the readiness duration at startup, such as "30s".
 	StartTimeout string `toml:"start_timeout"`
+	// ShutdownGrace bounds the teardown grace duration at shutdown, such as "10s".
+	ShutdownGrace string `toml:"shutdown_grace"`
 }
 
-// loadFile reads and validates the TOML configuration file. A file that does not
-// exist yields the defaults; a file that exists must be well-formed and, if it
-// sets an address, carry a valid host:port.
+// loadFile reads and validates the TOML configuration file. No defaults are
+// allowed: a file that does not exist or omits required fields yields an error.
 func loadFile(path string) (file, error) {
-	f := file{Address: defaultAddress}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return f, nil
+		return file{}, fmt.Errorf("read configuration file %s: file does not exist", path)
 	}
 	if err != nil {
 		return file{}, fmt.Errorf("read configuration file %s: %w", path, err)
 	}
+	var f file
 	if err := toml.Unmarshal(data, &f); err != nil {
 		return file{}, fmt.Errorf("invalid configuration file %s: %w", path, err)
 	}
-	if strings.TrimSpace(f.Address) == "" {
-		f.Address = defaultAddress
+	f.Address = strings.TrimSpace(f.Address)
+	if f.Address == "" {
+		return file{}, fmt.Errorf("configuration file %s: address is required", path)
 	}
 	if err := validateAddress(f.Address); err != nil {
 		return file{}, fmt.Errorf("configuration file %s: %w", path, err)
+	}
+	f.ReadHeaderTimeout = strings.TrimSpace(f.ReadHeaderTimeout)
+	if f.ReadHeaderTimeout == "" {
+		return file{}, fmt.Errorf("configuration file %s: read_header_timeout is required", path)
+	}
+	f.ShutdownTimeout = strings.TrimSpace(f.ShutdownTimeout)
+	if f.ShutdownTimeout == "" {
+		return file{}, fmt.Errorf("configuration file %s: shutdown_timeout is required", path)
+	}
+	f.Registration.ReconcileInterval = strings.TrimSpace(f.Registration.ReconcileInterval)
+	if f.Registration.ReconcileInterval == "" {
+		return file{}, fmt.Errorf("configuration file %s: [registration] reconcile_interval is required", path)
+	}
+	f.Fabric.Olric.StartTimeout = strings.TrimSpace(f.Fabric.Olric.StartTimeout)
+	if f.Fabric.Olric.StartTimeout == "" {
+		return file{}, fmt.Errorf("configuration file %s: [fabric.olric] start_timeout is required", path)
+	}
+	f.Fabric.Olric.ShutdownGrace = strings.TrimSpace(f.Fabric.Olric.ShutdownGrace)
+	if f.Fabric.Olric.ShutdownGrace == "" {
+		return file{}, fmt.Errorf("configuration file %s: [fabric.olric] shutdown_grace is required", path)
 	}
 	// An events directory is not validated here. A path is only known to be
 	// usable once it is opened, so the runtime validates it by constructing the
 	// sink at startup rather than trusting a check that could go stale.
 	f.EventsDir = strings.TrimSpace(f.EventsDir)
-	// Fabric overrides are not validated here either: what makes an address
-	// usable is the adapter's business, so the composed adapter configuration is
-	// validated at startup, before any listener opens.
+	// Fabric socket overrides are not required or validated here: what makes an
+	// address usable is the adapter's business, so the composed adapter
+	// configuration is validated at startup, before any listener opens.
 	f.Fabric.Olric.ClientAddress = strings.TrimSpace(f.Fabric.Olric.ClientAddress)
 	f.Fabric.Olric.MemberlistAddress = strings.TrimSpace(f.Fabric.Olric.MemberlistAddress)
-	f.Fabric.Olric.StartTimeout = strings.TrimSpace(f.Fabric.Olric.StartTimeout)
-	f.Registration.ReconcileInterval = strings.TrimSpace(f.Registration.ReconcileInterval)
 	return f, nil
 }

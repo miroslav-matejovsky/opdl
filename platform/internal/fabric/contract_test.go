@@ -98,6 +98,7 @@ func openOlric(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric {
 		ClientAddress:     freeAddress(t),
 		MemberlistAddress: freeAddress(t),
 		StartTimeout:      60 * time.Second,
+		ShutdownGrace:     10 * time.Second,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {

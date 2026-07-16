@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -414,7 +415,7 @@ func TestShutdownEndsScansWithBoundedErrors(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, nodeA.reconciler.Reconcile(canceled), context.Canceled)
-	require.ErrorIs(t, nodeA.reconciler.Run(canceled, DefaultInterval, nil), nil,
+	require.ErrorIs(t, nodeA.reconciler.Run(canceled, time.Second, nil), nil,
 		"a loop asked to stop has stopped, which is not a failure")
 
 	require.NoError(t, nodeA.fabric.Close(context.Background()))

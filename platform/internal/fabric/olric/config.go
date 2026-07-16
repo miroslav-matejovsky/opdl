@@ -49,6 +49,8 @@ type Config struct {
 	Join []string
 	// StartTimeout bounds how long the member may take to become ready.
 	StartTimeout time.Duration
+	// ShutdownGrace bounds how long the member may take to tear down cleanly.
+	ShutdownGrace time.Duration
 }
 
 // DefaultConfig derives the production configuration from a machine's resolved
@@ -78,6 +80,7 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 		MemberlistAddress: memberlist,
 		Join:              join,
 		StartTimeout:      DefaultStartTimeout,
+		ShutdownGrace:     10 * time.Second,
 	}, nil
 }
 
@@ -106,6 +109,9 @@ func (c Config) Validate() error {
 	}
 	if c.StartTimeout <= 0 {
 		return fmt.Errorf("olric: start timeout must be positive, got %s", c.StartTimeout)
+	}
+	if c.ShutdownGrace <= 0 {
+		return fmt.Errorf("olric: shutdown grace must be positive, got %s", c.ShutdownGrace)
 	}
 	return nil
 }

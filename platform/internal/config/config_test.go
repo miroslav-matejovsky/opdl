@@ -10,6 +10,17 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
 )
 
+const validSections = `
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+[registration]
+reconcile_interval = "250ms"
+[fabric.olric]
+start_timeout = "30s"
+shutdown_grace = "10s"
+`
+const validBaseConfig = `address = "127.0.0.1:9090"` + "\n" + validSections
+
 // writeConfig writes a TOML configuration file into a temp dir and returns its
 // path.
 func writeConfig(t *testing.T, contents string) string {
@@ -20,7 +31,7 @@ func writeConfig(t *testing.T, contents string) string {
 }
 
 func TestLoadComposesDescriptorAndAddress(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"`))
+	cfg, err := config.Load(writeConfig(t, validBaseConfig))
 	require.NoError(t, err)
 
 	d := cfg.Descriptor()
@@ -36,11 +47,11 @@ func TestLoadReadsOptionalEventsDir(t *testing.T) {
 		contents string
 		want     string
 	}{
-		{name: "absent disables recording", contents: `address = "127.0.0.1:9090"`, want: ""},
-		{name: "empty disables recording", contents: `events_dir = ""`, want: ""},
-		{name: "blank disables recording", contents: `events_dir = "   "`, want: ""},
-		{name: "configured directory", contents: `events_dir = "/var/log/opdl"`, want: "/var/log/opdl"},
-		{name: "surrounding space is trimmed", contents: `events_dir = " /var/log/opdl "`, want: "/var/log/opdl"},
+		{name: "absent disables recording", contents: validBaseConfig, want: ""},
+		{name: "empty disables recording", contents: `address = "127.0.0.1:9090"` + "\n" + `events_dir = ""` + "\n" + validSections, want: ""},
+		{name: "blank disables recording", contents: `address = "127.0.0.1:9090"` + "\n" + `events_dir = "   "` + "\n" + validSections, want: ""},
+		{name: "configured directory", contents: `address = "127.0.0.1:9090"` + "\n" + `events_dir = "/var/log/opdl"` + "\n" + validSections, want: "/var/log/opdl"},
+		{name: "surrounding space is trimmed", contents: `address = "127.0.0.1:9090"` + "\n" + `events_dir = " /var/log/opdl "` + "\n" + validSections, want: "/var/log/opdl"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -55,21 +66,94 @@ func TestLoadReadsOptionalEventsDir(t *testing.T) {
 // checked here. Only opening it proves it is usable, so the runtime validates
 // it by constructing the sink at startup.
 func TestLoadAcceptsUnwritableEventsDir(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `events_dir = "\\\\no-such-host\\share"`))
+	cfg, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"`+"\n"+`events_dir = "\\\\no-such-host\\share"`+"\n"+validSections))
 	require.NoError(t, err)
 	require.Equal(t, `\\no-such-host\share`, cfg.EventsDir())
 }
 
-func TestLoadMissingFileFallsBackToDefaultAddress(t *testing.T) {
-	cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.toml"))
-	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1:8080", cfg.Address())
+func TestLoadMissingFileFails(t *testing.T) {
+	_, err := config.Load(filepath.Join(t.TempDir(), "absent.toml"))
+	require.ErrorContains(t, err, "does not exist")
 }
 
-func TestLoadEmptyAddressFallsBackToDefault(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `address = ""`))
-	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1:8080", cfg.Address())
+func TestLoadMissingRequiredSettingsFails(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		err      string
+	}{
+		{
+			name: "missing address",
+			contents: `read_header_timeout = "5s"
+shutdown_timeout = "10s"
+[registration]
+reconcile_interval = "1s"
+[fabric.olric]
+start_timeout = "30s"
+shutdown_grace = "10s"`,
+			err: "address is required",
+		},
+		{
+			name: "missing read_header_timeout",
+			contents: `address = "127.0.0.1:8080"
+shutdown_timeout = "10s"
+[registration]
+reconcile_interval = "1s"
+[fabric.olric]
+start_timeout = "30s"
+shutdown_grace = "10s"`,
+			err: "read_header_timeout is required",
+		},
+		{
+			name: "missing shutdown_timeout",
+			contents: `address = "127.0.0.1:8080"
+read_header_timeout = "5s"
+[registration]
+reconcile_interval = "1s"
+[fabric.olric]
+start_timeout = "30s"
+shutdown_grace = "10s"`,
+			err: "shutdown_timeout is required",
+		},
+		{
+			name: "missing reconcile_interval",
+			contents: `address = "127.0.0.1:8080"
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+[fabric.olric]
+start_timeout = "30s"
+shutdown_grace = "10s"`,
+			err: "[registration] reconcile_interval is required",
+		},
+		{
+			name: "missing start_timeout",
+			contents: `address = "127.0.0.1:8080"
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+[registration]
+reconcile_interval = "1s"
+[fabric.olric]
+shutdown_grace = "10s"`,
+			err: "[fabric.olric] start_timeout is required",
+		},
+		{
+			name: "missing shutdown_grace",
+			contents: `address = "127.0.0.1:8080"
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+[registration]
+reconcile_interval = "1s"
+[fabric.olric]
+start_timeout = "30s"`,
+			err: "[fabric.olric] shutdown_grace is required",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := config.Load(writeConfig(t, test.contents))
+			require.ErrorContains(t, err, test.err)
+		})
+	}
 }
 
 func TestLoadRejectsMalformedFile(t *testing.T) {
@@ -78,47 +162,25 @@ func TestLoadRejectsMalformedFile(t *testing.T) {
 }
 
 func TestLoadRejectsAddressWithoutPort(t *testing.T) {
-	_, err := config.Load(writeConfig(t, `address = "127.0.0.1"`))
+	_, err := config.Load(writeConfig(t, `address = "127.0.0.1"`+"\n"+validSections))
 	require.ErrorContains(t, err, "invalid address")
 }
 
 func TestLoadRejectsPortOutOfRange(t *testing.T) {
-	_, err := config.Load(writeConfig(t, `address = "127.0.0.1:70000"`))
+	_, err := config.Load(writeConfig(t, `address = "127.0.0.1:70000"`+"\n"+validSections))
 	require.ErrorContains(t, err, "out of range")
 }
 
-func TestSummaryShowsDescriptorAndAddress(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"`))
+func TestSummaryShowsConfiguration(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, validBaseConfig))
 	require.NoError(t, err)
 
 	s := cfg.Summary()
 	require.Contains(t, s, "platform configuration (machine=mock)")
 	require.Contains(t, s, "deployment descriptor")
-	require.Contains(t, s, "address      127.0.0.1:9090")
-	require.Contains(t, s, "events_dir   (disabled)")
-}
-
-func TestSummaryShowsConfiguredEventsDir(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `events_dir = "/var/log/opdl"`))
-	require.NoError(t, err)
-	require.Contains(t, cfg.Summary(), "events_dir   /var/log/opdl")
-}
-
-// TestLoadReadsOptionalReconcileInterval checks the setting is carried through
-// as written. What makes an interval usable is the registration package's
-// business, so it is validated where it is composed rather than here.
-func TestLoadReadsOptionalReconcileInterval(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, "[registration]\nreconcile_interval = \" 250ms \""))
-	require.NoError(t, err)
-	require.Equal(t, config.Registration{ReconcileInterval: "250ms"}, cfg.Registration())
-	require.Contains(t, cfg.Summary(), "registration reconcile_interval=250ms")
-}
-
-// TestLoadDefaultsTheReconcileInterval checks an absent setting stays absent, so
-// composition applies its own default rather than a blank.
-func TestLoadDefaultsTheReconcileInterval(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, ""))
-	require.NoError(t, err)
-	require.Empty(t, cfg.Registration().ReconcileInterval)
-	require.Contains(t, cfg.Summary(), "registration (defaults)")
+	require.Contains(t, s, "address             127.0.0.1:9090")
+	require.Contains(t, s, "events_dir          (disabled)")
+	require.Contains(t, s, "read_header_timeout 5s")
+	require.Contains(t, s, "shutdown_timeout    10s")
+	require.Contains(t, s, "registration        reconcile_interval=250ms")
 }
