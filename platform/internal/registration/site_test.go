@@ -92,7 +92,7 @@ func (s *site) restart(machine string) *instance {
 // launch starts one machine's registration on the site.
 func (s *site) launch(machine string, recorder *recordingRecorder) *instance {
 	s.t.Helper()
-	f := s.shared.Open(s.descriptorFor(machine))
+	f := s.shared.Open(s.descriptorFor(machine), "primary")
 	service, reconciler, err := Open(f, recorder)
 	require.NoError(s.t, err)
 	s.t.Cleanup(func() { _ = f.Close(context.Background()) })

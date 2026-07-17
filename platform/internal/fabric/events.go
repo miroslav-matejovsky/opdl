@@ -13,10 +13,12 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //     after HTTP intake stopped and before the event sink closes, so the last
 //     thing a log shows is an orderly shutdown.
 //
-// The payloads describe this machine's own membership. They report operational
-// facts about the backend, which is why they name the adapter: it is metadata
-// for whoever is reading the log, not a platform guarantee. Nothing here implies
-// a fabric capability, and no fabric event carries a peer's address.
+// The payloads describe this process's own membership: the machine it runs on
+// and the platform instance it runs as, named separately so a log distinguishes
+// a machine's primary from its secondary. They report operational facts about
+// the backend, which is why they name the adapter: it is metadata for whoever is
+// reading the log, not a platform guarantee. Nothing here implies a fabric
+// capability, and no fabric event carries a peer's address.
 
 // eventSource is the subsystem every event in this file comes from.
 const eventSource = "fabric"
@@ -24,16 +26,22 @@ const eventSource = "fabric"
 // TypeStarted is stated when the fabric is ready to carry traffic.
 const TypeStarted events.Type = "platform.fabric.started"
 
-// Started states that this machine's fabric member is ready.
+// Started states that this process's fabric member is ready.
 type Started struct {
 	// Adapter is the fabric adapter implementation that started. It is
 	// operational metadata: the platform's behavior does not depend on it.
 	Adapter string `json:"adapter"`
-	// Address is this machine's own fabric member address.
+	// Machine is this process's machine identity.
+	Machine string `json:"machine"`
+	// Instance is the platform instance this process runs as, primary or
+	// secondary. It is named apart from the machine so a log tells the two
+	// instances of a redundant machine apart.
+	Instance string `json:"instance"`
+	// Address is this process's own fabric member address.
 	Address string `json:"address"`
-	// Members is the number of expected site members reachable at readiness. It
-	// is a reading taken at one instant: a member that has not started yet is
-	// not counted, and joins later.
+	// Members is the number of expected site members reachable at readiness,
+	// counting each instance. It is a reading taken at one instant: a member that
+	// has not started yet is not counted, and joins later.
 	Members int `json:"members"`
 }
 
@@ -46,10 +54,15 @@ func (Started) Source() string { return eventSource }
 // TypeStopped is stated once the fabric has been drained and closed.
 const TypeStopped events.Type = "platform.fabric.stopped"
 
-// Stopped states that this machine's fabric member has stopped.
+// Stopped states that this process's fabric member has stopped.
 type Stopped struct {
 	// Adapter is the fabric adapter implementation that stopped.
 	Adapter string `json:"adapter"`
+	// Machine is this process's machine identity.
+	Machine string `json:"machine"`
+	// Instance is the platform instance this process ran as, primary or
+	// secondary.
+	Instance string `json:"instance"`
 }
 
 // EventType returns the event's stable dotted kind.

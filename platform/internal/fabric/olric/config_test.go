@@ -43,7 +43,7 @@ func descriptor() deployment.Descriptor {
 // bootstrap: a machine's own addresses and its seeds are explicit descriptor
 // facts, and nothing else is needed to join a site.
 func TestDefaultConfigDerivesEverythingFromTheDescriptor(t *testing.T) {
-	cfg, err := fabricolric.DefaultConfig(descriptor())
+	cfg, err := fabricolric.DefaultConfig(descriptor(), "primary")
 	require.NoError(t, err)
 	require.Equal(t, fabricolric.Config{
 		ClientAddress:     "10.0.1.10:3320",
@@ -59,10 +59,48 @@ func TestDefaultConfigDerivesEverythingFromTheDescriptor(t *testing.T) {
 // starts a fabric rather than waiting to join one.
 func TestDefaultConfigForOneMemberSiteSeedsNobody(t *testing.T) {
 	d := deployment.Descriptor{PlatformInstances: []deployment.PlatformInstance{{Name: "primary", APIAddress: "127.0.0.1:8080", FabricClientAddress: "127.0.0.1:3320", FabricMemberlistAddress: "127.0.0.1:3322"}}}
-	cfg, err := fabricolric.DefaultConfig(d)
+	cfg, err := fabricolric.DefaultConfig(d, "primary")
 	require.NoError(t, err)
 	require.Empty(t, cfg.Join)
 	require.NoError(t, cfg.Validate())
+}
+
+// TestDefaultConfigSeedsEveryOtherInstance pins the instance-aware seeding rule:
+// a member seeds from every other expected instance of the site, including its
+// own machine's sibling and both instances of every peer, and never from itself.
+func TestDefaultConfigSeedsEveryOtherInstance(t *testing.T) {
+	redundant := func(ip string) []deployment.PlatformInstance {
+		return []deployment.PlatformInstance{
+			{Name: "primary", APIAddress: ip + ":8080", FabricClientAddress: ip + ":3320", FabricMemberlistAddress: ip + ":3322"},
+			{Name: "secondary", APIAddress: ip + ":8081", FabricClientAddress: ip + ":3321", FabricMemberlistAddress: ip + ":3323"},
+		}
+	}
+	redundantPeers := func(machine, ip string) []deployment.FabricPeer {
+		return []deployment.FabricPeer{
+			{Site: "north", Machine: machine, Instance: "primary", IP: ip, FabricClientAddress: ip + ":3320", FabricMemberlistAddress: ip + ":3322"},
+			{Site: "north", Machine: machine, Instance: "secondary", IP: ip, FabricClientAddress: ip + ":3321", FabricMemberlistAddress: ip + ":3323"},
+		}
+	}
+	d := deployment.Descriptor{
+		Site: "north", Machine: "node-a", IP: "10.0.1.10",
+		PlatformInstances: redundant("10.0.1.10"),
+		Fabric:            deployment.Fabric{Peers: redundantPeers("node-b", "10.0.1.11")},
+	}
+
+	// The primary seeds from its own secondary and from both of the peer's
+	// instances. It never lists its own memberlist address.
+	primaryCfg, err := fabricolric.DefaultConfig(d, "primary")
+	require.NoError(t, err)
+	require.Equal(t, "10.0.1.10:3320", primaryCfg.ClientAddress)
+	require.Equal(t, []string{"10.0.1.10:3323", "10.0.1.11:3322", "10.0.1.11:3323"}, primaryCfg.Join)
+	require.NoError(t, primaryCfg.Validate())
+
+	// The secondary is symmetric: it seeds from its own primary and both peers.
+	secondaryCfg, err := fabricolric.DefaultConfig(d, "secondary")
+	require.NoError(t, err)
+	require.Equal(t, "10.0.1.10:3321", secondaryCfg.ClientAddress)
+	require.Equal(t, []string{"10.0.1.10:3322", "10.0.1.11:3322", "10.0.1.11:3323"}, secondaryCfg.Join)
+	require.NoError(t, secondaryCfg.Validate())
 }
 
 // TestDefaultStartTimeoutOutlastsAJoinAttempt guards a real failure mode: a
@@ -76,18 +114,18 @@ func TestDefaultStartTimeoutOutlastsAJoinAttempt(t *testing.T) {
 func TestDefaultConfigRejectsInvalidTopologyAddresses(t *testing.T) {
 	badLocal := descriptor()
 	badLocal.PlatformInstances[0].FabricClientAddress = "not-an-address"
-	_, err := fabricolric.DefaultConfig(badLocal)
+	_, err := fabricolric.DefaultConfig(badLocal, "primary")
 	require.ErrorContains(t, err, "client address")
 
 	bad := descriptor()
 	bad.Fabric.Peers[1].FabricMemberlistAddress = "nope"
-	_, err = fabricolric.DefaultConfig(bad)
+	_, err = fabricolric.DefaultConfig(bad, "primary")
 	require.ErrorContains(t, err, "join address")
 }
 
 func TestConfigValidate(t *testing.T) {
 	valid := func() fabricolric.Config {
-		cfg, err := fabricolric.DefaultConfig(descriptor())
+		cfg, err := fabricolric.DefaultConfig(descriptor(), "primary")
 		require.NoError(t, err)
 		return cfg
 	}

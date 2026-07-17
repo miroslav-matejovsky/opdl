@@ -71,7 +71,7 @@ func adapters() []adapter {
 			name: "memory",
 			open: func(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric {
 				t.Helper()
-				f := memory.Open(descriptor)
+				f := memory.Open(descriptor, "primary")
 				t.Cleanup(func() { _ = f.Close(context.Background()) })
 				return f
 			},
@@ -103,7 +103,7 @@ func openOlric(t *testing.T, descriptor deployment.Descriptor) fabric.Fabric {
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 
-	f, err := fabricolric.Open(ctx, descriptor, fabricolric.Config{
+	f, err := fabricolric.Open(ctx, descriptor, "primary", fabricolric.Config{
 		ClientAddress:     freeAddress(t),
 		MemberlistAddress: freeAddress(t),
 		StartTimeout:      60 * time.Second,
@@ -334,13 +334,14 @@ func TestContract(t *testing.T) {
 	run(t, "expected members come from the descriptor, not from who is reachable", func(t *testing.T, a adapter) {
 		members := a.open(t, testDescriptor()).Members()
 		require.Equal(t, []fabric.Member{
-			{Site: testSite, Machine: "node-a", IP: "127.0.0.1", Self: true},
-			{Site: testSite, Machine: "node-b", IP: "127.0.0.2"},
-		}, members, "the primary peer is expected and the Stage 1 secondary is not yet a runtime member")
+			{Site: testSite, Machine: "node-a", Instance: "primary", IP: "127.0.0.1", Self: true},
+			{Site: testSite, Machine: "node-b", Instance: "primary", IP: "127.0.0.2"},
+			{Site: testSite, Machine: "node-b", Instance: "secondary", IP: "127.0.0.2"},
+		}, members, "both instances of the redundant peer are members, ordered primary before secondary")
 
 		self, ok := fabric.Self(members)
 		require.True(t, ok)
-		require.Equal(t, "node-a", self.Machine)
+		require.Equal(t, "node-a/primary", self.ID())
 	})
 
 	run(t, "members are a copy the caller cannot use to mutate the fabric", func(t *testing.T, a adapter) {
@@ -418,7 +419,7 @@ func TestContract(t *testing.T) {
 		// can still report which site it was part of.
 		f := a.open(t, testDescriptor())
 		require.NoError(t, f.Close(t.Context()))
-		require.Len(t, f.Members(), 2)
+		require.Len(t, f.Members(), 3)
 	})
 }
 

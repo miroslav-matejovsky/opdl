@@ -42,7 +42,7 @@ var testDescriptor = deployment.Descriptor{
 // they use the memory adapter and stay in the fast gate. The real backend's
 // lifecycle is covered by the olric adapter's own tests.
 func testFabric() fabric.Fabric {
-	return memory.Open(testDescriptor)
+	return memory.Open(testDescriptor, "primary")
 }
 
 // testLoop is a reconciler loop that is not running. serve stops it like any
@@ -233,7 +233,7 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	}
 
 	t.Run("no overrides uses the deployment", func(t *testing.T) {
-		cfg, err := olricConfig(descriptor, config.FabricOlric{})
+		cfg, err := olricConfig(descriptor, "primary", config.FabricOlric{})
 		require.NoError(t, err)
 		require.Equal(t, "10.0.1.10:3320", cfg.ClientAddress)
 		require.Equal(t, "10.0.1.10:3322", cfg.MemberlistAddress)
@@ -243,7 +243,7 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	})
 
 	t.Run("overrides move sockets", func(t *testing.T) {
-		cfg, err := olricConfig(descriptor, config.FabricOlric{
+		cfg, err := olricConfig(descriptor, "primary", config.FabricOlric{
 			ClientAddress:     "127.0.0.1:4001",
 			MemberlistAddress: "127.0.0.1:4002",
 			Join:              []string{"127.0.0.1:4102"},
@@ -259,7 +259,7 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	})
 
 	t.Run("a partial override keeps the rest of the deployment", func(t *testing.T) {
-		cfg, err := olricConfig(descriptor, config.FabricOlric{ClientAddress: "127.0.0.1:4001"})
+		cfg, err := olricConfig(descriptor, "primary", config.FabricOlric{ClientAddress: "127.0.0.1:4001"})
 		require.NoError(t, err)
 		require.Equal(t, "127.0.0.1:4001", cfg.ClientAddress)
 		require.Equal(t, "10.0.1.10:3322", cfg.MemberlistAddress, "an absent override is not a blank")
@@ -267,18 +267,18 @@ func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	})
 
 	t.Run("an explicit empty join list seeds from nobody", func(t *testing.T) {
-		cfg, err := olricConfig(descriptor, config.FabricOlric{Join: []string{}})
+		cfg, err := olricConfig(descriptor, "primary", config.FabricOlric{Join: []string{}})
 		require.NoError(t, err)
 		require.Empty(t, cfg.Join, "an explicit empty list is a deliberate override")
 	})
 
 	t.Run("an unparsable start timeout is reported", func(t *testing.T) {
-		_, err := olricConfig(descriptor, config.FabricOlric{StartTimeout: "soon"})
+		_, err := olricConfig(descriptor, "primary", config.FabricOlric{StartTimeout: "soon"})
 		require.ErrorContains(t, err, `start timeout "soon"`)
 	})
 
 	t.Run("an unparsable shutdown grace is reported", func(t *testing.T) {
-		_, err := olricConfig(descriptor, config.FabricOlric{ShutdownGrace: "soon"})
+		_, err := olricConfig(descriptor, "primary", config.FabricOlric{ShutdownGrace: "soon"})
 		require.ErrorContains(t, err, `shutdown grace "soon"`)
 	})
 }

@@ -21,9 +21,11 @@ import (
 type Fabric struct {
 	cfg     Config
 	members []fabric.Member
-	// clientAddresses maps an expected member's client address to its machine,
-	// which is how a live Olric member is recognized as a descriptor identity.
-	// An Olric member names itself by its client address.
+	// clientAddresses maps an expected member's client endpoint to its canonical
+	// machine/instance ID, which is how a live Olric member is recognized as a
+	// descriptor identity. An Olric member names itself by its client address, so
+	// a primary and secondary on one machine map to distinct IDs and never
+	// overwrite each other.
 	clientAddresses map[string]string
 
 	db     *olric.Olric
@@ -34,14 +36,15 @@ type Fabric struct {
 	closed bool
 }
 
-// Open starts an embedded Olric member for a machine's resolved deployment descriptor and
-// returns once it is ready. It validates the composed configuration before
-// opening any listener. Failure leaves nothing running.
-func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*Fabric, error) {
+// Open starts an embedded Olric member for a machine's resolved deployment
+// descriptor, running as selfInstance, and returns once it is ready. It
+// validates the composed configuration before opening any listener. Failure
+// leaves nothing running.
+func Open(ctx context.Context, descriptor deployment.Descriptor, selfInstance string, cfg Config) (*Fabric, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	members := fabric.MembersFromDescriptor(descriptor)
+	members := fabric.MembersFromDescriptor(descriptor, selfInstance)
 	addresses, err := clientAddresses(descriptor, members, cfg.ClientAddress)
 	if err != nil {
 		return nil, err
@@ -134,10 +137,11 @@ func (f *Fabric) State(ctx context.Context) (fabric.State, error) {
 }
 
 // Reachable returns the expected members Olric currently sees, ordered by
-// machine name. It maps live members back to descriptor identities by client
-// address and ignores anything it cannot place, so a stray member never appears
-// as part of this site. It is exported for diagnostics; membership decisions use
-// Members.
+// machine and then primary before secondary. It maps live members back to
+// descriptor identities by client endpoint and ignores anything it cannot place,
+// so a stray member never appears as part of this site, and a primary and
+// secondary on one machine are reported as the two distinct members they are. It
+// is exported for diagnostics; membership decisions use Members.
 func (f *Fabric) Reachable(ctx context.Context) ([]fabric.Member, error) {
 	if err := f.check(ctx); err != nil {
 		return nil, err
@@ -146,15 +150,15 @@ func (f *Fabric) Reachable(ctx context.Context) ([]fabric.Member, error) {
 	if err != nil {
 		return nil, fmt.Errorf("olric: list members: %w", err)
 	}
-	machines := make(map[string]bool, len(live))
+	ids := make(map[string]bool, len(live))
 	for _, member := range live {
-		if machine, ok := f.clientAddresses[member.Name]; ok {
-			machines[machine] = true
+		if id, ok := f.clientAddresses[member.Name]; ok {
+			ids[id] = true
 		}
 	}
-	reachable := make([]fabric.Member, 0, len(machines))
+	reachable := make([]fabric.Member, 0, len(ids))
 	for _, member := range f.members {
-		if machines[member.Machine] {
+		if ids[member.ID()] {
 			reachable = append(reachable, member)
 		}
 	}
@@ -249,32 +253,51 @@ func (c Config) olricConfig() (*olricconfig.Config, error) {
 	return cfg, nil
 }
 
-// clientAddresses maps each expected member's client address to its machine, so
-// a live Olric member can be recognized as a descriptor identity.
+// clientAddresses maps each expected member's client endpoint to its canonical
+// machine/instance ID, so a live Olric member can be recognized as a descriptor
+// identity. A primary and secondary on one machine have distinct client
+// endpoints, so they never collapse into one entry.
 //
 // Self is keyed by the address this member actually listens on, because that is
-// known exactly and may have been overridden. Until Stage 2 expands Member with
-// instance identity, each peer is keyed by its explicit primary client endpoint.
+// known exactly and may have been overridden. Every other member is keyed by its
+// explicit descriptor client endpoint: a sibling instance by its entry in this
+// machine's platform instances, a peer instance by its peer record.
 func clientAddresses(descriptor deployment.Descriptor, members []fabric.Member, selfAddress string) (map[string]string, error) {
-	peerAddresses := make(map[string]string)
-	for _, peer := range descriptor.Fabric.Peers {
-		if peer.Instance == deployment.PlatformInstancePrimary {
-			peerAddresses[peer.Machine] = peer.FabricClientAddress
-		}
-	}
 	addresses := make(map[string]string, len(members))
 	for _, member := range members {
 		if member.Self {
-			addresses[selfAddress] = member.Machine
+			addresses[selfAddress] = member.ID()
 			continue
 		}
-		address, found := peerAddresses[member.Machine]
-		if !found {
-			return nil, fmt.Errorf("olric: member %q has no primary client endpoint in deployment descriptor", member.Machine)
+		endpoint, err := memberClientEndpoint(descriptor, member)
+		if err != nil {
+			return nil, err
 		}
-		addresses[address] = member.Machine
+		addresses[endpoint] = member.ID()
 	}
 	return addresses, nil
+}
+
+// memberClientEndpoint returns the explicit client endpoint a non-self member
+// listens on, from the descriptor. A sibling instance is found among this
+// machine's platform instances; a peer instance among the fabric peers.
+func memberClientEndpoint(descriptor deployment.Descriptor, member fabric.Member) (string, error) {
+	if member.Machine == descriptor.Machine {
+		instance, found := instanceByName(descriptor.PlatformInstances, member.Instance)
+		if !found || instance.FabricClientAddress == "" {
+			return "", fmt.Errorf("olric: local instance %q has no client endpoint in deployment descriptor", member.ID())
+		}
+		return instance.FabricClientAddress, nil
+	}
+	for _, peer := range descriptor.Fabric.Peers {
+		if peer.Machine == member.Machine && peer.Instance == member.Instance {
+			if peer.FabricClientAddress == "" {
+				return "", fmt.Errorf("olric: member %q has no client endpoint in deployment descriptor", member.ID())
+			}
+			return peer.FabricClientAddress, nil
+		}
+	}
+	return "", fmt.Errorf("olric: member %q has no client endpoint in deployment descriptor", member.ID())
 }
 
 // collection is one Olric DMap behind the fabric's collection contract.

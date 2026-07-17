@@ -44,33 +44,33 @@ type Config struct {
 	ShutdownGrace time.Duration
 }
 
-// DefaultConfig reads the primary process's explicit production endpoints from
-// the resolved deployment descriptor. Stage 3 will select primary or secondary
-// at process startup. No endpoint or port is invented here.
-func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
-	var primary deployment.PlatformInstance
-	found := false
-	for _, instance := range descriptor.PlatformInstances {
-		if instance.Name == deployment.PlatformInstancePrimary {
-			primary, found = instance, true
-			break
-		}
-	}
+// DefaultConfig reads the selfInstance process's explicit production endpoints
+// from the resolved deployment descriptor. It seeds from every other expected
+// instance of the site, including this machine's sibling instance, so a primary
+// and secondary on one machine find each other and both find every peer
+// instance. Only the selected local instance is excluded. No endpoint or port is
+// invented here.
+func DefaultConfig(descriptor deployment.Descriptor, selfInstance string) (Config, error) {
+	self, found := instanceByName(descriptor.PlatformInstances, selfInstance)
 	if !found {
-		return Config{}, fmt.Errorf("olric: primary platform instance is absent from deployment descriptor")
+		return Config{}, fmt.Errorf("olric: platform instance %q is absent from deployment descriptor", selfInstance)
 	}
-	join := make([]string, 0, len(descriptor.Fabric.Peers))
-	for _, peer := range descriptor.Fabric.Peers {
-		// Until Stage 2 makes fabric membership instance-aware, the existing one
-		// process per machine joins the explicit primary endpoints only.
-		if peer.Instance != deployment.PlatformInstancePrimary {
+	join := make([]string, 0, len(descriptor.PlatformInstances)+len(descriptor.Fabric.Peers))
+	// The sibling instance on this machine, when there is one. Its endpoints are
+	// as explicit as any peer's, and a member never seeds from itself.
+	for _, instance := range descriptor.PlatformInstances {
+		if instance.Name == selfInstance {
 			continue
 		}
+		join = append(join, instance.FabricMemberlistAddress)
+	}
+	// Every peer instance of the site, both primary and secondary.
+	for _, peer := range descriptor.Fabric.Peers {
 		join = append(join, peer.FabricMemberlistAddress)
 	}
 	config := Config{
-		ClientAddress:     primary.FabricClientAddress,
-		MemberlistAddress: primary.FabricMemberlistAddress,
+		ClientAddress:     self.FabricClientAddress,
+		MemberlistAddress: self.FabricMemberlistAddress,
 		Join:              join,
 		StartTimeout:      DefaultStartTimeout,
 		ShutdownGrace:     10 * time.Second,
@@ -79,6 +79,16 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 		return Config{}, fmt.Errorf("olric: deployment endpoints: %w", err)
 	}
 	return config, nil
+}
+
+// instanceByName returns the named platform instance from a descriptor's list.
+func instanceByName(instances []deployment.PlatformInstance, name string) (deployment.PlatformInstance, bool) {
+	for _, instance := range instances {
+		if instance.Name == name {
+			return instance, true
+		}
+	}
+	return deployment.PlatformInstance{}, false
 }
 
 // Validate checks the composed configuration before any listener is opened, so

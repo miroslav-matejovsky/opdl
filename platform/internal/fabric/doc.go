@@ -40,14 +40,19 @@
 //     instants. A caller must not infer that a key is absent site-wide from its
 //     absence in one enumeration.
 //   - Stable membership. Members is the expected membership of the site, taken
-//     from the deployment descriptor the machine was built with. It is fixed for
-//     the process's whole life and identical on every member of the site. It
-//     does not shrink when a member is unreachable and does not grow when
-//     something unexpected connects: it answers "who belongs here", while State
-//     answers "who is reachable now". Nothing about it is discovered at runtime.
-//   - State. Connected means every expected member is reachable; a site of one
-//     is connected on its own. Degraded means some but not all are reachable.
-//     Disconnected means no peer is reachable.
+//     from the deployment descriptor the machine was built with. A member is one
+//     platform instance: a redundant machine contributes two members, its
+//     primary and its secondary, told apart by Member.Instance and by the
+//     canonical machine/instance ID. Membership is fixed for the process's whole
+//     life and identical on every member of the site. It does not shrink when a
+//     member is unreachable and does not grow when something unexpected connects:
+//     it answers "who belongs here", while State answers "who is reachable now".
+//     Nothing about it is discovered at runtime.
+//   - State. Connected means every expected member, counting each instance, is
+//     reachable; a site of one is connected on its own. Degraded means some but
+//     not all are reachable. Disconnected means no peer is reachable. State is
+//     operational reachability only: it is not a registration voting policy, and
+//     a caller must not read it as one.
 //   - Calls after close. Every method returns ErrClosed once Close returns, and
 //     a Collection obtained earlier is closed with its Fabric. Close is
 //     idempotent.
@@ -77,11 +82,18 @@
 // docs/01-architecture.md for the measurements and rationale. Do not read
 // Create as a linearizable site-wide claim primitive.
 //
-// # No redundancy
+// # Membership and reachability are not durable state
 //
-// A machine runs exactly one fabric member, and the platform provides no
-// election, fencing, or failover on top of it. If a backend replicates or
-// partitions data internally, that is the backend's business and not a platform
-// guarantee: nothing here promises a value survives losing a machine. Do not
-// read backend replication as service redundancy.
+// A redundant machine runs two fabric members, its primary and its secondary,
+// but the fabric still provides no election, fencing, or failover: the two are
+// distinct members that happen to share a machine, not a leader and a standby.
+// Membership says who belongs to the site and State says who is reachable now;
+// neither says anything about what any member durably holds. A member being
+// expected, or even reachable, does not mean a value it once stored still
+// exists: this is an in-memory distribution layer, and durability of
+// registration state is a separate responsibility that does not derive from
+// fabric membership or reachability. If a backend replicates or partitions data
+// internally, that is the backend's business and not a platform guarantee.
+// Nothing here promises a value survives losing a member, and backend
+// replication must not be read as service redundancy.
 package fabric

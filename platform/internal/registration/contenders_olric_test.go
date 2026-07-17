@@ -19,9 +19,9 @@ func TestJoinConvergesRetainedContenders(t *testing.T) {
 	}
 	ctx := t.Context()
 	nodeA, nodeB := contenderDescriptors()
-	aConfig, err := fabricolric.DefaultConfig(nodeA)
+	aConfig, err := fabricolric.DefaultConfig(nodeA, "primary")
 	require.NoError(t, err)
-	bConfig, err := fabricolric.DefaultConfig(nodeB)
+	bConfig, err := fabricolric.DefaultConfig(nodeB, "primary")
 	require.NoError(t, err)
 
 	fabricA := openContenderFabric(t, nodeA, aConfig)
@@ -154,7 +154,7 @@ func openContenderFabric(t *testing.T, descriptor deployment.Descriptor, config 
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
-	opened, err := fabricolric.Open(ctx, descriptor, config)
+	opened, err := fabricolric.Open(ctx, descriptor, "primary", config)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)

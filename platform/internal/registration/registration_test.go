@@ -441,7 +441,7 @@ func TestRunRejectsANonPositiveInterval(t *testing.T) {
 func TestOpenValidatesItsDeployment(t *testing.T) {
 	descriptor := newSite(t, "node-a", "node-b").descriptorFor("node-a")
 
-	_, _, err := Open(memory.Open(descriptor), nil)
+	_, _, err := Open(memory.Open(descriptor, "primary"), nil)
 	require.ErrorContains(t, err, "recorder is required")
 
 	_, _, err = Open(nil, events.NopRecorder{})
@@ -449,7 +449,7 @@ func TestOpenValidatesItsDeployment(t *testing.T) {
 
 	broken := descriptor
 	broken.Fabric.Peers = []deployment.FabricPeer{{Site: testSite, Machine: "node-b", IP: "not-an-ip"}}
-	_, _, err = Open(memory.Open(broken), events.NopRecorder{})
+	_, _, err = Open(memory.Open(broken, "primary"), events.NopRecorder{})
 	require.ErrorContains(t, err, "node-b")
 	require.ErrorContains(t, err, "IP")
 }

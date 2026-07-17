@@ -76,7 +76,7 @@ func openWithClock(f fabric.Fabric, recorder Recorder, now func() time.Time) (*S
 		return nil, nil, err
 	}
 
-	members := f.Members()
+	members := machineMembers(f.Members())
 	if len(members) == 0 {
 		return nil, nil, errors.New("registration: the fabric expects no members")
 	}
@@ -103,6 +103,38 @@ func openWithClock(f fabric.Fabric, recorder Recorder, now func() time.Time) (*S
 		now:        now,
 	}
 	return service, reconciler, nil
+}
+
+// machineMembers collapses the fabric's instance-level membership to one
+// representative per machine, preferring the local instance so the machine-level
+// view still identifies which machine is this process's own.
+//
+// Registration votes per machine, not per platform instance: a machine's primary
+// and secondary are redundant executors that write the same semantic machine
+// confirmation, and acceptance requires one accepted confirmation from every
+// expected machine. The fabric is instance-aware because reachability is; the
+// acceptance set is not, so the two instances of a machine must count as one
+// member here rather than as two votes that could never both be cast while one
+// process is down.
+func machineMembers(members []fabric.Member) []fabric.Member {
+	byMachine := make(map[string]fabric.Member, len(members))
+	order := make([]string, 0, len(members))
+	for _, member := range members {
+		existing, seen := byMachine[member.Machine]
+		if !seen {
+			order = append(order, member.Machine)
+			byMachine[member.Machine] = member
+			continue
+		}
+		if member.Self && !existing.Self {
+			byMachine[member.Machine] = member
+		}
+	}
+	unique := make([]fabric.Member, 0, len(order))
+	for _, machine := range order {
+		unique = append(unique, byMachine[machine])
+	}
+	return unique
 }
 
 // Create takes a registration request and returns whether it claimed its key or

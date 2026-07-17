@@ -16,6 +16,12 @@
 // site-wide behavior testable in one process, at one adapter's speed, without a
 // network.
 //
+// A member is one platform instance, so a redundant machine's primary and
+// secondary are two members. Opening one machine's descriptor twice on a Site,
+// once as primary and once as secondary, gives a test both instances of that
+// machine as independent handles over the same shared collections, each marking
+// its own instance as Self.
+//
 // Shared collections do not make the members reachable to each other. They never
 // connected, so State still reports what it can honestly see, and a shared site
 // of two reads as disconnected.

@@ -63,8 +63,9 @@ func Run(args []string) error {
 
 	// The fabric starts before the public API, and a machine that cannot join
 	// its site does not serve: answering requests while disconnected from the
-	// fabric would be answering for a site this machine is not part of.
-	member, err := startFabric(ctx, descriptor, instance.Fabric().Olric, rec)
+	// fabric would be answering for a site this machine is not part of. This
+	// process runs as the primary instance; Stage 4 makes the selection explicit.
+	member, err := startFabric(ctx, descriptor, deployment.PlatformInstancePrimary, instance.Fabric().Olric, rec)
 	if err != nil {
 		return errors.Join(err, closeRecorder(rec))
 	}
@@ -155,12 +156,12 @@ func newRecorder(descriptor deployment.Descriptor, dir string) (recorder, error)
 // may move this named instance's sockets as a controlled fallback. The composed
 // result is checked before any listener opens. A machine that cannot start its
 // fabric returns an error and never reaches the public API.
-func startFabric(ctx context.Context, descriptor deployment.Descriptor, overrides config.FabricOlric, rec recorder) (fabric.Fabric, error) {
-	cfg, err := olricConfig(descriptor, overrides)
+func startFabric(ctx context.Context, descriptor deployment.Descriptor, selfInstance string, overrides config.FabricOlric, rec recorder) (fabric.Fabric, error) {
+	cfg, err := olricConfig(descriptor, selfInstance, overrides)
 	if err != nil {
 		return nil, err
 	}
-	f, err := fabricolric.Open(ctx, descriptor, cfg)
+	f, err := fabricolric.Open(ctx, descriptor, selfInstance, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -169,13 +170,16 @@ func startFabric(ctx context.Context, descriptor deployment.Descriptor, override
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("fabric members: %w", err), f.Close(ctx))
 	}
-	fmt.Printf("platform: fabric member %s on %s, %d of %d members reachable\n",
-		descriptor.Machine, cfg.ClientAddress, len(reachable), len(f.Members()))
+	self, _ := fabric.Self(f.Members())
+	fmt.Printf("platform: fabric member %s on %s, %d of %d instances reachable\n",
+		self.ID(), cfg.ClientAddress, len(reachable), len(f.Members()))
 
 	if err := rec.Record(ctx, fabric.Started{
-		Adapter: f.Name(),
-		Address: cfg.ClientAddress,
-		Members: len(reachable),
+		Adapter:  f.Name(),
+		Machine:  self.Machine,
+		Instance: self.Instance,
+		Address:  cfg.ClientAddress,
+		Members:  len(reachable),
 	}); err != nil {
 		return nil, errors.Join(err, f.Close(ctx))
 	}
@@ -185,8 +189,8 @@ func startFabric(ctx context.Context, descriptor deployment.Descriptor, override
 // olricConfig composes the adapter's configuration: the descriptor's derived
 // topology first, then whatever the configuration file overrides. Deriving first
 // means an absent override is the deployment's own value rather than a blank.
-func olricConfig(descriptor deployment.Descriptor, overrides config.FabricOlric) (fabricolric.Config, error) {
-	cfg, err := fabricolric.DefaultConfig(descriptor)
+func olricConfig(descriptor deployment.Descriptor, selfInstance string, overrides config.FabricOlric) (fabricolric.Config, error) {
+	cfg, err := fabricolric.DefaultConfig(descriptor, selfInstance)
 	if err != nil {
 		return fabricolric.Config{}, err
 	}
@@ -229,7 +233,10 @@ func stopFabric(ctx context.Context, f fabric.Fabric, rec recorder, timeout time
 	if err := f.Close(stopCtx); err != nil {
 		errs = append(errs, fmt.Errorf("close fabric: %w", err))
 	}
-	if err := rec.Record(stopCtx, fabric.Stopped{Adapter: f.Name()}); err != nil {
+	// Membership stays readable after close, so the stopped event still names the
+	// instance that stopped.
+	self, _ := fabric.Self(f.Members())
+	if err := rec.Record(stopCtx, fabric.Stopped{Adapter: f.Name(), Machine: self.Machine, Instance: self.Instance}); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

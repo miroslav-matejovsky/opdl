@@ -204,7 +204,7 @@ func (s *site) start(machine string) *registration.Service {
 	}
 	require.NotEmpty(s.t, descriptor.Machine, "%s is not a machine of this site", machine)
 
-	f := s.shared.Open(descriptor)
+	f := s.shared.Open(descriptor, "primary")
 	service, reconciler, err := registration.Open(f, events.NopRecorder{})
 	require.NoError(s.t, err)
 	s.t.Cleanup(func() { _ = f.Close(context.Background()) })

@@ -34,9 +34,12 @@ func NewSite() *Site {
 }
 
 // Open builds one member's fabric on the site, from that machine's resolved
-// deployment descriptor.
-func (s *Site) Open(descriptor deployment.Descriptor) *Fabric {
-	return &Fabric{members: fabric.MembersFromDescriptor(descriptor), site: s}
+// deployment descriptor, running as selfInstance. Opening the same machine's
+// descriptor twice, once per instance, gives that machine's primary and
+// secondary independent handles over the site's shared collections, which is how
+// a test runs both instances of a redundant machine in one process.
+func (s *Site) Open(descriptor deployment.Descriptor, selfInstance string) *Fabric {
+	return &Fabric{members: fabric.MembersFromDescriptor(descriptor, selfInstance), site: s}
 }
 
 // collection returns the site's collection of that name, creating it on first
@@ -65,10 +68,11 @@ type Fabric struct {
 }
 
 // Open builds a standalone in-process fabric for a machine's resolved deployment
-// descriptor. It is a member of a site of its own, which is what a test wants
-// unless it is specifically testing members sharing state; for that, see Site.
-func Open(descriptor deployment.Descriptor) *Fabric {
-	return NewSite().Open(descriptor)
+// descriptor, running as selfInstance. It is a member of a site of its own,
+// which is what a test wants unless it is specifically testing members sharing
+// state; for that, see Site.
+func Open(descriptor deployment.Descriptor, selfInstance string) *Fabric {
+	return NewSite().Open(descriptor, selfInstance)
 }
 
 // Name returns this adapter's implementation name.

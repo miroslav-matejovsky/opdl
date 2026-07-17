@@ -31,19 +31,33 @@ const (
 	StateDisconnected State = "disconnected"
 )
 
-// Member is one expected fabric member of a site, as the deployment descriptor
-// names it. It is a deployment identity and carries no transport detail: a
-// consumer correlates a member with the machine it runs on, not with a socket.
+// Member is one expected fabric member of a site: one platform instance on one
+// machine, as the deployment descriptor names it. A redundant machine runs two
+// members, a primary and a secondary, that share the machine's identity and IP
+// but are distinct fabric members. It is a deployment identity and carries no
+// transport detail: a consumer correlates a member with the instance it runs
+// as, not with a socket.
 type Member struct {
 	// Site is the member's site. Every member of one fabric shares it.
 	Site string
-	// Machine is the member's machine identity, unique within the site.
+	// Machine is the member's machine identity, unique within the site. A
+	// machine's primary and secondary share it.
 	Machine string
-	// IP is the address the member is reached on.
+	// Instance is the member's platform instance identity on its machine,
+	// primary or secondary. It is what tells the two members of a redundant
+	// machine apart.
+	Instance string
+	// IP is the address the member is reached on. Both instances of a machine
+	// share it; they are distinguished by their explicit endpoints, not by IP.
 	IP string
-	// Self reports whether this member is the local machine.
+	// Self reports whether this member is this process's own instance.
 	Self bool
 }
+
+// ID is the member's canonical identity, machine/instance. It is the one string
+// used for keys, logs, comparisons, and diagnostics, so a primary and a
+// secondary on one machine never collapse into a single identity.
+func (m Member) ID() string { return m.Machine + "/" + m.Instance }
 
 // Entry is one key and its value from a collection.
 type Entry struct {
@@ -68,8 +82,8 @@ type Fabric interface {
 	// opening it twice on one member is not an error. A blank name is an error.
 	Collection(name string) (Collection, error)
 	// Members returns the expected site membership, including self, ordered by
-	// machine name. It is fixed for the process's life and does not reflect who
-	// is reachable now; see State for that.
+	// machine and then primary before secondary. It is fixed for the process's
+	// life and does not reflect who is reachable now; see State for that.
 	Members() []Member
 	// State reports whether the expected members are reachable.
 	State(ctx context.Context) (State, error)
@@ -103,35 +117,75 @@ type Collection interface {
 }
 
 // MembersFromDescriptor derives the expected site membership from a machine's
-// resolved deployment descriptor. Both adapters build their membership with it,
-// so "who belongs to this fabric" has exactly one definition and comes from the
-// descriptor rather than from anything observed at runtime.
+// resolved deployment descriptor, as seen by the process running as
+// selfInstance. Both adapters build their membership with it, so "who belongs to
+// this fabric" has exactly one definition and comes from the descriptor rather
+// than from anything observed at runtime.
 //
-// Stage 1 descriptors expose both platform instances, but the runtime still
-// runs one primary fabric member per machine until Stage 2 makes membership
-// instance-aware. Secondary peer records are therefore ignored here. The
-// result is ordered by machine name and includes self, so every member of a
-// site derives an identical list.
-func MembersFromDescriptor(descriptor deployment.Descriptor) []Member {
-	members := make([]Member, 0, len(descriptor.Fabric.Peers)+1)
+// Every configured platform instance in the site is a member: this machine's own
+// instances (its primary and, when configured, its secondary) and every peer
+// instance the descriptor lists. Exactly one member is marked Self, the local
+// instance this process runs as. The result is ordered by machine and then
+// primary before secondary, and includes self, so every instance of a site
+// derives an identical list.
+//
+// A descriptor that names no platform instances describes a single primary on
+// this machine, so a minimally specified machine is still a member of its own
+// site rather than a site of nobody.
+func MembersFromDescriptor(descriptor deployment.Descriptor, selfInstance string) []Member {
+	members := make([]Member, 0, len(descriptor.PlatformInstances)+len(descriptor.Fabric.Peers)+1)
+	// This machine's own instance, the one the process runs as. Its identity is
+	// the machine's, taken from the descriptor's top-level fields, so a machine
+	// that lists no explicit instances is still a member of its site.
 	members = append(members, Member{
-		Site:    descriptor.Site,
-		Machine: descriptor.Machine,
-		IP:      descriptor.IP,
-		Self:    true,
+		Site:     descriptor.Site,
+		Machine:  descriptor.Machine,
+		Instance: selfInstance,
+		IP:       descriptor.IP,
+		Self:     true,
 	})
-	for _, peer := range descriptor.Fabric.Peers {
-		if peer.Instance == deployment.PlatformInstanceSecondary {
+	// This machine's other configured instances, e.g. the secondary while the
+	// primary runs. They share the machine's identity and IP.
+	for _, instance := range descriptor.PlatformInstances {
+		if instance.Name == selfInstance {
 			continue
 		}
 		members = append(members, Member{
-			Site:    peer.Site,
-			Machine: peer.Machine,
-			IP:      peer.IP,
+			Site:     descriptor.Site,
+			Machine:  descriptor.Machine,
+			Instance: instance.Name,
+			IP:       descriptor.IP,
 		})
 	}
-	slices.SortFunc(members, func(a, b Member) int { return strings.Compare(a.Machine, b.Machine) })
+	// Every peer instance of the site, including a peer machine's secondary.
+	for _, peer := range descriptor.Fabric.Peers {
+		members = append(members, Member{
+			Site:     peer.Site,
+			Machine:  peer.Machine,
+			Instance: peer.Instance,
+			IP:       peer.IP,
+		})
+	}
+	slices.SortFunc(members, compareMembers)
 	return members
+}
+
+// compareMembers orders members by machine, then primary before secondary, so
+// every member of a site derives the same ordered list.
+func compareMembers(a, b Member) int {
+	if c := strings.Compare(a.Machine, b.Machine); c != 0 {
+		return c
+	}
+	return instanceRank(a.Instance) - instanceRank(b.Instance)
+}
+
+// instanceRank ranks a platform instance for ordering: primary first, secondary
+// after. An unnamed instance sorts with primary.
+func instanceRank(instance string) int {
+	if instance == deployment.PlatformInstanceSecondary {
+		return 1
+	}
+	return 0
 }
 
 // Self returns the local member of members.
