@@ -132,6 +132,7 @@ func (f *Fabric) doPublish(ctx context.Context, event events.Event) (eventfabric
 	if err != nil {
 		return eventfabric.Receipt{}, fmt.Errorf("nats: stamp %s: %w", event.EventType(), err)
 	}
+	record.CausationID, record.CorrelationID = eventfabric.CausalLinks(ctx)
 	route, err := eventfabric.NewRoute(f.scope, event.EventType())
 	if err != nil {
 		return eventfabric.Receipt{}, err
@@ -148,6 +149,17 @@ func (f *Fabric) doPublish(ctx context.Context, event events.Event) (eventfabric
 	ack, err := f.js.Publish(ctx, route.Subject(), data, jetstream.WithMsgID(dedupID))
 	if err != nil {
 		return eventfabric.Receipt{}, fmt.Errorf("nats: publish %s: %w", route.Subject(), err)
+	}
+	if ack.Duplicate {
+		stored, getErr := f.stream.GetMsg(ctx, ack.Sequence)
+		if getErr != nil {
+			return eventfabric.Receipt{}, fmt.Errorf("nats: read duplicate %s at %d: %w", route.Subject(), ack.Sequence, getErr)
+		}
+		accepted, decodeErr := eventfabric.Decode(stored.Data)
+		if decodeErr != nil {
+			return eventfabric.Receipt{}, decodeErr
+		}
+		id = accepted.ID
 	}
 	return eventfabric.Receipt{ID: id, Sequence: ack.Sequence}, nil
 }

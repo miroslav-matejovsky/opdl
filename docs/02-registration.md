@@ -119,9 +119,11 @@ quorum, and persistence are outside the current implementation.
 The accepted target replaces the five shared collections and the periodic
 reconciler with ordered events in the site journal and a node-local projection.
 Every node rebuilds the same registration views by folding the journal; no query
-reads shared state. The event catalog and the pure projection are frozen in
-`platform/internal/registration/eventmodel`; the runtime cutover is staged in
-`docs/plan`.
+reads shared state. The event catalog, local projection, command and query
+services, and durable handlers are implemented in
+`platform/internal/registration/eventmodel`. The live runtime still uses the
+Olric-backed implementation until Stage 4 composes NATS replay, handlers, HTTP
+readiness, and shutdown.
 
 ### Event flow
 

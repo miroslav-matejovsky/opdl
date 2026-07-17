@@ -119,7 +119,7 @@ assume the existing registration flow is the only stateful use case being moved.
 | --- | --- | --- | --- | --- |
 | [1. Event model and decisions](01-event-model.md) | Freeze the event, ordering, topology, and projection rules | Medium | 2-3 days | Complete |
 | [2. OPDL Event Fabric](02-event-fabric.md) | Add the OPDL abstraction and NATS JetStream adapter | High | 4-6 days | Complete |
-| [3. Registration projections](03-registration-projections.md) | Replace shared registration collections and scans with events | High | 5-8 days | Not started |
+| [3. Registration projections](03-registration-projections.md) | Build event-backed registration projections, services, and handlers | High | 5-8 days | Core complete; activation in Stage 4 |
 | [4. Runtime cutover](04-runtime-cutover.md) | Run the platform and scenarios solely through NATS | High | 3-5 days | Not started |
 | [5. Remove distributed state](05-remove-distributed-state.md) | Delete Olric, memory fabric, and obsolete paths | Medium | 2-4 days | Not started |
 
@@ -134,7 +134,10 @@ integration tests against a real embedded server. The adapter is not yet compose
 into the runtime, and the Olric registration runtime is unchanged. Issues
 surfaced while implementing these stages are in
 [01-event-model-findings.md](01-event-model-findings.md) and
-[02-event-fabric-findings.md](02-event-fabric-findings.md).
+[02-event-fabric-findings.md](02-event-fabric-findings.md). Stage 3 implemented
+the event-backed registration boundary without composing it into the live
+runtime; its cutover dependency is recorded in
+[03-registration-projections-findings.md](03-registration-projections-findings.md).
 
 ## Completion criteria
 

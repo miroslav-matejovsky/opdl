@@ -155,6 +155,17 @@ func (r *recorder) count(eventType events.Type) int {
 	return total
 }
 
+func (r *recorder) first(eventType events.Type) (eventfabric.Delivery, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, delivery := range r.got {
+		if delivery.Record.Type == eventType {
+			return delivery, true
+		}
+	}
+	return eventfabric.Delivery{}, false
+}
+
 // recordHandler records handled deliveries. It can fail the first failUntil
 // attempts of each sequence, or fail every attempt, so redelivery and exhaustion
 // are exercised.
@@ -250,6 +261,32 @@ func TestPublishDeduplicatesByStableIdentity(t *testing.T) {
 
 	require.Equal(t, first.Sequence, second.Sequence,
 		"republishing the same identity collapses onto the first acceptance")
+	require.Equal(t, first.ID, second.ID,
+		"a duplicate receipt identifies the event that is actually retained")
+}
+
+func TestPublishStampsHandlerCausation(t *testing.T) {
+	f := open(t, testConfig(t))
+	cause, err := f.Publish(context.Background(), probe{Fact: "cause"})
+	require.NoError(t, err)
+
+	ctx := eventfabric.CausalContext(context.Background(), eventfabric.Delivery{
+		Record: events.Record{Meta: events.Meta{ID: cause.ID}},
+	})
+	_, err = f.Publish(ctx, keyedProbe{Key: "consequence"})
+	require.NoError(t, err)
+
+	rec := &recorder{}
+	projectorCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- f.RunProjector(projectorCtx, rec) }()
+	waitFor(t, func() bool { return rec.count("platform.probe.keyed") == 1 }, "projector never replayed consequence")
+	delivery, found := rec.first("platform.probe.keyed")
+	require.True(t, found)
+	require.Equal(t, cause.ID, delivery.Record.CausationID)
+	require.Equal(t, cause.ID, delivery.Record.CorrelationID)
+	cancel()
+	require.NoError(t, <-done)
 }
 
 func TestProjectorRebuildsFromDiskAfterRestart(t *testing.T) {

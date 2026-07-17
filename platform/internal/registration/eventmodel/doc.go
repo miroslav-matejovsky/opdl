@@ -1,14 +1,12 @@
-// Package eventmodel is the event-sourced registration model frozen in Stage 1
-// of the NATS migration (docs/plan/01-event-model.md). It defines the
-// registration event catalog and the pure projection that reads it, with no
-// dependency on any transport or on shared distributed state.
+// Package eventmodel is the event-sourced registration implementation built in
+// Stages 1 and 3 of the NATS migration. It defines the event catalog, node-local
+// projection, command and query services, and durable coordination handler. It
+// has no dependency on NATS or shared distributed state.
 //
 // It exists alongside the current Olric-backed registration package rather than
-// replacing it: Stage 3 (docs/plan/03-registration-projections.md) promotes this
-// model into the registration runtime and deletes the collection-based store and
-// reconciler. Keeping the new model in its own package lets Stage 1 fix the
-// contract and prove the reducers without disturbing the live flow, and without
-// two event types of the same name in one package.
+// replacing it yet because Stage 4 owns runtime composition, startup replay, and
+// HTTP activation. Stage 4 promotes this package into the live registration
+// boundary and deletes the collection-based store and reconciler in one cutover.
 //
 // # The event flow
 //
@@ -52,11 +50,12 @@
 // proposal rejected but does not release the key: key release is a separate
 // future domain event, not implicit cleanup.
 //
-// # Projection
+// # Projection and coordination
 //
 // Projection is a pure, ordered, idempotent fold of these events into node-local
 // maps. Applying the whole journal from empty rebuilds the same views on every
 // node, and a redelivered event changes nothing. The reducers are exercised
-// directly in tests without any transport; Apply is the single entry point the
-// Event Fabric drives in later stages.
+// directly in tests without any transport. CommandService publishes proposals,
+// QueryService reads only Projection, and Handler waits for projection progress
+// before publishing a deterministic confirmation, rejection, or acceptance.
 package eventmodel

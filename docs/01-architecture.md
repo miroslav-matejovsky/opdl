@@ -151,6 +151,9 @@ in which a NATS JetStream site journal is the source of truth and every node
 rebuilds its own projections from it. The full plan is in `docs/plan`. Stage 1
 froze the target contract and Stage 2 built the NATS JetStream adapter
 (`internal/eventfabric/nats`) that implements it; both are tested in isolation.
+Stage 3 added event-backed command and query services, strict local projection
+replay, and durable registration handlers in
+`internal/registration/eventmodel`.
 The Olric fabric and the JSONL recorder described above remain the live
 mechanisms until the runtime cutover (Stage 4) composes the adapter in.
 

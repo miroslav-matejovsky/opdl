@@ -16,8 +16,24 @@ func apply(t *testing.T, p *Projection, sequence uint64, event events.Event) {
 	t.Helper()
 	data, err := json.Marshal(event)
 	require.NoError(t, err)
+	machine := "node-a"
+	switch value := event.(type) {
+	case Proposed:
+		machine = value.OriginMachine
+	case Confirmed:
+		machine = value.DecidingMachine
+	case Rejected:
+		machine = value.DecidingMachine
+	case Accepted:
+		machine = value.OriginMachine
+	}
 	delivery := eventfabric.Delivery{
-		Record:   events.Record{Meta: events.Meta{Type: event.EventType()}, Data: data},
+		Record: events.Record{Meta: events.Meta{
+			ID:            "event-id",
+			Type:          event.EventType(),
+			SchemaVersion: 1,
+			Node:          events.Node{Machine: machine},
+		}, Data: data},
 		Sequence: sequence,
 	}
 	require.NoError(t, p.Apply(t.Context(), delivery))
@@ -143,6 +159,29 @@ func TestProjectionResolvesAConflictToTheJournalOrderWinner(t *testing.T) {
 	require.Equal(t, []string{loser.ProposalID}, conflicts[0].Losers)
 }
 
+func TestProjectionRejectsAcceptanceOfAConflictLoser(t *testing.T) {
+	p := NewProjection()
+	winner := proposal(42)
+	loser := NewProposed(ProposalIdentity{
+		UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Other",
+		OriginMachine: "node-b", OriginIP: "10.0.1.11",
+		ExpectedMachines: []string{"node-a", "node-b"},
+	})
+	apply(t, p, 1, winner)
+	apply(t, p, 2, loser)
+
+	data, err := json.Marshal(NewAccepted(loser))
+	require.NoError(t, err)
+	err = p.Apply(t.Context(), eventfabric.Delivery{
+		Record: events.Record{Meta: events.Meta{
+			ID: "accept-loser", Type: TypeAccepted, SchemaVersion: 1,
+			Node: events.Node{Machine: "node-b"},
+		}, Data: data},
+		Sequence: 3,
+	})
+	require.ErrorContains(t, err, "losing proposal")
+}
+
 func TestProjectionLowestSequenceWinsRegardlessOfApplyOrder(t *testing.T) {
 	// The reducer is deterministic even if deliveries are folded out of order:
 	// the lowest journal sequence claims the key.
@@ -208,7 +247,7 @@ func TestProjectionTracksTheHighWaterSequence(t *testing.T) {
 func TestProjectionStopsOnAnUnsupportedEvent(t *testing.T) {
 	p := NewProjection()
 	delivery := eventfabric.Delivery{
-		Record:   events.Record{Meta: events.Meta{Type: "platform.registration.unknown"}, Data: json.RawMessage(`{}`)},
+		Record:   events.Record{Meta: events.Meta{Type: "platform.registration.unknown", SchemaVersion: 1}, Data: json.RawMessage(`{}`)},
 		Sequence: 1,
 	}
 	err := p.Apply(t.Context(), delivery)
@@ -218,11 +257,49 @@ func TestProjectionStopsOnAnUnsupportedEvent(t *testing.T) {
 func TestProjectionReportsAnUndecodablePayload(t *testing.T) {
 	p := NewProjection()
 	delivery := eventfabric.Delivery{
-		Record:   events.Record{Meta: events.Meta{Type: TypeProposed}, Data: json.RawMessage(`{invalid`)},
+		Record:   events.Record{Meta: events.Meta{Type: TypeProposed, SchemaVersion: 1}, Data: json.RawMessage(`{invalid`)},
 		Sequence: 1,
 	}
 	err := p.Apply(t.Context(), delivery)
 	require.ErrorContains(t, err, "decode")
+}
+
+func TestProjectionIgnoresOtherDomainsAndAdvances(t *testing.T) {
+	p := NewProjection()
+	delivery := eventfabric.Delivery{
+		Record:   events.Record{Meta: events.Meta{Type: eventfabric.TypeReady}},
+		Sequence: 4,
+	}
+	require.NoError(t, p.Apply(t.Context(), delivery))
+	require.Equal(t, uint64(4), p.Sequence())
+	require.NoError(t, p.WaitApplied(t.Context(), 4))
+}
+
+func TestProjectionWaitAppliedStopsOnProjectionFailure(t *testing.T) {
+	p := NewProjection()
+	waited := make(chan error, 1)
+	go func() { waited <- p.WaitApplied(t.Context(), 2) }()
+
+	err := p.Apply(t.Context(), eventfabric.Delivery{
+		Record:   events.Record{Meta: events.Meta{Type: TypeProposed, SchemaVersion: 2}},
+		Sequence: 1,
+	})
+	require.ErrorContains(t, err, "unsupported schema version")
+	require.ErrorContains(t, <-waited, "unsupported schema version")
+}
+
+func TestProjectionQueriesReturnCopies(t *testing.T) {
+	p := NewProjection()
+	proposed := proposal(42)
+	apply(t, p, 1, proposed)
+
+	got, found := p.Proposal(proposed.ProposalID)
+	require.True(t, found)
+	got.ExpectedMachines[0] = "changed"
+
+	again, found := p.Proposal(proposed.ProposalID)
+	require.True(t, found)
+	require.Equal(t, []string{"node-a", "node-b"}, again.ExpectedMachines)
 }
 
 func TestProjectionUnknownProposalHasNoStatus(t *testing.T) {

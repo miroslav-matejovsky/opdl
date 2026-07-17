@@ -11,6 +11,12 @@ Estimated time: 5-8 engineering days.
 
 Depends on: [Stage 2](02-event-fabric.md).
 
+Implementation status: the event-backed projection, command and query services,
+and durable handler are complete in `internal/registration/eventmodel`. Runtime
+activation, public HTTP contract changes, deletion of the Olric-backed package,
+and package promotion are one atomic Stage 4 cutover. See
+[Stage 3 findings](03-registration-projections-findings.md).
+
 ## State mapping
 
 | Current distributed state | Replacement |

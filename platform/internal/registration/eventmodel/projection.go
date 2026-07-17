@@ -3,9 +3,11 @@ package eventmodel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
@@ -25,8 +27,15 @@ type Projection struct {
 
 	// sequence is the highest journal sequence applied so far.
 	sequence uint64
+	// applyErr is the first permanent projection failure. Waiters receive it
+	// instead of waiting for a sequence this projection can never apply.
+	applyErr error
+	// changed is closed and replaced whenever sequence or applyErr changes.
+	changed chan struct{}
 	// proposals holds every distinct proposal by its ID.
 	proposals map[string]Proposed
+	// proposalSequences holds the first journal sequence of each proposal.
+	proposalSequences map[string]uint64
 	// claims records which proposal claimed each unit key, and at what journal
 	// sequence, so the earliest claim wins regardless of apply order.
 	claims map[Key]claim
@@ -93,11 +102,13 @@ type Conflict struct {
 // NewProjection builds an empty registration read model.
 func NewProjection() *Projection {
 	return &Projection{
-		proposals:  make(map[string]Proposed),
-		claims:     make(map[Key]claim),
-		contenders: make(map[Key][]string),
-		decisions:  make(map[string]map[string]decision),
-		accepted:   make(map[string]Accepted),
+		proposals:         make(map[string]Proposed),
+		proposalSequences: make(map[string]uint64),
+		claims:            make(map[Key]claim),
+		contenders:        make(map[Key][]string),
+		decisions:         make(map[string]map[string]decision),
+		accepted:          make(map[string]Accepted),
+		changed:           make(chan struct{}),
 	}
 }
 
@@ -106,48 +117,62 @@ var _ eventfabric.Projector = (*Projection)(nil)
 
 // Apply folds one journal delivery into the read model. It decodes the payload
 // for the delivery's event type and dispatches to the matching reducer. An
-// unknown event type or an undecodable payload is reported so catch-up stops
-// rather than leaving a gap; a canceled context is honored before any work.
+// unknown registration event or an undecodable payload is reported so catch-up
+// stops rather than leaving a gap. Events outside registration are ignored but
+// still advance the sequence because one node-wide projector carries all
+// domains.
 func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	p.mu.RLock()
+	applyErr := p.applyErr
+	p.mu.RUnlock()
+	if applyErr != nil {
+		return applyErr
+	}
+	if delivery.Sequence == 0 {
+		return p.fail(errors.New("eventmodel: delivery sequence must be positive"))
+	}
 
 	record := delivery.Record
+	if !strings.HasPrefix(string(record.Type), "platform.registration.") {
+		p.advance(delivery.Sequence)
+		return nil
+	}
+	if record.SchemaVersion != schemaVersion {
+		return p.fail(fmt.Errorf("eventmodel: unsupported schema version %d for %s at sequence %d", record.SchemaVersion, record.Type, delivery.Sequence))
+	}
+
+	var err error
 	switch record.Type {
 	case TypeProposed:
 		var event Proposed
-		if err := decode(record, &event); err != nil {
-			return err
+		if err = decode(record, &event); err == nil {
+			err = p.applyProposed(delivery, event)
 		}
-		p.applyProposed(delivery.Sequence, event)
 	case TypeConfirmed:
 		var event Confirmed
-		if err := decode(record, &event); err != nil {
-			return err
+		if err = decode(record, &event); err == nil {
+			err = p.applyDecision(delivery, event.ProposalID, decision{machine: event.DecidingMachine, kind: DecisionConfirmed}, event.DecisionID)
 		}
-		p.applyDecision(event.ProposalID, decision{machine: event.DecidingMachine, kind: DecisionConfirmed}, event.DecisionID)
 	case TypeRejected:
 		var event Rejected
-		if err := decode(record, &event); err != nil {
-			return err
+		if err = decode(record, &event); err == nil {
+			err = p.applyDecision(delivery, event.ProposalID, decision{machine: event.DecidingMachine, kind: DecisionRejected, reason: event.Reason}, event.DecisionID)
 		}
-		p.applyDecision(event.ProposalID, decision{machine: event.DecidingMachine, kind: DecisionRejected, reason: event.Reason}, event.DecisionID)
 	case TypeAccepted:
 		var event Accepted
-		if err := decode(record, &event); err != nil {
-			return err
+		if err = decode(record, &event); err == nil {
+			err = p.applyAccepted(delivery, event)
 		}
-		p.applyAccepted(event)
 	default:
-		return fmt.Errorf("eventmodel: unsupported event %q at sequence %d", record.Type, delivery.Sequence)
+		err = fmt.Errorf("eventmodel: unsupported event %q at sequence %d", record.Type, delivery.Sequence)
 	}
-
-	p.mu.Lock()
-	if delivery.Sequence > p.sequence {
-		p.sequence = delivery.Sequence
+	if err != nil {
+		return p.fail(err)
 	}
-	p.mu.Unlock()
+	p.advance(delivery.Sequence)
 	return nil
 }
 
@@ -155,41 +180,92 @@ func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) e
 // identical proposal ID already seen is an idempotent retry; a different one for
 // a claimed key becomes a contender, and the lowest journal sequence keeps the
 // claim.
-func (p *Projection) applyProposed(sequence uint64, event Proposed) {
+func (p *Projection) applyProposed(delivery eventfabric.Delivery, event Proposed) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if _, seen := p.proposals[event.ProposalID]; seen {
-		return
+	if err := validateProposed(delivery, event); err != nil {
+		return err
 	}
-	p.proposals[event.ProposalID] = event
+
+	if _, seen := p.proposals[event.ProposalID]; seen {
+		return nil
+	}
+	p.proposals[event.ProposalID] = cloneProposed(event)
+	p.proposalSequences[event.ProposalID] = delivery.Sequence
 
 	key := event.Key()
 	p.contenders[key] = append(p.contenders[key], event.ProposalID)
-	if current, claimed := p.claims[key]; !claimed || sequence < current.sequence {
-		p.claims[key] = claim{proposalID: event.ProposalID, sequence: sequence}
+	if current, claimed := p.claims[key]; !claimed || delivery.Sequence < current.sequence {
+		p.claims[key] = claim{proposalID: event.ProposalID, sequence: delivery.Sequence}
 	}
+	return nil
 }
 
 // applyDecision records one node's decision about a proposal, collapsing a
 // redelivered decision onto the entry its decision ID already holds.
-func (p *Projection) applyDecision(proposalID string, decided decision, decisionID string) {
+func (p *Projection) applyDecision(delivery eventfabric.Delivery, proposalID string, decided decision, decisionID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	proposal, ok := p.proposals[proposalID]
+	if !ok {
+		return fmt.Errorf("eventmodel: decision %q refers to unknown proposal %q", decisionID, proposalID)
+	}
+	if !slices.Contains(proposal.ExpectedMachines, decided.machine) {
+		return fmt.Errorf("eventmodel: decision %q is from unexpected machine %q", decisionID, decided.machine)
+	}
+	if delivery.Record.Node.Machine != decided.machine {
+		return fmt.Errorf("eventmodel: decision %q claims machine %q but envelope states %q", decisionID, decided.machine, delivery.Record.Node.Machine)
+	}
+	if decisionID != NewDecisionID(proposalID, decided.kind, decided.machine) {
+		return fmt.Errorf("eventmodel: decision %q has an invalid identity", decisionID)
+	}
+	if selected := p.claims[proposal.Key()].proposalID; decided.kind == DecisionConfirmed && selected != proposalID {
+		return fmt.Errorf("eventmodel: confirmation %q targets losing proposal, selected is %q", decisionID, selected)
+	}
+	if decided.kind == DecisionRejected && strings.TrimSpace(decided.reason) == "" {
+		return fmt.Errorf("eventmodel: rejection %q has no reason", decisionID)
+	}
+	if _, accepted := p.accepted[proposalID]; accepted && decided.kind == DecisionRejected {
+		return fmt.Errorf("eventmodel: proposal %q was rejected after acceptance", proposalID)
+	}
 
 	byID, ok := p.decisions[proposalID]
 	if !ok {
 		byID = make(map[string]decision)
 		p.decisions[proposalID] = byID
 	}
+	for existingID, existing := range byID {
+		if existing.machine == decided.machine && existing != decided {
+			return fmt.Errorf("eventmodel: machine %q made conflicting decisions %q and %q for proposal %q", decided.machine, existingID, decisionID, proposalID)
+		}
+	}
 	byID[decisionID] = decided
+	return nil
 }
 
 // applyAccepted records the origin's commit of a proposal.
-func (p *Projection) applyAccepted(event Accepted) {
+func (p *Projection) applyAccepted(delivery eventfabric.Delivery, event Accepted) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	proposal, ok := p.proposals[event.ProposalID]
+	if !ok {
+		return fmt.Errorf("eventmodel: acceptance refers to unknown proposal %q", event.ProposalID)
+	}
+	if delivery.Record.Node.Machine != proposal.OriginMachine {
+		return fmt.Errorf("eventmodel: acceptance for %q was stated by %q, not origin %q", event.ProposalID, delivery.Record.Node.Machine, proposal.OriginMachine)
+	}
+	if event != NewAccepted(proposal) {
+		return fmt.Errorf("eventmodel: acceptance for %q does not match its proposal", event.ProposalID)
+	}
+	if selected := p.claims[proposal.Key()].proposalID; selected != event.ProposalID {
+		return fmt.Errorf("eventmodel: acceptance for %q targets losing proposal, selected is %q", event.ProposalID, selected)
+	}
+	if !p.allExpectedConfirmed(proposal) {
+		return fmt.Errorf("eventmodel: acceptance for %q precedes all expected confirmations", event.ProposalID)
+	}
 	p.accepted[event.ProposalID] = event
+	return nil
 }
 
 // Sequence returns the highest journal sequence the projection has applied.
@@ -197,6 +273,64 @@ func (p *Projection) Sequence() uint64 {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.sequence
+}
+
+// WaitApplied blocks until the projection has applied sequence. It returns the
+// first projection failure or the caller's cancellation instead of waiting for
+// progress that cannot happen.
+func (p *Projection) WaitApplied(ctx context.Context, sequence uint64) error {
+	for {
+		p.mu.RLock()
+		applied, applyErr, changed := p.sequence, p.applyErr, p.changed
+		p.mu.RUnlock()
+		if applyErr != nil {
+			return applyErr
+		}
+		if applied >= sequence {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+// Proposal returns a copy of a proposal by ID.
+func (p *Projection) Proposal(proposalID string) (Proposed, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	proposal, ok := p.proposals[proposalID]
+	return cloneProposed(proposal), ok
+}
+
+// Proposals returns copies of every proposal in journal order.
+func (p *Projection) Proposals() []Proposed {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	proposals := make([]Proposed, 0, len(p.proposals))
+	for _, proposal := range p.proposals {
+		proposals = append(proposals, cloneProposed(proposal))
+	}
+	slices.SortFunc(proposals, func(a, b Proposed) int {
+		if left, right := p.proposalSequences[a.ProposalID], p.proposalSequences[b.ProposalID]; left != right {
+			if left < right {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.ProposalID, b.ProposalID)
+	})
+	return proposals
+}
+
+// ProposalSequence returns the proposal's first journal sequence.
+func (p *Projection) ProposalSequence(proposalID string) (uint64, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	sequence, ok := p.proposalSequences[proposalID]
+	return sequence, ok
 }
 
 // SelectedProposal returns the proposal ID that claimed key, if any proposal
@@ -266,13 +400,7 @@ func (p *Projection) AllExpectedConfirmed(proposalID string) bool {
 	if !seen {
 		return false
 	}
-	confirmed := p.machinesByKind(proposalID, DecisionConfirmed)
-	for _, machine := range proposal.ExpectedMachines {
-		if !slices.Contains(confirmed, machine) {
-			return false
-		}
-	}
-	return true
+	return p.allExpectedConfirmed(proposal)
 }
 
 // IsAccepted reports whether a proposal has been committed.
@@ -281,6 +409,42 @@ func (p *Projection) IsAccepted(proposalID string) bool {
 	defer p.mu.RUnlock()
 	_, ok := p.accepted[proposalID]
 	return ok
+}
+
+// advance records successful progress and wakes sequence waiters.
+func (p *Projection) advance(sequence uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if sequence <= p.sequence {
+		return
+	}
+	p.sequence = sequence
+	close(p.changed)
+	p.changed = make(chan struct{})
+}
+
+// fail records the first permanent projection error and wakes sequence waiters.
+func (p *Projection) fail(err error) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.applyErr == nil {
+		p.applyErr = err
+		close(p.changed)
+		p.changed = make(chan struct{})
+	}
+	return err
+}
+
+// allExpectedConfirmed reports whether every expected machine confirmed
+// proposal. The caller holds at least the read lock.
+func (p *Projection) allExpectedConfirmed(proposal Proposed) bool {
+	confirmed := p.machinesByKind(proposal.ProposalID, DecisionConfirmed)
+	for _, machine := range proposal.ExpectedMachines {
+		if !slices.Contains(confirmed, machine) {
+			return false
+		}
+	}
+	return true
 }
 
 // Conflicts returns every unit key that has more than one proposal, resolved
@@ -349,4 +513,39 @@ func decode(record events.Record, target events.Event) error {
 		return fmt.Errorf("eventmodel: decode %s: %w", record.Type, err)
 	}
 	return nil
+}
+
+func validateProposed(delivery eventfabric.Delivery, proposal Proposed) error {
+	if delivery.Record.Node.Machine != proposal.OriginMachine {
+		return fmt.Errorf("eventmodel: proposal %q claims origin %q but envelope states %q", proposal.ProposalID, proposal.OriginMachine, delivery.Record.Node.Machine)
+	}
+	if len(proposal.ExpectedMachines) == 0 {
+		return fmt.Errorf("eventmodel: proposal %q expects no machines", proposal.ProposalID)
+	}
+	for i, machine := range proposal.ExpectedMachines {
+		if strings.TrimSpace(machine) == "" {
+			return fmt.Errorf("eventmodel: proposal %q has a blank expected machine", proposal.ProposalID)
+		}
+		if i > 0 && proposal.ExpectedMachines[i-1] >= machine {
+			return fmt.Errorf("eventmodel: proposal %q expected machines are not sorted and unique", proposal.ProposalID)
+		}
+	}
+	want := NewProposalID(ProposalIdentity{
+		UnitType:               proposal.UnitType,
+		UnitID:                 proposal.UnitID,
+		UnitTypeNameAdvertised: proposal.UnitTypeNameAdvertised,
+		Role:                   proposal.Role,
+		OriginMachine:          proposal.OriginMachine,
+		OriginIP:               proposal.OriginIP,
+		ExpectedMachines:       proposal.ExpectedMachines,
+	})
+	if proposal.ProposalID != want {
+		return fmt.Errorf("eventmodel: proposal %q has an invalid identity", proposal.ProposalID)
+	}
+	return nil
+}
+
+func cloneProposed(proposal Proposed) Proposed {
+	proposal.ExpectedMachines = slices.Clone(proposal.ExpectedMachines)
+	return proposal
 }

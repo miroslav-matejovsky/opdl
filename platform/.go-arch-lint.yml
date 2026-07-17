@@ -53,4 +53,4 @@ deps:
   registration:
     mayDependOn: [api, events, fabric]
   registration-eventmodel:
-    mayDependOn: [events, eventfabric]
+    mayDependOn: [api, events, eventfabric]

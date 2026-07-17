@@ -130,4 +130,10 @@ func TestCatalogEventsDeclareTheirContract(t *testing.T) {
 
 	// A rejection is an operational anomaly.
 	require.Equal(t, []string{events.TagWarning}, Rejected{}.Tags())
+
+	// Every event supplies a stable, event-kind-scoped journal deduplication ID.
+	require.Equal(t, "registration.proposal.p", Proposed{ProposalID: "p"}.DedupID())
+	require.Equal(t, "registration.decision.d", Confirmed{DecisionID: "d"}.DedupID())
+	require.Equal(t, "registration.decision.d", Rejected{DecisionID: "d"}.DedupID())
+	require.Equal(t, "registration.acceptance.p", Accepted{ProposalID: "p"}.DedupID())
 }

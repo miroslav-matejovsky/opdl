@@ -28,6 +28,10 @@ const schemaVersion = 1
 // unit key it did not claim first in journal order.
 const ReasonKeyConflict = "registration_key_conflict"
 
+// ReasonInvalidProposal is the bounded reason an expected node rejects a
+// proposal that does not match the trusted topology or domain validation.
+const ReasonInvalidProposal = "registration_invalid_proposal"
+
 // Event type constants. Each reads as a fact: platform.<domain>.<fact>, past
 // tense.
 const (
@@ -109,6 +113,9 @@ func (Proposed) Source() string { return eventSource }
 // SchemaVersion returns the proposal payload schema version.
 func (Proposed) SchemaVersion() int { return schemaVersion }
 
+// DedupID returns the stable publication identity of this proposal.
+func (p Proposed) DedupID() string { return "registration.proposal." + p.ProposalID }
+
 // Key is the unit key this proposal is for.
 func (p Proposed) Key() Key { return Key{UnitType: p.UnitType, UnitID: p.UnitID} }
 
@@ -130,6 +137,9 @@ func (Confirmed) Source() string { return eventSource }
 
 // SchemaVersion returns the decision payload schema version.
 func (Confirmed) SchemaVersion() int { return schemaVersion }
+
+// DedupID returns the stable publication identity of this decision.
+func (c Confirmed) DedupID() string { return "registration.decision." + c.DecisionID }
 
 // Rejected states one expected node's refusal of a proposal, or a proposal
 // losing its key to an earlier one.
@@ -155,6 +165,9 @@ func (Rejected) SchemaVersion() int { return schemaVersion }
 
 // Tags marks the refusal as an operational anomaly.
 func (Rejected) Tags() []string { return []string{events.TagWarning} }
+
+// DedupID returns the stable publication identity of this decision.
+func (r Rejected) DedupID() string { return "registration.decision." + r.DecisionID }
 
 // Accepted states the origin's commit of a fully confirmed proposal. It repeats
 // the committed registration fields so the acceptance stands alone.
@@ -183,6 +196,9 @@ func (Accepted) Source() string { return eventSource }
 
 // SchemaVersion returns the acceptance payload schema version.
 func (Accepted) SchemaVersion() int { return schemaVersion }
+
+// DedupID returns the stable publication identity of this acceptance.
+func (a Accepted) DedupID() string { return "registration.acceptance." + a.ProposalID }
 
 // NewProposed builds a proposal from its identity. It sorts the expected
 // machines so the same set always produces the same proposal, and stamps the
