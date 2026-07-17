@@ -31,7 +31,8 @@ type Descriptor struct {
 
 // Features are the capability switches carried from the project onto a machine.
 type Features struct {
-	Chaos      bool `json:"chaos"`
+	Chaos bool `json:"chaos"`
+	// Redundancy is a legacy flag. The current runtime does not act on it.
 	Redundancy bool `json:"redundancy"`
 }
 

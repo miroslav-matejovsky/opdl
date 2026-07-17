@@ -6,6 +6,5 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
 `docs/backlog/README.md`, confirmed bugs in `docs/bugs/README.md`, and the documentation overview in `docs/README.md`.
 
 - different approach might be "organization -> site -> group -> unit"
-- redundancy (local warm standby) is not a feature, it is essential for platform reliability and zero-downtime upgrades, so we need to implement it in the platform
 - authentication for services as a platform feature
 - authorization for services as a platform feature

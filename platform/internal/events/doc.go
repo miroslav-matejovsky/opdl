@@ -78,6 +78,5 @@
 // journal — synchronously, so a fact is retained before the operation that
 // caused it returns. The journal is the platform's only event storage.
 //
-// The obsolete JSONL sink and optional no-op recorder were removed. A running
-// service has exactly one event source: the retained site journal.
+// A running service has exactly one event source: the retained site journal.
 package events

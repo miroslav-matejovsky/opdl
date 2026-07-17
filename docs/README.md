@@ -14,6 +14,6 @@ Additional material:
 
 - [Backlog](backlog/README.md) contains deferred, actionable work.
 - [Bugs](bugs/README.md) contains known issues.
-- [Event migration findings](plan/findings/README.md) classifies resolved
-  decisions, accepted risks, deployment requirements, and open work.
+- [Current implementation plan](plan/README.md) describes the active staged
+  architecture change.
 - Package-level details live next to Go code in `doc.go` files, or in `README.md` for top-level directories like `platform`.

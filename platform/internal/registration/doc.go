@@ -62,4 +62,11 @@
 // directly in tests without any transport. CommandService publishes proposals,
 // QueryService reads only Projection, and Handler waits for projection progress
 // before publishing a deterministic confirmation, rejection, or acceptance.
+//
+// # Query views
+//
+// Expected-machine IP addresses are display metadata resolved from the answering
+// node's current deployment descriptor. They are not registration facts and are
+// not persisted in events. If a historical machine is absent from the current
+// descriptor, queries keep the machine identity and return an empty IP address.
 package registration

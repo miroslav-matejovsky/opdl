@@ -1,15 +1,8 @@
 // Package eventfabric is the OPDL Event Fabric: the runtime boundary every OPDL
 // service publishes events through and receives them from. It states OPDL
-// behavior, not a message broker's API. A later adapter binds it to NATS
-// JetStream, but nothing in this contract names NATS, and no domain package
+// behavior, not a message broker's API. The NATS JetStream adapter binds this
+// contract to the transport, but no domain package
 // constructs a subject, a stream, or a consumer.
-//
-// This package is the frozen model from Stage 1 of the NATS migration
-// (docs/plan/01-event-model.md). It defines the envelope validation, the route
-// and journal naming, and the publish, delivery, and lifecycle contracts that
-// Stage 2 implements against real embedded NATS servers. The interfaces here
-// are the design boundary; their exact Go signatures may still be refined when
-// the adapter lands, but no capability is added without a current OPDL consumer.
 //
 // # Responsibilities
 //

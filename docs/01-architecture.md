@@ -194,6 +194,6 @@ nodes keep three copies of the site's history, and nothing takes over a
 machine's registration decisions when that machine is down. A proposal simply
 stays pending until it comes back.
 
-The concrete deployment mitigations and production-readiness gaps are tracked in
-the [migration findings catalog](plan/findings/README.md).
+The current implementation plan adds one local warm standby process per machine;
+see [Local warm standby redundancy](plan/README.md).
 

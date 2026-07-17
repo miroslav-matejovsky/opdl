@@ -27,10 +27,10 @@
 //
 // A Project names an environment and holds Features and Sites; a Site holds
 // Machines; a Machine names a role, an IP address, and the services assigned
-// to it. Features are project-level capability switches: chaos enables
-// deliberately injecting failures to test the system's resilience, and
-// redundancy runs two instances of platform services in parallel on the same
-// machine so one can fail without taking the service down.
+// to it. Chaos is an implemented project-level capability switch. Redundancy is
+// currently only carried into deployment descriptors; the runtime does not act
+// on it. The next descriptor revision replaces it with an explicit machine-level
+// warm-standby policy.
 //
 // The hcl struct tags on these types are the authoring wire format and the
 // only contract this package exposes; there is no separate model to keep in

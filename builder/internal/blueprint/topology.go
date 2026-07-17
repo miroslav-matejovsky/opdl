@@ -30,10 +30,9 @@ type Features struct {
 	// controlled way with the customer aware of the test and its potential
 	// impact on their operations.
 	Chaos bool `hcl:"chaos,optional"`
-	// Redundancy runs two instances of platform services in parallel on the
-	// same machine, so one can fail without taking the service down. Useful
-	// for critical services that need to be highly available, at the cost of
-	// extra resource usage and complexity.
+	// Redundancy is a legacy project-level switch carried into the deployment
+	// descriptor. The current runtime does not act on it. It will be replaced by
+	// an explicit machine-level warm-standby policy.
 	Redundancy bool `hcl:"redundancy,optional"`
 }
 
