@@ -12,6 +12,8 @@ implementation stages.
 
 Additional material:
 
+- [NATS event architecture migration](plan/README.md) contains the staged plan
+  for replacing shared distributed state with events and local projections.
 - [Backlog](backlog/README.md) contains deferred, actionable work.
 - [Bugs](bugs/README.md) contains known issues.
 - Package-level details live next to Go code in `doc.go` files, or in `README.md` for top-level directories like `platform`.

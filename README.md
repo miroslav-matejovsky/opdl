@@ -11,6 +11,7 @@ Start with the [documentation index](docs/README.md).
 
 - [Architecture](docs/01-architecture.md)
 - [Registration](docs/02-registration.md)
+- [NATS event architecture migration](docs/plan/README.md)
 - [Backlog](docs/backlog/README.md)
 - [Bugs](docs/bugs/README.md)
 
