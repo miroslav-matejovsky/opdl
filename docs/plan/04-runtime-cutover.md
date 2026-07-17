@@ -1,5 +1,31 @@
 # Stage 4: Runtime cutover
 
+Status: Complete. Findings, corrected decisions, and deferred work are in
+[04-runtime-cutover-findings.md](04-runtime-cutover-findings.md).
+
+## Completion notes
+
+The cutover is done and `task all` passes. What differs from the work below:
+
+- **The storage topology changed.** Work item 3 assumed the accepted "Core NATS
+  nodes route to the storage nodes" design. It does not work: NATS sizes a
+  JetStream metadata group from a server's routes, not from the servers holding
+  storage, so a Core NATS node in the cluster makes the group inquorate. The
+  site's cluster is now exactly its storage nodes, and every other machine is a
+  client of them. This is finding 1, and it is the reason the two-machine
+  scenario passes.
+- **Readiness and shutdown moved out of the adapter** (finding 2), which work
+  item 5 required anyway: `ready` now carries the server, journal, storage role,
+  replicas, and applied high-water sequence, and is stated by composition after
+  catch-up rather than by the transport when it connected.
+- **Work item 9 is partly deferred.** Offline delivery, restart replay, conflict
+  order, and NATS startup failure have scenarios. Graceful shutdown does not: a
+  portable child interrupt does not exist on Windows, and the ordering is covered
+  in-process (finding 5).
+- **No health endpoint was added.** The open questions recommend one; the node's
+  startup gate makes it unnecessary for readiness but not for live lag
+  (finding 8).
+
 ## Outcome
 
 Make NATS Event Fabric the platform's only runtime coordination path. Update

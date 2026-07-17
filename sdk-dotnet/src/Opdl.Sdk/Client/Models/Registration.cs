@@ -38,6 +38,14 @@ namespace Opdl.Sdk.Client.Models
 #else
         public List<global::Opdl.Sdk.Client.Models.PlatformInstanceRegistrationStatus> PlatformInstances { get; set; }
 #endif
+        /// <summary>The proposal_id property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? ProposalId { get; set; }
+#nullable restore
+#else
+        public string ProposalId { get; set; }
+#endif
         /// <summary>The reason property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -102,6 +110,7 @@ namespace Opdl.Sdk.Client.Models
                 { "ip", n => { Ip = n.GetStringValue(); } },
                 { "machine", n => { Machine = n.GetStringValue(); } },
                 { "platform_instances", n => { PlatformInstances = n.GetCollectionOfObjectValues<global::Opdl.Sdk.Client.Models.PlatformInstanceRegistrationStatus>(global::Opdl.Sdk.Client.Models.PlatformInstanceRegistrationStatus.CreateFromDiscriminatorValue)?.AsList(); } },
+                { "proposal_id", n => { ProposalId = n.GetStringValue(); } },
                 { "reason", n => { Reason = n.GetStringValue(); } },
                 { "role", n => { Role = n.GetStringValue(); } },
                 { "status", n => { Status = n.GetStringValue(); } },
@@ -120,6 +129,7 @@ namespace Opdl.Sdk.Client.Models
             writer.WriteStringValue("ip", Ip);
             writer.WriteStringValue("machine", Machine);
             writer.WriteCollectionOfObjectValues<global::Opdl.Sdk.Client.Models.PlatformInstanceRegistrationStatus>("platform_instances", PlatformInstances);
+            writer.WriteStringValue("proposal_id", ProposalId);
             writer.WriteStringValue("reason", Reason);
             writer.WriteStringValue("role", Role);
             writer.WriteStringValue("status", Status);

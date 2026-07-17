@@ -6,7 +6,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
@@ -14,36 +13,43 @@ import (
 )
 
 const (
-	errorCodeConflict       = "registration_key_conflict"
 	errorCodeInvalidRequest = "invalid_request"
 	errorCodeNotFound       = "registration_not_found"
+	errorCodeUnavailable    = "journal_unavailable"
 	errorCodeInternal       = "internal_error"
 )
 
-// NewHandler builds the platform's registration HTTP handler from its service
-// dependency. The caller owns the server lifecycle and trusted location setup.
-func NewHandler(service *registration.Service) http.Handler {
+// NewHandler builds the platform's registration HTTP handler from the two sides
+// of the use case: the command service that publishes proposals and the query
+// service that answers from this node's projection. The caller owns the server
+// lifecycle and trusted location setup.
+//
+// The split is the asynchronous contract made structural. A POST reaches only
+// the journal and learns nothing about the outcome; a GET reaches only the local
+// projection and never waits on the journal. Nothing here can decide a
+// registration, which is why nothing here can answer a conflict immediately.
+func NewHandler(commands *registration.CommandService, queries *registration.QueryService) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/registrations", func(w http.ResponseWriter, r *http.Request) {
-		handleRegistrations(service, w, r)
+		handleRegistrations(commands, queries, w, r)
 	})
 	// Register this exact route before the parameterized status route. A conflict
 	// query is a collection operation, never a malformed status lookup.
 	mux.HandleFunc("/registrations/conflicts", func(w http.ResponseWriter, r *http.Request) {
-		handleRegistrationConflicts(service, w, r)
+		handleRegistrationConflicts(queries, w, r)
 	})
 	mux.HandleFunc("/registrations/", func(w http.ResponseWriter, r *http.Request) {
-		handleRegistrationStatus(service, w, r)
+		handleRegistrationStatus(queries, w, r)
 	})
 	return mux
 }
 
-func handleRegistrationConflicts(service *registration.Service, w http.ResponseWriter, r *http.Request) {
+func handleRegistrationConflicts(queries *registration.QueryService, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
-	conflicts, err := service.Conflicts(r.Context())
+	conflicts, err := queries.Conflicts()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errorCodeInternal)
 		return
@@ -51,7 +57,7 @@ func handleRegistrationConflicts(service *registration.Service, w http.ResponseW
 	writeJSON(w, http.StatusOK, conflicts)
 }
 
-func handleRegistrations(service *registration.Service, w http.ResponseWriter, r *http.Request) {
+func handleRegistrations(commands *registration.CommandService, queries *registration.QueryService, w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		if !isJSON(r.Header.Get("Content-Type")) {
@@ -63,46 +69,41 @@ func handleRegistrations(service *registration.Service, w http.ResponseWriter, r
 			writeError(w, http.StatusBadRequest, errorCodeInvalidRequest)
 			return
 		}
-		if _, err := service.Create(r.Context(), request); err != nil {
-			if errors.Is(err, registration.ErrConflict) {
-				writeError(w, http.StatusConflict, errorCodeConflict)
-				return
-			}
-			if isValidationError(err) {
-				writeError(w, http.StatusBadRequest, errorCodeInvalidRequest)
-				return
-			}
-			writeError(w, http.StatusInternalServerError, errorCodeInternal)
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
-	case http.MethodGet:
-		registrations, err := service.List(r.Context())
+		receipt, err := commands.Create(r.Context(), request)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errorCodeInternal)
+			// A journal that will not take the proposal is the one failure the
+			// client can act on: nothing was recorded, so retrying is safe and is
+			// the right thing to do. Everything else the command service refuses is
+			// the request's own fault and will fail again unchanged.
+			if errors.Is(err, registration.ErrJournalUnavailable) {
+				writeError(w, http.StatusServiceUnavailable, errorCodeUnavailable)
+				return
+			}
+			writeError(w, http.StatusBadRequest, errorCodeInvalidRequest)
 			return
 		}
-		writeJSON(w, http.StatusOK, registrations)
+		writeJSON(w, http.StatusAccepted, api.ProposalAccepted{
+			ProposalID: receipt.ProposalID,
+			Sequence:   receipt.Sequence,
+		})
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, queries.List())
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
 }
 
-func handleRegistrationStatus(service *registration.Service, w http.ResponseWriter, r *http.Request) {
+func handleRegistrationStatus(queries *registration.QueryService, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
-	key, ok := parseStatusPath(r.URL.Path)
+	proposalID, ok := parseStatusPath(r.URL.Path)
 	if !ok {
 		writeError(w, http.StatusNotFound, errorCodeNotFound)
 		return
 	}
-	view, found, err := service.Get(r.Context(), key)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, errorCodeInternal)
-		return
-	}
+	view, found := queries.Get(proposalID)
 	if !found {
 		writeError(w, http.StatusNotFound, errorCodeNotFound)
 		return
@@ -110,20 +111,15 @@ func handleRegistrationStatus(service *registration.Service, w http.ResponseWrit
 	writeJSON(w, http.StatusOK, view)
 }
 
-func parseStatusPath(path string) (registration.Key, bool) {
-	parts := strings.Split(strings.TrimPrefix(path, "/registrations/"), "/")
-	if len(parts) != 3 || parts[2] != "status" || parts[0] == "" || parts[1] == "" {
-		return registration.Key{}, false
+// parseStatusPath returns the proposal ID a status path names. A proposal ID is
+// opaque here: the domain derives it and this boundary only carries it back, so
+// the only rule is that the path names exactly one non-empty segment.
+func parseStatusPath(path string) (string, bool) {
+	proposalID := strings.TrimPrefix(path, "/registrations/")
+	if proposalID == "" || strings.Contains(proposalID, "/") {
+		return "", false
 	}
-	unitType, err := strconv.ParseUint(parts[0], 10, 8)
-	if err != nil {
-		return registration.Key{}, false
-	}
-	unitID, err := strconv.ParseUint(parts[1], 10, 16)
-	if err != nil {
-		return registration.Key{}, false
-	}
-	return registration.Key{UnitType: uint8(unitType), UnitID: uint16(unitID)}, true
+	return proposalID, true
 }
 
 func decodeJSON(body io.Reader, target any) error {
@@ -145,10 +141,6 @@ func decodeJSON(body io.Reader, target any) error {
 func isJSON(contentType string) bool {
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	return err == nil && mediaType == "application/json"
-}
-
-func isValidationError(err error) bool {
-	return strings.HasPrefix(err.Error(), "registration: unit type") || strings.HasPrefix(err.Error(), "registration: role")
 }
 
 func methodNotAllowed(w http.ResponseWriter, allow string) {

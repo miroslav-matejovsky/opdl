@@ -4,70 +4,62 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/fabric/memory"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
-// TestHandlerServesARequestFromPendingToAccepted is the API's side of the
-// two-phase story: 202 does not mean registered, the status endpoint says
-// pending while an expected machine has not answered, and it turns to accepted
-// once that machine does.
-func TestHandlerServesARequestFromPendingToAccepted(t *testing.T) {
+// TestHandlerServesAProposalFromPendingToAccepted is the API's side of the
+// asynchronous story: 202 hands back the proposal's identity and says only that
+// the journal took it, the status says pending while an expected machine has not
+// answered, and it turns to accepted once that machine does.
+func TestHandlerServesAProposalFromPendingToAccepted(t *testing.T) {
 	site := newSite(t, "node-a", "node-b")
-	srv := httptest.NewServer(httpapi.NewHandler(site.start("node-a")))
+	nodeA := site.start("node-a")
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
 	defer srv.Close()
 
-	response := do(t, http.MethodGet, srv.URL+"/registrations", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-	var empty []api.Registration
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&empty))
-	require.Empty(t, empty)
-	response = do(t, http.MethodGet, srv.URL+"/registrations/conflicts", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	var conflicts []api.RegistrationConflict
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&conflicts))
-	require.Empty(t, conflicts)
+	require.Empty(t, list(t, srv))
+	require.Empty(t, conflicts(t, srv))
 
-	response = do(t, http.MethodPost, srv.URL+"/registrations", []byte(`{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing", "role": "Master"}`), "application/json")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusAccepted, response.StatusCode)
-	require.Zero(t, response.ContentLength, "202 says the request was taken, not that anything was registered")
+	accepted := propose(t, srv, `{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing", "role": "Master"}`)
+	require.NotEmpty(t, accepted.ProposalID, "202 hands back the handle the client polls with")
+	require.Positive(t, accepted.Sequence, "the proposal has a place in the site's history")
 
-	// node-b is expected and is not running, so the site cannot accept this.
-	response = do(t, http.MethodGet, srv.URL+"/registrations/7/42/status", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-	view := decodeRegistration(t, response)
+	// node-b is expected and has not answered, so the site cannot accept this.
+	site.settle()
+	view, code := status(t, srv, accepted.ProposalID)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, accepted.ProposalID, view.ProposalID)
 	require.Equal(t, api.RegistrationStatusPending, view.Status)
 	require.Equal(t, api.RegistrationStatusAccepted, instanceStatus(t, view, "node-a").Status)
-	require.Equal(t, api.RegistrationStatusPending, instanceStatus(t, view, "node-b").Status)
+	require.Equal(t, api.RegistrationStatusPending, instanceStatus(t, view, "node-b").Status,
+		"an expected machine that has not answered is visible rather than silent")
 
-	response = do(t, http.MethodGet, srv.URL+"/registrations", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	var registrations []api.Registration
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&registrations))
-	require.Len(t, registrations, 1, "a pending request is listed like any other")
+	registrations := list(t, srv)
+	require.Len(t, registrations, 1, "a pending proposal is listed like any other")
 	require.Equal(t, api.RegistrationStatusPending, registrations[0].Status)
 
 	// Start the machine the site was waiting for and let it answer.
 	site.start("node-b")
-	site.reconcile()
+	site.settle()
 
-	response = do(t, http.MethodGet, srv.URL+"/registrations/7/42/status", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	view = decodeRegistration(t, response)
+	view, code = status(t, srv, accepted.ProposalID)
+	require.Equal(t, http.StatusOK, code)
 	require.Equal(t, api.RegistrationStatusAccepted, view.Status)
 	require.Equal(t, "node-a", view.Machine)
 	require.Equal(t, "127.0.0.1", view.IP)
@@ -76,37 +68,86 @@ func TestHandlerServesARequestFromPendingToAccepted(t *testing.T) {
 	require.Equal(t, api.RegistrationStatusAccepted, instanceStatus(t, view, "node-b").Status)
 }
 
-// TestHandlerReturnsNotFoundAwayFromTheOrigin checks the status endpoint is the
-// origin's: another machine of the site holds the same request and still answers
-// 404, because it is not who the client asked.
-func TestHandlerReturnsNotFoundAwayFromTheOrigin(t *testing.T) {
+// TestHandlerAnswersTheSameProposalOnEveryNode checks the query is a projection
+// of the site's journal rather than the origin's private record. Every node
+// folds the same events, so a proposal's status is the same answer wherever it
+// is asked, and the client is no longer tied to the machine it posted to.
+func TestHandlerAnswersTheSameProposalOnEveryNode(t *testing.T) {
 	site := newSite(t, "node-a", "node-b")
-	origin := httptest.NewServer(httpapi.NewHandler(site.start("node-a")))
+	nodeA, nodeB := site.start("node-a"), site.start("node-b")
+	origin := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
 	defer origin.Close()
-	other := httptest.NewServer(httpapi.NewHandler(site.start("node-b")))
+	other := httptest.NewServer(httpapi.NewHandler(nodeB.commands, nodeB.queries))
 	defer other.Close()
 
-	response := do(t, http.MethodPost, origin.URL+"/registrations", []byte(`{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing"}`), "application/json")
-	require.Equal(t, http.StatusAccepted, response.StatusCode)
-	require.NoError(t, response.Body.Close())
-	site.reconcile()
+	accepted := propose(t, origin, `{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing"}`)
+	site.settle()
 
-	response = do(t, http.MethodGet, other.URL+"/registrations/7/42/status", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusNotFound, response.StatusCode)
+	fromOrigin, code := status(t, origin, accepted.ProposalID)
+	require.Equal(t, http.StatusOK, code)
+	fromOther, code := status(t, other, accepted.ProposalID)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, fromOrigin, fromOther, "both nodes folded the same journal into the same answer")
+	require.Equal(t, api.RegistrationStatusAccepted, fromOther.Status)
+	require.Equal(t, "node-a", fromOther.Machine, "the origin is a fact of the proposal, not of who answers")
 
-	// The list, unlike the status, is the site's state and answers anywhere.
-	response = do(t, http.MethodGet, other.URL+"/registrations", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	var registrations []api.Registration
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&registrations))
-	require.Len(t, registrations, 1)
-	require.Equal(t, "node-a", registrations[0].Machine)
-	require.Equal(t, api.RegistrationStatusAccepted, registrations[0].Status)
+	require.Equal(t, list(t, origin), list(t, other))
+}
+
+// TestHandlerProjectsAConflictRatherThanRefusingIt is the contract change the
+// journal's order makes possible. A competing claim is taken, ordered, and then
+// decided; the POST cannot refuse it, because at the moment it is written
+// nothing has decided anything yet.
+func TestHandlerProjectsAConflictRatherThanRefusingIt(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	defer srv.Close()
+
+	winner := propose(t, srv, `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`)
+	loser := propose(t, srv, `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Other"}`)
+	require.NotEqual(t, winner.ProposalID, loser.ProposalID, "a different claim is a different proposal")
+	require.Less(t, winner.Sequence, loser.Sequence, "the journal ordered them")
+	site.settle()
+
+	first, _ := status(t, srv, winner.ProposalID)
+	require.Equal(t, api.RegistrationStatusAccepted, first.Status, "the first claim in journal order keeps the key")
+	second, _ := status(t, srv, loser.ProposalID)
+	require.Equal(t, api.RegistrationStatusRejected, second.Status)
+	require.Equal(t, "registration_key_conflict", *second.Reason)
+
+	resolved := conflicts(t, srv)
+	require.Len(t, resolved, 1)
+	require.Equal(t, api.RegistrationConflictResolutionResolved, resolved[0].ResolutionStatus)
+	require.Equal(t, winner.ProposalID, resolved[0].Winner.ProposalID)
+	require.Len(t, resolved[0].Losers, 1)
+	require.Equal(t, loser.ProposalID, resolved[0].Losers[0].ProposalID)
+}
+
+// TestHandlerAnswersAnExactRetryWithTheSameProposal checks the identity contract
+// the client depends on: an identical request is the same claim, so it returns
+// the same handle rather than a second contender.
+func TestHandlerAnswersAnExactRetryWithTheSameProposal(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	defer srv.Close()
+
+	const body = `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`
+	first := propose(t, srv, body)
+	site.settle()
+	retry := propose(t, srv, body)
+	site.settle()
+
+	require.Equal(t, first.ProposalID, retry.ProposalID, "an exact retry is the same claim")
+	require.Len(t, list(t, srv), 1, "a retry is not a second registration")
+	require.Empty(t, conflicts(t, srv), "a retry does not contend with itself")
 }
 
 func TestHandlerRejectsInvalidOrSpoofedRequests(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewHandler(newService(t)))
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
 	defer srv.Close()
 
 	for _, body := range []string{
@@ -122,34 +163,53 @@ func TestHandlerRejectsInvalidOrSpoofedRequests(t *testing.T) {
 		require.Equal(t, "application/json", response.Header.Get("Content-Type"))
 		require.NoError(t, response.Body.Close())
 	}
+	require.Empty(t, list(t, srv), "an invalid request is refused before anything is published")
 
 	response := do(t, http.MethodPost, srv.URL+"/registrations", []byte(`{}`), "text/plain")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusBadRequest, response.StatusCode)
 }
 
-func TestHandlerReturnsConflictAndMethodErrors(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewHandler(newService(t)))
+// TestHandlerReportsAnUnavailableJournal checks the one failure a client can act
+// on. Nothing was recorded, so the answer says "not now" rather than "no": the
+// same request will succeed once the site journal takes writes again.
+func TestHandlerReportsAnUnavailableJournal(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
 	defer srv.Close()
 
-	response := do(t, http.MethodPost, srv.URL+"/registrations", []byte(`{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`), "application/json")
+	site.journal.breakWith(errors.New("no quorum"))
+	response := do(t, http.MethodPost, srv.URL+"/registrations",
+		[]byte(`{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`), "application/json")
 	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusAccepted, response.StatusCode)
-	response = do(t, http.MethodPost, srv.URL+"/registrations", []byte(`{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Other"}`), "application/json")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusConflict, response.StatusCode)
-	var conflict api.Error
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&conflict))
-	require.Equal(t, "registration_key_conflict", conflict.Code)
 
-	response = do(t, http.MethodDelete, srv.URL+"/registrations", nil, "")
+	require.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
+	var failure api.Error
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&failure))
+	require.Equal(t, "journal_unavailable", failure.Code)
+
+	// Queries are answered from the local projection, so they are unaffected by a
+	// journal that will not take writes.
+	require.Empty(t, list(t, srv))
+}
+
+func TestHandlerReturnsMethodErrors(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	defer srv.Close()
+
+	response := do(t, http.MethodDelete, srv.URL+"/registrations", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
 	require.Equal(t, "GET, POST", response.Header.Get("Allow"))
-	response = do(t, http.MethodPost, srv.URL+"/registrations/1/2/status", nil, "")
+
+	response = do(t, http.MethodPost, srv.URL+"/registrations/some-proposal", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
 	require.Equal(t, http.MethodGet, response.Header.Get("Allow"))
+
 	response = do(t, http.MethodPost, srv.URL+"/registrations/conflicts", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
@@ -157,77 +217,214 @@ func TestHandlerReturnsConflictAndMethodErrors(t *testing.T) {
 }
 
 func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewHandler(newService(t)))
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
 	defer srv.Close()
 
-	for _, path := range []string{"/registrations/1/2/status", "/registrations/256/2/status", "/registrations/1/2", "/"} {
+	for _, path := range []string{
+		"/registrations/deadbeef",
+		"/registrations/",
+		"/registrations/7/42/status",
+		"/",
+	} {
 		response := do(t, http.MethodGet, srv.URL+path, nil, "")
 		require.Equal(t, http.StatusNotFound, response.StatusCode, path)
 		require.NoError(t, response.Body.Close())
 	}
 }
 
-// site is the handler tests' deployment: the machines of one site sharing one
-// in-process fabric, so a test can serve one machine's API while deciding which
-// of the machines it waits for are running.
+// site is the handler tests' deployment: the machines of one site, publishing
+// into one in-process journal and folding it into their own projections.
+//
+// The journal is the Event Fabric's contract without a transport. That is all an
+// HTTP test needs: what this file checks is the boundary's own behavior, and the
+// domain's and the transport's are their own packages' to prove.
 type site struct {
-	t       *testing.T
-	shared  *memory.Site
-	peers   []deployment.FabricPeer
-	running []*registration.Reconciler
+	t        *testing.T
+	journal  *journal
+	machines []deployment.EventFabricPeer
+}
+
+// journal is an ordered, in-process site journal. It stamps each published event
+// with the node that stated it, gives it the next sequence, and folds it into
+// every node's projection, which is what the real fabric does once JetStream has
+// accepted a write.
+type journal struct {
+	t     *testing.T
+	scope eventfabric.SiteScope
+
+	mu       sync.Mutex
+	sequence uint64
+	records  []eventfabric.Delivery
+	nodes    []*node
+	failure  error
+}
+
+// node is one machine's registration composition: what it publishes through,
+// what it folds into, and what its HTTP boundary is handed.
+type node struct {
+	identity   events.Node
+	projection *registration.Projection
+	handler    *registration.Handler
+	commands   *registration.CommandService
+	queries    *registration.QueryService
+	// consumed is the highest journal sequence this node's handler has taken,
+	// standing in for a durable consumer's acknowledgements: without it a
+	// redriven handler would restate every decision forever.
+	consumed uint64
+}
+
+// publisher is one node's narrow publishing capability, stamping its own trusted
+// identity onto everything it states.
+type publisher struct {
+	journal  *journal
+	identity events.Node
+}
+
+func (p publisher) Publish(ctx context.Context, event events.Event) (eventfabric.Receipt, error) {
+	return p.journal.append(ctx, p.identity, event)
 }
 
 // newSite declares a site of machines and starts none of them. Machine i is at
 // 127.0.0.(i+1).
 func newSite(t *testing.T, machines ...string) *site {
 	t.Helper()
-	s := &site{t: t, shared: memory.NewSite()}
+	s := &site{
+		t:       t,
+		journal: &journal{t: t, scope: eventfabric.NewSiteScope("test", "development", "local")},
+	}
 	for i, machine := range machines {
-		s.peers = append(s.peers, deployment.FabricPeer{
+		s.machines = append(s.machines, deployment.EventFabricPeer{
 			Site: "local", Machine: machine, IP: fmt.Sprintf("127.0.0.%d", i+1),
 		})
 	}
 	return s
 }
 
-// start brings one expected machine up and returns the service its HTTP API
-// would serve.
-func (s *site) start(machine string) *registration.Service {
+// start brings one expected machine up and returns its composition. It replays
+// the journal into the new node's projection first, as a node joining a running
+// site does before it serves.
+func (s *site) start(machine string) *node {
 	s.t.Helper()
-	descriptor := deployment.Descriptor{Site: "local"}
-	for _, peer := range s.peers {
+	expected := make([]registration.Location, 0, len(s.machines))
+	var self registration.Location
+	for _, peer := range s.machines {
+		expected = append(expected, registration.Location{Machine: peer.Machine, IP: peer.IP})
 		if peer.Machine == machine {
-			descriptor.Machine, descriptor.IP = peer.Machine, peer.IP
-			continue
+			self = registration.Location{Machine: peer.Machine, IP: peer.IP}
 		}
-		descriptor.Fabric.Peers = append(descriptor.Fabric.Peers, peer)
 	}
-	require.NotEmpty(s.t, descriptor.Machine, "%s is not a machine of this site", machine)
+	require.NotEmpty(s.t, self.Machine, "%s is not a machine of this site", machine)
 
-	f := s.shared.Open(descriptor)
-	service, reconciler, err := registration.Open(f, events.NopRecorder{})
+	n := &node{
+		identity: events.Node{
+			Project: "test", Environment: "development", Site: "local",
+			Machine: self.Machine, Role: "all-in-one",
+		},
+		projection: registration.NewProjection(),
+	}
+	pub := publisher{journal: s.journal, identity: n.identity}
+
+	commands, queries, err := registration.Open(pub, n.projection, self, expected)
 	require.NoError(s.t, err)
-	s.t.Cleanup(func() { _ = f.Close(context.Background()) })
-	s.running = append(s.running, reconciler)
-	return service
+	handler, err := registration.NewHandler(pub, n.projection, self, expected, s.journal.scope)
+	require.NoError(s.t, err)
+	n.commands, n.queries, n.handler = commands, queries, handler
+
+	s.journal.attach(s.t.Context(), n)
+	return n
 }
 
-// reconcile lets the site settle, which is what its schedulers do on their own.
-func (s *site) reconcile() {
+// settle lets the site reach its conclusion, which its durable handlers do on
+// their own schedule. It drives every running handler over the events it has not
+// taken until nothing new happens.
+func (s *site) settle() {
 	s.t.Helper()
-	for range 2 {
-		for _, reconciler := range s.running {
-			require.NoError(s.t, reconciler.Reconcile(s.t.Context()))
+	require.True(s.t, s.journal.settle(s.t.Context()), "the site never settled")
+}
+
+// attach registers a node and replays the journal into its projection.
+func (j *journal) attach(ctx context.Context, n *node) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, delivery := range j.records {
+		require.NoError(j.t, n.projection.Apply(ctx, delivery))
+	}
+	j.nodes = append(j.nodes, n)
+}
+
+// append orders one event and folds it into every node's projection.
+func (j *journal) append(ctx context.Context, identity events.Node, event events.Event) (eventfabric.Receipt, error) {
+	j.mu.Lock()
+	if j.failure != nil {
+		defer j.mu.Unlock()
+		return eventfabric.Receipt{}, j.failure
+	}
+	record, err := events.StampRecord(identity, events.NewID(), time.Now(), event)
+	require.NoError(j.t, err)
+	j.sequence++
+	delivery := eventfabric.Delivery{Record: record, Sequence: j.sequence}
+	j.records = append(j.records, delivery)
+	nodes := slices.Clone(j.nodes)
+	j.mu.Unlock()
+
+	for _, n := range nodes {
+		require.NoError(j.t, n.projection.Apply(ctx, delivery))
+	}
+	return eventfabric.Receipt{ID: record.ID, Sequence: delivery.Sequence}, nil
+}
+
+// breakWith makes the journal refuse writes, as an unreachable or full one does.
+func (j *journal) breakWith(err error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.failure = fmt.Errorf("%w: %w", registration.ErrJournalUnavailable, err)
+}
+
+// settle drives every handler over what it has not taken, until a pass changes
+// nothing. It reports whether the site reached that point.
+func (j *journal) settle(ctx context.Context) bool {
+	const passes = 10
+	for range passes {
+		progressed := false
+		for _, n := range j.nodes {
+			for _, delivery := range j.deliveries() {
+				if delivery.Sequence <= n.consumed {
+					continue
+				}
+				n.consumed = delivery.Sequence
+				progressed = true
+				if !j.routed(n.handler, delivery) {
+					continue
+				}
+				require.NoError(j.t, n.handler.Handle(ctx, delivery))
+			}
+		}
+		if !progressed {
+			return true
 		}
 	}
+	return false
 }
 
-// newService builds the registration a one-machine site's platform serves. Its
-// own answer is the whole site's, so a request it takes is accepted as soon as
-// anything looks at it, which is all these tests need from the domain.
-func newService(t *testing.T) *registration.Service {
-	t.Helper()
-	return newSite(t, "node-a").start("node-a")
+func (j *journal) deliveries() []eventfabric.Delivery {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return slices.Clone(j.records)
+}
+
+// routed reports whether a handler declared the delivery's route. It asks the
+// handler what it consumes rather than repeating the answer, so a handler that
+// changed its routes changes what these tests deliver to it.
+func (j *journal) routed(handler *registration.Handler, delivery eventfabric.Delivery) bool {
+	route, err := eventfabric.NewRoute(j.scope, delivery.Record.Type)
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(handler.Routes(), func(declared eventfabric.Route) bool {
+		return declared.Subject() == route.Subject()
+	})
 }
 
 // instanceStatus returns one platform instance's entry in a registration view.
@@ -242,6 +439,52 @@ func instanceStatus(t *testing.T, view api.Registration, machine string) api.Pla
 	return api.PlatformInstanceRegistrationStatus{}
 }
 
+// propose posts a registration request and requires it to be taken.
+func propose(t *testing.T, srv *httptest.Server, body string) api.ProposalAccepted {
+	t.Helper()
+	response := do(t, http.MethodPost, srv.URL+"/registrations", []byte(body), "application/json")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusAccepted, response.StatusCode, body)
+
+	var accepted api.ProposalAccepted
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&accepted))
+	return accepted
+}
+
+// status reads one proposal's projected view and the code it was answered with.
+func status(t *testing.T, srv *httptest.Server, proposalID string) (view api.Registration, code int) {
+	t.Helper()
+	response := do(t, http.MethodGet, srv.URL+"/registrations/"+proposalID, nil, "")
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return api.Registration{}, response.StatusCode
+	}
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&view))
+	return view, response.StatusCode
+}
+
+func list(t *testing.T, srv *httptest.Server) []api.Registration {
+	t.Helper()
+	response := do(t, http.MethodGet, srv.URL+"/registrations", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+
+	var registrations []api.Registration
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&registrations))
+	return registrations
+}
+
+func conflicts(t *testing.T, srv *httptest.Server) []api.RegistrationConflict {
+	t.Helper()
+	response := do(t, http.MethodGet, srv.URL+"/registrations/conflicts", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+
+	var resolved []api.RegistrationConflict
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&resolved))
+	return resolved
+}
+
 func do(t *testing.T, method, url string, body []byte, contentType string) *http.Response {
 	t.Helper()
 	request, err := http.NewRequestWithContext(t.Context(), method, url, bytes.NewReader(body))
@@ -252,11 +495,4 @@ func do(t *testing.T, method, url string, body []byte, contentType string) *http
 	response, err := http.DefaultClient.Do(request)
 	require.NoError(t, err)
 	return response
-}
-
-func decodeRegistration(t *testing.T, response *http.Response) api.Registration {
-	t.Helper()
-	var view api.Registration
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&view))
-	return view
 }

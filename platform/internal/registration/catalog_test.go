@@ -1,4 +1,4 @@
-package eventmodel
+package registration
 
 import (
 	"testing"

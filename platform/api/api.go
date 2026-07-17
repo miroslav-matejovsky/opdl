@@ -23,6 +23,10 @@ const (
 // RegistrationRequest is the client-supplied request to register one unit.
 // Machine, IP, registration status, and platform-instance progress are supplied
 // only by the platform in Registration responses.
+//
+// Registration is asynchronous. A valid request is durably recorded and answered
+// with a ProposalAccepted; whether the site registers the unit is decided
+// afterwards and read back through the proposal's status.
 type RegistrationRequest struct {
 	// UnitType is the unit type identifier from 0 through 255.
 	UnitType uint8 `json:"unit_type"`
@@ -34,8 +38,24 @@ type RegistrationRequest struct {
 	Role *string `json:"role,omitempty"`
 }
 
+// ProposalAccepted acknowledges that the site journal durably recorded a
+// registration proposal. It is not an acceptance of the registration: it means
+// only that the proposal is retained and that the site will decide it.
+//
+// ProposalID is the client's handle on that decision, and it is deterministic:
+// an identical request always produces the same proposal, so a retry returns the
+// same ID and adds nothing to the journal.
+type ProposalAccepted struct {
+	// ProposalID is the proposal's stable identity and its status key.
+	ProposalID string `json:"proposal_id"`
+	// Sequence is the proposal's position in the site journal.
+	Sequence uint64 `json:"sequence"`
+}
+
 // Registration is the platform's immutable view of one registration request.
 type Registration struct {
+	// ProposalID is the proposal's stable identity and its status key.
+	ProposalID string `json:"proposal_id"`
 	// UnitType is the registered unit type identifier.
 	UnitType uint8 `json:"unit_type"`
 	// UnitID is the registered unit identifier.
@@ -75,9 +95,13 @@ type RegistrationConflict struct {
 // PlatformInstanceRegistrationStatus is one platform instance's progress for a
 // registration request.
 type PlatformInstanceRegistrationStatus struct {
-	// Machine is the platform instance's descriptor machine.
+	// Machine is the platform instance's descriptor machine. It is the identity
+	// the proposal itself names, so it is always present.
 	Machine string `json:"machine"`
-	// IP is the platform instance's descriptor IP.
+	// IP is the platform instance's descriptor IP. It is a display field looked
+	// up in the answering node's own topology rather than carried by the
+	// proposal, so it is empty for a historical proposal that names a machine the
+	// deployment no longer has.
 	IP string `json:"ip"`
 	// Status is pending, accepted, or rejected.
 	Status string `json:"status"`
@@ -166,13 +190,12 @@ func Describe() Contract {
 				Method:      http.MethodPost,
 				Path:        "/registrations",
 				OperationID: "registerUnit",
-				Summary:     "Request unit registration",
+				Summary:     "Propose a unit registration",
 				RequestBody: &RequestBody{Type: RegistrationRequest{}, Required: true},
 				Responses: []Response{
-					{Status: http.StatusAccepted},
+					{Status: http.StatusAccepted, Body: ProposalAccepted{}},
 					{Status: http.StatusBadRequest, Body: Error{}},
-					{Status: http.StatusConflict, Body: Error{}},
-					{Status: http.StatusInternalServerError, Body: Error{}},
+					{Status: http.StatusServiceUnavailable, Body: Error{}},
 				},
 			},
 			{
@@ -187,27 +210,24 @@ func Describe() Contract {
 			},
 			{
 				Method:      http.MethodGet,
-				Path:        "/registrations/{unit_type}/{unit_id}/status",
+				Path:        "/registrations/{proposal_id}",
 				OperationID: "getRegistrationStatus",
-				Summary:     "Get registration request status",
+				Summary:     "Get a registration proposal's status",
 				PathParameters: []PathParameter{
-					{Name: "unit_type", Type: uint8(0), Required: true},
-					{Name: "unit_id", Type: uint16(0), Required: true},
+					{Name: "proposal_id", Type: "", Required: true},
 				},
 				Responses: []Response{
 					{Status: http.StatusOK, Body: Registration{}},
 					{Status: http.StatusNotFound, Body: Error{}},
-					{Status: http.StatusInternalServerError, Body: Error{}},
 				},
 			},
 			{
 				Method:      http.MethodGet,
 				Path:        "/registrations",
 				OperationID: "listRegistrations",
-				Summary:     "List registration requests",
+				Summary:     "List registration proposals",
 				Responses: []Response{
 					{Status: http.StatusOK, Body: []Registration{}},
-					{Status: http.StatusInternalServerError, Body: Error{}},
 				},
 			},
 		},

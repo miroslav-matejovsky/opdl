@@ -37,6 +37,12 @@ type Fabric interface {
 	// the handler's delivery is exhausted.
 	RunHandler(ctx context.Context, handler Handler) error
 
+	// HandlerPending returns how many journal events handler's durable consumer
+	// has yet to acknowledge, so startup can wait for a node's retained work to
+	// drain before it serves. It reports ErrHandlerNotAttached until RunHandler
+	// has established the consumer.
+	HandlerPending(ctx context.Context, handler Handler) (uint64, error)
+
 	// HighWater returns the Sequence of the last event the journal has accepted.
 	// Startup captures it and waits for the projector to reach it before serving.
 	HighWater(ctx context.Context) (uint64, error)
@@ -45,8 +51,12 @@ type Fabric interface {
 	// caught up, so readiness can be derived without reaching into the transport.
 	State(ctx context.Context) (State, error)
 
-	// Close stops delivery, drains active handlers within ctx, and releases the
-	// transport.
+	// Info returns the fabric's identity and storage disposition, which is what a
+	// node's ready event reports about the transport it runs on.
+	Info() Info
+
+	// Close releases the transport. It states nothing: a node's shutdown is
+	// announced by composition, while the journal can still accept the fact.
 	Close(ctx context.Context) error
 }
 

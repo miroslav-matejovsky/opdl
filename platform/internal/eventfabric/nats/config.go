@@ -2,6 +2,7 @@ package nats
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -53,29 +54,40 @@ const (
 	DefaultMaxDeliver = 5
 )
 
-// Config is one embedded NATS node's settings. DefaultConfig derives a
+// Config is one node's Event Fabric transport settings. DefaultConfig derives a
 // production one from the deployment descriptor; the fields exist so development
 // and scenarios can move sockets and the data directory without rebuilding a
 // machine. Nothing here is an identity: overriding an address changes where the
-// node listens, never which machine it is.
+// node listens or connects, never which machine it is.
 type Config struct {
 	// ServerName is this node's name within the site cluster. It is unique per
-	// site.
+	// site. It is only meaningful on a storage node.
 	ServerName string
-	// ClusterName is the site cluster's name, shared by every node of the site.
+	// ClusterName is the site cluster's name, shared by the site's storage nodes.
 	ClusterName string
 
-	// ClientAddress is the host:port the node serves clients on.
+	// ClientAddress is the host:port this node's server serves clients on. It is
+	// only used on a storage node.
 	ClientAddress string
-	// ClusterAddress is the host:port the node routes to peers on.
+	// ClusterAddress is the host:port this node's server routes to peers on. It
+	// is only used on a storage node.
 	ClusterAddress string
-	// MonitorAddress is the host:port the node serves monitoring on.
+	// MonitorAddress is the host:port this node's server serves monitoring on. It
+	// is only used on a storage node.
 	MonitorAddress string
-	// Routes are the cluster host:port addresses of the site's peers to route to.
+	// Routes are the cluster host:port addresses of the site's other storage
+	// nodes. Only storage nodes route to each other, and a site with one storage
+	// node has none.
 	Routes []string
 
-	// HostsStorage reports whether this node runs JetStream storage. Only the
-	// storage nodes do; the rest run Core NATS and route to them.
+	// Servers are the client host:port addresses this node's Event Fabric client
+	// connects to: its own server on a storage node, and the site's storage nodes
+	// on a machine that does not store the journal.
+	Servers []string
+
+	// HostsStorage reports whether this node runs the site journal. Only the
+	// storage nodes run a NATS server at all; every other machine of the site is
+	// a client of theirs.
 	HostsStorage bool
 	// DataDir is the JetStream file store directory. It is required on a storage
 	// node and unused on a node that does not host storage.
@@ -107,43 +119,48 @@ type Config struct {
 }
 
 // DefaultConfig derives the production configuration from a machine's resolved
-// deployment descriptor: the node's own addresses from its descriptor IP, its
-// routes from its peers' IPs, and its storage role and replica count from the
-// site size. It leaves DataDir and credentials for the composer, which knows the
-// runtime data path and reads secrets from files.
+// deployment descriptor: which machines store the site journal, and therefore
+// whether this one runs a server at all, which peers it clusters with, and which
+// servers it connects to. It leaves DataDir and credentials for the composer,
+// which knows the runtime data path and reads secrets from files.
 func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
-	client, err := address(descriptor.IP, ClientPort)
+	ips, err := siteIPs(descriptor)
 	if err != nil {
-		return Config{}, fmt.Errorf("nats: client address: %w", err)
+		return Config{}, err
 	}
-	cluster, err := address(descriptor.IP, ClusterPort)
-	if err != nil {
-		return Config{}, fmt.Errorf("nats: cluster address: %w", err)
-	}
-	monitor, err := address("127.0.0.1", MonitorPort)
-	if err != nil {
-		return Config{}, fmt.Errorf("nats: monitor address: %w", err)
-	}
+	storage := StorageNodes(slices.Sorted(maps.Keys(ips)))
+	hostsStorage := slices.Contains(storage, descriptor.Machine)
 
-	routes := make([]string, 0, len(descriptor.Fabric.Peers))
-	for _, peer := range descriptor.Fabric.Peers {
-		route, err := address(peer.IP, ClusterPort)
+	// A machine that does not store the journal reaches it through any of the
+	// storage nodes' servers. A storage node reaches it through its own, which is
+	// why Servers is derived from ClientAddress below rather than listed here.
+	//
+	// The cluster is exactly the storage nodes: they are the only servers, and a
+	// server that is not one of them would only add a peer to the journal's
+	// metadata group without adding a replica to hold it.
+	servers := make([]string, 0, len(storage))
+	routes := make([]string, 0, len(storage))
+	for _, machine := range storage {
+		client, err := address(ips[machine], ClientPort)
 		if err != nil {
-			return Config{}, fmt.Errorf("nats: peer %q: %w", peer.Machine, err)
+			return Config{}, fmt.Errorf("nats: storage node %q: %w", machine, err)
+		}
+		servers = append(servers, client)
+		if machine == descriptor.Machine {
+			continue
+		}
+		route, err := address(ips[machine], ClusterPort)
+		if err != nil {
+			return Config{}, fmt.Errorf("nats: storage node %q: %w", machine, err)
 		}
 		routes = append(routes, route)
 	}
 
-	machines := siteMachines(descriptor)
-	return Config{
-		ServerName:      descriptor.Machine,
+	cfg := Config{
 		ClusterName:     string(eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)),
-		ClientAddress:   client,
-		ClusterAddress:  cluster,
-		MonitorAddress:  monitor,
-		Routes:          routes,
-		HostsStorage:    slices.Contains(StorageNodes(machines), descriptor.Machine),
-		Replicas:        Replicas(len(machines)),
+		Servers:         servers,
+		HostsStorage:    hostsStorage,
+		Replicas:        Replicas(len(ips)),
 		MaxBytes:        DefaultMaxBytes,
 		MaxMessageBytes: DefaultMaxMessageBytes,
 		AckWait:         DefaultAckWait,
@@ -151,7 +168,43 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 		StartupTimeout:  DefaultStartupTimeout,
 		CatchUpTimeout:  DefaultCatchUpTimeout,
 		ShutdownTimeout: DefaultShutdownTimeout,
-	}, nil
+	}
+	if !hostsStorage {
+		return cfg, nil
+	}
+
+	cfg.ServerName = descriptor.Machine
+	cfg.Routes = routes
+	if cfg.ClientAddress, err = address(descriptor.IP, ClientPort); err != nil {
+		return Config{}, fmt.Errorf("nats: client address: %w", err)
+	}
+	// A storage node reaches the journal through its own server, which already
+	// clusters with the site's others. Sending it across the network to a peer
+	// would be a hop to reach what is in this process.
+	cfg.Servers = []string{cfg.ClientAddress}
+	if cfg.ClusterAddress, err = address(descriptor.IP, ClusterPort); err != nil {
+		return Config{}, fmt.Errorf("nats: cluster address: %w", err)
+	}
+	if cfg.MonitorAddress, err = address("127.0.0.1", MonitorPort); err != nil {
+		return Config{}, fmt.Errorf("nats: monitor address: %w", err)
+	}
+	return cfg, nil
+}
+
+// siteIPs maps every machine of the site to its address: this machine and its
+// peers.
+func siteIPs(descriptor deployment.Descriptor) (map[string]string, error) {
+	if strings.TrimSpace(descriptor.Machine) == "" {
+		return nil, fmt.Errorf("nats: descriptor has no machine")
+	}
+	ips := map[string]string{descriptor.Machine: descriptor.IP}
+	for _, peer := range descriptor.EventFabric.Peers {
+		if strings.TrimSpace(peer.Machine) == "" {
+			return nil, fmt.Errorf("nats: event fabric peer has no machine")
+		}
+		ips[peer.Machine] = peer.IP
+	}
+	return ips, nil
 }
 
 // StorageNodes returns the machines that host JetStream storage for a site,
@@ -187,12 +240,59 @@ func Replicas(siteSize int) int {
 // bad address or an unwritable data directory fails at startup rather than half
 // way through binding sockets or creating a stream.
 func (c Config) Validate() error {
-	addresses := map[string]string{
+	if len(c.Servers) == 0 {
+		return fmt.Errorf("nats: no server to connect to: the site has no storage node")
+	}
+	for _, addr := range c.Servers {
+		if err := validateAddress("server", addr); err != nil {
+			return err
+		}
+	}
+	if duplicate, found := firstDuplicate(c.Servers); found {
+		return fmt.Errorf("nats: server %q is listed twice", duplicate)
+	}
+	// Only a storage node runs a server, so only a storage node has listeners to
+	// check or peers to route to. A machine that does not store the journal is a
+	// client of the ones that do, and has nothing to bind.
+	if c.HostsStorage {
+		if err := c.validateServer(); err != nil {
+			return err
+		}
+	} else if len(c.Routes) > 0 {
+		return fmt.Errorf("nats: a node that does not store the journal has no cluster to route to")
+	}
+	if c.AckWait <= 0 {
+		return fmt.Errorf("nats: ack wait must be positive, got %s", c.AckWait)
+	}
+	if c.MaxDeliver <= 0 {
+		return fmt.Errorf("nats: max deliver must be positive, got %d", c.MaxDeliver)
+	}
+	for what, duration := range map[string]time.Duration{
+		"startup timeout":  c.StartupTimeout,
+		"catch-up timeout": c.CatchUpTimeout,
+		"shutdown timeout": c.ShutdownTimeout,
+	} {
+		if duration <= 0 {
+			return fmt.Errorf("nats: %s must be positive, got %s", what, duration)
+		}
+	}
+	return c.validateCredentials()
+}
+
+// validateServer checks a storage node's listeners, its routes to the site's
+// other storage nodes, and the storage its journal needs.
+func (c Config) validateServer() error {
+	if strings.TrimSpace(c.ServerName) == "" {
+		return fmt.Errorf("nats: server name is required on a storage node")
+	}
+	if strings.TrimSpace(c.ClusterName) == "" {
+		return fmt.Errorf("nats: cluster name is required on a storage node")
+	}
+	for what, addr := range map[string]string{
 		"client address":  c.ClientAddress,
 		"cluster address": c.ClusterAddress,
 		"monitor address": c.MonitorAddress,
-	}
-	for what, addr := range addresses {
+	} {
 		if err := validateAddress(what, addr); err != nil {
 			return err
 		}
@@ -211,27 +311,10 @@ func (c Config) Validate() error {
 	if duplicate, found := firstDuplicate(c.Routes); found {
 		return fmt.Errorf("nats: route %q is listed twice", duplicate)
 	}
-	if c.HostsStorage {
-		if err := c.validateStorage(); err != nil {
-			return err
-		}
+	if !slices.Contains(c.Servers, c.ClientAddress) {
+		return fmt.Errorf("nats: a storage node must connect to its own server %q", c.ClientAddress)
 	}
-	if c.AckWait <= 0 {
-		return fmt.Errorf("nats: ack wait must be positive, got %s", c.AckWait)
-	}
-	if c.MaxDeliver <= 0 {
-		return fmt.Errorf("nats: max deliver must be positive, got %d", c.MaxDeliver)
-	}
-	for what, duration := range map[string]time.Duration{
-		"startup timeout":  c.StartupTimeout,
-		"catch-up timeout": c.CatchUpTimeout,
-		"shutdown timeout": c.ShutdownTimeout,
-	} {
-		if duration <= 0 {
-			return fmt.Errorf("nats: %s must be positive, got %s", what, duration)
-		}
-	}
-	return c.validateCredentials()
+	return c.validateStorage()
 }
 
 // validateStorage checks a storage node has a writable data directory and
@@ -255,11 +338,14 @@ func (c Config) validateStorage() error {
 	return nil
 }
 
-// validateCredentials requires site credentials whenever any address or route is
-// non-loopback, and allows their absence only when everything is loopback, which
-// is the tests-and-development case.
+// validateCredentials requires site credentials whenever any address this node
+// binds or reaches is non-loopback, and allows their absence only when
+// everything is loopback, which is the tests-and-development case.
 func (c Config) validateCredentials() error {
-	all := append([]string{c.ClientAddress, c.ClusterAddress, c.MonitorAddress}, c.Routes...)
+	all := slices.Concat(c.Servers, c.Routes)
+	if c.HostsStorage {
+		all = append(all, c.ClientAddress, c.ClusterAddress, c.MonitorAddress)
+	}
 	exposed := false
 	for _, addr := range all {
 		loopback, err := isLoopback(addr)
@@ -275,17 +361,6 @@ func (c Config) validateCredentials() error {
 		return fmt.Errorf("nats: username and password are required when any address is non-loopback")
 	}
 	return nil
-}
-
-// siteMachines returns every machine name in the site: this machine and its
-// peers.
-func siteMachines(descriptor deployment.Descriptor) []string {
-	machines := make([]string, 0, len(descriptor.Fabric.Peers)+1)
-	machines = append(machines, descriptor.Machine)
-	for _, peer := range descriptor.Fabric.Peers {
-		machines = append(machines, peer.Machine)
-	}
-	return machines
 }
 
 // address renders a validated host:port from an IP and a port.

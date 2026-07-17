@@ -9,38 +9,37 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
 using System;
-namespace Opdl.Sdk.Client.Registrations.Item.Item.Status
+namespace Opdl.Sdk.Client.Registrations.Item
 {
     /// <summary>
-    /// Builds and executes requests for operations under \registrations\{unit_type}\{unit_id}\status
+    /// Builds and executes requests for operations under \registrations\{proposal_id}
     /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
-    public partial class StatusRequestBuilder : BaseRequestBuilder
+    public partial class WithProposal_ItemRequestBuilder : BaseRequestBuilder
     {
         /// <summary>
-        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Registrations.Item.Item.Status.StatusRequestBuilder"/> and sets the default values.
+        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder"/> and sets the default values.
         /// </summary>
         /// <param name="pathParameters">Path parameters for the request</param>
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
-        public StatusRequestBuilder(Dictionary<string, object> pathParameters, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/registrations/{unit_type}/{unit_id}/status", pathParameters)
+        public WithProposal_ItemRequestBuilder(Dictionary<string, object> pathParameters, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/registrations/{proposal_id}", pathParameters)
         {
         }
         /// <summary>
-        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Registrations.Item.Item.Status.StatusRequestBuilder"/> and sets the default values.
+        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder"/> and sets the default values.
         /// </summary>
         /// <param name="rawUrl">The raw URL to use for the request builder.</param>
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
-        public StatusRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/registrations/{unit_type}/{unit_id}/status", rawUrl)
+        public WithProposal_ItemRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/registrations/{proposal_id}", rawUrl)
         {
         }
         /// <summary>
-        /// Get registration request status
+        /// Get a registration proposal&apos;s status
         /// </summary>
         /// <returns>A <see cref="global::Opdl.Sdk.Client.Models.Registration"/></returns>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
         /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 404 status code</exception>
-        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 500 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<global::Opdl.Sdk.Client.Models.Registration?> GetAsync(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -54,12 +53,11 @@ namespace Opdl.Sdk.Client.Registrations.Item.Item.Status
             var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
             {
                 { "404", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
-                { "500", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
             };
             return await RequestAdapter.SendAsync<global::Opdl.Sdk.Client.Models.Registration>(requestInfo, global::Opdl.Sdk.Client.Models.Registration.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// Get registration request status
+        /// Get a registration proposal&apos;s status
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
@@ -80,18 +78,18 @@ namespace Opdl.Sdk.Client.Registrations.Item.Item.Status
         /// <summary>
         /// Returns a request builder with the provided arbitrary URL. Using this method means any other path or query parameters are ignored.
         /// </summary>
-        /// <returns>A <see cref="global::Opdl.Sdk.Client.Registrations.Item.Item.Status.StatusRequestBuilder"/></returns>
+        /// <returns>A <see cref="global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder"/></returns>
         /// <param name="rawUrl">The raw URL to use for the request builder.</param>
-        public global::Opdl.Sdk.Client.Registrations.Item.Item.Status.StatusRequestBuilder WithUrl(string rawUrl)
+        public global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder WithUrl(string rawUrl)
         {
-            return new global::Opdl.Sdk.Client.Registrations.Item.Item.Status.StatusRequestBuilder(rawUrl, RequestAdapter);
+            return new global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder(rawUrl, RequestAdapter);
         }
         /// <summary>
         /// Configuration for the request such as headers, query parameters, and middleware options.
         /// </summary>
         [Obsolete("This class is deprecated. Please use the generic RequestConfiguration class generated by the generator.")]
         [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
-        public partial class StatusRequestBuilderGetRequestConfiguration : RequestConfiguration<DefaultQueryParameters>
+        public partial class WithProposal_ItemRequestBuilderGetRequestConfiguration : RequestConfiguration<DefaultQueryParameters>
         {
         }
     }

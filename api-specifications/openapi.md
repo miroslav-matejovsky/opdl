@@ -6,7 +6,7 @@ HTTP API served by the OPDL platform runtime.
 
 ## GET /registrations
 
-List registration requests
+List registration proposals
 
 **Response `200`**
 
@@ -19,6 +19,7 @@ Items:
 | `ip` | string | yes |
 | `machine` | string | yes |
 | `platform_instances` | array<`PlatformInstanceRegistrationStatus`> | yes |
+| `proposal_id` | string | yes |
 | `reason` | string |  |
 | `role` | string |  |
 | `status` | string | yes |
@@ -26,15 +27,9 @@ Items:
 | `unit_type` | integer | yes |
 | `unit_type_name_advertised` | string | yes |
 
-**Response `500`** — `Error`
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `code` | string | yes |
-
 ## POST /registrations
 
-Request unit registration
+Propose a unit registration
 
 **Request body** (required) — `RegistrationRequest`
 
@@ -45,7 +40,12 @@ Request unit registration
 | `unit_type` | integer | yes |
 | `unit_type_name_advertised` | string | yes |
 
-**Response `202`**
+**Response `202`** — `ProposalAccepted`
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `proposal_id` | string | yes |
+| `sequence` | integer | yes |
 
 **Response `400`** — `Error`
 
@@ -53,13 +53,7 @@ Request unit registration
 | --- | --- | --- |
 | `code` | string | yes |
 
-**Response `409`** — `Error`
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `code` | string | yes |
-
-**Response `500`** — `Error`
+**Response `503`** — `Error`
 
 | Field | Type | Required |
 | --- | --- | --- |
@@ -89,9 +83,9 @@ Items:
 | --- | --- | --- |
 | `code` | string | yes |
 
-## GET /registrations/{unit_type}/{unit_id}/status
+## GET /registrations/{proposal_id}
 
-Get registration request status
+Get a registration proposal's status
 
 **Response `200`** — `Registration`
 
@@ -100,6 +94,7 @@ Get registration request status
 | `ip` | string | yes |
 | `machine` | string | yes |
 | `platform_instances` | array<`PlatformInstanceRegistrationStatus`> | yes |
+| `proposal_id` | string | yes |
 | `reason` | string |  |
 | `role` | string |  |
 | `status` | string | yes |
@@ -108,12 +103,6 @@ Get registration request status
 | `unit_type_name_advertised` | string | yes |
 
 **Response `404`** — `Error`
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `code` | string | yes |
-
-**Response `500`** — `Error`
 
 | Field | Type | Required |
 | --- | --- | --- |

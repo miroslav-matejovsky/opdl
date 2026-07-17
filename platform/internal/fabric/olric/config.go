@@ -67,8 +67,8 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("olric: memberlist address: %w", err)
 	}
-	join := make([]string, 0, len(descriptor.Fabric.Peers))
-	for _, peer := range descriptor.Fabric.Peers {
+	join := make([]string, 0, len(descriptor.EventFabric.Peers))
+	for _, peer := range descriptor.EventFabric.Peers {
 		address, err := fabric.Address(peer.IP, MemberlistPort)
 		if err != nil {
 			return Config{}, fmt.Errorf("olric: peer %q: %w", peer.Machine, err)

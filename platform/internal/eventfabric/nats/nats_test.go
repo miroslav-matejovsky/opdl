@@ -57,6 +57,7 @@ func configForDir(t *testing.T, dir string) Config {
 		ClientAddress:   addrs[0],
 		ClusterAddress:  addrs[1],
 		MonitorAddress:  addrs[2],
+		Servers:         []string{addrs[0]},
 		HostsStorage:    true,
 		DataDir:         dir,
 		Replicas:        1,
@@ -90,12 +91,12 @@ func freeAddrs(t *testing.T, n int) []string {
 	return addrs
 }
 
-// routeFor is the site route for one event type.
-func routeFor(t *testing.T, eventType events.Type) eventfabric.Route {
+// probeRoute is the site route for the probe event every handler test consumes.
+func probeRoute(t *testing.T) eventfabric.Route {
 	t.Helper()
 	route, err := eventfabric.NewRoute(
 		eventfabric.NewSiteScope(testDescriptor.Project, testDescriptor.Environment, testDescriptor.Site),
-		eventType,
+		probe{}.EventType(),
 	)
 	require.NoError(t, err)
 	return route
@@ -234,7 +235,8 @@ func TestPublishReturnsAReceiptAndTheEventReplays(t *testing.T) {
 	receipt, err := f.Publish(context.Background(), probe{Fact: "started"})
 	require.NoError(t, err)
 	require.NotEmpty(t, receipt.ID)
-	require.Positive(t, receipt.Sequence)
+	require.Equal(t, uint64(1), receipt.Sequence,
+		"an open fabric has stated nothing, so the first published fact is first in the journal")
 
 	rec := &recorder{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -244,11 +246,45 @@ func TestPublishReturnsAReceiptAndTheEventReplays(t *testing.T) {
 
 	waitFor(t, func() bool { return rec.count("platform.probe.happened") == 1 },
 		"projector never replayed the published event")
-	// The fabric states its own readiness through the same journal.
-	require.Positive(t, rec.count("platform.event_fabric.ready"))
 
 	cancel()
 	require.NoError(t, <-done, "a canceled projector returns cleanly")
+}
+
+// TestOpenStatesNothing pins where readiness belongs. A connected transport is
+// not a ready node: the projections have not replayed and the handlers have not
+// attached, and only composition knows when they have. An adapter that announced
+// itself would be stating something it cannot know.
+func TestOpenStatesNothing(t *testing.T) {
+	f := open(t, testConfig(t))
+
+	high, err := f.HighWater(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, high, "opening a fabric adds nothing to the journal")
+
+	require.NoError(t, f.Close(context.Background()))
+
+	// Reopening proves it across the whole lifecycle: neither end wrote anything.
+	second := open(t, testConfig(t))
+	high, err = second.HighWater(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, high, "closing a fabric adds nothing either")
+}
+
+// TestInfoDescribesTheNodesTransport checks the fabric reports what a node's
+// ready event says about it: which adapter and server it is, which journal it is
+// bound to, and whether it stores that journal or routes to the nodes that do.
+func TestInfoDescribesTheNodesTransport(t *testing.T) {
+	cfg := testConfig(t)
+	f := open(t, cfg)
+
+	info := f.Info()
+	require.Equal(t, Name, info.Adapter)
+	require.Equal(t, cfg.ServerName, info.Server)
+	require.Equal(t, eventfabric.NewSiteScope(
+		testDescriptor.Project, testDescriptor.Environment, testDescriptor.Site).StreamName(), info.Journal)
+	require.True(t, info.HostsStorage)
+	require.Equal(t, cfg.Replicas, info.Replicas)
 }
 
 func TestPublishDeduplicatesByStableIdentity(t *testing.T) {
@@ -322,7 +358,7 @@ func TestDurableHandlerReceivesEventsPublishedBeforeItStarted(t *testing.T) {
 	_, err = f.Publish(context.Background(), probe{Fact: "b"})
 	require.NoError(t, err)
 
-	handler := &recordHandler{name: "probe", routes: []eventfabric.Route{routeFor(t, "platform.probe.happened")}}
+	handler := &recordHandler{name: "probe", routes: []eventfabric.Route{probeRoute(t)}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -343,7 +379,7 @@ func TestHandlerRedeliversUntilItSucceeds(t *testing.T) {
 	// Fail the first attempt of each delivery; the second succeeds.
 	handler := &recordHandler{
 		name:      "probe",
-		routes:    []eventfabric.Route{routeFor(t, "platform.probe.happened")},
+		routes:    []eventfabric.Route{probeRoute(t)},
 		failUntil: 1,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -366,7 +402,7 @@ func TestHandlerExhaustsAfterMaxDeliver(t *testing.T) {
 
 	handler := &recordHandler{
 		name:       "probe",
-		routes:     []eventfabric.Route{routeFor(t, "platform.probe.happened")},
+		routes:     []eventfabric.Route{probeRoute(t)},
 		alwaysFail: true,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -421,11 +457,9 @@ func TestReopeningWithAnIncompatibleJournalIsRefused(t *testing.T) {
 func TestHighWaterAndStateTrackCatchUp(t *testing.T) {
 	f := open(t, testConfig(t))
 
-	// The ready event is the first in the journal, so the high-water mark is
-	// already positive before any domain event.
 	base, err := f.HighWater(context.Background())
 	require.NoError(t, err)
-	require.Positive(t, base)
+	require.Zero(t, base, "an empty journal has accepted nothing")
 
 	_, err = f.Publish(context.Background(), probe{Fact: "a"})
 	require.NoError(t, err)
@@ -447,7 +481,10 @@ func TestHighWaterAndStateTrackCatchUp(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
-func TestCloseIsIdempotentAndStatesStopping(t *testing.T) {
+// TestCloseIsIdempotentAndRefusesLaterCalls checks a closed fabric is closed:
+// closing again is not a failure, and a call that arrives afterwards is refused
+// rather than quietly accepted into a transport that is gone.
+func TestCloseIsIdempotentAndRefusesLaterCalls(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping NATS integration test in -short mode")
 	}
@@ -458,19 +495,45 @@ func TestCloseIsIdempotentAndStatesStopping(t *testing.T) {
 	require.NoError(t, f.Close(context.Background()))
 	require.NoError(t, f.Close(context.Background()), "close is idempotent")
 
-	// A call after close is refused, not silently accepted.
 	_, err = f.Publish(context.Background(), probe{Fact: "late"})
 	require.ErrorIs(t, err, eventfabric.ErrClosed)
+	_, err = f.HighWater(context.Background())
+	require.ErrorIs(t, err, eventfabric.ErrClosed)
+	require.ErrorIs(t, f.RunProjector(context.Background(), &recorder{}), eventfabric.ErrClosed)
+}
 
-	// Reopen and replay: the stopping event reached the journal before the close.
-	second := open(t, configForDir(t, dir))
-	rec := &recorder{}
+// TestHandlerPendingReportsRetainedWork is what a node's startup gates on: how
+// much of the journal a durable handler still owes an answer for. A handler that
+// has not attached is reported as such rather than as having nothing to do,
+// because a node may serve only on the second of those.
+func TestHandlerPendingReportsRetainedWork(t *testing.T) {
+	f := open(t, testConfig(t))
+	handler := &recordHandler{
+		name:   "pending",
+		routes: []eventfabric.Route{probeRoute(t)},
+	}
+
+	_, err := f.HandlerPending(context.Background(), handler)
+	require.ErrorIs(t, err, eventfabric.ErrHandlerNotAttached,
+		"a handler that never ran has not decided it has nothing to do")
+
+	// Retain work for a handler that is not running yet.
+	for range 3 {
+		_, err := f.Publish(context.Background(), probe{Fact: "queued"})
+		require.NoError(t, err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- second.RunProjector(ctx, rec) }()
-	waitFor(t, func() bool { return rec.count("platform.event_fabric.stopping") >= 1 },
-		"the stopping event was not recorded before shutdown")
+	go func() { done <- f.RunHandler(ctx, handler) }()
+
+	waitFor(t, func() bool {
+		pending, err := f.HandlerPending(context.Background(), handler)
+		return err == nil && pending == 0
+	}, "the handler's retained work never drained")
+	require.Equal(t, 3, handler.handledCount(), "every retained event reached the handler")
+
 	cancel()
 	require.NoError(t, <-done)
 }

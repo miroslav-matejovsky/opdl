@@ -111,14 +111,14 @@ type Collection interface {
 // The result is ordered by machine name and includes self, so every member of a
 // site derives an identical list.
 func MembersFromDescriptor(descriptor deployment.Descriptor) []Member {
-	members := make([]Member, 0, len(descriptor.Fabric.Peers)+1)
+	members := make([]Member, 0, len(descriptor.EventFabric.Peers)+1)
 	members = append(members, Member{
 		Site:    descriptor.Site,
 		Machine: descriptor.Machine,
 		IP:      descriptor.IP,
 		Self:    true,
 	})
-	for _, peer := range descriptor.Fabric.Peers {
+	for _, peer := range descriptor.EventFabric.Peers {
 		members = append(members, Member{
 			Site:    peer.Site,
 			Machine: peer.Machine,

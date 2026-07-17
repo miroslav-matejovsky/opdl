@@ -22,8 +22,8 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches enabled on the machine.
 	Features Features `json:"features"`
-	// Fabric is the resolved platform fabric topology for this machine.
-	Fabric Fabric `json:"fabric"`
+	// EventFabric is the resolved Event Fabric topology for this machine.
+	EventFabric EventFabric `json:"event_fabric"`
 }
 
 // Features are the capability switches carried from the project onto a machine.
@@ -32,29 +32,29 @@ type Features struct {
 	Redundancy bool `json:"redundancy"`
 }
 
-// Fabric is this machine's resolved view of the platform fabric: the peers it
-// forms that fabric with. The descriptor already carries this machine's
-// identity, so Fabric contains only the additional topology. The builder derives
-// it from the project topology and stages it here, so the platform boots knowing
-// its membership and discovers nothing at runtime.
+// EventFabric is this machine's resolved view of the site's Event Fabric: the
+// peers it forms that fabric with. The descriptor already carries this machine's
+// identity, so EventFabric contains only the additional topology. The builder
+// derives it from the project topology and stages it here, so the platform boots
+// knowing its membership and discovers nothing at runtime.
 //
 // It is transport-neutral: identities and addresses only, with no ports, adapter
-// names, or protocol settings. A fabric adapter derives what it needs from these
-// addresses, which is what lets the backend be replaced without changing the
-// deployment contract.
-type Fabric struct {
-	// Peers are the other fabric members of this machine's site, ordered by
+// names, or protocol settings. The Event Fabric adapter derives what it needs
+// from these addresses, which is what lets the transport be replaced without
+// changing the deployment contract.
+type EventFabric struct {
+	// Peers are the other Event Fabric members of this machine's site, ordered by
 	// machine name. A machine never lists itself, and the fabric spans exactly
 	// one site. A single-machine site has no peers and forms a one-member fabric.
-	Peers []FabricPeer `json:"peers"`
+	Peers []EventFabricPeer `json:"peers"`
 }
 
-// FabricPeer is one other fabric member this machine expects to meet.
-type FabricPeer struct {
+// EventFabricPeer is one other Event Fabric member this machine expects to meet.
+type EventFabricPeer struct {
 	// Site is the peer's site, always equal to this machine's site.
 	Site string `json:"site"`
 	// Machine is the peer's machine identity.
 	Machine string `json:"machine"`
-	// IP is the address the peer's fabric member is reached on.
+	// IP is the address the peer's Event Fabric member is reached on.
 	IP string `json:"ip"`
 }

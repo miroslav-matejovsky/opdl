@@ -47,40 +47,86 @@ func TestDefaultConfigForASingleNodeSiteHostsStorageAlone(t *testing.T) {
 
 	require.True(t, cfg.HostsStorage, "the only machine hosts storage")
 	require.Equal(t, 1, cfg.Replicas)
-	require.Empty(t, cfg.Routes, "a single-node site has no peers to route to")
+	require.Empty(t, cfg.Routes, "a single-node site has no other storage node to cluster with")
 	require.Equal(t, "10.0.1.10:4222", cfg.ClientAddress)
 	require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress)
 	require.Equal(t, "127.0.0.1:8222", cfg.MonitorAddress, "monitoring binds to loopback by default")
 	require.Equal(t, "node-a", cfg.ServerName)
 	require.NotEmpty(t, cfg.ClusterName)
+	require.Equal(t, []string{"10.0.1.10:4222"}, cfg.Servers, "a storage node reaches the journal on its own server")
 }
 
-func TestDefaultConfigForALargerSiteDerivesStorageAndRoutes(t *testing.T) {
-	descriptor := deployment.Descriptor{
+// TestDefaultConfigForATwoMachineSiteRunsOneServer pins the POC topology. Two
+// machines run one storage node, and the other machine does not run a server at
+// all: it is a client of the one that does.
+//
+// The alternative would be a second server that holds no journal. NATS sizes a
+// journal's metadata group from the cluster it is in, so that server would join
+// the group deciding whether the site can write while having nowhere to write
+// to, and the site would need both machines up to accept anything. One server
+// and one client is what keeps a two-machine site working when the second
+// machine is down.
+func TestDefaultConfigForATwoMachineSiteRunsOneServer(t *testing.T) {
+	site := deployment.EventFabric{Peers: []deployment.EventFabricPeer{
+		{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
+	}}
+	storage, err := DefaultConfig(deployment.Descriptor{
+		Project: "customer-a", Environment: "production", Site: "north",
+		Machine: "node-a", IP: "10.0.1.10", EventFabric: site,
+	})
+	require.NoError(t, err)
+	require.True(t, storage.HostsStorage, "node-a sorts first")
+	require.Empty(t, storage.Routes, "the site's only server has nobody to cluster with")
+	require.Equal(t, []string{"10.0.1.10:4222"}, storage.Servers)
+
+	client, err := DefaultConfig(deployment.Descriptor{
+		Project: "customer-a", Environment: "production", Site: "north",
+		Machine: "node-b", IP: "10.0.1.11",
+		EventFabric: deployment.EventFabric{Peers: []deployment.EventFabricPeer{
+			{Site: "north", Machine: "node-a", IP: "10.0.1.10"},
+		}},
+	})
+	require.NoError(t, err)
+	require.False(t, client.HostsStorage, "node-b does not store the journal")
+	require.Equal(t, []string{"10.0.1.10:4222"}, client.Servers,
+		"it reaches the journal on the storage node's server")
+	require.Empty(t, client.Routes, "it has no server, so it clusters with nobody")
+	require.Empty(t, client.ClientAddress, "it binds nothing")
+	require.Empty(t, client.ClusterAddress)
+	require.Empty(t, client.MonitorAddress)
+}
+
+// TestDefaultConfigForALargerSiteClustersTheStorageNodes checks the cluster is
+// exactly the storage nodes. A fourth machine is a client of the three, and none
+// of the three routes to it: routing to a server that holds no journal would
+// only enlarge the metadata group's quorum without enlarging its storage.
+func TestDefaultConfigForALargerSiteClustersTheStorageNodes(t *testing.T) {
+	cfg, err := DefaultConfig(deployment.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "north",
 		Machine: "node-c", IP: "10.0.1.12",
-		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{
+		EventFabric: deployment.EventFabric{Peers: []deployment.EventFabricPeer{
 			{Site: "north", Machine: "node-a", IP: "10.0.1.10"},
 			{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
 			{Site: "north", Machine: "node-d", IP: "10.0.1.13"},
 		}},
-	}
-
-	cfg, err := DefaultConfig(descriptor)
+	})
 	require.NoError(t, err)
 
 	// Four machines: the first three by sorted name host storage. node-c is one of
 	// them; node-d is not.
 	require.True(t, cfg.HostsStorage, "node-c is among the first three by name")
 	require.Equal(t, 3, cfg.Replicas)
-	require.Equal(t, []string{"10.0.1.10:6222", "10.0.1.11:6222", "10.0.1.13:6222"}, cfg.Routes)
+	require.Equal(t, []string{"10.0.1.10:6222", "10.0.1.11:6222"}, cfg.Routes,
+		"node-c clusters with the other two storage nodes, and not with node-d")
+	require.Equal(t, []string{"10.0.1.12:4222"}, cfg.Servers,
+		"a storage node reaches the journal through its own server, which clusters with the rest")
 }
 
 func TestDefaultConfigLeavesOutStorageForALaterNode(t *testing.T) {
 	descriptor := deployment.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "north",
 		Machine: "node-d", IP: "10.0.1.13",
-		Fabric: deployment.Fabric{Peers: []deployment.FabricPeer{
+		EventFabric: deployment.EventFabric{Peers: []deployment.EventFabricPeer{
 			{Site: "north", Machine: "node-a", IP: "10.0.1.10"},
 			{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
 			{Site: "north", Machine: "node-c", IP: "10.0.1.12"},
@@ -89,7 +135,9 @@ func TestDefaultConfigLeavesOutStorageForALaterNode(t *testing.T) {
 
 	cfg, err := DefaultConfig(descriptor)
 	require.NoError(t, err)
-	require.False(t, cfg.HostsStorage, "node-d is the fourth by name and runs Core NATS only")
+	require.False(t, cfg.HostsStorage, "node-d is the fourth by name and runs no server")
+	require.Equal(t, []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"}, cfg.Servers,
+		"it reaches the journal on any of the site's storage nodes")
 }
 
 // loopbackStorageConfig is a valid single-node storage configuration on loopback
@@ -102,6 +150,7 @@ func loopbackStorageConfig(t *testing.T) Config {
 		ClientAddress:   "127.0.0.1:4222",
 		ClusterAddress:  "127.0.0.1:6222",
 		MonitorAddress:  "127.0.0.1:8222",
+		Servers:         []string{"127.0.0.1:4222"},
 		HostsStorage:    true,
 		DataDir:         filepath.Join(t.TempDir(), "nats"),
 		Replicas:        1,
@@ -125,7 +174,15 @@ func TestValidateRejectsIncompleteConfigs(t *testing.T) {
 		mutate func(*Config)
 		want   string
 	}{
+		{name: "no server to connect to", mutate: func(c *Config) { c.Servers = nil }, want: "the site has no storage node"},
 		{name: "blank client address", mutate: func(c *Config) { c.ClientAddress = "" }, want: "client address is required"},
+		{name: "a storage node that does not use its own server", mutate: func(c *Config) {
+			c.Servers = []string{"10.0.1.11:4222"}
+		}, want: "must connect to its own server"},
+		{name: "a client node with routes", mutate: func(c *Config) {
+			c.HostsStorage = false
+			c.Routes = []string{"10.0.1.11:6222"}
+		}, want: "has no cluster to route to"},
 		{name: "colliding addresses", mutate: func(c *Config) { c.ClusterAddress = c.ClientAddress }, want: "used more than once"},
 		{name: "route points at self", mutate: func(c *Config) { c.Routes = []string{c.ClusterAddress} }, want: "is this node itself"},
 		{name: "duplicate routes", mutate: func(c *Config) { c.Routes = []string{"10.0.1.11:6222", "10.0.1.11:6222"} }, want: "listed twice"},
@@ -151,6 +208,7 @@ func TestValidateRejectsIncompleteConfigs(t *testing.T) {
 func TestValidateRequiresCredentialsOffLoopback(t *testing.T) {
 	cfg := loopbackStorageConfig(t)
 	cfg.ClientAddress = "10.0.1.10:4222"
+	cfg.Servers = []string{"10.0.1.10:4222"}
 	require.ErrorContains(t, cfg.Validate(), "username and password are required")
 
 	cfg.Username = "opdl-site"

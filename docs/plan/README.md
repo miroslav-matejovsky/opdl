@@ -58,14 +58,19 @@ services goes only through the Event Fabric.
 - Carry deployment node identity in every event envelope. The current JSONL
   convention of keeping node identity only in the filename cannot work in a
   shared journal.
-- Start with one embedded NATS server per OPDL node and derive its site cluster
-  peers from the deployment descriptor.
+- Run an embedded NATS server on each of the site's storage nodes and derive its
+  cluster peers from the deployment descriptor.
 - Enable JetStream on one deterministic storage node in one-node and two-node
   POC sites. Enable it on three deterministic storage nodes when a site has at
-  least three nodes. Use one and three stream replicas respectively. Other OPDL
-  nodes still run Core NATS and route JetStream requests to the storage nodes.
-  This avoids a two-member JetStream metadata group that loses quorum when one
-  member fails.
+  least three nodes. Use one and three stream replicas respectively. This avoids
+  a two-member JetStream metadata group that loses quorum when one member fails.
+- Make the site's NATS cluster exactly its storage nodes. Every other machine
+  runs no server and reaches the journal as a client of the storage nodes.
+  Stage 4 measured why: NATS sizes a JetStream metadata group from the routes a
+  server is configured with, not from the servers that actually hold storage, so
+  a Core NATS node inside the cluster enlarges the quorum that decides whether
+  the site can write without adding anywhere to write to. See
+  [04-runtime-cutover-findings.md](04-runtime-cutover-findings.md).
 - Rebuild in-memory projections from the journal at process start for the POC.
   Local projection persistence and snapshots are deferred until replay cost
   proves they are needed.
@@ -78,14 +83,14 @@ Use these defaults unless a stage records a different decision:
 
 | Area | Recommendation |
 | --- | --- |
-| Server | Link the NATS server into the platform process. Run one server per OPDL node. |
+| Server | Link the NATS server into the platform process. Run one server per storage node; every other machine is a client of them. |
 | Site topology | Keep peer identities and IPs in the descriptor. Use fixed NATS ports with scenario-only overrides. |
 | Journal | One file-backed, limits-retained stream per site with `DiscardNew`. |
 | Storage and replicas | One JetStream node and replica for sites smaller than three nodes; three JetStream nodes and replicas otherwise. Select storage nodes by sorted machine name for the POC. |
 | History | No age or message-count deletion before snapshots exist. Configure a byte limit and fail writes when full. |
 | Delivery | At least once. Durable pull consumers for coordination. One node-wide continuous ordered consumer dispatches to local projectors. |
 | Registration acceptance | Require every expected machine, as today. Capture that machine set in the proposal event. |
-| HTTP proposal result | Return `202` plus a proposal ID after durable publish. Resolve conflicts asynchronously. |
+| HTTP proposal result | Return `202` plus a proposal ID after durable publish. Resolve conflicts asynchronously. Read a proposal's status back by its ID from any node. |
 | Projection storage | In memory, rebuilt from the complete retained journal on every start. |
 | Security | Require site credentials for non-loopback deployments. Allow unauthenticated loopback only in tests. |
 | Compatibility | No dual write, old-state import, forwarding package, or compatibility configuration. |
@@ -119,25 +124,33 @@ assume the existing registration flow is the only stateful use case being moved.
 | --- | --- | --- | --- | --- |
 | [1. Event model and decisions](01-event-model.md) | Freeze the event, ordering, topology, and projection rules | Medium | 2-3 days | Complete |
 | [2. OPDL Event Fabric](02-event-fabric.md) | Add the OPDL abstraction and NATS JetStream adapter | High | 4-6 days | Complete |
-| [3. Registration projections](03-registration-projections.md) | Build event-backed registration projections, services, and handlers | High | 5-8 days | Core complete; activation in Stage 4 |
-| [4. Runtime cutover](04-runtime-cutover.md) | Run the platform and scenarios solely through NATS | High | 3-5 days | Not started |
+| [3. Registration projections](03-registration-projections.md) | Build event-backed registration projections, services, and handlers | High | 5-8 days | Complete |
+| [4. Runtime cutover](04-runtime-cutover.md) | Run the platform and scenarios solely through NATS | High | 3-5 days | Complete |
 | [5. Remove distributed state](05-remove-distributed-state.md) | Delete Olric, memory fabric, and obsolete paths | Medium | 2-4 days | Not started |
 
 Total estimate: 16-26 engineering days.
 
 Stage 1 froze the contract in code: the event envelope, the OPDL Event Fabric
-package (`platform/internal/eventfabric`), the route and journal naming, and the
-event-sourced registration model (`platform/internal/registration/eventmodel`),
-all unit-tested. Stage 2 built the NATS JetStream adapter
-(`platform/internal/eventfabric/nats`) that implements the contract, with
-integration tests against a real embedded server. The adapter is not yet composed
-into the runtime, and the Olric registration runtime is unchanged. Issues
-surfaced while implementing these stages are in
-[01-event-model-findings.md](01-event-model-findings.md) and
-[02-event-fabric-findings.md](02-event-fabric-findings.md). Stage 3 implemented
-the event-backed registration boundary without composing it into the live
-runtime; its cutover dependency is recorded in
-[03-registration-projections-findings.md](03-registration-projections-findings.md).
+package (`platform/internal/eventfabric`), and the route and journal naming.
+Stage 2 built the NATS JetStream adapter (`platform/internal/eventfabric/nats`)
+that implements the contract, with integration tests against a real embedded
+server. Stage 3 built the event-backed registration boundary. Stage 4 performed
+the cutover: the platform now composes NATS, replays the site journal into a
+node-local projection before it serves, runs a durable registration handler, and
+promoted the event model into `platform/internal/registration`, deleting the
+Olric-backed registration and the JSONL runtime path. The HTTP contract is
+asynchronous, and the OpenAPI description and .NET SDK are regenerated from it.
+
+Olric itself, the in-memory fabric adapter, and their tests still exist and are
+Stage 5's to delete; no runtime path reaches them.
+
+Issues surfaced while implementing these stages are in
+[01-event-model-findings.md](01-event-model-findings.md),
+[02-event-fabric-findings.md](02-event-fabric-findings.md),
+[03-registration-projections-findings.md](03-registration-projections-findings.md),
+and [04-runtime-cutover-findings.md](04-runtime-cutover-findings.md). Stage 4
+corrected an accepted decision the transport could not support: the site's NATS
+cluster is now exactly its storage nodes.
 
 ## Completion criteria
 
@@ -154,6 +167,10 @@ runtime; its cutover dependency is recorded in
 - Startup does not serve the HTTP API until NATS is ready and local projections
   have caught up to a recorded journal high-water mark.
 - `task all` passes.
+
+Stage 4 met every criterion above except the two that name Olric's removal, which
+is Stage 5's work: the dependency, adapter, configuration, tests, and the
+`fabric.Collection` contract still exist, unreachable from any runtime path.
 
 ## NATS references
 

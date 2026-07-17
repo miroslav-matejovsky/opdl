@@ -17,13 +17,28 @@
 //
 // # Topology
 //
-// Every node runs one embedded server. Server name, cluster name, addresses, and
-// routes are derived from the deployment descriptor; see Config. JetStream
-// storage runs only on the selected storage nodes — one for a site smaller than
-// three machines, the first three by sorted machine name otherwise — with one or
-// three stream replicas to match. Other nodes run Core NATS and route to the
-// storage nodes, which avoids forming a two-member JetStream metadata group that
-// would lose quorum when one member failed.
+// The site's storage nodes are selected by sorted machine name — one for a site
+// smaller than three machines, the first three otherwise — with one or three
+// journal replicas to match. This avoids a two-member JetStream metadata group,
+// which would lose quorum whenever either member failed.
+//
+// Only a storage node runs a server, and the site's cluster is exactly the
+// storage nodes. Every other machine of the site runs nothing and reaches the
+// journal as a client of them. That is not a simplification: NATS sizes a
+// JetStream metadata group from a server's configured routes rather than from
+// the servers that enable JetStream (see server/raft.go, "Determining expected
+// peer size"), so a server in the cluster that stores nothing still joins the
+// group deciding whether the site can write, while adding nowhere to write to.
+// A single storage node with a route to a routing-only peer never elects a
+// metadata leader, and every JetStream call times out. One server and a client
+// is what keeps a two-machine site working while its second machine is down.
+//
+// A machine that does not store the journal therefore depends on one that does.
+// It retries the connection and waits for the journal to exist, both bounded by
+// StartupTimeout, and does not open if no storage node answers.
+//
+// Server name, cluster name, addresses, routes, and servers are all derived from
+// the deployment descriptor; see Config.
 //
 // # Journal
 //
@@ -45,9 +60,12 @@
 // stops the runner with an error so the node can be made unready rather than
 // dropping an event.
 //
-// # Not wired into the runtime yet
+// # What the adapter does not decide
 //
-// This stage builds and tests the adapter in isolation. Composing it into the
-// platform runtime — replacing the Olric fabric and the JSONL recorder — is the
-// runtime cutover in docs/plan/04-runtime-cutover.md.
+// Open returns a fabric that is usable, not a node that is ready, and it states
+// nothing in the journal. Readiness is a conclusion about a node's projections
+// and handlers, which only runtime composition can reach; Close is silent for the
+// same reason, since a transport closing itself is not evidence a node stopped
+// cleanly. Info reports what this node is, and internal/app publishes the ready
+// and stopping facts.
 package nats

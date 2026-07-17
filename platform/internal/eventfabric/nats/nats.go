@@ -49,10 +49,16 @@ var _ eventfabric.Fabric = (*Fabric)(nil)
 // rejects.
 var serviceName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// Open starts a node's embedded NATS server, connects to it, creates or
-// validates the site journal, and records that the node's Event Fabric is ready.
-// It validates the configuration before opening any listener, and leaves nothing
-// running on failure.
+// connectRetryInterval is how often a node retries reaching the site's servers
+// while it starts.
+const connectRetryInterval = 200 * time.Millisecond
+
+// Open starts a node's embedded NATS server, connects to it, and creates or
+// validates the site journal. It validates the configuration before opening any
+// listener, and leaves nothing running on failure.
+//
+// An open fabric is usable, not ready: readiness is a conclusion about the
+// node's projections and handlers, which is composition's to reach and to state.
 func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*Fabric, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -66,28 +72,36 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 		return nil, fmt.Errorf("nats: open on %s: %w", cfg.ClientAddress, err)
 	}
 
-	opts, err := serverOptions(cfg)
-	if err != nil {
-		return nil, err
-	}
-	srv, err := server.NewServer(opts)
-	if err != nil {
-		return nil, fmt.Errorf("nats: create server %s: %w", cfg.ServerName, err)
-	}
-	f := &Fabric{cfg: cfg, scope: scope, node: node, machineToken: eventfabric.SafeToken(node.Machine), srv: srv}
+	f := &Fabric{cfg: cfg, scope: scope, node: node, machineToken: eventfabric.SafeToken(node.Machine)}
 
 	fail := func(cause error) (*Fabric, error) {
-		return nil, fmt.Errorf("nats: open on %s: %w", cfg.ClientAddress, errors.Join(cause, f.abandon(ctx)))
+		return nil, fmt.Errorf("nats: open on %s: %w", strings.Join(cfg.Servers, ","), errors.Join(cause, f.abandon(ctx)))
 	}
 
-	srv.Start()
-	if !srv.ReadyForConnections(cfg.StartupTimeout) {
-		return fail(fmt.Errorf("server not ready within %s", cfg.StartupTimeout))
+	// Only a storage node runs a server. Every other machine of the site is a
+	// client of the ones that do: a server without the journal would add a peer to
+	// the journal's metadata group without adding anywhere to keep it, and that
+	// group's quorum is what decides whether the site can write at all.
+	if cfg.HostsStorage {
+		opts, err := serverOptions(cfg)
+		if err != nil {
+			return nil, err
+		}
+		srv, err := server.NewServer(opts)
+		if err != nil {
+			return nil, fmt.Errorf("nats: create server %s: %w", cfg.ServerName, err)
+		}
+		f.srv = srv
+
+		srv.Start()
+		if !srv.ReadyForConnections(cfg.StartupTimeout) {
+			return fail(fmt.Errorf("server not ready within %s", cfg.StartupTimeout))
+		}
 	}
 
-	nc, err := nats.Connect(srv.ClientURL(), natsOptions(cfg)...)
+	nc, err := f.connect(ctx)
 	if err != nil {
-		return fail(fmt.Errorf("connect: %w", err))
+		return fail(err)
 	}
 	f.nc = nc
 
@@ -102,15 +116,57 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 		return fail(err)
 	}
 	f.stream = stream
-
-	high, err := f.HighWater(ctx)
-	if err != nil {
-		return fail(err)
-	}
-	if _, err := f.doPublish(ctx, eventfabric.Ready{Adapter: Name, Stream: scope.StreamName(), HighWater: high}); err != nil {
-		return fail(fmt.Errorf("record ready: %w", err))
-	}
 	return f, nil
+}
+
+// connect opens the client connection to the site's servers, waiting for one to
+// accept within the startup bound.
+//
+// A machine that does not store the journal depends on one that does, and a site
+// boots in some order, so the first attempt may well find nobody listening yet.
+// Retrying until the bound expires is the difference between "the storage node
+// is still starting" and "this site has no journal", and only the second is
+// worth refusing to start over.
+func (f *Fabric) connect(ctx context.Context) (*nats.Conn, error) {
+	urls := make([]string, 0, len(f.cfg.Servers))
+	for _, addr := range f.cfg.Servers {
+		urls = append(urls, "nats://"+addr)
+	}
+	target := strings.Join(urls, ",")
+
+	deadline := time.Now().Add(f.cfg.StartupTimeout)
+	for {
+		nc, err := nats.Connect(target, natsOptions(f.cfg)...)
+		if err == nil {
+			return nc, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("connect to %s: %w", target, ctxErr)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("connect to %s within %s: %w", target, f.cfg.StartupTimeout, err)
+		}
+		time.Sleep(connectRetryInterval)
+	}
+}
+
+// Info returns the fabric's identity and storage disposition: which adapter and
+// server this node runs, which journal it is bound to, and whether it stores
+// that journal or routes to the nodes that do.
+func (f *Fabric) Info() eventfabric.Info {
+	name := f.cfg.ServerName
+	if !f.cfg.HostsStorage {
+		// A machine that runs no server still names itself, so a reader of the
+		// journal can tell which node stated the fact.
+		name = f.node.Machine
+	}
+	return eventfabric.Info{
+		Adapter:      Name,
+		Server:       name,
+		Journal:      f.scope.StreamName(),
+		HostsStorage: f.cfg.HostsStorage,
+		Replicas:     f.cfg.Replicas,
+	}
 }
 
 // Publish stamps event with its envelope, validates it, and appends it to the
@@ -224,6 +280,36 @@ func (f *Fabric) RunHandler(ctx context.Context, handler eventfabric.Handler) er
 	})
 }
 
+// HandlerPending returns how many journal events handler's durable consumer has
+// yet to acknowledge: the events it has not been given plus the ones it holds
+// unacknowledged. Startup waits for it to reach zero, so a node does not serve
+// while it still owes the site a decision it already has the input for.
+//
+// A consumer that does not exist yet is reported as ErrHandlerNotAttached rather
+// than as zero pending: "the handler has nothing to do" and "the handler has not
+// started" are different answers, and only one of them means a node may serve.
+func (f *Fabric) HandlerPending(ctx context.Context, handler eventfabric.Handler) (uint64, error) {
+	if err := f.check(ctx); err != nil {
+		return 0, err
+	}
+	name, err := f.consumerName(handler.Name())
+	if err != nil {
+		return 0, err
+	}
+	consumer, err := f.stream.Consumer(ctx, name)
+	if errors.Is(err, jetstream.ErrConsumerNotFound) {
+		return 0, fmt.Errorf("%w: %s", eventfabric.ErrHandlerNotAttached, handler.Name())
+	}
+	if err != nil {
+		return 0, fmt.Errorf("nats: handler consumer %s: %w", name, err)
+	}
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("nats: handler consumer %s info: %w", name, err)
+	}
+	return info.NumPending + uint64(info.NumAckPending), nil
+}
+
 // handle runs one delivery through handler and acknowledges it, leaves it
 // unacknowledged for redelivery, or reports exhaustion. A handler failure on a
 // delivery that has not reached its redelivery limit is a negative acknowledge
@@ -283,6 +369,13 @@ func (f *Fabric) consume(ctx context.Context, consumer jetstream.Consumer, apply
 			return err
 		}
 		if err := apply(message, delivery); err != nil {
+			// A loop cancelled while it was working reports its cancellation, not
+			// a verdict on the event. Treating that as a projector or handler
+			// failure would make every shutdown that caught one mid-delivery look
+			// like the node had broken.
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
 	}
@@ -319,9 +412,12 @@ func (f *Fabric) State(ctx context.Context) (eventfabric.State, error) {
 	}, nil
 }
 
-// Close records that the node's Event Fabric is stopping, then closes the client
-// and shuts the embedded server down within the configured shutdown bound. It is
-// idempotent.
+// Close closes the client and shuts the embedded server down within the
+// configured shutdown bound. It is idempotent.
+//
+// It states nothing. A node announces its own shutdown through the journal
+// before it gets here, while the journal can still accept the fact; a transport
+// closing itself is not evidence a node stopped cleanly.
 func (f *Fabric) Close(ctx context.Context) error {
 	f.mu.Lock()
 	if f.closed {
@@ -333,12 +429,7 @@ func (f *Fabric) Close(ctx context.Context) error {
 
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), f.cfg.ShutdownTimeout)
 	defer cancel()
-
-	var errs []error
-	if _, err := f.doPublish(stopCtx, eventfabric.Stopping{Adapter: Name}); err != nil {
-		errs = append(errs, fmt.Errorf("nats: record stopping: %w", err))
-	}
-	return errors.Join(append(errs, f.shutdown(stopCtx))...)
+	return f.shutdown(stopCtx)
 }
 
 // abandon tears down a server that never became a working fabric. It runs on the

@@ -32,8 +32,8 @@ func testDescriptor() deployment.Descriptor {
 		Site:    testSite,
 		Machine: "node-a",
 		IP:      "127.0.0.1",
-		Fabric: deployment.Fabric{
-			Peers: []deployment.FabricPeer{
+		EventFabric: deployment.EventFabric{
+			Peers: []deployment.EventFabricPeer{
 				{Site: testSite, Machine: "node-b", IP: "127.0.0.2"},
 			},
 		},

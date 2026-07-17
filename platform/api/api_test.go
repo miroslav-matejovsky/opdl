@@ -19,13 +19,12 @@ func TestDescribeReportsRegistrationOperations(t *testing.T) {
 			Method:      http.MethodPost,
 			Path:        "/registrations",
 			OperationID: "registerUnit",
-			Summary:     "Request unit registration",
+			Summary:     "Propose a unit registration",
 			RequestBody: &api.RequestBody{Type: api.RegistrationRequest{}, Required: true},
 			Responses: []api.Response{
-				{Status: http.StatusAccepted},
+				{Status: http.StatusAccepted, Body: api.ProposalAccepted{}},
 				{Status: http.StatusBadRequest, Body: api.Error{}},
-				{Status: http.StatusConflict, Body: api.Error{}},
-				{Status: http.StatusInternalServerError, Body: api.Error{}},
+				{Status: http.StatusServiceUnavailable, Body: api.Error{}},
 			},
 		},
 		{
@@ -40,27 +39,24 @@ func TestDescribeReportsRegistrationOperations(t *testing.T) {
 		},
 		{
 			Method:      http.MethodGet,
-			Path:        "/registrations/{unit_type}/{unit_id}/status",
+			Path:        "/registrations/{proposal_id}",
 			OperationID: "getRegistrationStatus",
-			Summary:     "Get registration request status",
+			Summary:     "Get a registration proposal's status",
 			PathParameters: []api.PathParameter{
-				{Name: "unit_type", Type: uint8(0), Required: true},
-				{Name: "unit_id", Type: uint16(0), Required: true},
+				{Name: "proposal_id", Type: "", Required: true},
 			},
 			Responses: []api.Response{
 				{Status: http.StatusOK, Body: api.Registration{}},
 				{Status: http.StatusNotFound, Body: api.Error{}},
-				{Status: http.StatusInternalServerError, Body: api.Error{}},
 			},
 		},
 		{
 			Method:      http.MethodGet,
 			Path:        "/registrations",
 			OperationID: "listRegistrations",
-			Summary:     "List registration requests",
+			Summary:     "List registration proposals",
 			Responses: []api.Response{
 				{Status: http.StatusOK, Body: []api.Registration{}},
-				{Status: http.StatusInternalServerError, Body: api.Error{}},
 			},
 		},
 	}, c.Operations)

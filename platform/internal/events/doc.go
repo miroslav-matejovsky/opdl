@@ -1,5 +1,5 @@
-// Package events is the platform's domain event mechanism: the envelope, the
-// recorder, and the sink contract. It owns no events of its own.
+// Package events is the platform's domain event mechanism: the envelope and its
+// stamping. It owns no events of its own.
 //
 // # Domain events, not logs
 //
@@ -31,8 +31,8 @@
 // keeping the two together is what stops the catalog from drifting away from
 // the behavior it claims to describe. Today that is:
 //
-//   - internal/registration: requested, confirmed, accepted, rejected, conflict.
-//   - internal/fabric: started, stopped.
+//   - internal/registration: proposed, confirmed, rejected, accepted.
+//   - internal/eventfabric: ready, stopping.
 //
 // A package declares an event by implementing Event: a small struct of payload
 // fields that knows its own Type and the Source subsystem it comes from. An
@@ -69,18 +69,17 @@
 // run, so the Recorder is told this machine's Node once and stamps it onto
 // every record. Carrying it per record is what lets a shared journal pool the
 // events of every node in one ordered stream and still attribute each fact to
-// its origin. The jsonl sink additionally names its file after the node, so a
-// directory of single-node files stays readable, but the identity no longer
-// depends on the file name.
+// its origin.
 //
 // # Storage
 //
-// A Recorder stamps an event and appends it to a Sink. Recording is
-// synchronous: Record returns only once the sink has accepted and flushed the
-// record. A scenario that has read an HTTP response has therefore already been
-// able to observe every event that response produced. Package jsonl is the
-// file-backed Sink; NopRecorder discards everything and is used when no events
-// directory is configured.
+// This package does not store events. StampRecord turns an event into a
+// complete, self-describing record, and the Event Fabric appends it to the site
+// journal — synchronously, so a fact is retained before the operation that
+// caused it returns. The journal is the platform's only event storage.
+//
+// The Recorder, Sink, and jsonl file sink predate the journal and no runtime
+// path uses them; see docs/plan/05-remove-distributed-state.md.
 //
 // # Limitations
 //

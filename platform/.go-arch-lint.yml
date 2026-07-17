@@ -23,7 +23,6 @@ components:
   fabric-olric: { in: internal/fabric/olric }
   httpapi: { in: internal/httpapi }
   registration: { in: internal/registration }
-  registration-eventmodel: { in: internal/registration/eventmodel }
 
 deps:
   cmd:
@@ -31,7 +30,7 @@ deps:
   embedded:
     mayDependOn: [deployment]
   app:
-    mayDependOn: [config, deployment, events, events-jsonl, fabric, fabric-memory, fabric-olric, httpapi, registration]
+    mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, registration]
   config:
     mayDependOn: [deployment, embedded]
   events:
@@ -51,6 +50,4 @@ deps:
   httpapi:
     mayDependOn: [api, registration]
   registration:
-    mayDependOn: [api, events, fabric]
-  registration-eventmodel:
     mayDependOn: [api, events, eventfabric]

@@ -20,9 +20,14 @@ namespace Opdl.Sdk.E2E;
 /// </para>
 /// <para>
 /// The subject is the acceptance barrier. Node B is deliberately not running for
-/// the first half: a request taken by node A must stay pending, and say that node
-/// B is the machine it is waiting for, until node B exists and accepts it. The
+/// the first half: a proposal taken by node A must stay pending, and say that node
+/// B is the machine it is waiting for, until node B exists and confirms it. The
 /// handshake is what makes that a fact rather than a race.
+/// </para>
+/// <para>
+/// Registration is asynchronous. A POST returns the proposal's identity and
+/// nothing about the outcome, and the site decides afterwards, so every question
+/// this test asks about a registration it asks by polling that identity.
 /// </para>
 /// </remarks>
 public class RegistrationTests
@@ -39,6 +44,8 @@ public class RegistrationTests
 
     private const string Pending = "pending";
     private const string Accepted = "accepted";
+    private const string Rejected = "rejected";
+    private const string KeyConflict = "registration_key_conflict";
 
     /// <summary>Bounds a poll for a state only another machine can bring about.</summary>
     private static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(60);
@@ -68,7 +75,7 @@ public class RegistrationTests
         Assert.Empty(before ?? []);
 
         // A role-less request: role is optional, and the platform must not invent one.
-        await nodeA.Registrations.PostAsync(
+        var proposal = await nodeA.Registrations.PostAsync(
             new RegistrationRequest
             {
                 UnitType = UnitType,
@@ -77,18 +84,23 @@ public class RegistrationTests
             },
             cancellationToken: token);
 
-        // PostAsync returns no value at all: 202 says the request was taken, and the
-        // contract deliberately gives a consumer nothing to mistake for a registration.
+        // 202 says the journal took the proposal and hands back the handle to poll.
+        // It deliberately gives a consumer nothing to mistake for a registration.
+        Assert.NotNull(proposal);
+        Assert.False(string.IsNullOrWhiteSpace(proposal!.ProposalId));
+        Assert.True(proposal.Sequence > 0, "the proposal has a place in the site's history");
+        var proposalId = proposal.ProposalId!;
 
-        var pending = await nodeA.Registrations[UnitType][UnitId].Status.GetAsync(cancellationToken: token);
+        var pending = await nodeA.Registrations[proposalId].GetAsync(cancellationToken: token);
         Assert.NotNull(pending);
-        Assert.Equal(Pending, pending!.Status);
+        Assert.Equal(proposalId, pending!.ProposalId);
+        Assert.Equal(Pending, pending.Status);
         Assert.Equal("node-a", pending.Machine);
         Assert.Equal("127.0.0.1", pending.Ip);
         Assert.Null(pending.Role);
         Assert.Equal("Billing", pending.UnitTypeNameAdvertised);
 
-        // The pending request is listed like any other, and the list and the status
+        // The pending proposal is listed like any other, and the list and the status
         // endpoint agree about it.
         var pendingList = await nodeA.Registrations.GetAsync(cancellationToken: token);
         var listedPending = Assert.Single(pendingList ?? []);
@@ -96,13 +108,14 @@ public class RegistrationTests
         Assert.Equal(UnitType, listedPending.UnitType);
         Assert.Equal(UnitId, listedPending.UnitId);
 
-        // Node A answers for itself as soon as it looks at the request; node B is
+        // Node A confirms for itself as soon as it handles the proposal; node B is
         // expected and offline, so it stays pending. This is the whole point: the
         // platform names the machine it is waiting for rather than going quiet.
         var barrier = await PollStatusAsync(
             nodeA,
+            proposalId,
             view => InstanceOf(view, "node-a").Status == Accepted,
-            "node-a to confirm its own request",
+            "node-a to confirm its own proposal",
             token);
         Assert.Equal(Pending, barrier.Status);
         Assert.Equal(Accepted, InstanceOf(barrier, "node-a").Status);
@@ -118,12 +131,13 @@ public class RegistrationTests
 
         // -- Node B joins and the site can accept. -------------------------------------
 
-        // The client polls where it asked. That is its only confirmation mechanism:
-        // nothing is pushed, and node B answers on its own schedule.
+        // The client polls the proposal it was given. That is its only confirmation
+        // mechanism: nothing is pushed, and node B answers on its own schedule.
         var accepted = await PollStatusAsync(
             nodeA,
+            proposalId,
             view => view.Status == Accepted,
-            "node-b to start and the site to accept the request",
+            "node-b to start and the site to accept the proposal",
             token);
         Assert.Equal("node-a", accepted.Machine);
         Assert.Equal("127.0.0.1", accepted.Ip);
@@ -132,26 +146,36 @@ public class RegistrationTests
         Assert.Equal(Accepted, InstanceOf(accepted, "node-a").Status);
         Assert.Equal(Accepted, InstanceOf(accepted, "node-b").Status);
 
-        // Both machines list it identically: the list is the site's state, and both
-        // machines carry it.
+        // Both machines list it identically: the list is the site's state, folded from
+        // the same journal on each machine.
         foreach (var client in new[] { nodeA, nodeB })
         {
             var listed = Assert.Single(await client.Registrations.GetAsync(cancellationToken: token) ?? []);
             AssertSameRegistration(accepted, listed);
         }
 
-        // Node B holds the same registration and still answers 404 for its status: it
-        // is not the machine the client asked.
+        // A proposal's status is the same answer wherever it is asked. The client is
+        // not tied to the machine it posted to: every node folds the same journal.
+        var fromNodeB = await PollStatusAsync(
+            nodeB,
+            proposalId,
+            view => view.Status == Accepted,
+            "node-b to project the accepted proposal",
+            token);
+        AssertSameRegistration(accepted, fromNodeB);
+
+        // A proposal nobody made is not found, on any machine.
         var notFound = await Assert.ThrowsAsync<Error>(
-            () => nodeB.Registrations[UnitType][UnitId].Status.GetAsync(cancellationToken: token));
+            () => nodeB.Registrations["0000000000000000000000000000000000000000000000000000000000000000"]
+                .GetAsync(cancellationToken: token));
         Assert.Equal(404, notFound.ResponseStatusCode);
         Assert.Equal("registration_not_found", notFound.Code);
 
         // -- Claiming the key again. ---------------------------------------------------
 
-        // The exact same request is the same claim, so it is answered and changes
-        // nothing.
-        await nodeA.Registrations.PostAsync(
+        // The exact same request is the same claim, so it hands back the same proposal
+        // and changes nothing.
+        var retry = await nodeA.Registrations.PostAsync(
             new RegistrationRequest
             {
                 UnitType = UnitType,
@@ -159,46 +183,72 @@ public class RegistrationTests
                 UnitTypeNameAdvertised = "Billing",
             },
             cancellationToken: token);
-        var afterRetry = await nodeA.Registrations[UnitType][UnitId].Status.GetAsync(cancellationToken: token);
+        Assert.NotNull(retry);
+        Assert.Equal(proposalId, retry!.ProposalId);
+
+        var afterRetry = await nodeA.Registrations[proposalId].GetAsync(cancellationToken: token);
         Assert.NotNull(afterRetry);
         AssertSameRegistration(accepted, afterRetry!);
+        Assert.Single(await nodeA.Registrations.GetAsync(cancellationToken: token) ?? []);
 
-        // A different advertised name on the same key is a different claim, even from
-        // the machine that holds it.
-        var sameMachineConflict = await Assert.ThrowsAsync<Error>(
-            () => nodeA.Registrations.PostAsync(
-                new RegistrationRequest
-                {
-                    UnitType = UnitType,
-                    UnitId = UnitId,
-                    UnitTypeNameAdvertised = "Payments",
-                },
-                cancellationToken: token));
-        Assert.Equal(409, sameMachineConflict.ResponseStatusCode);
-        Assert.Equal("registration_key_conflict", sameMachineConflict.Code);
+        // A different advertised name on the same key is a different claim. The POST
+        // cannot refuse it: at the moment the journal takes it nothing has decided
+        // anything, and the site resolves the conflict afterwards.
+        var contender = await nodeA.Registrations.PostAsync(
+            new RegistrationRequest
+            {
+                UnitType = UnitType,
+                UnitId = UnitId,
+                UnitTypeNameAdvertised = "Payments",
+            },
+            cancellationToken: token);
+        Assert.NotNull(contender);
+        Assert.NotEqual(proposalId, contender!.ProposalId);
+
+        var refused = await PollStatusAsync(
+            nodeA,
+            contender.ProposalId!,
+            view => view.Status == Rejected,
+            "the site to reject the competing claim",
+            token);
+        Assert.Equal(KeyConflict, refused.Reason);
 
         // The key is the site's, not a machine's, so the same claim from node B is a
-        // different claim too.
-        var crossMachineConflict = await Assert.ThrowsAsync<Error>(
-            () => nodeB.Registrations.PostAsync(
-                new RegistrationRequest
-                {
-                    UnitType = UnitType,
-                    UnitId = UnitId,
-                    UnitTypeNameAdvertised = "Billing",
-                },
-                cancellationToken: token));
-        Assert.Equal(409, crossMachineConflict.ResponseStatusCode);
-        Assert.Equal("registration_key_conflict", crossMachineConflict.Code);
+        // different claim too: a different origin is a different proposal.
+        var crossMachine = await nodeB.Registrations.PostAsync(
+            new RegistrationRequest
+            {
+                UnitType = UnitType,
+                UnitId = UnitId,
+                UnitTypeNameAdvertised = "Billing",
+            },
+            cancellationToken: token);
+        Assert.NotNull(crossMachine);
+        Assert.NotEqual(proposalId, crossMachine!.ProposalId);
 
-        // Every refused claim left the registration exactly as it was, on both
-        // machines.
+        var refusedFromB = await PollStatusAsync(
+            nodeB,
+            crossMachine.ProposalId!,
+            view => view.Status == Rejected,
+            "the site to reject the claim from the other machine",
+            token);
+        Assert.Equal(KeyConflict, refusedFromB.Reason);
+
+        // Every losing claim left the accepted registration exactly as it was, on both
+        // machines, and the conflicts query reports the resolution.
         foreach (var client in new[] { nodeA, nodeB })
         {
-            var listed = Assert.Single(await client.Registrations.GetAsync(cancellationToken: token) ?? []);
-            AssertSameRegistration(accepted, listed);
-            Assert.Equal(Accepted, InstanceOf(listed, "node-a").Status);
-            Assert.Equal(Accepted, InstanceOf(listed, "node-b").Status);
+            var winner = await PollStatusAsync(
+                client, proposalId, view => view.Status == Accepted, "the incumbent to survive", token);
+            AssertSameRegistration(accepted, winner);
+            Assert.Equal(Accepted, InstanceOf(winner, "node-a").Status);
+            Assert.Equal(Accepted, InstanceOf(winner, "node-b").Status);
+
+            var conflicts = await client.Registrations.Conflicts.GetAsync(cancellationToken: token);
+            var conflict = Assert.Single(conflicts ?? []);
+            Assert.Equal("resolved", conflict.ResolutionStatus);
+            Assert.Equal(proposalId, conflict.Winner?.ProposalId);
+            Assert.Equal(2, (conflict.Losers ?? []).Count);
         }
     }
 
@@ -208,7 +258,7 @@ public class RegistrationTests
         new(new HttpClientRequestAdapter(new AnonymousAuthenticationProvider()) { BaseUrl = baseUrl });
 
     /// <summary>
-    /// Polls the status endpoint until the request satisfies <paramref name="reached"/>.
+    /// Polls one proposal's status until it satisfies <paramref name="reached"/>.
     /// </summary>
     /// <remarks>
     /// Polling is bounded, and a timeout reports the last view it saw, because "never
@@ -216,6 +266,7 @@ public class RegistrationTests
     /// </remarks>
     private static async Task<Registration> PollStatusAsync(
         PlatformClient client,
+        string proposalId,
         Func<Registration, bool> reached,
         string what,
         CancellationToken token)
@@ -224,7 +275,7 @@ public class RegistrationTests
         Registration? last = null;
         while (DateTime.UtcNow < deadline)
         {
-            last = await client.Registrations[UnitType][UnitId].Status.GetAsync(cancellationToken: token);
+            last = await client.Registrations[proposalId].GetAsync(cancellationToken: token);
             if (last is not null && reached(last))
             {
                 return last;

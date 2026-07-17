@@ -15,8 +15,8 @@ func descriptor() deployment.Descriptor {
 		Site:    "north",
 		Machine: "node-a",
 		IP:      "10.0.1.10",
-		Fabric: deployment.Fabric{
-			Peers: []deployment.FabricPeer{
+		EventFabric: deployment.EventFabric{
+			Peers: []deployment.EventFabricPeer{
 				{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
 				{Site: "north", Machine: "node-c", IP: "10.0.1.12"},
 			},
@@ -62,7 +62,7 @@ func TestDefaultConfigRejectsInvalidTopologyAddresses(t *testing.T) {
 	require.ErrorContains(t, err, "client address")
 
 	bad := descriptor()
-	bad.Fabric.Peers[1].IP = "nope"
+	bad.EventFabric.Peers[1].IP = "nope"
 	_, err = fabricolric.DefaultConfig(bad)
 	require.ErrorContains(t, err, `peer "node-c"`)
 }

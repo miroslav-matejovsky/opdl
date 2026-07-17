@@ -7,25 +7,19 @@ paths:
     /registrations:
         get:
             operationId: listRegistrations
-            summary: List registration requests
+            summary: List registration proposals
             responses:
                 "200":
-                    description: List registration requests
+                    description: List registration proposals
                     content:
                         application/json:
                             schema:
                                 type: array
                                 items:
                                     $ref: '#/components/schemas/Registration'
-                "500":
-                    description: List registration requests
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Error'
         post:
             operationId: registerUnit
-            summary: Request unit registration
+            summary: Propose a unit registration
             requestBody:
                 required: true
                 content:
@@ -34,61 +28,42 @@ paths:
                             $ref: '#/components/schemas/RegistrationRequest'
             responses:
                 "202":
-                    description: Request unit registration
+                    description: Propose a unit registration
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ProposalAccepted'
                 "400":
-                    description: Request unit registration
+                    description: Propose a unit registration
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
-                "409":
-                    description: Request unit registration
+                "503":
+                    description: Propose a unit registration
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
-                "500":
-                    description: Request unit registration
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Error'
-    /registrations/{unit_type}/{unit_id}/status:
+    /registrations/{proposal_id}:
         get:
             operationId: getRegistrationStatus
-            summary: Get registration request status
+            summary: Get a registration proposal's status
             parameters:
-                - name: unit_type
+                - name: proposal_id
                   in: path
                   required: true
                   schema:
-                    type: integer
-                    format: int32
-                    minimum: 0
-                    maximum: 255
-                - name: unit_id
-                  in: path
-                  required: true
-                  schema:
-                    type: integer
-                    format: int32
-                    minimum: 0
-                    maximum: 65535
+                    type: string
             responses:
                 "200":
-                    description: Get registration request status
+                    description: Get a registration proposal's status
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Registration'
                 "404":
-                    description: Get registration request status
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/Error'
-                "500":
-                    description: Get registration request status
+                    description: Get a registration proposal's status
                     content:
                         application/json:
                             schema:
@@ -137,6 +112,17 @@ components:
                 - ip
                 - machine
                 - status
+        ProposalAccepted:
+            type: object
+            properties:
+                proposal_id:
+                    type: string
+                sequence:
+                    type: integer
+                    format: int64
+            required:
+                - proposal_id
+                - sequence
         Registration:
             type: object
             properties:
@@ -148,6 +134,8 @@ components:
                     type: array
                     items:
                         $ref: '#/components/schemas/PlatformInstanceRegistrationStatus'
+                proposal_id:
+                    type: string
                 reason:
                     type: string
                     nullable: true
@@ -172,6 +160,7 @@ components:
                 - ip
                 - machine
                 - platform_instances
+                - proposal_id
                 - status
                 - unit_id
                 - unit_type

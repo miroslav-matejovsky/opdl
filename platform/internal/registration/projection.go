@@ -1,4 +1,4 @@
-package eventmodel
+package registration
 
 import (
 	"context"
@@ -132,7 +132,7 @@ func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) e
 		return applyErr
 	}
 	if delivery.Sequence == 0 {
-		return p.fail(errors.New("eventmodel: delivery sequence must be positive"))
+		return p.fail(errors.New("registration: delivery sequence must be positive"))
 	}
 
 	record := delivery.Record
@@ -141,7 +141,7 @@ func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) e
 		return nil
 	}
 	if record.SchemaVersion != schemaVersion {
-		return p.fail(fmt.Errorf("eventmodel: unsupported schema version %d for %s at sequence %d", record.SchemaVersion, record.Type, delivery.Sequence))
+		return p.fail(fmt.Errorf("registration: unsupported schema version %d for %s at sequence %d", record.SchemaVersion, record.Type, delivery.Sequence))
 	}
 
 	var err error
@@ -167,7 +167,7 @@ func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) e
 			err = p.applyAccepted(delivery, event)
 		}
 	default:
-		err = fmt.Errorf("eventmodel: unsupported event %q at sequence %d", record.Type, delivery.Sequence)
+		err = fmt.Errorf("registration: unsupported event %q at sequence %d", record.Type, delivery.Sequence)
 	}
 	if err != nil {
 		return p.fail(err)
@@ -209,25 +209,25 @@ func (p *Projection) applyDecision(delivery eventfabric.Delivery, proposalID str
 	defer p.mu.Unlock()
 	proposal, ok := p.proposals[proposalID]
 	if !ok {
-		return fmt.Errorf("eventmodel: decision %q refers to unknown proposal %q", decisionID, proposalID)
+		return fmt.Errorf("registration: decision %q refers to unknown proposal %q", decisionID, proposalID)
 	}
 	if !slices.Contains(proposal.ExpectedMachines, decided.machine) {
-		return fmt.Errorf("eventmodel: decision %q is from unexpected machine %q", decisionID, decided.machine)
+		return fmt.Errorf("registration: decision %q is from unexpected machine %q", decisionID, decided.machine)
 	}
 	if delivery.Record.Node.Machine != decided.machine {
-		return fmt.Errorf("eventmodel: decision %q claims machine %q but envelope states %q", decisionID, decided.machine, delivery.Record.Node.Machine)
+		return fmt.Errorf("registration: decision %q claims machine %q but envelope states %q", decisionID, decided.machine, delivery.Record.Node.Machine)
 	}
 	if decisionID != NewDecisionID(proposalID, decided.kind, decided.machine) {
-		return fmt.Errorf("eventmodel: decision %q has an invalid identity", decisionID)
+		return fmt.Errorf("registration: decision %q has an invalid identity", decisionID)
 	}
 	if selected := p.claims[proposal.Key()].proposalID; decided.kind == DecisionConfirmed && selected != proposalID {
-		return fmt.Errorf("eventmodel: confirmation %q targets losing proposal, selected is %q", decisionID, selected)
+		return fmt.Errorf("registration: confirmation %q targets losing proposal, selected is %q", decisionID, selected)
 	}
 	if decided.kind == DecisionRejected && strings.TrimSpace(decided.reason) == "" {
-		return fmt.Errorf("eventmodel: rejection %q has no reason", decisionID)
+		return fmt.Errorf("registration: rejection %q has no reason", decisionID)
 	}
 	if _, accepted := p.accepted[proposalID]; accepted && decided.kind == DecisionRejected {
-		return fmt.Errorf("eventmodel: proposal %q was rejected after acceptance", proposalID)
+		return fmt.Errorf("registration: proposal %q was rejected after acceptance", proposalID)
 	}
 
 	byID, ok := p.decisions[proposalID]
@@ -237,7 +237,7 @@ func (p *Projection) applyDecision(delivery eventfabric.Delivery, proposalID str
 	}
 	for existingID, existing := range byID {
 		if existing.machine == decided.machine && existing != decided {
-			return fmt.Errorf("eventmodel: machine %q made conflicting decisions %q and %q for proposal %q", decided.machine, existingID, decisionID, proposalID)
+			return fmt.Errorf("registration: machine %q made conflicting decisions %q and %q for proposal %q", decided.machine, existingID, decisionID, proposalID)
 		}
 	}
 	byID[decisionID] = decided
@@ -250,19 +250,19 @@ func (p *Projection) applyAccepted(delivery eventfabric.Delivery, event Accepted
 	defer p.mu.Unlock()
 	proposal, ok := p.proposals[event.ProposalID]
 	if !ok {
-		return fmt.Errorf("eventmodel: acceptance refers to unknown proposal %q", event.ProposalID)
+		return fmt.Errorf("registration: acceptance refers to unknown proposal %q", event.ProposalID)
 	}
 	if delivery.Record.Node.Machine != proposal.OriginMachine {
-		return fmt.Errorf("eventmodel: acceptance for %q was stated by %q, not origin %q", event.ProposalID, delivery.Record.Node.Machine, proposal.OriginMachine)
+		return fmt.Errorf("registration: acceptance for %q was stated by %q, not origin %q", event.ProposalID, delivery.Record.Node.Machine, proposal.OriginMachine)
 	}
 	if event != NewAccepted(proposal) {
-		return fmt.Errorf("eventmodel: acceptance for %q does not match its proposal", event.ProposalID)
+		return fmt.Errorf("registration: acceptance for %q does not match its proposal", event.ProposalID)
 	}
 	if selected := p.claims[proposal.Key()].proposalID; selected != event.ProposalID {
-		return fmt.Errorf("eventmodel: acceptance for %q targets losing proposal, selected is %q", event.ProposalID, selected)
+		return fmt.Errorf("registration: acceptance for %q targets losing proposal, selected is %q", event.ProposalID, selected)
 	}
 	if !p.allExpectedConfirmed(proposal) {
-		return fmt.Errorf("eventmodel: acceptance for %q precedes all expected confirmations", event.ProposalID)
+		return fmt.Errorf("registration: acceptance for %q precedes all expected confirmations", event.ProposalID)
 	}
 	p.accepted[event.ProposalID] = event
 	return nil
@@ -510,24 +510,24 @@ func compareKeys(a, b Key) int {
 // the event type for context.
 func decode(record events.Record, target events.Event) error {
 	if err := json.Unmarshal(record.Data, target); err != nil {
-		return fmt.Errorf("eventmodel: decode %s: %w", record.Type, err)
+		return fmt.Errorf("registration: decode %s: %w", record.Type, err)
 	}
 	return nil
 }
 
 func validateProposed(delivery eventfabric.Delivery, proposal Proposed) error {
 	if delivery.Record.Node.Machine != proposal.OriginMachine {
-		return fmt.Errorf("eventmodel: proposal %q claims origin %q but envelope states %q", proposal.ProposalID, proposal.OriginMachine, delivery.Record.Node.Machine)
+		return fmt.Errorf("registration: proposal %q claims origin %q but envelope states %q", proposal.ProposalID, proposal.OriginMachine, delivery.Record.Node.Machine)
 	}
 	if len(proposal.ExpectedMachines) == 0 {
-		return fmt.Errorf("eventmodel: proposal %q expects no machines", proposal.ProposalID)
+		return fmt.Errorf("registration: proposal %q expects no machines", proposal.ProposalID)
 	}
 	for i, machine := range proposal.ExpectedMachines {
 		if strings.TrimSpace(machine) == "" {
-			return fmt.Errorf("eventmodel: proposal %q has a blank expected machine", proposal.ProposalID)
+			return fmt.Errorf("registration: proposal %q has a blank expected machine", proposal.ProposalID)
 		}
 		if i > 0 && proposal.ExpectedMachines[i-1] >= machine {
-			return fmt.Errorf("eventmodel: proposal %q expected machines are not sorted and unique", proposal.ProposalID)
+			return fmt.Errorf("registration: proposal %q expected machines are not sorted and unique", proposal.ProposalID)
 		}
 	}
 	want := NewProposalID(ProposalIdentity{
@@ -540,7 +540,7 @@ func validateProposed(delivery eventfabric.Delivery, proposal Proposed) error {
 		ExpectedMachines:       proposal.ExpectedMachines,
 	})
 	if proposal.ProposalID != want {
-		return fmt.Errorf("eventmodel: proposal %q has an invalid identity", proposal.ProposalID)
+		return fmt.Errorf("registration: proposal %q has an invalid identity", proposal.ProposalID)
 	}
 	return nil
 }

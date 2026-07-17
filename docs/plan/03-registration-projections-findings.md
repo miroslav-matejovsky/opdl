@@ -1,7 +1,8 @@
 # Stage 3 findings: registration projections
 
 Findings and stage-boundary constraints discovered while implementing
-[Stage 3](03-registration-projections.md).
+[Stage 3](03-registration-projections.md). The implemented decisions below are
+still in force; the package they describe now *is* `internal/registration`.
 
 ## Implemented decisions
 
@@ -36,41 +37,10 @@ replay. A structurally coherent proposal that fails current registration input
 or trusted-topology validation is projected and receives a deterministic
 `registration_invalid_proposal` rejection from each expected handler.
 
-## Runtime cutover dependency
+## Resolved by Stage 4
 
-### 5. Promotion and public API activation must happen with Stage 4
-
-The new command service, query service, projection, and handler are complete in
-`internal/registration/eventmodel`, with direct tests and no dependency on NATS
-or shared state. They are not yet used by `internal/app` or `internal/httpapi`.
-
-Moving them into `internal/registration` now would collide with the live event
-types and leave the platform without a compilable runtime unless Stage 4 also
-added NATS configuration, startup replay, handler lifecycle, readiness, and
-shutdown. Therefore Stage 4 must perform one breaking cutover:
-
-1. Compose NATS, the projection, and the durable handler.
-2. Open the event-backed command and query services.
-3. Change POST to return `proposal_id` and journal sequence.
-4. Change status lookup to use proposal ID and return journal-unavailable as
-   `503`.
-5. Regenerate OpenAPI and the .NET SDK and update black-box scenarios.
-6. Delete the Olric-backed registration files and promote `eventmodel` into the
-   parent package.
-
-This is not a compatibility requirement. It is an atomic build and lifecycle
-boundary. No dual write or state import is needed.
-
-## Remaining design decision
-
-### 6. Query views obtain expected-machine IPs from the current descriptor
-
-`Proposed` captures expected machine names, as the accepted event contract
-requires, but does not capture every expected machine IP. Query views map those
-names to IPs from the node's trusted descriptor. A historical proposal with a
-machine no longer present can still be reconstructed, but that instance has no
-IP in the public view.
-
-Recommendation: keep names as the acceptance identity and do not expand the
-proposal solely for a display field. Stage 4 should either allow an empty IP for
-historical machines or remove per-instance IP from the new HTTP contract.
+The cutover dependency this file recorded is done: `eventmodel` was promoted into
+`internal/registration`, the Olric-backed registration files are deleted, and the
+HTTP boundary serves the asynchronous contract. The open question about
+expected-machine IPs was decided in favour of an empty IP for a historical
+machine; see [04-runtime-cutover-findings.md](04-runtime-cutover-findings.md).

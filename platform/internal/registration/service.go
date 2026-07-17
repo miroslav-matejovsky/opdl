@@ -1,4 +1,4 @@
-package eventmodel
+package registration
 
 import (
 	"context"
@@ -167,6 +167,7 @@ func (s *QueryService) view(proposal Proposed) api.Registration {
 		}
 	}
 	return api.Registration{
+		ProposalID:             proposal.ProposalID,
 		UnitType:               proposal.UnitType,
 		UnitID:                 proposal.UnitID,
 		UnitTypeNameAdvertised: proposal.UnitTypeNameAdvertised,
