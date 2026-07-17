@@ -72,12 +72,22 @@ type SiteScope string
 // can encode the same bytes, and renders the hash as lower-case unpadded base32,
 // which is safe in both a subject token and a stream name.
 func NewSiteScope(project, environment, site string) SiteScope {
+	return SiteScope(SafeToken(project, environment, site))
+}
+
+// SafeToken renders values as one stable, transport-safe token: a lower-case
+// unpadded base32 encoding of a SHA-256 over the length-prefixed values. The
+// same values always produce the same token, and no two different value lists
+// collide. Routes, journal names, and durable consumer names are all built from
+// safe tokens, so deployment identity never leaks a character a subject or a
+// stream name cannot hold.
+func SafeToken(values ...string) string {
 	digest := sha256.New()
-	writeLengthPrefixed(digest, project)
-	writeLengthPrefixed(digest, environment)
-	writeLengthPrefixed(digest, site)
+	for _, value := range values {
+		writeLengthPrefixed(digest, value)
+	}
 	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest.Sum(nil))
-	return SiteScope(strings.ToLower(encoded))
+	return strings.ToLower(encoded)
 }
 
 // StreamName is the site journal's name: OPDL_<UPPER_SITE_SCOPE>_EVENTS. It is

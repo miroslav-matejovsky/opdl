@@ -17,6 +17,7 @@ components:
   events: { in: internal/events }
   events-jsonl: { in: internal/events/jsonl }
   eventfabric: { in: internal/eventfabric }
+  eventfabric-nats: { in: internal/eventfabric/nats }
   fabric: { in: internal/fabric }
   fabric-memory: { in: internal/fabric/memory }
   fabric-olric: { in: internal/fabric/olric }
@@ -39,6 +40,8 @@ deps:
     mayDependOn: [events]
   eventfabric:
     mayDependOn: [events]
+  eventfabric-nats:
+    mayDependOn: [deployment, events, eventfabric]
   fabric:
     mayDependOn: [deployment, events]
   fabric-memory:

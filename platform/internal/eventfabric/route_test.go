@@ -52,6 +52,16 @@ func TestNewSiteScopeIsStableAndSafe(t *testing.T) {
 	}
 }
 
+func TestSafeTokenIsStableAndDistinct(t *testing.T) {
+	require.Equal(t, SafeToken("node-a"), SafeToken("node-a"), "stable for the same value")
+	require.NotEqual(t, SafeToken("node-a"), SafeToken("node-b"), "distinct for different values")
+	// A safe token is a single lower-case base32 subject token.
+	for _, r := range SafeToken("odd/machine name") {
+		safe := (r >= 'a' && r <= 'z') || (r >= '2' && r <= '7')
+		require.True(t, safe, "token must be a safe subject token")
+	}
+}
+
 func TestNewSiteScopeIsLengthPrefixedAgainstBoundaryCollisions(t *testing.T) {
 	// Without length prefixing these two different sites would hash identical
 	// bytes. The prefix makes the field boundaries part of the hash.

@@ -147,6 +147,23 @@ func newRecord(meta Meta, event Event) (Record, error) {
 	return Record{Meta: meta, Data: data}, nil
 }
 
+// StampRecord builds the stored record for event as of occurredAt, stamped with
+// id and node. It is the one place an event's envelope is constructed, shared by
+// the Recorder and by the Event Fabric publisher, so every publish path produces
+// the same envelope. It does not set the causal links; a publisher that reacts
+// to a delivery sets those from the delivery it is handling.
+func StampRecord(node Node, id string, occurredAt time.Time, event Event) (Record, error) {
+	return newRecord(Meta{
+		ID:            id,
+		Type:          event.EventType(),
+		SchemaVersion: eventSchemaVersion(event),
+		OccurredAt:    occurredAt.UTC(),
+		Source:        event.Source(),
+		Node:          node,
+		Tags:          eventTags(event),
+	}, event)
+}
+
 // eventTags returns the normalized tags event declares, or nil when it declares
 // none.
 func eventTags(event Event) []string {

@@ -1,5 +1,15 @@
 # Stage 2: OPDL Event Fabric
 
+> Status: Complete (2026-07-17). The NATS JetStream adapter
+> (`platform/internal/eventfabric/nats`) implements the Event Fabric contract:
+> embedded server lifecycle, idempotent journal create-or-validate, synchronous
+> publish with deduplication, an ordered projector, durable per-service handlers
+> with bounded redelivery, health, and shutdown. Integration tests run against a
+> real embedded server. The adapter is not yet composed into the runtime (Stage
+> 4). Issues and deferrals are in
+> [02-event-fabric-findings.md](02-event-fabric-findings.md); see the
+> [completion notes](#completion-notes) for what shipped and what is deferred.
+
 ## Outcome
 
 Implement the OPDL-specific event boundary and its NATS JetStream adapter. The
@@ -172,3 +182,39 @@ startup summary.
   or testing difficult. Keep only the capabilities used by OPDL.
 - Unbounded replay, redelivery, or shutdown can hang startup and deployment.
   Every wait needs context cancellation and a configured bound.
+
+## Completion notes
+
+What this stage delivered, mapped to the work items above:
+
+- Adapter package and contract (items 1, 2, 11, 12): `eventfabric` gained typed
+  errors (`errors.go`), the fabric's own lifecycle events (`lifecycle.go`,
+  `ready`/`stopping`, no `stopped`), the `Identified` dedup interface, and a
+  `Name()` on `Handler` for durable consumer names. `events` gained shared
+  `StampRecord` and `NewID` so the fabric and the recorder produce identical
+  envelopes.
+- NATS JetStream adapter (items 3-9): `platform/internal/eventfabric/nats`
+  embeds `nats-server/v2 v2.11.9` with `nats.go v1.46.1`, derives server name,
+  cluster name, addresses, routes, storage-node selection, and replicas from the
+  descriptor (`config.go`), validates the config before opening sockets, creates
+  or validates the file-backed limits-retained journal idempotently
+  (`journal.go`), publishes synchronously with `Nats-Msg-Id` from the event's
+  stable identity and returns the stream sequence, runs one ordered projector and
+  durable per-service handlers with explicit acknowledgement (`nats.go`).
+- Bounds and typed failures (items 10, 11): acknowledgement wait, redelivery,
+  and shutdown are configured; decode failures and exhausted handler delivery
+  surface as errors that stop the runner rather than dropping an event.
+- Tests (item 13): pure config tests for storage selection, replicas,
+  derivation, and validation; integration tests against a real embedded server
+  for publish-and-replay, deduplication, restart replay, offline durable
+  delivery, redelivery, exhaustion, invalid-event rejection, projector-failure
+  catch-up stop, incompatible-journal rejection, high-water and catch-up state,
+  and idempotent shutdown with a recorded stopping event. Server setup lives in
+  the adapter's own `_test.go`; there is no in-memory transport.
+
+Deferred, and recorded in the findings: the multi-server cluster runtime tests
+(a two-node storage + Core-NATS site, and a simultaneous two-node
+publish-and-replay), the catch-up wait loop that produces `ErrCatchUpTimeout`
+(runtime composition, Stage 4), and wiring the domain events' `Identified`
+dedup keys and the domain-aware projector routing (Stage 3). The restart-replay
+test meets the cross-instance replay exit criterion in its durable-journal form.

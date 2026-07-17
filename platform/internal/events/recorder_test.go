@@ -212,7 +212,7 @@ func TestNewIDIsUniqueAndTimeOrdered(t *testing.T) {
 	seen := make(map[string]struct{}, count)
 	previousTime := ""
 	for range count {
-		id := newID()
+		id := NewID()
 		require.Len(t, id, 37, "ids must be fixed width so they sort lexically")
 		require.NotContains(t, seen, id, "event ids must be unique")
 		seen[id] = struct{}{}

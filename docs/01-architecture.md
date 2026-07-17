@@ -149,8 +149,10 @@ authoritative conflict query.
 The platform is migrating from the shared Olric fabric to an event-driven model
 in which a NATS JetStream site journal is the source of truth and every node
 rebuilds its own projections from it. The full plan is in `docs/plan`. Stage 1
-has frozen the target contract; the Olric fabric described above remains the
-live coordination mechanism until the later cutover stages replace it.
+froze the target contract and Stage 2 built the NATS JetStream adapter
+(`internal/eventfabric/nats`) that implements it; both are tested in isolation.
+The Olric fabric and the JSONL recorder described above remain the live
+mechanisms until the runtime cutover (Stage 4) composes the adapter in.
 
 The accepted decisions this stage records:
 

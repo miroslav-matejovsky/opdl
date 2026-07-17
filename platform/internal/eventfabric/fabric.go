@@ -108,6 +108,12 @@ type Projector interface {
 // the role that must be idempotent under redelivery and must acknowledge an
 // input only after any resulting event is durably accepted.
 type Handler interface {
+	// Name is the service name this handler is for. It is a stable, safe token
+	// that, with the site scope and machine, names the handler's durable
+	// consumer, so a restart resumes the same consumer rather than starting a new
+	// one.
+	Name() string
+
 	// Routes are the exact event routes this handler consumes. A handler lists
 	// them explicitly; it never subscribes to a wildcard or reacts to an event
 	// type it did not name.
@@ -118,4 +124,16 @@ type Handler interface {
 	// decides from a caught-up local view. Returning nil acknowledges the input;
 	// returning an error leaves it unacknowledged for redelivery.
 	Handle(ctx context.Context, delivery Delivery) error
+}
+
+// Identified is the optional interface an events.Event implements to supply a
+// stable publication identity. The Event Fabric uses it as the journal's
+// deduplication key, so a fact republished after a redelivery — a handler
+// restating a decision, for instance — is recognized as the same message inside
+// the deduplication window. An event that does not implement it is deduplicated
+// only by its unique envelope ID, which recognizes a repeated publish of one
+// record but not a fact recomputed from scratch.
+type Identified interface {
+	// DedupID returns the event's stable deduplication identity.
+	DedupID() string
 }

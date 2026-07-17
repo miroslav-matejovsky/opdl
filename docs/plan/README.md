@@ -118,7 +118,7 @@ assume the existing registration flow is the only stateful use case being moved.
 | Stage | Outcome | Complexity | Estimate | Status |
 | --- | --- | --- | --- | --- |
 | [1. Event model and decisions](01-event-model.md) | Freeze the event, ordering, topology, and projection rules | Medium | 2-3 days | Complete |
-| [2. OPDL Event Fabric](02-event-fabric.md) | Add the OPDL abstraction and NATS JetStream adapter | High | 4-6 days | Not started |
+| [2. OPDL Event Fabric](02-event-fabric.md) | Add the OPDL abstraction and NATS JetStream adapter | High | 4-6 days | Complete |
 | [3. Registration projections](03-registration-projections.md) | Replace shared registration collections and scans with events | High | 5-8 days | Not started |
 | [4. Runtime cutover](04-runtime-cutover.md) | Run the platform and scenarios solely through NATS | High | 3-5 days | Not started |
 | [5. Remove distributed state](05-remove-distributed-state.md) | Delete Olric, memory fabric, and obsolete paths | Medium | 2-4 days | Not started |
@@ -128,9 +128,13 @@ Total estimate: 16-26 engineering days.
 Stage 1 froze the contract in code: the event envelope, the OPDL Event Fabric
 package (`platform/internal/eventfabric`), the route and journal naming, and the
 event-sourced registration model (`platform/internal/registration/eventmodel`),
-all unit-tested. NATS is not yet wired and the Olric registration runtime is
-unchanged. Issues surfaced while implementing it are in
-[01-event-model-findings.md](01-event-model-findings.md).
+all unit-tested. Stage 2 built the NATS JetStream adapter
+(`platform/internal/eventfabric/nats`) that implements the contract, with
+integration tests against a real embedded server. The adapter is not yet composed
+into the runtime, and the Olric registration runtime is unchanged. Issues
+surfaced while implementing these stages are in
+[01-event-model-findings.md](01-event-model-findings.md) and
+[02-event-fabric-findings.md](02-event-fabric-findings.md).
 
 ## Completion criteria
 

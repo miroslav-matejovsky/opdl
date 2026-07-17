@@ -46,7 +46,7 @@ type Recorder struct {
 // appends it to sink. Every record carries node, this process's own deployment
 // identity. The recorder takes ownership of sink and closes it on Close.
 func NewRecorder(node Node, sink Sink) *Recorder {
-	return newRecorder(node, sink, time.Now, newID)
+	return newRecorder(node, sink, time.Now, NewID)
 }
 
 // newRecorder builds a recorder with injectable time and identity, so tests can
@@ -66,15 +66,7 @@ func (r *Recorder) Record(ctx context.Context, event Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, err := newRecord(Meta{
-		ID:            r.newID(),
-		Type:          event.EventType(),
-		SchemaVersion: eventSchemaVersion(event),
-		OccurredAt:    r.now().UTC(),
-		Source:        event.Source(),
-		Node:          r.node,
-		Tags:          eventTags(event),
-	}, event)
+	record, err := StampRecord(r.node, r.newID(), r.now(), event)
 	if err != nil {
 		return fmt.Errorf("events: %w", err)
 	}
@@ -99,10 +91,12 @@ func (NopRecorder) Record(context.Context, Event) error { return nil }
 // Close releases nothing and always succeeds.
 func (NopRecorder) Close() error { return nil }
 
-// newID returns a time-ordered unique event id: the occurrence time in
+// NewID returns a time-ordered unique event id: the occurrence time in
 // nanoseconds, zero-padded so ids sort lexically, plus random bytes to break
-// ties within one clock tick. The clock alone is too coarse to be unique.
-func newID() string {
+// ties within one clock tick. The clock alone is too coarse to be unique. It is
+// exported so a publisher that stamps its own records, like the Event Fabric,
+// generates ids the same way the Recorder does.
+func NewID() string {
 	// crypto/rand.Read never returns an error: it fills the buffer entirely or
 	// the program cannot obtain randomness at all.
 	var suffix [8]byte
