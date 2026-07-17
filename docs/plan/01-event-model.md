@@ -12,22 +12,27 @@ Estimated time: 2-3 engineering days.
 
 ## Work
 
-1. Write the Event Fabric contract in `platform/internal/eventfabric/doc.go`.
-   Keep the contract about OPDL behavior, not NATS APIs.
-2. Define the shared event envelope with:
+1. Create `platform/internal/eventfabric/doc.go`. Specify `Fabric`, `Publisher`,
+   `Receipt`, `Delivery`, `Projector`, and `Handler` responsibilities. Keep the
+   contract about OPDL behavior, not NATS APIs.
+2. Change `platform/internal/events.Record` so every record contains:
    - event ID and event type;
    - schema version;
    - occurrence time;
    - project, environment, site, machine, and role identity;
    - causation ID and optional correlation ID;
    - immutable JSON payload.
-3. Remove process-local sequence as a cross-node ordering promise. The journal
-   receipt and delivery metadata provide the site stream sequence.
-4. Define deterministic route construction. A route is scoped by project,
-   environment, and site, then by domain and event type. Deployment names must
-   be safely encoded and validated by Event Fabric, never concatenated by a
-   domain package.
-5. Define one limits-retained site journal. Use file storage and reject new
+3. Remove `Meta.Sequence`. Add `eventfabric.Receipt.Sequence` and
+   `eventfabric.Delivery.Sequence` for the JetStream site sequence. Domain event
+   payloads must not contain or depend on that transport sequence.
+4. Add a route constructor in `platform/internal/eventfabric/route.go`. Produce
+   `opdl.<site-scope>.event.<domain>.<fact>`, where `site-scope` is a stable
+   lower-case, unpadded base32 encoding of a SHA-256 hash over length-prefixed
+   project, environment, and site values. Parse event types only in
+   `platform.<domain>.<fact>` form. Reject blank or extra tokens. Domain packages
+   pass an event type, never a raw subject.
+5. Name the site stream `OPDL_<UPPER_SITE_SCOPE>_EVENTS` and bind only
+   `opdl.<site-scope>.event.>`. Use file storage and reject new
    events when limits are reached so required replay history is not silently
    removed.
 6. Define at-least-once handling:
@@ -36,23 +41,32 @@ Estimated time: 2-3 engineering days.
      complete;
    - projection application is idempotent by event ID and domain identity;
    - malformed or unsupported events stop catch-up and make the node unready.
-7. Define startup catch-up. Capture the journal high-water sequence, replay
-   through it, switch to live delivery without a gap, then allow the HTTP API to
-   serve.
-8. Replace the current registration storage algorithm with this event flow:
-   - the origin publishes `platform.registration.proposed` after validating the
-     HTTP input;
-   - every expected node handles the proposal and publishes its own confirmed
-     or rejected decision;
+7. Define startup catch-up around one continuous ordered consumer. Start it,
+   capture the journal high-water sequence, wait until the projector has applied
+   that sequence, and keep the same consumer attached for live delivery. This
+   avoids a replay-to-live subscription gap.
+8. Replace the current registration storage algorithm and event catalog with
+   this event flow:
+   - the origin publishes `platform.registration.proposed` only after validating
+     the HTTP input, trusted origin, and expected machine set;
+   - every expected node handles the proposal and publishes exactly one
+     `platform.registration.confirmed` or `platform.registration.rejected`
+     decision;
    - the origin publishes accepted after every expected node confirmed;
-   - the first valid proposal for a unit key in site journal order is the
-     winner; later different proposals are rejected as conflicts;
+   - the first proposed event for a unit key in site journal order claims the
+     key; an identical proposal is a retry and a later different proposal is
+     rejected as a conflict;
    - all query views are deterministic projections of these events.
-9. Give handler outcomes stable decision identities. Redelivery may try to
-   publish the same outcome again, so projectors must collapse it even after the
-   NATS duplicate window has expired.
-10. Update the architecture and registration documentation with the accepted
-    decisions before implementing the adapter.
+9. Define `proposal_id` as a SHA-256 hash of versioned canonical request fields,
+   trusted origin identity, and expected machines. Define decision IDs from
+   proposal ID, decision kind, and deciding machine. Redelivery may try to
+   publish the same outcome again, so reducers collapse decisions by this ID
+   even after the NATS duplicate window expires.
+10. Add table-driven tests in `eventfabric` for route and envelope validation.
+    Add pure reducer tests in `registration` for proposal order, duplicate
+    decisions, all-node acceptance, and conflict projection.
+11. Update `docs/01-architecture.md`, `docs/02-registration.md`, and the relevant
+    `doc.go` files with the accepted decisions before implementing the adapter.
 
 ## Deliverables
 
@@ -73,22 +87,32 @@ Estimated time: 2-3 engineering days.
 - Every required Event Fabric guarantee has an adapter contract test planned.
 - The NATS deployment and stream replication choice is recorded.
 
-## Open questions
+## Open questions and recommendations
 
-- Should the POC keep an embedded NATS server per OPDL node, as proposed, or run
-  a separately managed site cluster? Embedded servers keep packaging close to
-  the current model. A managed cluster separates runtime and storage failure.
-- What JetStream replica count should a one-node, two-node, and three-or-more
-  node site use? The simple POC default is one replica. Two replicas do not
-  provide useful failure tolerance because both are needed for quorum.
-- Is acceptance still required from every expected node, or should registration
-  use a quorum? The plan retains the existing all-node rule until changed
-  explicitly.
-- How much event history must be retained? Full replay requires either retained
-  history or a later snapshot mechanism.
-- Should a valid POST always return `202` with a proposal ID, leaving conflict
-  resolution to the projection? This is the cleanest asynchronous contract and
-  intentionally breaks the current immediate `409` behavior.
+- Embedded or managed NATS cluster?
+  Recommendation: embed one linked NATS server in each OPDL process for the POC.
+  This preserves one deployable binary. Revisit when NATS needs an independent
+  upgrade, security, backup, or failure boundary.
+- Replica count by site size?
+  Recommendation: enable JetStream on one deterministic node with one stream
+  replica for one-node and two-node sites. Enable it on the first three nodes by
+  sorted machine name with three replicas for larger sites. Non-storage nodes
+  run Core NATS and route to the storage nodes. Do not form a two-member
+  JetStream metadata group. Revisit when the descriptor can express dedicated
+  storage roles or availability requirements change.
+- All expected nodes or quorum acceptance?
+  Recommendation: keep all expected nodes. This migration should change the
+  coordination mechanism, not the registration business rule. Plan quorum as a
+  separate domain change if offline acceptance is required.
+- How much history is retained?
+  Recommendation: retain all events by age and count until snapshots exist.
+  Require a configurable byte limit, use `DiscardNew`, and make capacity visible
+  in readiness. Revisit when measured replay time or disk use justifies snapshots.
+- What does a valid POST return?
+  Recommendation: return `202` and `proposal_id` only after durable publication.
+  Report accepted, rejected, and conflict outcomes through status queries. This
+  gives one deterministic asynchronous contract and removes the immediate `409`
+  race.
 
 ## Risks
 
@@ -102,6 +126,6 @@ Estimated time: 2-3 engineering days.
 - Retention limits can make a full replay impossible. Rejecting new events is
   safer than silently deleting old history, but it can stop writes when disk is
   full.
-- Two-node JetStream topology can appear redundant while still losing
-  availability on one failure. Make this explicit in deployment documentation.
-
+- A two-node site has one JetStream storage node and no journal redundancy. It
+  cannot publish or replay while that node is down. Make this explicit in
+  deployment documentation.

@@ -24,31 +24,54 @@ Depends on: [Stage 2](02-event-fabric.md).
 
 ## Work
 
-1. Replace storage records with versioned event payloads. A proposal carries its
+1. Replace `records.go` storage records with versioned payloads in `events.go`.
+   Add `Proposed`, keep or revise `Confirmed`, `Rejected`, and `Accepted`, and
+   remove payload meanings tied to collection writes. A proposal carries its
    deterministic proposal ID, complete request fields, trusted origin identity,
-   and the expected machine set used for its decision.
-2. Implement pure, ordered, idempotent reducers for:
+   ordered expected machine names. Occurrence time stays in the shared envelope
+   and is not part of the proposal ID.
+2. Add `projection.go` with a `Projection` type that owns ordinary Go maps under
+   a read/write mutex. Its `Apply(eventfabric.Delivery)` method dispatches to
+   pure, ordered, idempotent reducers for:
    - proposal status by proposal ID;
    - selected proposal by unit key;
    - confirmations and rejections by machine;
    - accepted registrations;
    - resolved conflicts.
-3. Resolve concurrent proposals by their sequence in the site journal. The
-   first valid proposal for a unit key wins. An identical proposal is an
-   idempotent retry. A later different proposal becomes a rejected contender.
-4. Replace each reconciler scan with a durable handler scoped to the node:
+   Query methods return copies and never expose the maps. Unit tests call the
+   reducers directly without NATS.
+3. Resolve concurrent proposals by `Delivery.Sequence` in the site journal. The
+   first proposed event for a unit key permanently claims it. An identical
+   proposal is an idempotent retry. A later different proposal becomes a
+   rejected contender. If an expected node rejects the selected proposal, its
+   status is rejected but the key is not automatically released. Key release is
+   a separate future domain event, not implicit cleanup.
+4. Add `handler.go` and replace each reconciler scan with one durable handler
+   scoped to the node:
    - validate new proposals and publish one node decision;
    - on the origin node, observe all required confirmations and publish the
      final accepted event;
    - publish conflict rejection for a losing proposal.
-5. Make decision identities deterministic from proposal ID, decision kind, and
+   Register an explicit route list. Do not subscribe to `>` or dispatch unknown
+   registration events dynamically.
+5. Before a handler decides from an input delivery, call
+   `Projection.WaitApplied(ctx, delivery.Sequence)`. This ensures the local view
+   includes the event and every earlier journal event. The method returns when
+   `Apply` advances the projection's recorded sequence and fails on cancellation
+   or projection error.
+6. Make decision identities deterministic from proposal ID, decision kind, and
    deciding machine. A handler may safely repeat publication after redelivery.
-6. Acknowledge an input event only after any required resulting event is
+7. Acknowledge an input event only after any required resulting event is
    durably accepted. If publication is uncertain, leave the input unacknowledged
    and retry.
-7. Change the service API to publish commands and read only local projections.
-   It must not query NATS synchronously for state.
-8. Simplify the HTTP contract for asynchronous processing:
+8. Rewrite `registration.Open` to accept a narrow `eventfabric.Publisher`, the
+   local `Projection`, trusted `Location`, and expected machines. Return a
+   command service and query service. Delete `store.go` and `reconciler.go` only
+   after their tests have direct event-based replacements.
+9. Change the command service to validate and publish only. Change the query
+   service to read only local projections. Neither service may query NATS
+   synchronously for state.
+10. Simplify the HTTP contract for asynchronous processing:
    - invalid input returns `400` without publishing;
    - a durably published proposal returns `202` and its proposal ID;
    - an unavailable journal returns `503`;
@@ -56,17 +79,33 @@ Depends on: [Stage 2](02-event-fabric.md).
      current journal sequence;
    - conflict is a projected outcome, not a race-sensitive immediate POST
      result.
-9. Open the API only after registration projections have completed startup
+11. Update `platform/api`, `internal/httpapi`, the OpenAPI source, generated .NET
+    SDK, and their tests around `proposal_id` and asynchronous conflict status.
+12. Open the API only after registration projections have completed startup
    replay. Continue applying live events while serving queries.
-10. Replace fabric-heavy registration tests with pure reducer tests and focused
-    NATS integration tests.
+13. Replace `site_test.go`, `contenders_test.go`, and
+    `contenders_olric_test.go` coverage with pure reducer and handler tests.
+    Keep only cross-process delivery behavior in NATS integration tests and
+    black-box scenarios.
+
+## Handler consequences
+
+| Input event | Handler action |
+| --- | --- |
+| `registration.proposed` | Every expected node waits for its projection, then publishes one confirmed decision for the selected proposal or one rejected decision for a conflicting or invalid proposal. |
+| `registration.confirmed` | The origin waits for its projection, then publishes accepted when all expected confirmations are present. Other nodes acknowledge without publishing. |
+| `registration.rejected` | No handler route. The node-wide projector records it. |
+| `registration.accepted` | No handler route. The node-wide projector records it. |
+
+Every publication uses a stable decision ID. No handler consumes its own output
+unless the table requires another finite transition.
 
 ## Observable registration flow
 
 1. Node A validates an HTTP request and publishes a proposal.
 2. The site journal assigns the proposal's order and acknowledges it.
-3. Every expected node's durable handler processes the proposal, including a
-   node that reconnects later.
+3. Every expected node's durable handler processes the proposal in journal
+   order, including a node that reconnects later.
 4. Each node publishes one confirmation or rejection.
 5. Node A observes every required confirmation and publishes acceptance.
 6. Every node applies the same events to its local projection.
@@ -98,19 +137,30 @@ the current all-node acceptance rule without shared state.
 - No registration correctness rule depends on clock comparison or Olric
   membership stability.
 
-## Open questions
+## Open questions and recommendations
 
-- Should expected machines be copied into each proposal event or derived from
-  the local descriptor during projection? Copying makes historical decisions
-  self-contained and is the recommended POC choice.
-- Does every node run registration validation, or only nodes that host the
-  registration service? The expected decision set must be explicit.
-- Should rejected proposals remain visible forever, or follow the journal's
-  retention policy?
-- Should status lookup use the new proposal ID, the unit key, or both?
-- Is the origin solely responsible for final acceptance, or may any node emit
-  the same deterministic acceptance event? Origin-only is simpler and matches
-  current behavior, but acceptance waits for origin recovery.
+- Capture expected machines or derive them during replay?
+  Recommendation: copy an ordered expected-machine list into `Proposed`. A
+  historical decision must not change because a later binary has a different
+  descriptor. Reject a proposal when its set does not match the origin's current
+  trusted descriptor at publication time.
+- Which nodes validate a proposal?
+  Recommendation: use every expected platform machine for the first migration,
+  matching current behavior. If only service-hosting machines should decide,
+  change the builder to produce that explicit set before Stage 3.
+- How long are rejected proposals visible?
+  Recommendation: keep them for the same duration as the journal and rebuild
+  them in the conflicts projection. Do not add separate deletion events or
+  retention rules during migration.
+- How is status addressed?
+  Recommendation: make proposal ID the canonical status key. Keep unit-key list
+  and conflict queries for current domain views. Do not overload one unit-key
+  status route when several proposals may exist.
+- Who emits final acceptance?
+  Recommendation: only the trusted origin handler. This matches current
+  ownership and prevents several nodes from racing to state the same fact. The
+  proposal remains pending while the origin is offline and completes when its
+  durable handler resumes.
 
 ## Risks
 
@@ -124,4 +174,3 @@ the current all-node acceptance rule without shared state.
   node from readiness when lag exceeds an agreed bound.
 - Changing the expected machine set after a proposal was published can change
   its outcome unless the set is captured in the event.
-

@@ -16,26 +16,41 @@ Depends on: [Stage 4](04-runtime-cutover.md).
 
 1. Delete `platform/internal/fabric/olric` and
    `platform/internal/fabric/memory`.
-2. Delete the state-oriented `fabric.Fabric`, `Collection`, entry, membership,
-   and collection contract tests. Do not rename these map operations into the
-   new Event Fabric.
-3. Delete registration store records, collection names, reconciliation loops,
-   join-race regression tests, and state repair logic.
-4. Remove Olric configuration and socket overrides from platform configuration,
-   examples, scenario harnesses, and documentation.
-5. Remove `github.com/olric-data/olric`, run `go mod tidy`, and confirm that its
-   indirect dependency tree is gone.
+2. Delete the rest of `platform/internal/fabric`, including state-oriented
+   `Fabric`, `Collection`, entry, membership, lifecycle events, and collection
+   contract tests. Do not rename these map operations into the new Event Fabric.
+3. Delete `platform/internal/registration/store.go`, `reconciler.go`, storage
+   records and keys from `records.go`, `contenders_olric_test.go`, and old
+   reconcile-focused tests after Stage 3 replacements pass.
+4. Remove `FabricOlric`, `[fabric.olric]`, `reconcile_interval`, Olric socket
+   overrides, and `events_dir` from configuration, examples, scenario harnesses,
+   generated test fixtures, and documentation.
+5. Remove `github.com/olric-data/olric` from `platform/go.mod`, run
+   `go mod tidy` in every Go module through the repository task, and confirm that
+   Olric and its adapter-only indirect dependency tree are gone from `go.sum`.
 6. Remove the JSONL and no-op event sinks if Stage 4 left them unused. Event
    publication must not be optional in a running service.
 7. Rename remaining state-fabric terminology in logs, lifecycle events,
    descriptors, scenario names, and documentation to Event Fabric terminology.
+   Do not blindly replace the word `fabric`; keep it where it means the new
+   Event Fabric and remove it where it means distributed maps.
 8. Replace tests that used a shared-memory transport with:
    - direct pure projection and handler unit tests; or
    - integration tests using an isolated real embedded NATS server.
-9. Search the repository for stale state assumptions, including `olric`,
-   `fabric.Collection`, `registration-contenders`, `reconcile_interval`, and
-   `[fabric.olric]`.
-10. Run `task all` and resolve every format, lint, unit, conformance, generation,
+9. Run these repository searches and require no obsolete result outside this
+   migration plan:
+
+   ```powershell
+   rg -n -i -g "!docs/plan/**" "olric|olric-data" .
+   rg -n -g "!docs/plan/**" "fabric\.Collection|registration-contenders|reconcile_interval" .
+   rg -n -g "!docs/plan/**" "\[fabric\.olric\]|events_dir" .
+   rg -n "internal/fabric" platform scenarios conformance-tests builder
+   ```
+
+10. Add an architecture rule that domain packages cannot import the NATS client,
+    NATS server, or `internal/eventfabric/nats`. Only runtime composition may
+    import the adapter; domains depend on the core Event Fabric interfaces.
+11. Run `task all` and resolve every format, lint, unit, conformance, generation,
     SDK, build, and scenario failure.
 
 ## Final verification
@@ -65,17 +80,25 @@ Depends on: [Stage 4](04-runtime-cutover.md).
 - All supported state can be rebuilt from retained NATS events.
 - `task all` passes.
 
-## Open questions
+## Open questions and recommendations
 
-- Should the old `internal/fabric` directory be deleted completely or retained
-  only as a temporary forwarding package? The POC recommendation is complete
-  deletion because backward compatibility is not required.
-- Should local projection snapshots be added now? The recommendation is no.
-  Measure replay first and add snapshots only when startup time requires them.
-- Is a JSONL audit subscriber needed for operators after cutover? It is not part
-  of authoritative state and should be planned separately if required.
-- What repository check should prevent Olric or distributed key-value state from
-  returning later?
+- Delete `internal/fabric` or keep a forwarding package?
+  Recommendation: delete it completely. No compatibility consumer remains, and
+  a forwarding package would preserve the wrong state-oriented vocabulary.
+- Add local projection snapshots now?
+  Recommendation: no. Record replay duration and journal size in scenarios.
+  Propose snapshots only when a measured startup objective cannot be met by full
+  replay. Any future snapshot is node-local cache data, never shared state.
+- Keep a JSONL audit subscriber?
+  Recommendation: no in this migration. NATS is the single event source. Add a
+  separately deployed projector later only if operators define an audit-file
+  requirement.
+- What prevents the old architecture from returning?
+  Recommendation: extend the existing architecture checks so only
+  `internal/eventfabric/nats` and `internal/app` may import NATS packages, and
+  domain packages may import only `internal/eventfabric`. Add a small repository
+  conformance test that rejects `olric-data` in module files. Do not enforce a
+  broad ban on maps or local in-memory projections.
 
 ## Risks
 
@@ -88,4 +111,3 @@ Depends on: [Stage 4](04-runtime-cutover.md).
   docs and architecture docs in the same change as deletion.
 - Snapshot work introduced during cleanup can recreate synchronization and
   consistency complexity. Keep snapshots local and deferred.
-
