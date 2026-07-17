@@ -5,10 +5,9 @@
 > embedded server lifecycle, idempotent journal create-or-validate, synchronous
 > publish with deduplication, an ordered projector, durable per-service handlers
 > with bounded redelivery, health, and shutdown. Integration tests run against a
-> real embedded server. The adapter is not yet composed into the runtime (Stage
-> 4). Issues and deferrals are in
-> [02-event-fabric-findings.md](02-event-fabric-findings.md); see the
-> [completion notes](#completion-notes) for what shipped and what is deferred.
+> real embedded server, and the adapter is composed into the runtime. Findings
+> are in the [migration findings catalog](findings/README.md); see the
+> [completion notes](#completion-notes) for what shipped.
 
 ## Outcome
 
@@ -212,9 +211,7 @@ What this stage delivered, mapped to the work items above:
   and idempotent shutdown with a recorded stopping event. Server setup lives in
   the adapter's own `_test.go`; there is no in-memory transport.
 
-Deferred, and recorded in the findings: the multi-server cluster runtime tests
-(a two-node storage + Core-NATS site, and a simultaneous two-node
-publish-and-replay), the catch-up wait loop that produces `ErrCatchUpTimeout`
-(runtime composition, Stage 4), and wiring the domain events' `Identified`
-dedup keys and the domain-aware projector routing (Stage 3). The restart-replay
-test meets the cross-instance replay exit criterion in its durable-journal form.
+Later stages added catch-up orchestration, stable domain deduplication identities,
+domain-aware filtering, and runtime composition. Remaining test and scaling
+limits are tracked as F009 and F021 in the
+[migration findings catalog](findings/README.md).

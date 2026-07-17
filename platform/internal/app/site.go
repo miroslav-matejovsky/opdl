@@ -105,13 +105,14 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 
 	location, expected := topology(descriptor)
 	scope := eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)
-	commands, queries, err := registration.Open(fabric, s.projection, location, expected)
+	publisher := eventfabric.Publisher(fabric)
+	commands, queries, err := registration.Open(publisher, s.projection, location, expected)
 	if err != nil {
 		return nil, errors.Join(err, s.close(ctx))
 	}
 	s.commands, s.queries = commands, queries
 
-	handler, err := registration.NewHandler(fabric, s.projection, location, expected, scope)
+	handler, err := registration.NewHandler(publisher, s.projection, location, expected, scope)
 	if err != nil {
 		return nil, errors.Join(err, s.close(ctx))
 	}

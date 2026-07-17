@@ -1,7 +1,7 @@
 # Stage 4: Runtime cutover
 
-Status: Complete. Findings, corrected decisions, and deferred work are in
-[04-runtime-cutover-findings.md](04-runtime-cutover-findings.md).
+Status: Complete. Findings, corrected decisions, and deferred work are in the
+[migration findings catalog](findings/README.md).
 
 ## Completion notes
 

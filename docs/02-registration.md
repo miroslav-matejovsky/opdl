@@ -152,3 +152,7 @@ IPs in a view come from the answering node's own descriptor rather than from the
 proposal, so a historical proposal naming a machine the deployment no longer has
 reports that instance with an empty IP. Authentication, authorization, removal,
 leases, heartbeats, and quorum are outside the current implementation.
+
+Deployment requirements and the accepted availability consequences of
+all-machine confirmation are analyzed in the
+[migration findings catalog](plan/findings/README.md).

@@ -1,6 +1,6 @@
 # NATS event architecture migration
 
-Status: proposed for the POC.
+Status: Complete for the POC (2026-07-17).
 
 This plan replaces the shared Olric collections with an event-driven model.
 NATS JetStream becomes the durable site event journal. Each platform node
@@ -70,7 +70,7 @@ services goes only through the Event Fabric.
   server is configured with, not from the servers that actually hold storage, so
   a Core NATS node inside the cluster enlarges the quorum that decides whether
   the site can write without adding anywhere to write to. See
-  [04-runtime-cutover-findings.md](04-runtime-cutover-findings.md).
+  [F013](findings/013-storage-only-nats-cluster.md).
 - Rebuild in-memory projections from the journal at process start for the POC.
   Local projection persistence and snapshots are deferred until replay cost
   proves they are needed.
@@ -126,7 +126,7 @@ assume the existing registration flow is the only stateful use case being moved.
 | [2. OPDL Event Fabric](02-event-fabric.md) | Add the OPDL abstraction and NATS JetStream adapter | High | 4-6 days | Complete |
 | [3. Registration projections](03-registration-projections.md) | Build event-backed registration projections, services, and handlers | High | 5-8 days | Complete |
 | [4. Runtime cutover](04-runtime-cutover.md) | Run the platform and scenarios solely through NATS | High | 3-5 days | Complete |
-| [5. Remove distributed state](05-remove-distributed-state.md) | Delete Olric, memory fabric, and obsolete paths | Medium | 2-4 days | Not started |
+| [5. Remove distributed state](05-remove-distributed-state.md) | Delete Olric, memory fabric, and obsolete paths | Medium | 2-4 days | Complete |
 
 Total estimate: 16-26 engineering days.
 
@@ -141,16 +141,13 @@ promoted the event model into `platform/internal/registration`, deleting the
 Olric-backed registration and the JSONL runtime path. The HTTP contract is
 asynchronous, and the OpenAPI description and .NET SDK are regenerated from it.
 
-Olric itself, the in-memory fabric adapter, and their tests still exist and are
-Stage 5's to delete; no runtime path reaches them.
+Stage 5 deleted the old state fabric, its memory and Olric adapters, the JSONL
+recorder path, and their dependency tree. Strict architecture lint rules prevent
+direct domain-to-NATS coupling and deny unlisted vendor dependencies.
 
-Issues surfaced while implementing these stages are in
-[01-event-model-findings.md](01-event-model-findings.md),
-[02-event-fabric-findings.md](02-event-fabric-findings.md),
-[03-registration-projections-findings.md](03-registration-projections-findings.md),
-and [04-runtime-cutover-findings.md](04-runtime-cutover-findings.md). Stage 4
-corrected an accepted decision the transport could not support: the site's NATS
-cluster is now exactly its storage nodes.
+Issues surfaced across all stages are classified and analyzed in the
+[migration findings catalog](findings/README.md). It includes resolved decisions,
+accepted POC constraints, deployment mitigations, and prioritized open work.
 
 ## Completion criteria
 
@@ -168,9 +165,8 @@ cluster is now exactly its storage nodes.
   have caught up to a recorded journal high-water mark.
 - `task all` passes.
 
-Stage 4 met every criterion above except the two that name Olric's removal, which
-is Stage 5's work: the dependency, adapter, configuration, tests, and the
-`fabric.Collection` contract still exist, unreachable from any runtime path.
+All five migration stages are complete. Remaining production-readiness work is
+explicitly outside this migration and tracked in the findings catalog.
 
 ## NATS references
 

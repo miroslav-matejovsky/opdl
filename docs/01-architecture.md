@@ -110,6 +110,11 @@ journal replicas respectively. A two-member metadata group would lose quorum whe
 either member failed, which is worse than one member that either works or does
 not.
 
+One- and two-machine sites are POC deployments with no journal-node failure
+tolerance. A deployment that must tolerate one journal node failure requires at
+least three machines with stable storage on the first three machines by sorted
+name. This protects event history, not service processes.
+
 The site's NATS cluster is exactly its storage nodes. Every other machine of the
 site runs no server and reaches the journal as a client of the storage nodes.
 This is not a simplification for its own sake: NATS sizes a journal's metadata
@@ -188,4 +193,7 @@ Journal replication must not be interpreted as service redundancy: three storage
 nodes keep three copies of the site's history, and nothing takes over a
 machine's registration decisions when that machine is down. A proposal simply
 stays pending until it comes back.
+
+The concrete deployment mitigations and production-readiness gaps are tracked in
+the [migration findings catalog](plan/findings/README.md).
 

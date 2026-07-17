@@ -41,8 +41,8 @@
 //
 // # Envelope
 //
-// Emitters supply only the payload. The Recorder stamps the envelope (Meta) and
-// stores the two together as one Record:
+// Emitters supply only the payload. The Event Fabric publisher stamps the
+// envelope (Meta) and stores the two together as one Record:
 //
 //   - ID: unique per occurrence and time-ordered.
 //   - Type: the event's stable dotted kind.
@@ -66,7 +66,7 @@
 // # Node identity is on every record
 //
 // Which process an event is about is a Node. It is constant for a whole process
-// run, so the Recorder is told this machine's Node once and stamps it onto
+// run, so the Event Fabric is told this machine's Node once and stamps it onto
 // every record. Carrying it per record is what lets a shared journal pool the
 // events of every node in one ordered stream and still attribute each fact to
 // its origin.
@@ -78,17 +78,6 @@
 // journal — synchronously, so a fact is retained before the operation that
 // caused it returns. The journal is the platform's only event storage.
 //
-// The Recorder, Sink, and jsonl file sink predate the journal and no runtime
-// path uses them; see docs/plan/05-remove-distributed-state.md.
-//
-// # Limitations
-//
-// Event delivery is best effort for this phase. A Record call that fails after
-// the emitting domain has already changed its state returns an error with
-// context; there is no rollback across a store and a sink, and the caller is
-// expected to surface the failure rather than retry. Recording holds a lock
-// across the sink write, so events are serialized against each other; the
-// volume this stage emits does not justify a queue. There is no publish or
-// subscribe side: events are recorded for readers outside the process, and
-// nothing in the platform reacts to them yet.
+// The obsolete JSONL sink and optional no-op recorder were removed. A running
+// service has exactly one event source: the retained site journal.
 package events

@@ -1,11 +1,23 @@
 version: 3
 
+workdir: .
+
 allow:
-  depOnAnyVendor: true
-  deepScan: false
+  depOnAnyVendor: false
+  deepScan: true
+
+exclude:
+  - ".gocache"
+  - ".lintcache"
+  - ".test-results"
 
 excludeFiles:
-  - "_test\\.go$"
+  - "^.*_test\\.go$"
+
+vendors:
+  toml: { in: "github.com/BurntSushi/toml**" }
+  nats-server: { in: "github.com/nats-io/nats-server/v2/**" }
+  nats-client: { in: "github.com/nats-io/nats.go**" }
 
 components:
   api: { in: api }
@@ -15,12 +27,10 @@ components:
   app: { in: internal/app }
   config: { in: internal/config }
   events: { in: internal/events }
-  events-jsonl: { in: internal/events/jsonl }
   eventfabric: { in: internal/eventfabric }
   eventfabric-nats: { in: internal/eventfabric/nats }
-  fabric: { in: internal/fabric }
-  fabric-memory: { in: internal/fabric/memory }
-  fabric-olric: { in: internal/fabric/olric }
+  # Reserved name for the deleted boundary. No component may depend on it.
+  legacy-state-fabric: { in: internal/fabric }
   httpapi: { in: internal/httpapi }
   registration: { in: internal/registration }
 
@@ -32,21 +42,15 @@ deps:
   app:
     mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, registration]
   config:
+    canUse: [toml]
     mayDependOn: [deployment, embedded]
   events:
     mayDependOn: [deployment]
-  events-jsonl:
-    mayDependOn: [events]
   eventfabric:
     mayDependOn: [events]
   eventfabric-nats:
+    canUse: [nats-server, nats-client]
     mayDependOn: [deployment, events, eventfabric]
-  fabric:
-    mayDependOn: [deployment, events]
-  fabric-memory:
-    mayDependOn: [deployment, fabric]
-  fabric-olric:
-    mayDependOn: [deployment, fabric]
   httpapi:
     mayDependOn: [api, registration]
   registration:

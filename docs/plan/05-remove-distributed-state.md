@@ -1,5 +1,23 @@
 # Stage 5: Remove distributed state
 
+Status: Complete (2026-07-17).
+
+## Completion notes
+
+The obsolete `internal/fabric` contract, memory adapter, Olric adapter, JSONL
+sink, recorder, tests, configuration vocabulary, and module dependency tree are
+deleted. Event ID generation and envelope stamping remain in `internal/events`
+because the NATS publisher uses them directly.
+
+A focused real-NATS test verifies that a full `DiscardNew` journal rejects new
+writes instead of deleting replay history. Strict `go-arch-lint` rules deny
+unlisted vendors, deep-scan dependency injection, allow NATS only in its adapter,
+and prevent runtime components from depending on the reserved state-fabric
+boundary.
+
+All implementation findings, including resolved decisions and remaining risks,
+are in the [migration findings catalog](findings/README.md).
+
 ## Outcome
 
 Delete every remaining Olric and shared in-memory state path. Finish with NATS
@@ -71,7 +89,7 @@ Depends on: [Stage 4](04-runtime-cutover.md).
 ## Exit criteria
 
 - Repository search finds no Olric dependency, adapter, configuration, test, or
-  documentation.
+  documentation outside this historical migration plan.
 - There is no implementation of a shared in-memory distributed-state fabric.
 - No service coordinates through map create, swap, get, enumeration, polling,
   or repair.
@@ -80,34 +98,7 @@ Depends on: [Stage 4](04-runtime-cutover.md).
 - All supported state can be rebuilt from retained NATS events.
 - `task all` passes.
 
-## Open questions and recommendations
+## Findings
 
-- Delete `internal/fabric` or keep a forwarding package?
-  Recommendation: delete it completely. No compatibility consumer remains, and
-  a forwarding package would preserve the wrong state-oriented vocabulary.
-- Add local projection snapshots now?
-  Recommendation: no. Record replay duration and journal size in scenarios.
-  Propose snapshots only when a measured startup objective cannot be met by full
-  replay. Any future snapshot is node-local cache data, never shared state.
-- Keep a JSONL audit subscriber?
-  Recommendation: no in this migration. NATS is the single event source. Add a
-  separately deployed projector later only if operators define an audit-file
-  requirement.
-- What prevents the old architecture from returning?
-  Recommendation: extend the existing architecture checks so only
-  `internal/eventfabric/nats` and `internal/app` may import NATS packages, and
-  domain packages may import only `internal/eventfabric`. Add a small repository
-  conformance test that rejects `olric-data` in module files. Do not enforce a
-  broad ban on maps or local in-memory projections.
-
-## Risks
-
-- Removing old integration tests can reduce coverage if their observable
-  behavior is not recreated with NATS scenarios. Map each deleted scenario to a
-  replacement before deletion.
-- An indirect Olric dependency can remain in `go.sum` if module cleanup is not
-  run at every affected module level.
-- Stale documentation can lead new code back toward shared state. Update package
-  docs and architecture docs in the same change as deletion.
-- Snapshot work introduced during cleanup can recreate synchronization and
-  consistency complexity. Keep snapshots local and deferred.
+Stage 5 decisions and risks are cataloged individually as F008, F018, F022,
+F023, and F024 in the [migration findings catalog](findings/README.md).

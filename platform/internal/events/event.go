@@ -24,10 +24,9 @@ type Type string
 // Node is the identity of the platform process an event is about: which machine
 // of which deployment stated the fact.
 //
-// It is constant for a whole process run, so it is not part of the envelope. A
-// sink states it once for everything it stores, which is why Node is passed to
-// a sink rather than to the Recorder. A future sink that pools events from
-// several nodes must store it per record.
+// It is constant for a whole process run and is stamped onto every record. The
+// shared site journal pools events from several nodes, so identity must travel
+// with each fact.
 type Node struct {
 	// Project is the deployment project identifier.
 	Project string `json:"project"`
@@ -60,8 +59,8 @@ func NodeFromDescriptor(d deployment.Descriptor) Node {
 // instead of guessing at its meaning.
 const DefaultSchemaVersion = 1
 
-// Meta is the envelope every event carries. The Recorder sets it; emitters
-// never populate it themselves.
+// Meta is the envelope every event carries. The Event Fabric publisher sets it;
+// emitters never populate it themselves.
 //
 // The envelope is self-describing: it identifies the occurrence, names the
 // deployment node that stated the fact, and versions the payload schema. It
@@ -113,8 +112,8 @@ type Event interface {
 }
 
 // Tagged is the optional interface an Event implements when it carries tags,
-// typically TagWarning. The Recorder normalizes whatever it returns; an event
-// that does not implement Tagged records no tags.
+// typically TagWarning. Envelope stamping normalizes whatever it returns; an
+// event that does not implement Tagged records no tags.
 type Tagged interface {
 	// Tags returns the markers to stamp onto the event, in any order.
 	Tags() []string
@@ -130,8 +129,7 @@ type Versioned interface {
 }
 
 // Record is the stored form of an event: the envelope plus the payload as raw
-// JSON. It marshals to exactly one line in a JSONL sink. Meta is embedded, so
-// its fields sit at the top level next to data.
+// JSON. Meta is embedded, so its fields sit at the top level next to data.
 type Record struct {
 	Meta
 	// Data is the event payload encoded as JSON.
@@ -148,9 +146,8 @@ func newRecord(meta Meta, event Event) (Record, error) {
 }
 
 // StampRecord builds the stored record for event as of occurredAt, stamped with
-// id and node. It is the one place an event's envelope is constructed, shared by
-// the Recorder and by the Event Fabric publisher, so every publish path produces
-// the same envelope. It does not set the causal links; a publisher that reacts
+// id and node. It is the one place an event's envelope is constructed for the
+// Event Fabric publisher. It does not set the causal links; a publisher that reacts
 // to a delivery sets those from the delivery it is handling.
 func StampRecord(node Node, id string, occurredAt time.Time, event Event) (Record, error) {
 	return newRecord(Meta{

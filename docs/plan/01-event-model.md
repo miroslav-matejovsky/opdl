@@ -2,11 +2,9 @@
 
 > Status: Complete (2026-07-17). The event envelope, the OPDL Event Fabric
 > contract, the route and journal naming, and the event-sourced registration
-> model with pure reducers are defined and unit-tested. NATS is not yet wired
-> (Stage 2) and the Olric registration runtime is unchanged (Stage 3). Issues and
-> inconsistencies surfaced while implementing this stage are recorded in
-> [01-event-model-findings.md](01-event-model-findings.md). See the
-> [completion notes](#completion-notes) for what shipped.
+> model with pure reducers are defined, tested, and used by the completed
+> runtime. Findings are in the [migration findings catalog](findings/README.md).
+> See the [completion notes](#completion-notes) for what shipped.
 
 ## Outcome
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,8 +19,8 @@ import (
 
 // The tests in this file run a real embedded NATS server with JetStream. They
 // bind sockets and write files, so they are skipped under -short and run in the
-// integration gate, matching the olric adapter. Reusable server setup lives here
-// rather than in a separate package, as the plan requires.
+// integration gate. Reusable server setup lives here rather than in a separate
+// package, as the plan requires.
 
 var testDescriptor = deployment.Descriptor{
 	Platform: "opdl", Project: "customer-a", Environment: "production",
@@ -249,6 +250,25 @@ func TestPublishReturnsAReceiptAndTheEventReplays(t *testing.T) {
 
 	cancel()
 	require.NoError(t, <-done, "a canceled projector returns cleanly")
+}
+
+func TestPublishFailsWhenJournalByteLimitIsReached(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.MaxBytes = 4 << 10
+	cfg.MaxMessageBytes = 2 << 10
+	f := open(t, cfg)
+
+	_, err := f.Publish(t.Context(), probe{Fact: strings.Repeat("x", 1024)})
+	require.NoError(t, err, "the journal accepts data before reaching its limit")
+
+	for range 10 {
+		_, err = f.Publish(t.Context(), probe{Fact: strings.Repeat("x", 1024)})
+		if err != nil {
+			break
+		}
+	}
+	require.Error(t, err, "the journal must reject writes instead of deleting replay history")
+	require.ErrorContains(t, err, "publish")
 }
 
 // TestOpenStatesNothing pins where readiness belongs. A connected transport is
