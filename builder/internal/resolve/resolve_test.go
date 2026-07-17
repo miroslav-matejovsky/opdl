@@ -80,40 +80,40 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.True(t, m.Features.Redundancy)
 }
 
-// TestBuildDerivesOneMemberFabricForSingleMachineSite checks a standalone
+// TestBuildDerivesOneMemberEventFabricForSingleMachineSite checks a standalone
 // machine is a valid fabric of one, not a machine with a missing fabric.
-func TestBuildDerivesOneMemberFabricForSingleMachineSite(t *testing.T) {
+func TestBuildDerivesOneMemberEventFabricForSingleMachineSite(t *testing.T) {
 	plan, err := resolve.Build(project(), "acme-opdl")
 	require.NoError(t, err)
-	require.Equal(t, deployment.Fabric{
-		Peers: []deployment.FabricPeer{},
-	}, plan.Machines[0].Fabric)
+	require.Equal(t, deployment.EventFabric{
+		Peers: []deployment.EventFabricPeer{},
+	}, plan.Machines[0].EventFabric)
 }
 
-// TestBuildDerivesFabricPeersFromTheSiteOnly checks the fabric spans exactly one
+// TestBuildDerivesEventFabricPeersFromTheSiteOnly checks the fabric spans exactly one
 // site: a machine's peers are its site's other machines, never another site's,
 // and every machine of a site sees the same membership.
-func TestBuildDerivesFabricPeersFromTheSiteOnly(t *testing.T) {
+func TestBuildDerivesEventFabricPeersFromTheSiteOnly(t *testing.T) {
 	plan, err := resolve.Build(twoSiteProject(), "acme-opdl")
 	require.NoError(t, err)
 
 	sensor := machineByName(t, plan, "sensor")
-	require.Equal(t, deployment.Fabric{
-		Peers: []deployment.FabricPeer{
+	require.Equal(t, deployment.EventFabric{
+		Peers: []deployment.EventFabricPeer{
 			{Site: "north", Machine: "archive", IP: "10.0.1.12"},
 			{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
 		},
-	}, sensor.Fabric, "peers are the site's other machines, ordered by name")
+	}, sensor.EventFabric, "peers are the site's other machines, ordered by name")
 
 	// The south machine is alone in its site, so it forms its own fabric and
 	// never meets the north machines.
 	south := machineByName(t, plan, "south-node")
-	require.Empty(t, south.Fabric.Peers)
+	require.Empty(t, south.EventFabric.Peers)
 }
 
-// TestBuildFabricOrderIsIndependentOfDeclarationOrder checks the derived
+// TestBuildEventFabricOrderIsIndependentOfDeclarationOrder checks the derived
 // topology is a function of the machines, not of how the blueprint was authored.
-func TestBuildFabricOrderIsIndependentOfDeclarationOrder(t *testing.T) {
+func TestBuildEventFabricOrderIsIndependentOfDeclarationOrder(t *testing.T) {
 	authored, err := resolve.Build(twoSiteProject(), "acme-opdl")
 	require.NoError(t, err)
 
@@ -124,8 +124,8 @@ func TestBuildFabricOrderIsIndependentOfDeclarationOrder(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t,
-		machineByName(t, authored, "sensor").Fabric,
-		machineByName(t, shuffled, "sensor").Fabric)
+		machineByName(t, authored, "sensor").EventFabric,
+		machineByName(t, shuffled, "sensor").EventFabric)
 }
 
 func TestBuildValidatesDescriptors(t *testing.T) {

@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +71,129 @@ func machineBinary(outDir, project, machine string) string {
 	return filepath.Join(outDir, project, scenarioSite, machine, name)
 }
 
+// sockets are one machine's reserved addresses and its journal storage.
+//
+// A deployment derives all of these from the machine's own IP on fixed ports.
+// A scenario cannot: several machines share one host, and a developer's machine
+// may already be using those ports. So the harness reserves ephemeral ports and
+// hands them to the platform as runtime overrides, which move sockets and
+// nothing else. Which machine a process is remains what it was built with.
+type sockets struct {
+	api     string
+	client  string
+	cluster string
+	monitor string
+	dataDir string
+}
+
+// site is the machines of one built project under a scenario's control.
+//
+// Every machine is prepared before any is started, because each one's
+// configuration names the others: the site's NATS nodes route to each other's
+// cluster addresses, and on one host those addresses are not the ones the
+// deployment derived. Preparing the site as a whole is what lets a scenario
+// start the machines in any order, or leave one deliberately absent.
+type site struct {
+	project  string
+	outDir   string
+	workDir  string
+	machines []*machine
+}
+
+// prepareSite builds nothing and starts nothing: it reserves each named
+// machine's sockets and storage, and writes each one a configuration that routes
+// to the others.
+func prepareSite(t *testing.T, outDir, workDir, project string, names ...string) *site {
+	t.Helper()
+	s := &site{project: project, outDir: outDir, workDir: workDir}
+
+	// Every address is reserved before any is released, so no two machines of the
+	// site are handed the same port.
+	addrs := freeAddresses(t, 4*len(names))
+	reserved := make([]sockets, len(names))
+	for i, name := range names {
+		reserved[i] = sockets{
+			api:     addrs[4*i],
+			client:  addrs[4*i+1],
+			cluster: addrs[4*i+2],
+			monitor: addrs[4*i+3],
+			dataDir: filepath.Join(workDir, "nats-"+name),
+		}
+	}
+
+	// The site's storage nodes are chosen by sorted machine name, and a scenario
+	// declares its machines in that order, so the first is the storage node of a
+	// site smaller than three machines. Only storage nodes run a server; the rest
+	// reach the journal as clients of theirs.
+	//
+	// The harness has to know which is which because it hands out the addresses.
+	// It derives that the same way the platform does rather than being told,
+	// so a scenario cannot quietly disagree with the deployment about who stores
+	// what.
+	storage := storageNodes(names)
+	servers := make([]string, 0, len(storage))
+	for _, i := range storage {
+		servers = append(servers, reserved[i].client)
+	}
+
+	for i, name := range names {
+		var routes []string
+		if slices.Contains(storage, i) {
+			routes = make([]string, 0, len(storage)-1)
+			for _, j := range storage {
+				if j != i {
+					routes = append(routes, reserved[j].cluster)
+				}
+			}
+		}
+		s.machines = append(s.machines, prepareMachine(t, s, name, reserved[i], routes, servers))
+	}
+	return s
+}
+
+// storageNodes returns the indexes of the machines that store the site journal,
+// mirroring the platform's own rule: one storage node for a site smaller than
+// three machines, the first three by sorted name otherwise.
+func storageNodes(names []string) []int {
+	sorted := slices.Sorted(slices.Values(names))
+	count := 1
+	if len(sorted) > 2 {
+		count = 3
+	}
+	indexes := make([]int, 0, count)
+	for _, name := range sorted[:min(count, len(sorted))] {
+		indexes = append(indexes, slices.Index(names, name))
+	}
+	return indexes
+}
+
+// machine returns one prepared machine of the site by name.
+func (s *site) machine(t *testing.T, name string) *machine {
+	t.Helper()
+	for _, m := range s.machines {
+		if m.name == name {
+			return m
+		}
+	}
+	require.FailNowf(t, "no such machine", "%s is not a machine of project %s", name, s.project)
+	return nil
+}
+
+// startAll starts every machine of the site in declaration order and waits for
+// each to serve.
+//
+// Order is not incidental. A site smaller than three machines runs JetStream on
+// one deterministic storage node, and a node that only routes to it cannot reach
+// a journal that is not running yet, so the storage node starts first. Machine
+// order in a blueprint is the sorted name order storage selection uses.
+func (s *site) startAll(ctx context.Context, t *testing.T) {
+	t.Helper()
+	for _, m := range s.machines {
+		m.start(ctx, t)
+		waitForAPI(ctx, t, m)
+	}
+}
+
 // machine is one platform process under a scenario's control: prepared, and
 // running once started.
 type machine struct {
@@ -77,8 +202,9 @@ type machine struct {
 	// url is the base URL of its registration API, known from the moment it is
 	// prepared, whether or not it is running.
 	url string
-	// eventsDir is the directory it records events into.
-	eventsDir string
+	// sockets are the addresses and storage it was configured with. A restart
+	// reuses them, which is what makes replaying its own journal possible.
+	sockets sockets
 
 	binaryPath string
 	configPath string
@@ -88,34 +214,64 @@ type machine struct {
 }
 
 // running reports whether the machine has been started.
-func (m *machine) running() bool { return m.cmd != nil }
+func (m *machine) running() bool { return m.cmd != nil && !m.stopped }
 
-// prepareMachine writes a configuration file for one built machine and reserves
-// its API address, without starting it. The scenario picks the API address and
-// events directory so several machines can run on one host without colliding.
+// prepareMachine writes a configuration file for one built machine without
+// starting it.
 //
 // Preparing and starting are separate so a scenario can know where a machine
 // will answer before it is running. That is what lets a machine be deliberately
 // offline for part of a scenario while something else is already configured to
 // call it, which is the only way to observe what the platform does about an
 // expected machine that is not there.
-func prepareMachine(t *testing.T, binaryPath, workDir, name string) *machine {
+func prepareMachine(t *testing.T, s *site, name string, reserved sockets, routes, servers []string) *machine {
 	t.Helper()
+	binaryPath := machineBinary(s.outDir, s.project, name)
 	require.FileExists(t, binaryPath)
 
-	addr := freeAddress(t)
-	eventsDir := filepath.Join(workDir, "events-"+name)
-	configPath := filepath.Join(workDir, "config-"+name+".toml")
-	require.NoError(t, os.WriteFile(configPath, eventsConfig(addr, eventsDir), 0o644))
+	configPath := filepath.Join(s.workDir, "config-"+name+".toml")
+	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved, routes, servers), 0o644))
 
 	return &machine{
 		name:       name,
-		url:        "http://" + addr,
-		eventsDir:  eventsDir,
+		url:        "http://" + reserved.api,
+		sockets:    reserved,
 		binaryPath: binaryPath,
 		configPath: configPath,
 		output:     &bytes.Buffer{},
 	}
+}
+
+// platformConfig renders a platform configuration that pins every socket the
+// machine binds or reaches, and places its journal storage under the scenario's
+// own directory.
+//
+// Every list is explicit, including an empty one: an omitted list would keep the
+// addresses the descriptor derived, which on one host are the wrong ones.
+func platformConfig(reserved sockets, routes, servers []string) []byte {
+	return fmt.Appendf(nil, `address = %q
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+[event_fabric.nats]
+data_dir = %q
+startup_timeout = "30s"
+catch_up_timeout = "30s"
+client_address = %q
+cluster_address = %q
+monitor_address = %q
+routes = [%s]
+servers = [%s]
+`, reserved.api, filepath.ToSlash(reserved.dataDir),
+		reserved.client, reserved.cluster, reserved.monitor, quoteList(routes), quoteList(servers))
+}
+
+// quoteList renders addresses as a TOML array body.
+func quoteList(addrs []string) string {
+	quoted := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		quoted = append(quoted, fmt.Sprintf("%q", addr))
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // start runs a prepared machine and registers its cleanup.
@@ -126,24 +282,28 @@ func (m *machine) start(ctx context.Context, t *testing.T) {
 	m.cmd.Stdout = m.output
 	m.cmd.Stderr = m.output
 	require.NoError(t, m.cmd.Start())
+	m.stopped = false
 	t.Cleanup(m.stop)
 }
 
-// startMachine prepares one built machine and starts it.
-func startMachine(ctx context.Context, t *testing.T, binaryPath, workDir, name string) *machine {
+// restart force-stops the machine and starts it again on the same sockets and
+// the same journal storage, which is what makes it the same node coming back
+// rather than a new one.
+func (m *machine) restart(ctx context.Context, t *testing.T) {
 	t.Helper()
-	m := prepareMachine(t, binaryPath, workDir, name)
+	m.stop()
+	m.cmd = nil
+	m.output = &bytes.Buffer{}
 	m.start(ctx, t)
-	return m
 }
 
 // stop force-stops the machine. A graceful child interrupt is not portable, and
-// a scenario reads the events it needs while the process is alive, so stopping
-// hard is enough for cleanup. The orderly shutdown a signal would cause, and the
-// order it releases dependencies in, are covered by the platform's in-process
-// lifecycle tests instead.
+// stopping hard is also the more demanding test: the journal is on disk, so a
+// node that is killed must still come back to the same state. The orderly
+// shutdown a signal would cause, and the order it releases dependencies in, are
+// covered by the platform's in-process lifecycle tests instead.
 func (m *machine) stop() {
-	if m.stopped || !m.running() {
+	if m.stopped || m.cmd == nil {
 		return
 	}
 	m.stopped = true
@@ -156,6 +316,17 @@ func (m *machine) stop() {
 // afterwards.
 func (m *machine) logs() string {
 	m.stop()
+	return m.output.String()
+}
+
+// wait blocks until the machine's process exits and returns its output. It is
+// for a scenario about a platform that is supposed to fail to start: waiting is
+// the assertion, and the output is why.
+func (m *machine) wait(t *testing.T) string {
+	t.Helper()
+	require.NotNil(t, m.cmd, "%s was never started", m.name)
+	_ = m.cmd.Wait()
+	m.stopped = true
 	return m.output.String()
 }
 
@@ -250,14 +421,41 @@ func (p *process) exited() bool {
 // rather than the complete output wait returns.
 func (p *process) logs() string { return p.output.String() }
 
-// freeAddress reserves an ephemeral loopback port, then releases it so a machine
-// can bind it. A brief race window is acceptable for a scenario.
-func freeAddress(t *testing.T) string {
+// freeAddresses reserves n distinct ephemeral loopback ports, then releases them
+// so the machines can bind them. Holding every listener until all are reserved
+// is what guarantees they are distinct; a brief race with the rest of the host
+// afterwards is acceptable for a scenario.
+func freeAddresses(t *testing.T, n int) []string {
 	t.Helper()
 	var listen net.ListenConfig
-	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := listener.Addr().String()
-	require.NoError(t, listener.Close())
-	return addr
+	listeners := make([]net.Listener, 0, n)
+	addrs := make([]string, 0, n)
+	for range n {
+		listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		listeners = append(listeners, listener)
+		addrs = append(addrs, listener.Addr().String())
+	}
+	for _, listener := range listeners {
+		require.NoError(t, listener.Close())
+	}
+	return addrs
+}
+
+// diagnose renders everything worth knowing when a scenario fails: what each
+// machine printed, whether it was running, and where it answers.
+//
+// It is only ever called on a failure path. A passing run says nothing, because
+// the point of a scenario that passes is that nobody has to read it.
+func diagnose(machines []*machine) string {
+	var b strings.Builder
+	for _, m := range machines {
+		state := "running"
+		if !m.running() {
+			state = "not started"
+		}
+		fmt.Fprintf(&b, "\n--- machine %s (%s, api %s, journal %s) ---\n%s",
+			m.name, state, m.url, m.sockets.dataDir, m.output.String())
+	}
+	return b.String()
 }

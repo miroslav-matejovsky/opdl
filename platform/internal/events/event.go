@@ -24,10 +24,9 @@ type Type string
 // Node is the identity of the platform process an event is about: which machine
 // of which deployment stated the fact.
 //
-// It is constant for a whole process run, so it is not part of the envelope. A
-// sink states it once for everything it stores, which is why Node is passed to
-// a sink rather than to the Recorder. A future sink that pools events from
-// several nodes must store it per record.
+// It is constant for a whole process run and is stamped onto every record. The
+// shared site journal pools events from several nodes, so identity must travel
+// with each fact.
 type Node struct {
 	// Project is the deployment project identifier.
 	Project string `json:"project"`
@@ -54,20 +53,46 @@ func NodeFromDescriptor(d deployment.Descriptor) Node {
 	}
 }
 
-// Meta is the envelope every event carries. The Recorder sets it; emitters
-// never populate it themselves.
+// DefaultSchemaVersion is the payload schema version stamped on an event that
+// does not declare its own. Every event carries a positive schema version so a
+// reader that replays a journal can refuse a payload it does not understand
+// instead of guessing at its meaning.
+const DefaultSchemaVersion = 1
+
+// Meta is the envelope every event carries. The Event Fabric publisher sets it;
+// emitters never populate it themselves.
+//
+// The envelope is self-describing: it identifies the occurrence, names the
+// deployment node that stated the fact, and versions the payload schema. It
+// deliberately carries no transport ordering. A shared journal orders events
+// when it accepts them, and that sequence belongs to the transport receipt and
+// delivery, not to the immutable fact. See eventfabric.Receipt and
+// eventfabric.Delivery.
 type Meta struct {
 	// ID is unique per occurrence and sorts in occurrence order.
 	ID string `json:"id"`
 	// Type is the event kind.
 	Type Type `json:"type"`
-	// Sequence is a monotonic counter within one process run. It restarts on
-	// every run, by design, and orders events recorded within one timestamp.
-	Sequence uint64 `json:"sequence"`
+	// SchemaVersion is the version of the payload schema Type encodes. It is
+	// positive on every record and lets a reader reject an unknown encoding.
+	SchemaVersion int `json:"schema_version"`
 	// OccurredAt is when the fact happened, in UTC.
 	OccurredAt time.Time `json:"occurred_at"`
 	// Source is the emitting subsystem.
 	Source string `json:"source"`
+	// Node is the deployment identity of the process that stated the fact. It is
+	// on every record, not only in a per-node file name, so a shared journal that
+	// pools every node's events keeps each fact attributed to its origin.
+	Node Node `json:"node"`
+	// CausationID is the ID of the event whose handling produced this one, empty
+	// for an event that begins a chain. It lets a reader follow a reaction back
+	// to its cause. The Event Fabric sets it from the delivery a handler is
+	// processing; the plain recorder leaves it empty.
+	CausationID string `json:"causation_id,omitempty"`
+	// CorrelationID groups every event of one logical workflow, empty when a
+	// record starts or belongs to no such workflow. It flows unchanged from a
+	// cause onto its consequences.
+	CorrelationID string `json:"correlation_id,omitempty"`
 	// Tags are optional sorted, duplicate-free markers, omitted when empty.
 	Tags []string `json:"tags,omitempty"`
 }
@@ -87,16 +112,24 @@ type Event interface {
 }
 
 // Tagged is the optional interface an Event implements when it carries tags,
-// typically TagWarning. The Recorder normalizes whatever it returns; an event
-// that does not implement Tagged records no tags.
+// typically TagWarning. Envelope stamping normalizes whatever it returns; an
+// event that does not implement Tagged records no tags.
 type Tagged interface {
 	// Tags returns the markers to stamp onto the event, in any order.
 	Tags() []string
 }
 
+// Versioned is the optional interface an Event implements to declare the schema
+// version of its payload. An event that does not implement it records
+// DefaultSchemaVersion. An event that evolves its payload increments this so a
+// reader can tell one encoding from another.
+type Versioned interface {
+	// SchemaVersion returns the positive version of the event's payload schema.
+	SchemaVersion() int
+}
+
 // Record is the stored form of an event: the envelope plus the payload as raw
-// JSON. It marshals to exactly one line in a JSONL sink. Meta is embedded, so
-// its fields sit at the top level next to data.
+// JSON. Meta is embedded, so its fields sit at the top level next to data.
 type Record struct {
 	Meta
 	// Data is the event payload encoded as JSON.
@@ -112,6 +145,22 @@ func newRecord(meta Meta, event Event) (Record, error) {
 	return Record{Meta: meta, Data: data}, nil
 }
 
+// StampRecord builds the stored record for event as of occurredAt, stamped with
+// id and node. It is the one place an event's envelope is constructed for the
+// Event Fabric publisher. It does not set the causal links; a publisher that reacts
+// to a delivery sets those from the delivery it is handling.
+func StampRecord(node Node, id string, occurredAt time.Time, event Event) (Record, error) {
+	return newRecord(Meta{
+		ID:            id,
+		Type:          event.EventType(),
+		SchemaVersion: eventSchemaVersion(event),
+		OccurredAt:    occurredAt.UTC(),
+		Source:        event.Source(),
+		Node:          node,
+		Tags:          eventTags(event),
+	}, event)
+}
+
 // eventTags returns the normalized tags event declares, or nil when it declares
 // none.
 func eventTags(event Event) []string {
@@ -120,6 +169,21 @@ func eventTags(event Event) []string {
 		return nil
 	}
 	return normalizeTags(tagged.Tags())
+}
+
+// eventSchemaVersion returns the payload schema version event declares, or
+// DefaultSchemaVersion when it declares none. A non-positive declared version is
+// treated as the default: a version is metadata a reader trusts, so an
+// unusable one is corrected rather than stored.
+func eventSchemaVersion(event Event) int {
+	versioned, ok := event.(Versioned)
+	if !ok {
+		return DefaultSchemaVersion
+	}
+	if version := versioned.SchemaVersion(); version > 0 {
+		return version
+	}
+	return DefaultSchemaVersion
 }
 
 // normalizeTags returns tags trimmed, deduplicated, and sorted, so the same set

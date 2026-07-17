@@ -52,34 +52,34 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 			Chaos:      p.Features.Chaos,
 			Redundancy: p.Features.Redundancy,
 		},
-		Fabric: fabric(site, machine),
+		EventFabric: eventFabric(site, machine),
 	}
 }
 
-// fabric derives one machine's fabric topology from its site. The fabric spans
-// exactly one site, so the peers are that site's other machines and nothing
-// else: a machine in another site, environment, or project is never a peer and
-// forms its own fabric.
+// eventFabric derives one machine's Event Fabric topology from its site. The
+// fabric spans exactly one site, so the peers are that site's other machines and
+// nothing else: a machine in another site, environment, or project is never a
+// peer and forms its own fabric.
 //
 // Peers are ordered by machine name rather than by declaration, so the same
 // topology always derives the same descriptor no matter how the blueprint was
 // authored.
-func fabric(site blueprint.Site, machine blueprint.Machine) deployment.Fabric {
-	peers := make([]deployment.FabricPeer, 0, len(site.Machines))
+func eventFabric(site blueprint.Site, machine blueprint.Machine) deployment.EventFabric {
+	peers := make([]deployment.EventFabricPeer, 0, len(site.Machines))
 	for _, peer := range site.Machines {
 		if peer.Name == machine.Name {
 			continue
 		}
-		peers = append(peers, deployment.FabricPeer{
+		peers = append(peers, deployment.EventFabricPeer{
 			Site:    site.Name,
 			Machine: peer.Name,
 			IP:      peer.IP,
 		})
 	}
-	slices.SortFunc(peers, func(a, b deployment.FabricPeer) int {
+	slices.SortFunc(peers, func(a, b deployment.EventFabricPeer) int {
 		return strings.Compare(a.Machine, b.Machine)
 	})
-	return deployment.Fabric{
+	return deployment.EventFabric{
 		Peers: peers,
 	}
 }

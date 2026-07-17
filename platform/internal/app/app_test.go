@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,14 +13,19 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/embedded"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/jsonl"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/fabric"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/fabric/memory"
-	fabricolric "github.com/miroslav-matejovsky/opdl/platform/internal/fabric/olric"
+	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
+
+// This file covers what runtime composition owns: deriving the Event Fabric's
+// configuration from the deployment, placing a node's storage, reading the
+// trusted topology, and the startup and shutdown ordering.
+//
+// The composition tests run a real embedded NATS server, so they are integration
+// tests and stay out of the fast gate. Everything derivable without a socket is
+// tested without one.
 
 var testDescriptor = deployment.Descriptor{
 	Platform:    "opdl",
@@ -31,33 +35,8 @@ var testDescriptor = deployment.Descriptor{
 	Machine:     "node",
 	Role:        "all-in-one",
 	IP:          "127.0.0.1",
-	Fabric:      deployment.Fabric{},
-}
-
-// testFabric is an in-process fabric. The lifecycle these tests check is the
-// runtime's own ordering, which is the same whichever backend is composed, so
-// they use the memory adapter and stay in the fast gate. The real backend's
-// lifecycle is covered by the olric adapter's own tests.
-func testFabric() fabric.Fabric {
-	return memory.Open(testDescriptor)
-}
-
-// testLoop is a reconciler loop that is not running. serve stops it like any
-// other, which is all these tests need: what they check is the runtime's
-// teardown ordering, and reconciliation's own behavior is the registration
-// package's to prove.
-func testLoop() *reconcilerLoop {
-	done := make(chan struct{})
-	close(done)
-	return &reconcilerLoop{cancel: func() {}, done: done}
-}
-
-// probeEvent is a real domain event, so these tests exercise the recorder the
-// runtime actually composes rather than a double.
-func probeEvent() events.Event {
-	return registration.Requested{
-		UnitType: 1, UnitID: 2, UnitTypeNameAdvertised: "Worker", Machine: "node", IP: "127.0.0.1",
-	}
+	Services:    []string{"core-services"},
+	EventFabric: deployment.EventFabric{},
 }
 
 // freeAddress reserves an ephemeral loopback port, then releases it so the
@@ -94,16 +73,99 @@ func get(ctx context.Context, addr string) bool {
 	return true
 }
 
-func TestServeStopsServerAndClosesRecorderOnSignal(t *testing.T) {
+// writeConfig writes a loopback platform configuration whose Event Fabric binds
+// free ports and stores its journal under the test's own directory, so several
+// tests can run at once without colliding.
+func writeConfig(t *testing.T, dir string) string {
+	t.Helper()
+	client, cluster, monitor := freeAddress(t), freeAddress(t), freeAddress(t)
+	path := filepath.Join(dir, "config.toml")
+	contents := fmt.Sprintf(`address = %q
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+[event_fabric.nats]
+data_dir = %q
+startup_timeout = "30s"
+catch_up_timeout = "30s"
+client_address = %q
+cluster_address = %q
+monitor_address = %q
+`, freeAddress(t), filepath.ToSlash(filepath.Join(dir, "nats")), client, cluster, monitor)
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
+	return path
+}
+
+// embeddedDescriptor is the identity this test binary was compiled with. A
+// platform's identity is not configurable, so a composition test reads it rather
+// than choosing it.
+func embeddedDescriptor(t *testing.T) deployment.Descriptor {
+	t.Helper()
+	d, err := embedded.Deployment()
+	require.NoError(t, err)
+	return d
+}
+
+// openTestSite composes a real Event Fabric on loopback and returns it ready to
+// serve, as Run would. It skips in the fast gate: a site is not a site without a
+// journal, and a journal means a server and a disk.
+func openTestSite(t *testing.T) *site {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+
+	s, err := open(t.Context(), cfg.Descriptor(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
+	return s
+}
+
+// TestOpenIsReadyBeforeItReturns checks the promise the startup order exists
+// for: a returned site has already caught its projection up to the journal and
+// stated its readiness, so the first request cannot arrive before the node has
+// seen the site's history.
+func TestOpenIsReadyBeforeItReturns(t *testing.T) {
+	s := openTestSite(t)
+
+	require.True(t, s.ready, "a site that returned from open has announced it is ready")
+	state, err := s.fabric.State(t.Context())
+	require.NoError(t, err)
+	require.True(t, state.Connected)
+	require.True(t, state.CaughtUp, "the projection has applied everything the journal held")
+	require.Positive(t, state.HighWater, "the node's own ready event is in the journal")
+	require.GreaterOrEqual(t, s.projection.Sequence(), state.HighWater,
+		"the node applied its own readiness before it returned")
+}
+
+// TestOpenStatesReadyIntoTheJournal checks readiness is a fact in the site's
+// history rather than a log line: it names the node's transport, journal, and
+// storage role, and reports the sequence the node had caught up to.
+func TestOpenStatesReadyIntoTheJournal(t *testing.T) {
+	s := openTestSite(t)
+
+	// The node names itself from the descriptor it was compiled with, which for a
+	// test binary is the neutral mock the builder stages over.
+	info := s.fabric.Info()
+	require.Equal(t, natsfabric.Name, info.Adapter)
+	require.Equal(t, embeddedDescriptor(t).Machine, info.Server)
+	require.NotEmpty(t, info.Journal)
+	require.True(t, info.HostsStorage, "the only machine of a one-machine site stores its journal")
+	require.Equal(t, 1, info.Replicas)
+}
+
+// TestSiteServesAndReleasesOnSignal checks the whole ordered lifecycle: the
+// server answers, an interrupt stops it, and the site releases everything it
+// composed without reporting a failure. An orderly shutdown is not an error.
+func TestSiteServesAndReleasesOnSignal(t *testing.T) {
+	s := openTestSite(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	dir := t.TempDir()
-	rec, err := newRecorder(testDescriptor, dir)
-	require.NoError(t, err)
 	addr := freeAddress(t)
 
 	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), testFabric(), rec, 10*time.Second) }()
+	go func() { stopped <- serve(ctx, newTestServer(addr), s, 10*time.Second) }()
 	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
 		"server never became reachable")
 
@@ -112,20 +174,17 @@ func TestServeStopsServerAndClosesRecorderOnSignal(t *testing.T) {
 	select {
 	case err := <-stopped:
 		require.NoError(t, err, "an orderly shutdown is not an error")
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("serve did not return after its context was canceled")
 	}
-
 	require.False(t, get(t.Context(), addr), "server still accepts requests after shutdown")
-	// The sink is closed, so a late event is reported rather than dropped.
-	err = rec.Record(t.Context(), probeEvent())
-	require.ErrorContains(t, err, "append to closed events file")
 }
 
-func TestServeClosesRecorderWhenServerCannotStart(t *testing.T) {
-	dir := t.TempDir()
-	rec, err := newRecorder(testDescriptor, dir)
-	require.NoError(t, err)
+// TestServeReleasesTheSiteWhenTheServerCannotStart checks the failure path
+// releases what startup composed: a platform that cannot listen must not leave a
+// NATS server and its store running behind it.
+func TestServeReleasesTheSiteWhenTheServerCannotStart(t *testing.T) {
+	s := openTestSite(t)
 
 	// Hold the address so ListenAndServe fails immediately.
 	var listen net.ListenConfig
@@ -133,195 +192,150 @@ func TestServeClosesRecorderWhenServerCannotStart(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = listener.Close() }()
 
-	err = serve(t.Context(), newTestServer(listener.Addr().String()), testLoop(), testFabric(), rec, 10*time.Second)
+	err = serve(t.Context(), newTestServer(listener.Addr().String()), s, 10*time.Second)
 	require.ErrorContains(t, err, "serve HTTP", "a server that cannot start must report why")
 
-	// Dependencies are released even on the failure path.
-	require.ErrorContains(t,
-		rec.Record(t.Context(), probeEvent()),
-		"append to closed events file")
+	// The transport really is released, not just reported as released.
+	_, err = s.fabric.HighWater(t.Context())
+	require.Error(t, err, "the fabric is closed even on the failure path")
 }
 
-func TestServeReportsShutdownAndCloseFailuresTogether(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	failing := failingRecorder{err: errors.New("sink is gone")}
-	addr := freeAddress(t)
-
-	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), testFabric(), failing, 10*time.Second) }()
-	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
-		"server never became reachable")
-	cancel()
-
-	select {
-	case err := <-stopped:
-		require.ErrorContains(t, err, "close event recorder")
-		require.ErrorContains(t, err, "sink is gone", "the sink's own error is preserved")
-	case <-time.After(10 * time.Second):
-		t.Fatal("serve did not return after its context was canceled")
-	}
+// TestCloseIsIdempotent checks a site can be released twice. serve releases on
+// every path, and a test or a caller that also releases must not turn an orderly
+// shutdown into an error.
+func TestCloseIsIdempotent(t *testing.T) {
+	s := openTestSite(t)
+	require.NoError(t, s.close(t.Context()))
+	require.NoError(t, s.close(t.Context()), "closing an already closed site is not a failure")
 }
 
-// failingRecorder accepts every event and fails to close, so a test can check
-// the runtime reports a sink it could not release.
-type failingRecorder struct{ err error }
-
-func (failingRecorder) Record(context.Context, events.Event) error { return nil }
-
-func (r failingRecorder) Close() error { return r.err }
-
-func TestNewRecorderDisabledWithoutEventsDir(t *testing.T) {
-	rec, err := newRecorder(testDescriptor, "")
-	require.NoError(t, err)
-	require.Equal(t, events.NopRecorder{}, rec)
-	require.NoError(t, rec.Record(t.Context(), probeEvent()))
-	require.NoError(t, rec.Close())
-}
-
-// TestNewRecorderNamesTheFileAfterThisMachine checks the runtime hands the sink
-// its own compiled-in identity: the events land in a file named after the
-// descriptor, and the records themselves carry no node.
-func TestNewRecorderNamesTheFileAfterThisMachine(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "events")
-	rec, err := newRecorder(testDescriptor, dir)
-	require.NoError(t, err)
-	defer func() { _ = rec.Close() }()
-
-	require.NoError(t, rec.Record(t.Context(), probeEvent()))
-
-	entries, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
-	require.NoError(t, err)
-	require.Equal(t, []string{
-		filepath.Join(dir, "events-scenario-development-local-node-all-in-one.jsonl"),
-	}, entries)
-	require.Equal(t,
-		jsonl.FileName(events.NodeFromDescriptor(testDescriptor)),
-		filepath.Base(entries[0]))
-
-	data, err := os.ReadFile(entries[0])
-	require.NoError(t, err)
-	require.Contains(t, string(data), `"type":"platform.registration.requested"`)
-	require.NotContains(t, string(data), `"node":`, "the node is stated by the file name, not on every record")
-}
-
-func TestNewRecorderRejectsUnusableEventsDirAtStartup(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "not-a-dir")
-	require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
-
-	_, err := newRecorder(testDescriptor, path)
-	require.ErrorContains(t, err, "event sink")
-	require.ErrorContains(t, err, path)
-}
-
-// TestOlricConfigDerivesFromDescriptorAndAppliesOverrides pins the precedence
-// rule: the deployment decides, and the configuration file may move sockets.
-func TestOlricConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
+// TestNatsConfigDerivesFromDescriptorAndAppliesOverrides pins the precedence
+// rule: the deployment decides, and the configuration file may move sockets and
+// place storage.
+func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	descriptor := deployment.Descriptor{
-		Site:    "north",
-		Machine: "node-a",
-		IP:      "10.0.1.10",
-		Fabric: deployment.Fabric{
-			Peers: []deployment.FabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
+		Project: "customer-a", Environment: "production",
+		Site: "north", Machine: "node-a", IP: "10.0.1.10",
+		EventFabric: deployment.EventFabric{
+			Peers: []deployment.EventFabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
 		},
 	}
+	settings := func(t *testing.T, nats string) *config.Config {
+		t.Helper()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.toml")
+		contents := "address = \"127.0.0.1:8080\"\nread_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\n[event_fabric.nats]\n" + nats
+		require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
+		cfg, err := config.Load(path)
+		require.NoError(t, err)
+		return cfg
+	}
+	const required = "data_dir = \"/var/lib/opdl\"\nstartup_timeout = \"45s\"\ncatch_up_timeout = \"25s\"\n"
 
 	t.Run("no overrides uses the deployment", func(t *testing.T) {
-		cfg, err := olricConfig(descriptor, config.FabricOlric{})
+		cfg, err := natsConfig(descriptor, settings(t, required))
 		require.NoError(t, err)
-		require.Equal(t, "10.0.1.10:3320", cfg.ClientAddress)
-		require.Equal(t, "10.0.1.10:3322", cfg.MemberlistAddress)
-		require.Equal(t, []string{"10.0.1.11:3322"}, cfg.Join)
-		require.Equal(t, fabricolric.DefaultStartTimeout, cfg.StartTimeout)
-		require.Equal(t, 10*time.Second, cfg.ShutdownGrace)
+		require.Equal(t, "10.0.1.10:4222", cfg.ClientAddress)
+		require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress)
+		require.Equal(t, []string{"10.0.1.10:4222"}, cfg.Servers,
+			"node-a is the site's only storage node, so it reaches the journal on its own server")
+		require.Empty(t, cfg.Routes, "the site's only server has nobody to cluster with")
+		require.Equal(t, 45*time.Second, cfg.StartupTimeout)
+		require.Equal(t, 25*time.Second, cfg.CatchUpTimeout)
+		require.Equal(t, 11*time.Second, cfg.ShutdownTimeout, "the fabric closes within the runtime's own bound")
 	})
 
 	t.Run("overrides move sockets", func(t *testing.T) {
-		cfg, err := olricConfig(descriptor, config.FabricOlric{
-			ClientAddress:     "127.0.0.1:4001",
-			MemberlistAddress: "127.0.0.1:4002",
-			Join:              []string{"127.0.0.1:4102"},
-			StartTimeout:      "45s",
-			ShutdownGrace:     "15s",
-		})
+		cfg, err := natsConfig(descriptor, settings(t, required+`client_address = "127.0.0.1:4001"
+cluster_address = "127.0.0.1:4002"
+monitor_address = "127.0.0.1:4003"
+routes = ["127.0.0.1:4102"]
+servers = ["127.0.0.1:4001"]
+`))
 		require.NoError(t, err)
 		require.Equal(t, "127.0.0.1:4001", cfg.ClientAddress)
-		require.Equal(t, "127.0.0.1:4002", cfg.MemberlistAddress)
-		require.Equal(t, []string{"127.0.0.1:4102"}, cfg.Join)
-		require.Equal(t, 45*time.Second, cfg.StartTimeout)
-		require.Equal(t, 15*time.Second, cfg.ShutdownGrace)
+		require.Equal(t, "127.0.0.1:4002", cfg.ClusterAddress)
+		require.Equal(t, "127.0.0.1:4003", cfg.MonitorAddress)
+		require.Equal(t, []string{"127.0.0.1:4102"}, cfg.Routes)
+		require.Equal(t, []string{"127.0.0.1:4001"}, cfg.Servers)
 	})
 
 	t.Run("a partial override keeps the rest of the deployment", func(t *testing.T) {
-		cfg, err := olricConfig(descriptor, config.FabricOlric{ClientAddress: "127.0.0.1:4001"})
+		cfg, err := natsConfig(descriptor, settings(t, required+"client_address = \"127.0.0.1:4001\"\n"))
 		require.NoError(t, err)
 		require.Equal(t, "127.0.0.1:4001", cfg.ClientAddress)
-		require.Equal(t, "10.0.1.10:3322", cfg.MemberlistAddress, "an absent override is not a blank")
-		require.Equal(t, []string{"10.0.1.11:3322"}, cfg.Join)
+		require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress, "an absent override is not a blank")
+		require.Equal(t, "127.0.0.1:8222", cfg.MonitorAddress)
 	})
 
-	t.Run("an explicit empty join list seeds from nobody", func(t *testing.T) {
-		cfg, err := olricConfig(descriptor, config.FabricOlric{Join: []string{}})
+	t.Run("a storage node always reaches the journal on its own server", func(t *testing.T) {
+		// node-a stores the site journal, so where it connects follows where its
+		// own server listens. It is not a second setting that could disagree.
+		cfg, err := natsConfig(descriptor, settings(t,
+			required+"client_address = \"127.0.0.1:4001\"\nservers = [\"10.9.9.9:4222\"]\n"))
 		require.NoError(t, err)
-		require.Empty(t, cfg.Join, "an explicit empty list is a deliberate override")
+		require.Equal(t, []string{"127.0.0.1:4001"}, cfg.Servers,
+			"a storage node cannot be configured to run one journal and talk to another")
 	})
 
-	t.Run("an unparsable start timeout is reported", func(t *testing.T) {
-		_, err := olricConfig(descriptor, config.FabricOlric{StartTimeout: "soon"})
-		require.ErrorContains(t, err, `start timeout "soon"`)
+	t.Run("storage and replicas come from the site, not the file", func(t *testing.T) {
+		cfg, err := natsConfig(descriptor, settings(t, required))
+		require.NoError(t, err)
+		require.True(t, cfg.HostsStorage, "node-a sorts first in a two-machine site")
+		require.Equal(t, 1, cfg.Replicas, "a site smaller than three machines runs one replica")
 	})
 
-	t.Run("an unparsable shutdown grace is reported", func(t *testing.T) {
-		_, err := olricConfig(descriptor, config.FabricOlric{ShutdownGrace: "soon"})
-		require.ErrorContains(t, err, `shutdown grace "soon"`)
+	t.Run("credentials come from their own file", func(t *testing.T) {
+		dir := t.TempDir()
+		secrets := filepath.Join(dir, "creds.toml")
+		require.NoError(t, os.WriteFile(secrets, []byte("username = \"opdl\"\npassword = \"s3cret\"\n"), 0o600))
+		cfg, err := natsConfig(descriptor, settings(t, required+fmt.Sprintf("credentials_file = %q\n", filepath.ToSlash(secrets))))
+		require.NoError(t, err)
+		require.Equal(t, "opdl", cfg.Username)
+		require.Equal(t, "s3cret", cfg.Password)
 	})
 }
 
-// TestStopFabricRecordsStoppedBeforeTheSinkCloses checks the shutdown order the
-// runtime promises: the fabric is closed and says so while the sink can still
-// take the event.
-func TestStopFabricRecordsStoppedBeforeTheSinkCloses(t *testing.T) {
-	dir := t.TempDir()
-	rec, err := newRecorder(testDescriptor, dir)
-	require.NoError(t, err)
-	member := testFabric()
+// TestNodeDataDirIsNamedAfterTheMachine checks two machines sharing one
+// configured data directory never share a store. A JetStream store carries a
+// server's identity, so two nodes in one directory would claim each other's
+// journal.
+func TestNodeDataDirIsNamedAfterTheMachine(t *testing.T) {
+	dataDir := t.TempDir()
+	nodeA := nodeDataDir(dataDir, deployment.Descriptor{
+		Project: "customer-a", Environment: "production", Site: "north", Machine: "node-a",
+	})
+	nodeB := nodeDataDir(dataDir, deployment.Descriptor{
+		Project: "customer-a", Environment: "production", Site: "north", Machine: "node-b",
+	})
+	require.Equal(t, filepath.Join(dataDir, "customer-a-production-north-node-a"), nodeA)
+	require.NotEqual(t, nodeA, nodeB, "two machines of one site never share a store")
 
-	require.NoError(t, stopFabric(t.Context(), member, rec, 10*time.Second))
-	require.NoError(t, rec.Close())
-
-	data, err := os.ReadFile(filepath.Join(dir, jsonl.FileName(events.NodeFromDescriptor(testDescriptor))))
-	require.NoError(t, err)
-	require.Contains(t, string(data), `"type":"platform.fabric.stopped"`)
-	require.Contains(t, string(data), `"adapter":"memory"`, "the event names the adapter that was composed")
-
-	// The fabric really is closed, not just reported as closed.
-	_, err = member.Collection("late")
-	require.ErrorIs(t, err, fabric.ErrClosed)
+	otherSite := nodeDataDir(dataDir, deployment.Descriptor{
+		Project: "customer-a", Environment: "production", Site: "south", Machine: "node-a",
+	})
+	require.NotEqual(t, nodeA, otherSite, "the same machine name in another site is another node")
 }
 
-// TestServeRecordsFabricStoppedOnShutdown checks the whole ordered teardown: the
-// server stops, the fabric reports it stopped, and only then does the sink close.
-func TestServeRecordsFabricStoppedOnShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	dir := t.TempDir()
-	rec, err := newRecorder(testDescriptor, dir)
-	require.NoError(t, err)
-	addr := freeAddress(t)
-	member := testFabric()
+// TestTopologyExpectsEverySiteMachineIncludingItself checks the trusted
+// registration topology is the descriptor's static membership. Acceptance needs
+// every expected machine, so the set must never be "who is reachable".
+func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
+	self, expected := topology(deployment.Descriptor{
+		Site: "north", Machine: "node-a", IP: "10.0.1.10",
+		EventFabric: deployment.EventFabric{
+			Peers: []deployment.EventFabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
+		},
+	})
+	require.Equal(t, registration.Location{Machine: "node-a", IP: "10.0.1.10"}, self)
+	require.Equal(t, []registration.Location{
+		{Machine: "node-a", IP: "10.0.1.10"},
+		{Machine: "node-b", IP: "10.0.1.11"},
+	}, expected, "a machine confirms its own registrations too")
 
-	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), testLoop(), member, rec, 10*time.Second) }()
-	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
-		"server never became reachable")
-	cancel()
-	require.NoError(t, <-stopped)
-
-	data, err := os.ReadFile(filepath.Join(dir, jsonl.FileName(events.NodeFromDescriptor(testDescriptor))))
-	require.NoError(t, err)
-	require.Contains(t, string(data), `"type":"platform.fabric.stopped"`,
-		"the stopped event must reach the sink before it closes")
-	require.False(t, get(t.Context(), addr))
+	self, expected = topology(testDescriptor)
+	require.Equal(t, []registration.Location{self}, expected,
+		"a one-machine site expects only itself")
 }
 
 func TestRunReportsMissingConfigFlag(t *testing.T) {
@@ -334,22 +348,26 @@ func TestRunReportsUnusableConfigFile(t *testing.T) {
 	require.ErrorContains(t, Run([]string{"-config", path}), "invalid configuration file")
 }
 
-func TestRunReportsUnusableEventsDir(t *testing.T) {
+// TestRunReportsUnusableJournalStorage checks a node fails at startup rather
+// than when its first event needs writing. The journal is the site's history: a
+// platform that cannot store it must not start and pretend otherwise.
+func TestRunReportsUnusableJournalStorage(t *testing.T) {
 	dir := t.TempDir()
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
+
 	path := filepath.Join(dir, "config.toml")
 	contents := fmt.Sprintf(`address = "127.0.0.1:8080"
-events_dir = %q
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
-[registration]
-reconcile_interval = "1s"
-[fabric.olric]
-start_timeout = "30s"
-shutdown_grace = "10s"
-`, blocked)
+[event_fabric.nats]
+data_dir = %q
+startup_timeout = "30s"
+catch_up_timeout = "30s"
+`, filepath.ToSlash(blocked))
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 
-	require.ErrorContains(t, Run([]string{"-config", path}), "event sink")
+	err := Run([]string{"-config", path})
+	require.ErrorContains(t, err, "data directory")
+	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
 }

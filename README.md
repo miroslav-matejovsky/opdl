@@ -19,7 +19,7 @@ Start with the [documentation index](docs/README.md).
 | Area | Purpose |
 | --- | --- |
 | `builder` | Build one platform package per blueprint machine. |
-| `platform` | Run the registration API, fabric member, reconciler, and event recorder. |
+| `platform` | Run the registration API and the site event journal it projects from. |
 | `conformance-tests` | Regenerate API artifacts and verify shared contracts. |
 | `scenarios` | Run black-box tests against built binaries. |
 | `sdk-dotnet` | Generated .NET client and end-to-end tests. |

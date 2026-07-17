@@ -115,7 +115,7 @@ func TestPlatformOperationIDIsStable(t *testing.T) {
 	require.Equal(t, "registerUnit", doc.Paths["/registrations"]["post"].OperationID)
 	require.Equal(t, "listRegistrations", doc.Paths["/registrations"]["get"].OperationID)
 	require.Equal(t, "listRegistrationConflicts", doc.Paths["/registrations/conflicts"]["get"].OperationID)
-	require.Equal(t, "getRegistrationStatus", doc.Paths["/registrations/{unit_type}/{unit_id}/status"]["get"].OperationID)
+	require.Equal(t, "getRegistrationStatus", doc.Paths["/registrations/{proposal_id}"]["get"].OperationID)
 }
 
 // TestSchemaForStruct is a small unit test of the reflection-to-schema mapping in

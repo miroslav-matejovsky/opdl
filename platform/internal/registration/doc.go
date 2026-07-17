@@ -1,103 +1,65 @@
-// Package registration owns the registration use case: taking a client's
-// request to register a unit, deciding it across the machines of a site, and
-// projecting the result into the public API models.
+// Package registration owns the registration use case: proposals, per-node
+// decisions, site acceptance, and the conflict view. It is event-sourced. Every
+// fact is an ordered event in the site journal, and every answer is a
+// deterministic projection of those facts; nothing reads shared state, and no
+// node coordinates another.
 //
-// It has no HTTP or deployment-loading concerns. It is given a fabric and a
-// recorder; its identity, its expected membership, and the origin it stamps on a
-// request all come from the fabric's own local member, so a machine can only ever
-// answer as itself and a client cannot claim to be somewhere it is not.
+// It depends on the Event Fabric contract only. It publishes through a narrow
+// Publisher, folds deliveries through a Projector, and reacts through a Handler.
+// It never constructs a subject, stream, or consumer, and it does not know which
+// transport carries the journal.
 //
-// # Registration is a site-wide decision, not a local one
+// # The event flow
 //
-// A POST creates a proposal and nothing more. The request becomes a registration
-// only once every platform instance in the site's static deployment topology,
-// the origin included, has recorded acceptance of that exact proposal.
+// A registration is a site-wide decision expressed entirely as ordered events:
 //
-// That boundary is the whole point of the design. It is not a quorum and not
-// current live membership: the acceptance set comes from the deployment
-// descriptor, so an expected machine that is down keeps a request pending rather
-// than being dropped from the vote. There is no timeout, no expiry, and no
-// forced acceptance. A request can stay pending indefinitely, and that is the
-// promise being kept rather than a failure to keep one.
+//   - platform.registration.proposed: the origin proposes a registration after
+//     validating the HTTP input, the trusted origin identity, and the expected
+//     machine set. The first proposed event for a unit key in journal order
+//     claims that key.
+//   - platform.registration.confirmed: one expected node accepts the claiming
+//     proposal.
+//   - platform.registration.rejected: one expected node refuses a proposal, or a
+//     later proposal loses the key to an earlier one. Tagged as a warning.
+//   - platform.registration.accepted: the origin commits the registration once
+//     every expected node has confirmed the claiming proposal.
 //
-// # How it is put together
+// Confirmation is required from every expected machine, including the origin.
+// The expected set is the static descriptor's, not a quorum and not the
+// currently reachable members, so an expected machine that is offline keeps a
+// proposal pending indefinitely and says so.
 //
-//   - Service takes requests and answers questions. It decides nothing: a
-//     client's call must not be able to accept its own registration.
-//   - Reconciler is one instance's part in the decision. It answers for itself
-//     about every request in the site, and commits the ones this instance
-//     originated once the site has agreed. Every instance runs exactly one,
-//     nothing is delivered to it, and there is no leader.
-//   - store is the state on fabric collections shared by every machine of the
-//     site. It retains immutable proposals and repairable current views. See
-//     records.go for the storage vocabulary and keys.
+// # Identity, not occurrence
 //
-// # Contender model
+// A proposal is identified by its proposal ID: a hash of the versioned canonical
+// request fields, the trusted origin identity, and the ordered expected
+// machines. Two identical proposals share one ID and are the same claim, so a
+// retry is idempotent; any different proposal has a different ID and is a
+// separate contender. A decision is identified by a decision ID derived from the
+// proposal ID, the decision kind, and the deciding machine, so a node that
+// republishes its decision after redelivery collapses to the one decision it
+// already made, even after any transport deduplication window has expired.
 //
-// Olric Create is one-winner only while fabric membership is stable. A member
-// join can temporarily let a different proposal overwrite a current view, so a
-// registration must not use one successful Create as its only proof of a unique
-// claim. This package retains every distinct proposal under its fingerprint.
-// The reconciler then groups those contenders by unit key and derives one winner:
+// Occurrence time and journal position are transport metadata. They are never
+// part of a proposal or decision ID, so the same fact always hashes to the same
+// identity regardless of when or in what order it was delivered.
 //
-//   - An accepted proposal observed before any competitor is the incumbent and
-//     remains the winner.
-//   - If no contender is accepted, the earliest platform-observed request time
-//     wins.
-//   - Equal request times use the proposal fingerprint as a deterministic
-//     tie-break.
+// # Ordering and conflict
 //
-// The request time comes from the receiving platform machine. Machines do not
-// coordinate clocks, so "first" is best effort for a true cross-machine race;
-// this package makes no linearizable global first-writer claim. That trade-off is
-// deliberate for the site's static topology and low expected contention.
+// Order is the site journal order, delivered as eventfabric.Delivery.Sequence.
+// It is when the journal accepted an event, not when a client began its request.
+// The first proposed event for a key in that order permanently claims the key.
+// An identical later proposal is a retry; a different later proposal is a
+// rejected conflict contender. A node rejecting the claiming proposal marks that
+// proposal rejected but does not release the key: key release is a separate
+// future domain event, not implicit cleanup.
 //
-// Until all contenders are visible, a proposal can be pending or briefly appear
-// accepted. Once membership is stable and the contenders have been scanned, the
-// winning proposal is the site's registration and every loser is rejected with
-// reason registration_key_conflict. Reconciliation repairs current request and
-// accepted views to match that winner. A pass remains a correction: repeated,
-// overlapping, and restarted passes derive the same final state from retained
-// records. This corrects the known join limitation after membership stabilizes.
+// # Projection and coordination
 //
-// # Create-only
-//
-// Each proposal is immutable and is never removed or
-// altered. An identical repeat is an idempotent retry; a different proposal that
-// is already visible is refused with 409. During the membership-change window,
-// a different proposal can be accepted provisionally and is later rejected by
-// reconciliation. The key is site-local and never scoped by machine. Explicit
-// removal remains a later use case.
-//
-// Without a caller identity, a byte-for-byte identical second unit on one
-// machine is indistinguishable from a retry and is answered as one. That is an
-// explicit limitation of this phase: nothing in a request says who is asking.
-//
-// # Querying and reporting conflicts
-//
-// GET /registrations lists every retained proposal, including rejected losers.
-// GET /registrations/conflicts groups the contenders for one key and identifies
-// the winner and losers. It is a domain query rather
-// than a health endpoint: a resolved registration conflict does not make the
-// process unavailable. Notifications, acknowledgement, retention, and removal
-// are not part of this release.
-//
-// # What this package states
-//
-// The domain events are declared and listed in events.go, and each is recorded
-// at the transition that owns it, by the instance that owns that transition: a
-// first claim is requested, each instance's own acceptance is confirmed, the
-// origin's commit is accepted, an instance's refusal is rejected, and a refused
-// claim is conflict. Reconciliation can make a provisional transition visible before
-// reconciliation corrects it, so events are not the conflict-reporting
-// mechanism. The query API is authoritative once contenders have
-// converged. A recording failure surfaces to the caller as the operation's
-// error, and the store is not rolled back to match it.
-//
-// # Not in this phase
-//
-// State is in memory and is not replayed after a full-site shutdown. There is no
-// authentication, authorization, removal, lease, heartbeat, quorum, timeout, or
-// persistence. A site's fabric is its own: cross-site uniqueness is not
-// enforced, and is not a goal.
+// Projection is a pure, ordered, idempotent fold of these events into node-local
+// maps. Applying the whole journal from empty rebuilds the same views on every
+// node, and a redelivered event changes nothing. The reducers are exercised
+// directly in tests without any transport. CommandService publishes proposals,
+// QueryService reads only Projection, and Handler waits for projection progress
+// before publishing a deterministic confirmation, rejection, or acceptance.
 package registration

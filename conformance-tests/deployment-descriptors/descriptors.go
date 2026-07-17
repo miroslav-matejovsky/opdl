@@ -59,8 +59,8 @@ func checkRoundTrip() error {
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    builderdeployment.Features{Chaos: true, Redundancy: true},
-		Fabric: builderdeployment.Fabric{
-			Peers: []builderdeployment.FabricPeer{
+		EventFabric: builderdeployment.EventFabric{
+			Peers: []builderdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
 			},
 		},
@@ -86,8 +86,8 @@ func checkRoundTrip() error {
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    platformdeployment.Features{Chaos: true, Redundancy: true},
-		Fabric: platformdeployment.Fabric{
-			Peers: []platformdeployment.FabricPeer{
+		EventFabric: platformdeployment.EventFabric{
+			Peers: []platformdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
 			},
 		},

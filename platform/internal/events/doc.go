@@ -1,5 +1,5 @@
-// Package events is the platform's domain event mechanism: the envelope, the
-// recorder, and the sink contract. It owns no events of its own.
+// Package events is the platform's domain event mechanism: the envelope and its
+// stamping. It owns no events of its own.
 //
 // # Domain events, not logs
 //
@@ -31,8 +31,8 @@
 // keeping the two together is what stops the catalog from drifting away from
 // the behavior it claims to describe. Today that is:
 //
-//   - internal/registration: requested, confirmed, accepted, rejected, conflict.
-//   - internal/fabric: started, stopped.
+//   - internal/registration: proposed, confirmed, rejected, accepted.
+//   - internal/eventfabric: ready, stopping.
 //
 // A package declares an event by implementing Event: a small struct of payload
 // fields that knows its own Type and the Source subsystem it comes from. An
@@ -41,40 +41,43 @@
 //
 // # Envelope
 //
-// Emitters supply only the payload. The Recorder stamps the envelope (Meta) and
-// stores the two together as one Record:
+// Emitters supply only the payload. The Event Fabric publisher stamps the
+// envelope (Meta) and stores the two together as one Record:
 //
 //   - ID: unique per occurrence and time-ordered.
 //   - Type: the event's stable dotted kind.
-//   - Sequence: a monotonic counter within one process run. It restarts at 1 on
-//     every run, by design, and totally orders events within one timestamp.
+//   - SchemaVersion: the version of the payload schema, positive on every
+//     record. An event declares its own with the Versioned interface, otherwise
+//     it is DefaultSchemaVersion. It lets a reader that replays a journal reject
+//     a payload encoding it does not understand.
 //   - OccurredAt: when the fact happened, in UTC.
 //   - Source: the subsystem that emitted the event.
+//   - Node: the deployment identity of the process that stated the fact.
+//   - CausationID and CorrelationID: the causal links between events, set by the
+//     Event Fabric when a handler's reaction produces a new event and empty on
+//     an event the plain recorder stamps.
 //   - Tags: optional sorted, duplicate-free markers, omitted when empty.
 //
-// The envelope carries no node identity. Which process an event is about is a
-// Node, and it is constant for a whole process run, so a sink is free to state
-// it once instead of on every record: the jsonl sink names its file after the
-// node. A sink that pools events from several nodes must carry Node per record
-// instead.
+// The envelope deliberately carries no transport ordering. A shared journal
+// orders events when it accepts them; that sequence is a property of the
+// delivery, not of the immutable fact, and lives on the Event Fabric's receipt
+// and delivery rather than in the record.
+//
+// # Node identity is on every record
+//
+// Which process an event is about is a Node. It is constant for a whole process
+// run, so the Event Fabric is told this machine's Node once and stamps it onto
+// every record. Carrying it per record is what lets a shared journal pool the
+// events of every node in one ordered stream and still attribute each fact to
+// its origin.
 //
 // # Storage
 //
-// A Recorder stamps an event and appends it to a Sink. Recording is
-// synchronous: Record returns only once the sink has accepted and flushed the
-// record. A scenario that has read an HTTP response has therefore already been
-// able to observe every event that response produced. Package jsonl is the
-// file-backed Sink; NopRecorder discards everything and is used when no events
-// directory is configured.
+// This package does not store events. StampRecord turns an event into a
+// complete, self-describing record, and the Event Fabric appends it to the site
+// journal — synchronously, so a fact is retained before the operation that
+// caused it returns. The journal is the platform's only event storage.
 //
-// # Limitations
-//
-// Event delivery is best effort for this phase. A Record call that fails after
-// the emitting domain has already changed its state returns an error with
-// context; there is no rollback across a store and a sink, and the caller is
-// expected to surface the failure rather than retry. Recording holds a lock
-// across the sink write, so events are serialized against each other; the
-// volume this stage emits does not justify a queue. There is no publish or
-// subscribe side: events are recorded for readers outside the process, and
-// nothing in the platform reacts to them yet.
+// The obsolete JSONL sink and optional no-op recorder were removed. A running
+// service has exactly one event source: the retained site journal.
 package events

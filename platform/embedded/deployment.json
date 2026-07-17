@@ -13,7 +13,7 @@
     "chaos": false,
     "redundancy": false
   },
-  "fabric": {
+  "event_fabric": {
     "peers": []
   }
 }

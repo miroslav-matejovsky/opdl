@@ -26,27 +26,14 @@ namespace Opdl.Sdk.Client.Registrations
         }
         /// <summary>Gets an item from the Opdl.Sdk.Client.registrations.item collection</summary>
         /// <param name="position">Unique identifier of the item</param>
-        /// <returns>A <see cref="global::Opdl.Sdk.Client.Registrations.Item.WithUnit_typeItemRequestBuilder"/></returns>
-        public global::Opdl.Sdk.Client.Registrations.Item.WithUnit_typeItemRequestBuilder this[int position]
+        /// <returns>A <see cref="global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder"/></returns>
+        public global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder this[string position]
         {
             get
             {
                 var urlTplParams = new Dictionary<string, object>(PathParameters);
-                urlTplParams.Add("unit_type", position);
-                return new global::Opdl.Sdk.Client.Registrations.Item.WithUnit_typeItemRequestBuilder(urlTplParams, RequestAdapter);
-            }
-        }
-        /// <summary>Gets an item from the Opdl.Sdk.Client.registrations.item collection</summary>
-        /// <param name="position">Unique identifier of the item</param>
-        /// <returns>A <see cref="global::Opdl.Sdk.Client.Registrations.Item.WithUnit_typeItemRequestBuilder"/></returns>
-        [Obsolete("This indexer is deprecated and will be removed in the next major version. Use the one with the typed parameter instead.")]
-        public global::Opdl.Sdk.Client.Registrations.Item.WithUnit_typeItemRequestBuilder this[string position]
-        {
-            get
-            {
-                var urlTplParams = new Dictionary<string, object>(PathParameters);
-                if (!string.IsNullOrWhiteSpace(position)) urlTplParams.Add("unit_type", position);
-                return new global::Opdl.Sdk.Client.Registrations.Item.WithUnit_typeItemRequestBuilder(urlTplParams, RequestAdapter);
+                urlTplParams.Add("proposal_id", position);
+                return new global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder(urlTplParams, RequestAdapter);
             }
         }
         /// <summary>
@@ -66,12 +53,11 @@ namespace Opdl.Sdk.Client.Registrations
         {
         }
         /// <summary>
-        /// List registration requests
+        /// List registration proposals
         /// </summary>
         /// <returns>A List&lt;global::Opdl.Sdk.Client.Models.Registration&gt;</returns>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
-        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 500 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<List<global::Opdl.Sdk.Client.Models.Registration>?> GetAsync(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -82,29 +68,25 @@ namespace Opdl.Sdk.Client.Registrations
         {
 #endif
             var requestInfo = ToGetRequestInformation(requestConfiguration);
-            var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
-            {
-                { "500", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
-            };
-            var collectionResult = await RequestAdapter.SendCollectionAsync<global::Opdl.Sdk.Client.Models.Registration>(requestInfo, global::Opdl.Sdk.Client.Models.Registration.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
+            var collectionResult = await RequestAdapter.SendCollectionAsync<global::Opdl.Sdk.Client.Models.Registration>(requestInfo, global::Opdl.Sdk.Client.Models.Registration.CreateFromDiscriminatorValue, default, cancellationToken).ConfigureAwait(false);
             return collectionResult?.AsList();
         }
         /// <summary>
-        /// Request unit registration
+        /// Propose a unit registration
         /// </summary>
+        /// <returns>A <see cref="global::Opdl.Sdk.Client.Models.ProposalAccepted"/></returns>
         /// <param name="body">The request body</param>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
         /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 400 status code</exception>
-        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 409 status code</exception>
-        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 500 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 503 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
-        public async Task PostAsync(global::Opdl.Sdk.Client.Models.RegistrationRequest body, Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
+        public async Task<global::Opdl.Sdk.Client.Models.ProposalAccepted?> PostAsync(global::Opdl.Sdk.Client.Models.RegistrationRequest body, Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
         {
 #nullable restore
 #else
-        public async Task PostAsync(global::Opdl.Sdk.Client.Models.RegistrationRequest body, Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default, CancellationToken cancellationToken = default)
+        public async Task<global::Opdl.Sdk.Client.Models.ProposalAccepted> PostAsync(global::Opdl.Sdk.Client.Models.RegistrationRequest body, Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default, CancellationToken cancellationToken = default)
         {
 #endif
             if(ReferenceEquals(body, null)) throw new ArgumentNullException(nameof(body));
@@ -112,13 +94,12 @@ namespace Opdl.Sdk.Client.Registrations
             var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
             {
                 { "400", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
-                { "409", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
-                { "500", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
+                { "503", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
             };
-            await RequestAdapter.SendNoContentAsync(requestInfo, errorMapping, cancellationToken).ConfigureAwait(false);
+            return await RequestAdapter.SendAsync<global::Opdl.Sdk.Client.Models.ProposalAccepted>(requestInfo, global::Opdl.Sdk.Client.Models.ProposalAccepted.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// List registration requests
+        /// List registration proposals
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
@@ -137,7 +118,7 @@ namespace Opdl.Sdk.Client.Registrations
             return requestInfo;
         }
         /// <summary>
-        /// Request unit registration
+        /// Propose a unit registration
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
         /// <param name="body">The request body</param>

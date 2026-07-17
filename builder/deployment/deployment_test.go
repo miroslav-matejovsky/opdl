@@ -19,8 +19,8 @@ func validDescriptor() deployment.Descriptor {
 		IP:          "10.0.1.10",
 		Services:    []string{"sensor-services"},
 		Features:    deployment.Features{Chaos: true},
-		Fabric: deployment.Fabric{
-			Peers: []deployment.FabricPeer{
+		EventFabric: deployment.EventFabric{
+			Peers: []deployment.EventFabricPeer{
 				{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
 				{Site: "north", Machine: "historian", IP: "10.0.1.12"},
 			},
@@ -48,45 +48,45 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"no services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
 		{
 			"peer from another site",
-			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Site = "south" },
-			`fabric peer "gateway" is in site "south", not this machine's site "north"`,
+			func(d *deployment.Descriptor) { d.EventFabric.Peers[0].Site = "south" },
+			`event fabric peer "gateway" is in site "south", not this machine's site "north"`,
 		},
 		{
 			"machine lists itself as a peer",
-			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Machine = "sensor" },
-			`fabric peer "sensor" is duplicated or is this machine itself`,
+			func(d *deployment.Descriptor) { d.EventFabric.Peers[0].Machine = "sensor" },
+			`event fabric peer "sensor" is duplicated or is this machine itself`,
 		},
 		{
 			"duplicate peer",
-			func(d *deployment.Descriptor) { d.Fabric.Peers[1].Machine = "gateway" },
+			func(d *deployment.Descriptor) { d.EventFabric.Peers[1].Machine = "gateway" },
 			"is duplicated",
 		},
 		{
 			"peer with empty machine",
-			func(d *deployment.Descriptor) { d.Fabric.Peers[0].Machine = " " },
-			"fabric peer with empty machine",
+			func(d *deployment.Descriptor) { d.EventFabric.Peers[0].Machine = " " },
+			"event fabric peer with empty machine",
 		},
 		{
 			"peer with invalid ip",
-			func(d *deployment.Descriptor) { d.Fabric.Peers[0].IP = "nope" },
-			`fabric peer "gateway": ip "nope" is not a valid IP address`,
+			func(d *deployment.Descriptor) { d.EventFabric.Peers[0].IP = "nope" },
+			`event fabric peer "gateway": ip "nope" is not a valid IP address`,
 		},
 		{
 			"peer reusing this machine's ip",
-			func(d *deployment.Descriptor) { d.Fabric.Peers[0].IP = "10.0.1.10" },
+			func(d *deployment.Descriptor) { d.EventFabric.Peers[0].IP = "10.0.1.10" },
 			`ip "10.0.1.10" is already used by another member`,
 		},
 		{
 			"peers sharing an ip",
-			func(d *deployment.Descriptor) { d.Fabric.Peers[1].IP = "10.0.1.11" },
+			func(d *deployment.Descriptor) { d.EventFabric.Peers[1].IP = "10.0.1.11" },
 			`ip "10.0.1.11" is already used by another member`,
 		},
 		{
 			"peers out of order",
 			func(d *deployment.Descriptor) {
-				d.Fabric.Peers[0], d.Fabric.Peers[1] = d.Fabric.Peers[1], d.Fabric.Peers[0]
+				d.EventFabric.Peers[0], d.EventFabric.Peers[1] = d.EventFabric.Peers[1], d.EventFabric.Peers[0]
 			},
-			`fabric peers are not ordered by machine: "gateway" after "historian"`,
+			`event fabric peers are not ordered by machine: "gateway" after "historian"`,
 		},
 	}
 	for _, tc := range tests {
@@ -102,6 +102,6 @@ func TestDescriptorValidateFailures(t *testing.T) {
 // valid deployment: it forms a fabric with itself and no peers.
 func TestDescriptorValidateAcceptsOneMemberFabric(t *testing.T) {
 	d := validDescriptor()
-	d.Fabric.Peers = nil
+	d.EventFabric.Peers = nil
 	require.NoError(t, d.Validate())
 }

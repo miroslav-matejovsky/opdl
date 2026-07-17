@@ -18,11 +18,11 @@ import (
 type Config struct {
 	descriptor        deployment.Descriptor
 	address           string
-	eventsDir         string
 	readHeaderTimeout time.Duration
 	shutdownTimeout   time.Duration
-	fabric            Fabric
-	registration      Registration
+	eventFabric       EventFabric
+	username          string
+	password          string
 }
 
 // Load composes a Config from the platform's embedded deployment descriptor and
@@ -45,24 +45,31 @@ func Load(configPath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	if _, err := validateDuration("[registration] reconcile_interval", f.Registration.ReconcileInterval); err != nil {
+	if _, err := validateDuration("[event_fabric.nats] startup_timeout", f.EventFabric.Nats.StartupTimeout); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	if _, err := validateDuration("[fabric.olric] start_timeout", f.Fabric.Olric.StartTimeout); err != nil {
+	if _, err := validateDuration("[event_fabric.nats] catch_up_timeout", f.EventFabric.Nats.CatchUpTimeout); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	if _, err := validateDuration("[fabric.olric] shutdown_grace", f.Fabric.Olric.ShutdownGrace); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	return &Config{
+
+	cfg := &Config{
 		descriptor:        d,
 		address:           f.Address,
-		eventsDir:         f.EventsDir,
 		readHeaderTimeout: readHeaderTimeout,
 		shutdownTimeout:   shutdownTimeout,
-		fabric:            f.Fabric,
-		registration:      f.Registration,
-	}, nil
+		eventFabric:       f.EventFabric,
+	}
+	// Credentials are read here rather than by the adapter: composition owns
+	// files and secrets, and the adapter is handed values. A configured file that
+	// cannot be read is a startup failure, not a surprise when a listener opens.
+	if path := f.EventFabric.Nats.CredentialsFile; path != "" {
+		site, err := loadCredentials(path)
+		if err != nil {
+			return nil, fmt.Errorf("config: %w", err)
+		}
+		cfg.username, cfg.password = site.Username, site.Password
+	}
+	return cfg, nil
 }
 
 func validateDuration(name, s string) (time.Duration, error) {
@@ -99,26 +106,27 @@ func (c *Config) Descriptor() deployment.Descriptor { return c.descriptor }
 // Address returns the host:port the platform's API listens on.
 func (c *Config) Address() string { return c.address }
 
-// EventsDir returns the directory the platform records events into. An empty
-// string means event recording is disabled.
-func (c *Config) EventsDir() string { return c.eventsDir }
-
 // ReadHeaderTimeout returns the maximum duration allowed for reading HTTP request headers.
 func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout }
 
-// ShutdownTimeout returns the maximum duration allowed for graceful server and fabric shutdown.
+// ShutdownTimeout returns the maximum duration allowed for graceful server and
+// Event Fabric shutdown.
 func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
 
-// Fabric returns the fabric adapter overrides from the configuration file. Only
-// runtime composition reads it: it is how a site moves the fabric's sockets, and
-// no domain package has any business knowing a backend is configurable.
-func (c *Config) Fabric() Fabric { return c.fabric }
+// EventFabric returns the Event Fabric adapter settings from the configuration
+// file. Only runtime composition reads it: it is how a site places the journal's
+// storage and moves the transport's sockets, and no domain package has any
+// business knowing a transport is configurable.
+func (c *Config) EventFabric() EventFabric { return c.eventFabric }
 
-// Registration returns the registration settings from the configuration file.
-func (c *Config) Registration() Registration { return c.registration }
+// Credentials returns the site's NATS username and password, empty when no
+// credentials file is configured. They are held apart from EventFabric so a
+// secret is never carried in the struct the startup summary renders.
+func (c *Config) Credentials() (username, password string) { return c.username, c.password }
 
 // Summary renders the effective configuration as a human-readable block for
-// logging at startup.
+// logging at startup. It names the credentials file but never reads a secret
+// into the log.
 func (c *Config) Summary() string {
 	d := c.descriptor
 	var b strings.Builder
@@ -133,25 +141,18 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t redundancy=%t\n", d.Features.Chaos, d.Features.Redundancy)
-	fmt.Fprintf(&b, "    fabric       %s\n", fabricSummary(d.Fabric))
+	fmt.Fprintf(&b, "    event_fabric %s\n", eventFabricSummary(d.EventFabric))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    address             %s\n", c.address)
-	fmt.Fprintf(&b, "    events_dir          %s\n", eventsDirSummary(c.eventsDir))
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
-	fmt.Fprintf(&b, "    fabric.olric        %s\n", olricSummary(c.fabric.Olric))
-	fmt.Fprintf(&b, "    registration        %s", registrationSummary(c.registration))
+	fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
 	return b.String()
 }
 
-// registrationSummary renders the registration settings.
-func registrationSummary(r Registration) string {
-	return "reconcile_interval=" + r.ReconcileInterval
-}
-
-// fabricSummary renders the derived fabric membership: who this machine is on
-// the fabric and which peers it expects to meet.
-func fabricSummary(f deployment.Fabric) string {
+// eventFabricSummary renders the derived Event Fabric membership: which peers
+// this machine expects to meet on the site's journal.
+func eventFabricSummary(f deployment.EventFabric) string {
 	if len(f.Peers) == 0 {
 		return "one-member site"
 	}
@@ -162,36 +163,44 @@ func fabricSummary(f deployment.Fabric) string {
 	return fmt.Sprintf("peers: %s", strings.Join(peers, ", "))
 }
 
-// olricSummary renders the fabric adapter overrides, so a startup log shows
-// whether a machine is running on its deployment addresses or on local ones.
-func olricSummary(o FabricOlric) string {
-	overrides := make([]string, 0, 6)
-	if o.ClientAddress != "" {
-		overrides = append(overrides, "client="+o.ClientAddress)
+// natsSummary renders the Event Fabric adapter's settings, so a startup log
+// shows where the journal is stored and whether a machine is running on its
+// deployment addresses or on local ones.
+//
+// It names the credentials file and never renders its content: a startup block
+// is copied into tickets and chat windows, so a secret must not be able to reach
+// it in the first place.
+func natsSummary(n EventFabricNats) string {
+	parts := []string{
+		"data_dir=" + n.DataDir,
+		"startup_timeout=" + n.StartupTimeout,
+		"catch_up_timeout=" + n.CatchUpTimeout,
+		"credentials_file=" + credentialsSummary(n.CredentialsFile),
 	}
-	if o.MemberlistAddress != "" {
-		overrides = append(overrides, "memberlist="+o.MemberlistAddress)
+	if n.ClientAddress != "" {
+		parts = append(parts, "client="+n.ClientAddress)
 	}
-	if o.Join != nil {
-		overrides = append(overrides, "join="+strings.Join(o.Join, ","))
+	if n.ClusterAddress != "" {
+		parts = append(parts, "cluster="+n.ClusterAddress)
 	}
-	if o.StartTimeout != "" {
-		overrides = append(overrides, "start_timeout="+o.StartTimeout)
+	if n.MonitorAddress != "" {
+		parts = append(parts, "monitor="+n.MonitorAddress)
 	}
-	if o.ShutdownGrace != "" {
-		overrides = append(overrides, "shutdown_grace="+o.ShutdownGrace)
+	if n.Routes != nil {
+		parts = append(parts, "routes="+strings.Join(n.Routes, ","))
 	}
-	if len(overrides) == 0 {
-		return "(derived from deployment)"
+	if n.Servers != nil {
+		parts = append(parts, "servers="+strings.Join(n.Servers, ","))
 	}
-	return strings.Join(overrides, " ")
+	return strings.Join(parts, " ")
 }
 
-// eventsDirSummary renders an unset events directory as an explicit statement
-// that recording is off, so the startup block never shows a blank value.
-func eventsDirSummary(dir string) string {
-	if dir == "" {
-		return "(disabled)"
+// credentialsSummary renders an unset credentials file as an explicit statement
+// that the deployment is running unauthenticated, so the startup block never
+// shows a blank value.
+func credentialsSummary(path string) string {
+	if path == "" {
+		return "(none: loopback only)"
 	}
-	return dir
+	return path
 }
