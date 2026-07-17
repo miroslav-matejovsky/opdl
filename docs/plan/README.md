@@ -115,15 +115,22 @@ to `opdl.<site-scope>.event.>`.
 Estimates are for one engineer and include code, tests, and documentation. They
 assume the existing registration flow is the only stateful use case being moved.
 
-| Stage | Outcome | Complexity | Estimate |
-| --- | --- | --- | --- |
-| [1. Event model and decisions](01-event-model.md) | Freeze the event, ordering, topology, and projection rules | Medium | 2-3 days |
-| [2. OPDL Event Fabric](02-event-fabric.md) | Add the OPDL abstraction and NATS JetStream adapter | High | 4-6 days |
-| [3. Registration projections](03-registration-projections.md) | Replace shared registration collections and scans with events | High | 5-8 days |
-| [4. Runtime cutover](04-runtime-cutover.md) | Run the platform and scenarios solely through NATS | High | 3-5 days |
-| [5. Remove distributed state](05-remove-distributed-state.md) | Delete Olric, memory fabric, and obsolete paths | Medium | 2-4 days |
+| Stage | Outcome | Complexity | Estimate | Status |
+| --- | --- | --- | --- | --- |
+| [1. Event model and decisions](01-event-model.md) | Freeze the event, ordering, topology, and projection rules | Medium | 2-3 days | Complete |
+| [2. OPDL Event Fabric](02-event-fabric.md) | Add the OPDL abstraction and NATS JetStream adapter | High | 4-6 days | Not started |
+| [3. Registration projections](03-registration-projections.md) | Replace shared registration collections and scans with events | High | 5-8 days | Not started |
+| [4. Runtime cutover](04-runtime-cutover.md) | Run the platform and scenarios solely through NATS | High | 3-5 days | Not started |
+| [5. Remove distributed state](05-remove-distributed-state.md) | Delete Olric, memory fabric, and obsolete paths | Medium | 2-4 days | Not started |
 
 Total estimate: 16-26 engineering days.
+
+Stage 1 froze the contract in code: the event envelope, the OPDL Event Fabric
+package (`platform/internal/eventfabric`), the route and journal naming, and the
+event-sourced registration model (`platform/internal/registration/eventmodel`),
+all unit-tested. NATS is not yet wired and the Olric registration runtime is
+unchanged. Issues surfaced while implementing it are in
+[01-event-model-findings.md](01-event-model-findings.md).
 
 ## Completion criteria
 

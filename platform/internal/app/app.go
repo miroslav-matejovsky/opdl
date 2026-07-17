@@ -139,11 +139,12 @@ func newRecorder(descriptor deployment.Descriptor, dir string) (recorder, error)
 	if dir == "" {
 		return events.NopRecorder{}, nil
 	}
-	sink, err := jsonl.Open(dir, events.NodeFromDescriptor(descriptor))
+	node := events.NodeFromDescriptor(descriptor)
+	sink, err := jsonl.Open(dir, node)
 	if err != nil {
 		return nil, fmt.Errorf("event sink: %w", err)
 	}
-	return events.NewRecorder(sink), nil
+	return events.NewRecorder(node, sink), nil
 }
 
 // startFabric opens the platform fabric for this machine and records that it is

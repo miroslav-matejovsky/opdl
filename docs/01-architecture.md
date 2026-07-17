@@ -131,10 +131,49 @@ operation returns.
 | `internal/registration` | `platform.registration.requested`, `confirmed`, `accepted`, `rejected`, `conflict` |
 | `internal/fabric` | `platform.fabric.started`, `stopped` |
 
-`internal/events` owns only the envelope, recorder, and sink contract. The
-current JSONL sink writes one file per deployment node. An empty `events_dir`
-uses a no-op recorder. Event storage is for development and scenarios; it is not
-a durable replay mechanism or the authoritative conflict query.
+`internal/events` owns only the envelope, recorder, and sink contract. Every
+record is self-describing: it carries its own occurrence ID, event type, payload
+schema version, occurrence time, source subsystem, and the deployment node that
+stated it, plus optional causal links. It deliberately carries no transport
+ordering; a shared journal orders events when it accepts them, and that sequence
+belongs to the Event Fabric receipt and delivery, not to the immutable fact.
+
+The current JSONL sink writes one file per deployment node and also stamps that
+node onto every record, so a future shared journal can pool nodes without losing
+attribution. An empty `events_dir` uses a no-op recorder. Event storage is for
+development and scenarios; it is not yet a durable replay mechanism or the
+authoritative conflict query.
+
+## Event Fabric migration (accepted decisions)
+
+The platform is migrating from the shared Olric fabric to an event-driven model
+in which a NATS JetStream site journal is the source of truth and every node
+rebuilds its own projections from it. The full plan is in `docs/plan`. Stage 1
+has frozen the target contract; the Olric fabric described above remains the
+live coordination mechanism until the later cutover stages replace it.
+
+The accepted decisions this stage records:
+
+- The OPDL Event Fabric (`internal/eventfabric`) is the only coordination
+  boundary domains use. It exposes publish, replay, live delivery, health, and
+  shutdown, and it hides every transport concept: no domain constructs a
+  subject, stream, or consumer.
+- One ordered journal per site is the common order for every projection. A route
+  is `opdl.<site-scope>.event.<domain>.<fact>`, where `site-scope` is a stable
+  transport-safe hash of the length-prefixed project, environment, and site. The
+  journal is named `OPDL_<UPPER_SITE_SCOPE>_EVENTS` and binds
+  `opdl.<site-scope>.event.>`. It uses file storage and rejects new events when
+  a configured limit is reached rather than deleting replay history.
+- Delivery is at least once. Every projector and handler is idempotent by event
+  identity; transport deduplication is an optimization, never correctness. A
+  malformed or unsupported event stops catch-up and makes the node unready
+  rather than being skipped.
+- Startup runs one continuous ordered consumer from the first retained event,
+  waits until the projector has applied the captured high-water sequence, and
+  keeps the same consumer for live delivery, so there is no replay-to-live gap.
+- Registration becomes a projection of `proposed`, `confirmed`, `rejected`, and
+  `accepted` events (`internal/registration/eventmodel`). See
+  `docs/02-registration.md` for the event-sourced target.
 
 ## No redundancy
 

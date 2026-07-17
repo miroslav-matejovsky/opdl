@@ -6,24 +6,24 @@
 // distributed backend would be a sibling implementation of events.Sink, so
 // nothing outside this package knows events are stored as files.
 //
-// # The node is in the file name
+// # The node is also in the file name
 //
-// The events.Node an event is about is constant for a whole process run, so
-// this sink states it once, in its file name, rather than repeating five fields
-// on every line:
+// Every record already carries its events.Node, so a shared reader never
+// depends on where the record is stored. This sink additionally names its file
+// after the node, so a directory of single-node files stays human-readable:
 //
 //	events-<project>-<environment>-<site>-<machine>-<role>.jsonl
 //
-// One file therefore holds the events of exactly one node, and a directory that
-// collects several nodes keeps them apart without any per-record identity. A
-// sink that pools nodes into one stream, as a production backend would, has to
-// carry events.Node per record instead; that is a property of this sink, not of
-// the event model.
+// One file therefore holds the events of exactly one node. The file name is a
+// convenience for this development backend, not the source of identity: a
+// production backend that pools every node's events into one stream reads the
+// same node from each record.
 //
 // Characters that are not portable in a file name are replaced, so a node whose
 // identifiers are unusual still records. Two nodes whose identifiers differ only
 // in those characters would share a file, which is acceptable for a backend
-// that will not run in production.
+// that will not run in production; the records within still carry their own
+// exact node.
 //
 // # Durability
 //

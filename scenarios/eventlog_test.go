@@ -47,18 +47,23 @@ func (n eventNode) fileName() string {
 	return fmt.Sprintf("events-%s-%s-%s-%s-%s.jsonl", n.Project, n.Environment, n.Site, n.Machine, n.Role)
 }
 
-// eventRecord is the observable shape of one recorded event.
+// eventRecord is the observable shape of one recorded event. The envelope
+// carries no transport sequence: a shared journal orders events when it accepts
+// them, and the file records them in that order, so a scenario reads order from
+// position, not from a per-record counter.
 type eventRecord struct {
-	// ID is unique per occurrence.
+	// ID is unique per occurrence and sorts in occurrence order.
 	ID string `json:"id"`
 	// Type is the stable dotted event kind.
 	Type string `json:"type"`
-	// Sequence is the process-local monotonic event number.
-	Sequence uint64 `json:"sequence"`
+	// SchemaVersion is the payload schema version, positive on every record.
+	SchemaVersion int `json:"schema_version"`
 	// OccurredAt is when the fact happened, in UTC.
 	OccurredAt time.Time `json:"occurred_at"`
 	// Source is the subsystem that emitted the event.
 	Source string `json:"source"`
+	// Node is the deployment identity of the process the event is about.
+	Node eventNode `json:"node"`
 	// Tags are optional markers, e.g. warning.
 	Tags []string `json:"tags,omitempty"`
 	// Data is the event-specific payload, decoded only when queried.

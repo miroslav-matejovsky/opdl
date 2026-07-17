@@ -1,5 +1,13 @@
 # Stage 1: Event model and decisions
 
+> Status: Complete (2026-07-17). The event envelope, the OPDL Event Fabric
+> contract, the route and journal naming, and the event-sourced registration
+> model with pure reducers are defined and unit-tested. NATS is not yet wired
+> (Stage 2) and the Olric registration runtime is unchanged (Stage 3). Issues and
+> inconsistencies surfaced while implementing this stage are recorded in
+> [01-event-model-findings.md](01-event-model-findings.md). See the
+> [completion notes](#completion-notes) for what shipped.
+
 ## Outcome
 
 Define the target behavior before introducing NATS. This stage fixes the event
@@ -129,3 +137,43 @@ Estimated time: 2-3 engineering days.
 - A two-node site has one JetStream storage node and no journal redundancy. It
   cannot publish or replay while that node is down. Make this explicit in
   deployment documentation.
+
+## Completion notes
+
+What this stage delivered, mapped to the work items above:
+
+- Event Fabric package documentation and contract (items 1, 3, 6, 7):
+  `platform/internal/eventfabric/doc.go` states the Fabric, Publisher, Receipt,
+  Delivery, Projector, and Handler responsibilities, the delivery guarantees, and
+  the publish/catch-up/live/failure/shutdown lifecycle. `fabric.go` defines the
+  `Publisher`, `Fabric`, `Projector`, and `Handler` interfaces and the `Receipt`,
+  `Delivery`, and `State` types. `Receipt.Sequence` and `Delivery.Sequence` hold
+  the journal sequence.
+- Envelope change (items 2, 3): `platform/internal/events` records now carry
+  event ID, type, payload schema version, occurrence time, source, deployment
+  node identity, optional causation and correlation IDs, and the immutable JSON
+  payload. `Meta.Sequence` is removed. See finding 2 and finding 6 for the
+  transitional and ownership consequences.
+- Route and journal naming (item 4, 5): `platform/internal/eventfabric/route.go`
+  builds `opdl.<site-scope>.event.<domain>.<fact>` from a `platform.<domain>.<fact>`
+  event type and a hashed, length-prefixed site scope, and derives the
+  `OPDL_<UPPER_SITE_SCOPE>_EVENTS` journal name and its `opdl.<site-scope>.event.>`
+  subject filter.
+- Registration event flow and identities (items 8, 9): the `Proposed`,
+  `Confirmed`, `Rejected`, and `Accepted` catalog, the `proposal_id` and
+  `decision_id` derivations, and the pure ordered projection live in
+  `platform/internal/registration/eventmodel`, alongside the unchanged Olric flow.
+  See finding 1 for why this is a sibling package.
+- Tests (item 10): table-driven route and envelope validation tests in
+  `eventfabric`, and pure reducer tests in `eventmodel` for proposal order,
+  duplicate decisions, all-node acceptance, and conflict projection.
+- Documentation (item 11): `docs/01-architecture.md` records the accepted Event
+  Fabric decisions and the new envelope; `docs/02-registration.md` records the
+  event-sourced target; the `doc.go` files carry the package-level contracts.
+
+Deferred to later stages by design: the NATS JetStream adapter and its contract
+tests (Stage 2), the registration runtime cutover that replaces `store.go` and
+`reconciler.go` and wires handlers and projections (Stage 3), and the asynchronous
+HTTP contract change (Stage 3). The NATS deployment and replication choices are
+recorded in the plan README and the open questions above; the concrete adapter
+records the pinned versions in Stage 2.

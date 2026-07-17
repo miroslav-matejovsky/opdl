@@ -181,7 +181,8 @@ func TestNewRecorderDisabledWithoutEventsDir(t *testing.T) {
 
 // TestNewRecorderNamesTheFileAfterThisMachine checks the runtime hands the sink
 // its own compiled-in identity: the events land in a file named after the
-// descriptor, and the records themselves carry no node.
+// descriptor, and every record carries that same node identity so a shared
+// reader is not left depending on the file name.
 func TestNewRecorderNamesTheFileAfterThisMachine(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "events")
 	rec, err := newRecorder(testDescriptor, dir)
@@ -202,7 +203,8 @@ func TestNewRecorderNamesTheFileAfterThisMachine(t *testing.T) {
 	data, err := os.ReadFile(entries[0])
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"type":"platform.registration.requested"`)
-	require.NotContains(t, string(data), `"node":`, "the node is stated by the file name, not on every record")
+	require.Contains(t, string(data), `"node":{`, "the node is stamped on every record")
+	require.Contains(t, string(data), `"machine":"node"`)
 }
 
 func TestNewRecorderRejectsUnusableEventsDirAtStartup(t *testing.T) {

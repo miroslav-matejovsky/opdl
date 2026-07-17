@@ -46,17 +46,32 @@
 //
 //   - ID: unique per occurrence and time-ordered.
 //   - Type: the event's stable dotted kind.
-//   - Sequence: a monotonic counter within one process run. It restarts at 1 on
-//     every run, by design, and totally orders events within one timestamp.
+//   - SchemaVersion: the version of the payload schema, positive on every
+//     record. An event declares its own with the Versioned interface, otherwise
+//     it is DefaultSchemaVersion. It lets a reader that replays a journal reject
+//     a payload encoding it does not understand.
 //   - OccurredAt: when the fact happened, in UTC.
 //   - Source: the subsystem that emitted the event.
+//   - Node: the deployment identity of the process that stated the fact.
+//   - CausationID and CorrelationID: the causal links between events, set by the
+//     Event Fabric when a handler's reaction produces a new event and empty on
+//     an event the plain recorder stamps.
 //   - Tags: optional sorted, duplicate-free markers, omitted when empty.
 //
-// The envelope carries no node identity. Which process an event is about is a
-// Node, and it is constant for a whole process run, so a sink is free to state
-// it once instead of on every record: the jsonl sink names its file after the
-// node. A sink that pools events from several nodes must carry Node per record
-// instead.
+// The envelope deliberately carries no transport ordering. A shared journal
+// orders events when it accepts them; that sequence is a property of the
+// delivery, not of the immutable fact, and lives on the Event Fabric's receipt
+// and delivery rather than in the record.
+//
+// # Node identity is on every record
+//
+// Which process an event is about is a Node. It is constant for a whole process
+// run, so the Recorder is told this machine's Node once and stamps it onto
+// every record. Carrying it per record is what lets a shared journal pool the
+// events of every node in one ordered stream and still attribute each fact to
+// its origin. The jsonl sink additionally names its file after the node, so a
+// directory of single-node files stays readable, but the identity no longer
+// depends on the file name.
 //
 // # Storage
 //

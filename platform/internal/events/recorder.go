@@ -25,30 +25,34 @@ type Sink interface {
 // safe for concurrent use.
 //
 // Recording is synchronous and serialized: Record holds the recorder's lock
-// across both stamping and the sink write, so records reach the sink in
-// sequence order and a returning Record means the event is durable. Callers
-// pay the sink's write cost; the volume this stage emits does not justify a
-// background queue.
+// across both stamping and the sink write, so records reach the sink in the
+// order they were recorded and a returning Record means the event is durable.
+// Callers pay the sink's write cost; the volume this stage emits does not
+// justify a background queue.
+//
+// The recorder holds this process's own Node and stamps it onto every record.
+// Identity is the platform's compiled-in descriptor, so an event's node is
+// never something a caller can claim to be.
 type Recorder struct {
+	node  Node
 	sink  Sink
 	now   func() time.Time
 	newID func() string
 
-	mu  sync.Mutex
-	seq uint64
+	mu sync.Mutex
 }
 
 // NewRecorder builds a recorder that stamps an envelope onto every event and
-// appends it to sink. The recorder takes ownership of sink and closes it on
-// Close.
-func NewRecorder(sink Sink) *Recorder {
-	return newRecorder(sink, time.Now, newID)
+// appends it to sink. Every record carries node, this process's own deployment
+// identity. The recorder takes ownership of sink and closes it on Close.
+func NewRecorder(node Node, sink Sink) *Recorder {
+	return newRecorder(node, sink, time.Now, newID)
 }
 
 // newRecorder builds a recorder with injectable time and identity, so tests can
 // assert exact envelopes without depending on the clock or randomness.
-func newRecorder(sink Sink, now func() time.Time, newID func() string) *Recorder {
-	return &Recorder{sink: sink, now: now, newID: newID}
+func newRecorder(node Node, sink Sink, now func() time.Time, newID func() string) *Recorder {
+	return &Recorder{node: node, sink: sink, now: now, newID: newID}
 }
 
 // Record stamps event with a fresh envelope and appends it to the sink. It
@@ -62,14 +66,14 @@ func (r *Recorder) Record(ctx context.Context, event Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.seq++
 	record, err := newRecord(Meta{
-		ID:         r.newID(),
-		Type:       event.EventType(),
-		Sequence:   r.seq,
-		OccurredAt: r.now().UTC(),
-		Source:     event.Source(),
-		Tags:       eventTags(event),
+		ID:            r.newID(),
+		Type:          event.EventType(),
+		SchemaVersion: eventSchemaVersion(event),
+		OccurredAt:    r.now().UTC(),
+		Source:        event.Source(),
+		Node:          r.node,
+		Tags:          eventTags(event),
 	}, event)
 	if err != nil {
 		return fmt.Errorf("events: %w", err)

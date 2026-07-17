@@ -124,7 +124,12 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 	accepted := requireSingleEvent(t, records, "platform.registration.accepted")
 	require.Equal(t, "node", accepted.payload(t)["machine"])
 	require.Equal(t, "127.0.0.1", accepted.payload(t)["ip"])
-	require.Greater(t, accepted.Sequence, requested.Sequence, "events are numbered in occurrence order")
+
+	// The envelope is self-describing: every record carries this node's identity
+	// and a positive payload schema version, and occurrence order is the order
+	// the events were recorded in, already asserted above.
+	require.Equal(t, node, accepted.Node, "every record carries the node that stated it")
+	require.Positive(t, accepted.SchemaVersion, "every record carries a positive schema version")
 
 	// An exact retry is answered but changes nothing, so it reports nothing. The
 	// platform flushes each event before answering, so the file is complete as

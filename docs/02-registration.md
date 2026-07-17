@@ -4,6 +4,12 @@ Registration is a site-wide decision over the static deployment topology. A
 client submits a proposal to one machine and polls that same machine for the
 result.
 
+> Migration status: the behavior below is the live Olric-backed implementation.
+> The accepted event-sourced target is recorded in
+> [Event-sourced target](#event-sourced-target-accepted) and is implemented over
+> the stages in `docs/plan`. The business rule — every expected machine must
+> accept — does not change; only the coordination mechanism does.
+
 ## HTTP operations
 
 | Operation | Meaning |
@@ -107,4 +113,56 @@ Registration state is memory-only and is not replayed after a full-site
 shutdown. Different sites have separate fabrics, so cross-site uniqueness is
 not enforced. Authentication, authorization, removal, leases, heartbeats,
 quorum, and persistence are outside the current implementation.
+
+## Event-sourced target (accepted)
+
+The accepted target replaces the five shared collections and the periodic
+reconciler with ordered events in the site journal and a node-local projection.
+Every node rebuilds the same registration views by folding the journal; no query
+reads shared state. The event catalog and the pure projection are frozen in
+`platform/internal/registration/eventmodel`; the runtime cutover is staged in
+`docs/plan`.
+
+### Event flow
+
+| Event | Meaning |
+| --- | --- |
+| `platform.registration.proposed` | The origin proposes a registration after validating the HTTP input, the trusted origin, and the expected machine set. The first proposed event for a unit key in journal order claims that key. |
+| `platform.registration.confirmed` | One expected node accepts the claiming proposal. |
+| `platform.registration.rejected` | One expected node refuses a proposal, or a later proposal loses the key to an earlier one. Tagged as a warning. |
+| `platform.registration.accepted` | The origin commits the registration once every expected node has confirmed the claiming proposal. |
+
+A proposal carries its complete request, the trusted origin, and the ordered
+expected machines. Confirmation is still required from every expected machine,
+including the origin. An expected machine that is offline keeps the proposal
+pending indefinitely, exactly as today.
+
+### Identity and idempotency
+
+A proposal is identified by a `proposal_id`: a hash of the versioned canonical
+request fields, the trusted origin identity, and the ordered expected machines.
+Two identical proposals share one ID, so a retry is idempotent; any different
+proposal is a separate contender. A decision is identified by a `decision_id`
+derived from the proposal ID, the decision kind, and the deciding machine, so a
+node that republishes its decision after redelivery collapses onto the one
+decision it already made — even after any transport deduplication window has
+expired. Correctness lives in these identities, not in transport deduplication.
+
+### Ordering and conflict
+
+Order is the site journal order. It is when the journal accepted an event, not
+when a client began its request. The first proposed event for a key in that
+order permanently claims the key. An identical later proposal is a retry; a
+different later proposal is a rejected conflict contender. A node rejecting the
+claiming proposal marks that proposal rejected but does not release the key; key
+release is a separate future domain event, not implicit cleanup.
+
+### Asynchronous HTTP contract
+
+The POST becomes a purely asynchronous contract. Invalid input returns `400`
+without publishing. A durably published proposal returns `202` and its
+`proposal_id`. An unavailable journal returns `503`. Status, list, and conflict
+answers are read from the local projection and are the authoritative view once a
+node has caught up. Conflict is a projected outcome, not a race-sensitive
+immediate POST result, which removes the current immediate `409`.
 

@@ -58,7 +58,7 @@ func fixedRecorder() (*Recorder, *stubSink) {
 		ids++
 		return "id-" + string(rune('a'+ids-1))
 	}
-	return newRecorder(sink, now, newID), sink
+	return newRecorder(testNode, sink, now, newID), sink
 }
 
 func TestRecorderStampsEnvelopeOntoPayload(t *testing.T) {
@@ -69,16 +69,27 @@ func TestRecorderStampsEnvelopeOntoPayload(t *testing.T) {
 	stored := sink.stored()
 	require.Len(t, stored, 1)
 	require.Equal(t, Meta{
-		ID:         "id-a",
-		Type:       "platform.test.plain",
-		Sequence:   1,
-		OccurredAt: time.Date(2026, 7, 15, 10, 0, 1, 0, time.UTC),
-		Source:     "test",
+		ID:            "id-a",
+		Type:          "platform.test.plain",
+		SchemaVersion: DefaultSchemaVersion,
+		OccurredAt:    time.Date(2026, 7, 15, 10, 0, 1, 0, time.UTC),
+		Source:        "test",
+		Node:          testNode,
 	}, stored[0].Meta)
 	require.JSONEq(t, `{"detail": "started"}`, string(stored[0].Data))
 }
 
-func TestRecorderNumbersEventsMonotonicallyWithinOneRun(t *testing.T) {
+func TestRecorderStampsDeclaredSchemaVersion(t *testing.T) {
+	recorder, sink := fixedRecorder()
+
+	require.NoError(t, recorder.Record(t.Context(), versionedEvent{version: 4}))
+
+	stored := sink.stored()
+	require.Len(t, stored, 1)
+	require.Equal(t, 4, stored[0].SchemaVersion)
+}
+
+func TestRecorderGivesEveryEventAFreshOrderedID(t *testing.T) {
 	recorder, sink := fixedRecorder()
 
 	for range 3 {
@@ -87,9 +98,6 @@ func TestRecorderNumbersEventsMonotonicallyWithinOneRun(t *testing.T) {
 
 	stored := sink.stored()
 	require.Len(t, stored, 3)
-	for i, record := range stored {
-		require.Equal(t, uint64(i+1), record.Sequence)
-	}
 	require.Equal(t, []string{"id-a", "id-b", "id-c"}, []string{stored[0].ID, stored[1].ID, stored[2].ID})
 }
 
@@ -97,7 +105,7 @@ func TestRecorderStampsOccurredAtInUTC(t *testing.T) {
 	sink := &stubSink{}
 	local := time.FixedZone("CEST", 2*60*60)
 	occurred := time.Date(2026, 7, 15, 12, 0, 0, 0, local)
-	recorder := newRecorder(sink, func() time.Time { return occurred }, func() string { return "id" })
+	recorder := newRecorder(testNode, sink, func() time.Time { return occurred }, func() string { return "id" })
 
 	require.NoError(t, recorder.Record(t.Context(), plainEvent{}))
 
@@ -123,21 +131,23 @@ func TestRecorderStampsNormalizedTagsAndOmitsThemWhenAbsent(t *testing.T) {
 	require.NotContains(t, string(encoded), "tags")
 }
 
-// TestRecorderEnvelopeCarriesNoNode pins that the node identity is not repeated
-// on every record. A sink states which node it holds; see package jsonl, which
-// names its file after it.
-func TestRecorderEnvelopeCarriesNoNode(t *testing.T) {
+// TestRecorderEnvelopeCarriesNode pins that this process's own deployment
+// identity is stamped onto every record, so a shared journal that pools nodes
+// keeps each fact attributed to its origin.
+func TestRecorderEnvelopeCarriesNode(t *testing.T) {
 	recorder, sink := fixedRecorder()
 	require.NoError(t, recorder.Record(t.Context(), plainEvent{}))
 
+	require.Equal(t, testNode, sink.stored()[0].Node)
+
 	encoded, err := json.Marshal(sink.stored()[0])
 	require.NoError(t, err)
-	require.NotContains(t, string(encoded), `"node":`)
+	require.Contains(t, string(encoded), `"machine":"node"`)
 }
 
 func TestRecorderReportsSinkFailureWithContext(t *testing.T) {
 	sink := &stubSink{appendErr: errors.New("disk gone")}
-	recorder := NewRecorder(sink)
+	recorder := NewRecorder(testNode, sink)
 
 	err := recorder.Record(t.Context(), plainEvent{})
 	require.ErrorContains(t, err, "events: record platform.test.plain")
@@ -149,7 +159,7 @@ func TestRecorderRejectsMissingEvent(t *testing.T) {
 	require.ErrorContains(t, recorder.Record(t.Context(), nil), "event is required")
 }
 
-func TestRecorderConcurrentRecordsAreSequencedAndComplete(t *testing.T) {
+func TestRecorderConcurrentRecordsAreCompleteAndUnique(t *testing.T) {
 	recorder, sink := fixedRecorder()
 
 	const writers = 50
@@ -168,22 +178,25 @@ func TestRecorderConcurrentRecordsAreSequencedAndComplete(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Records reach the sink in sequence order: the recorder serializes stamping
-	// and the write together, so a reader of the sink sees no reordering.
+	// Every record reaches the sink exactly once with its own ID: the recorder
+	// serializes stamping and the write together, so no writer is lost or
+	// interleaved with another.
 	stored := sink.stored()
 	require.Len(t, stored, writers)
-	for i, record := range stored {
-		require.Equal(t, uint64(i+1), record.Sequence)
+	seen := make(map[string]struct{}, writers)
+	for _, record := range stored {
+		seen[record.ID] = struct{}{}
 	}
+	require.Len(t, seen, writers, "every recorded event has a unique id")
 }
 
 func TestRecorderCloseClosesSinkAndReportsItsError(t *testing.T) {
 	sink := &stubSink{}
-	require.NoError(t, NewRecorder(sink).Close())
+	require.NoError(t, NewRecorder(testNode, sink).Close())
 	require.Equal(t, 1, sink.closed)
 
 	failing := &stubSink{closeErr: errors.New("close failed")}
-	require.ErrorContains(t, NewRecorder(failing).Close(), "close failed")
+	require.ErrorContains(t, NewRecorder(testNode, failing).Close(), "close failed")
 }
 
 func TestNopRecorderDiscardsEverything(t *testing.T) {

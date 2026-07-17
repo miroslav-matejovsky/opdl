@@ -16,11 +16,13 @@ components:
   config: { in: internal/config }
   events: { in: internal/events }
   events-jsonl: { in: internal/events/jsonl }
+  eventfabric: { in: internal/eventfabric }
   fabric: { in: internal/fabric }
   fabric-memory: { in: internal/fabric/memory }
   fabric-olric: { in: internal/fabric/olric }
   httpapi: { in: internal/httpapi }
   registration: { in: internal/registration }
+  registration-eventmodel: { in: internal/registration/eventmodel }
 
 deps:
   cmd:
@@ -35,6 +37,8 @@ deps:
     mayDependOn: [deployment]
   events-jsonl:
     mayDependOn: [events]
+  eventfabric:
+    mayDependOn: [events]
   fabric:
     mayDependOn: [deployment, events]
   fabric-memory:
@@ -45,3 +49,5 @@ deps:
     mayDependOn: [api, registration]
   registration:
     mayDependOn: [api, events, fabric]
+  registration-eventmodel:
+    mayDependOn: [events, eventfabric]
