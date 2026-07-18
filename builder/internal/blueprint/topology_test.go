@@ -14,7 +14,7 @@ func validProject() *blueprint.Project {
 	return &blueprint.Project{
 		Name:        "customer-a",
 		Environment: "production",
-		Features:    blueprint.Features{Chaos: true, Redundancy: true},
+		Features:    blueprint.Features{Chaos: true},
 		Sites: []blueprint.Site{{
 			Name: "north",
 			Machines: []blueprint.Machine{{
@@ -126,7 +126,50 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 func TestFeatures(t *testing.T) {
 	f := blueprint.Features{Chaos: true}
 	require.True(t, f.Chaos)
-	require.False(t, f.Redundancy)
+}
+
+// TestMachinePlatformWarmStandby checks the platform subsection decodes as a
+// presence-aware value: absent block, absent attribute, and explicit true/false
+// are all distinguishable, which is what lets resolution default an omission to
+// enabled while honoring an explicit opt-out.
+func TestMachinePlatformWarmStandby(t *testing.T) {
+	machine := func(t *testing.T, body string) blueprint.Machine {
+		t.Helper()
+		p := decodeHCL(t, `project "p" {
+		  environment = "production"
+		  features {}
+		  site "north" {
+		    machine "m1" {
+		      role     = "node"
+		      ip       = "10.0.1.10"
+		      services = ["core-services"]
+		      `+body+`
+		    }
+		  }
+		}`)
+		return p.Sites[0].Machines[0]
+	}
+
+	t.Run("no platform block", func(t *testing.T) {
+		require.Nil(t, machine(t, "").Platform)
+	})
+	t.Run("platform block without warm_standby", func(t *testing.T) {
+		m := machine(t, "platform {}")
+		require.NotNil(t, m.Platform)
+		require.Nil(t, m.Platform.WarmStandby)
+	})
+	t.Run("explicit false", func(t *testing.T) {
+		m := machine(t, "platform { warm_standby = false }")
+		require.NotNil(t, m.Platform)
+		require.NotNil(t, m.Platform.WarmStandby)
+		require.False(t, *m.Platform.WarmStandby)
+	})
+	t.Run("explicit true", func(t *testing.T) {
+		m := machine(t, "platform { warm_standby = true }")
+		require.NotNil(t, m.Platform)
+		require.NotNil(t, m.Platform.WarmStandby)
+		require.True(t, *m.Platform.WarmStandby)
+	})
 }
 
 type topologyFile struct {

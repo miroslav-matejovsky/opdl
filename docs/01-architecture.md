@@ -2,8 +2,10 @@
 
 OPDL builds one platform binary for each machine in a project blueprint. The
 builder resolves the machine's deployment descriptor, embeds it in the runtime,
-and packages the result. Identity is compiled into the artifact. A deployment
-site does not assign identity through runtime configuration.
+and packages the result. A package runs one process when warm standby is
+disabled, or a primary and standby when it is enabled. Identity is
+compiled into the artifact. A deployment site does not assign identity through
+runtime configuration.
 
 ## Distribution line
 
@@ -14,7 +16,7 @@ project blueprint
 builder -> resolved descriptor per machine -> platform binary per machine
                                                 |
                                                 v
-                                      one runtime at the site
+                                      primary and optional standby
 ```
 
 The repository is a Go workspace of four modules plus a generated .NET SDK.
@@ -34,14 +36,15 @@ artifacts and then regenerate `sdk-dotnet` from that contract.
 ## Deployment descriptor
 
 Every built platform binary embeds one `deployment.Descriptor`. It contains the
-project, environment, site, machine, role, IP, services, features, and resolved
-Event Fabric peers.
+project, environment, site, machine, role, IP, services, features, resolved
+warm-standby policy, and Event Fabric peers.
 
 The runtime trusts the descriptor as its identity. Registration origins, event
 nodes, and Event Fabric members come from it. A client cannot claim a different
 machine or site. Runtime TOML configuration contains only site-adjustable
-settings: the HTTP listen address, timeouts, the journal's storage directory, a
-credentials file, and Event Fabric socket overrides.
+settings: the HTTP listen address, timeouts, the local instance directory, the
+required projection lag bound, the journal's storage directory, a credentials
+file, and Event Fabric socket overrides.
 
 ## Runtime boundaries
 
@@ -52,6 +55,7 @@ The platform is composed around three boundaries:
 | `internal/httpapi` | Decodes and encodes the public HTTP contract. It does not decide registration state. |
 | `internal/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
 | `internal/eventfabric` | Publishes facts to the site's ordered journal, replays them, delivers them, and reports health. Runtime code does not depend on a transport. |
+| `internal/redundancy` | Owns process roles, lifecycle state, the machine fence, projection-lag state, and atomic status files. |
 
 The production adapter is `eventfabric/nats`. NATS is imported only by it.
 
@@ -151,7 +155,7 @@ stopped.
 
 ## Bootstrap and lifecycle
 
-Startup order is strict, and each step exists because the next one would
+Active startup order is strict, and each step exists because the next one would
 otherwise be a lie:
 
 1. Validate the configuration and probe the journal's storage.
@@ -165,6 +169,21 @@ otherwise be a lie:
 7. State `platform.event_fabric.ready` and wait for the node's own projection to
    apply it.
 8. Serve the public HTTP API.
+
+A warm standby opens only a client Event Fabric connection and a distinct
+projector. It catches up and follows the journal, writes its local process status,
+and owns no public listener, durable handler, lifecycle readiness publication,
+embedded NATS server, or JetStream storage. On a storage machine it prefers the
+co-located active server and retains peer storage addresses as fallbacks.
+
+The primary and standby contend for one non-expiring OS file lock under the
+configured local instance directory. Only the lock holder may compose active
+capabilities. The lock is released after active resources close, or
+automatically when the holding process exits. A standby waits for the fence
+independently of its projector. After acquisition it marks itself activating,
+closes the client-only composition, opens the active Event Fabric, catches up
+again, drains retained handler work, publishes readiness, binds HTTP, and marks
+itself active.
 
 The whole readiness sequence is bounded by `catch_up_timeout`. A node that cannot
 finish it does not serve, and reports how far its projector got and what each
@@ -180,20 +199,66 @@ still accept it; then the projector stops and the transport closes. A projector 
 handler that stops on its own also ends serving: the projection is what every
 query is answered from.
 
+Full-machine shutdown stops the primary service and then the standby service. A
+standby may promote during this bounded interval and is stopped immediately.
+
 The site journal is the platform's durable state. A node rebuilds its projections
 by replaying it at every start, so a machine that is killed comes back to the same
 answers. Local projections are memory-only and are not snapshotted; replay cost
 has not yet justified it.
 
-## No redundancy
+## Local warm standby
 
-There is one platform per machine. OPDL currently has no primary/secondary
-instance, election, fencing, failover, or zero-downtime upgrade mechanism.
-Journal replication must not be interpreted as service redundancy: three storage
-nodes keep three copies of the site's history, and nothing takes over a
-machine's registration decisions when that machine is down. A proposal simply
-stays pending until it comes back.
+OPDL can run a preferred primary and an optional standby for one machine. The
+fence owner runs active capabilities; the other process maintains a warm local
+projection. Both retain the same compiled machine identity, so they remain one
+registration voter. After failover, a returning primary reclaims ownership only
+through graceful handover from the promoted standby.
 
-The current implementation plan adds one local warm standby process per machine;
-see [Local warm standby redundancy](plan/README.md).
+After failover, a returning primary starts projection-only and waits. Deployment
+tooling verifies that it is caught up, gracefully stops the promoted standby,
+and waits for the primary to acquire the released fence. The primary never
+steals ownership from a live standby. Journal replication remains separate from
+service redundancy: storage replicas protect site history, while the local
+process fence protects one machine's active capabilities.
+
+### Package and service-manager contract
+
+Each package manifest contains one required `primary` launch and, when the
+resolved machine policy enables warm standby, one optional `standby` launch.
+Both name the same binary and configuration. Their direct arguments are
+`-instance primary` and `-instance standby`.
+
+Deployment starts the primary and waits for its local status to become `active`
+before starting the standby. A handover requires a fresh, live standby status
+with `promotable=true`, no last error, and a caught-up sequence. The service
+manager then gracefully stops the active process and waits for the other process
+to become `active`. A returning primary uses this procedure to reclaim
+ownership. Full machine shutdown stops the primary service and then the standby
+service; the standby may briefly promote between those operations.
+
+Status files are operational evidence, not ownership. They identify the process
+role and PID and report lifecycle state, projection progress, lag, promotability,
+and the last error. Only the OS fence grants active ownership.
+
+### Validation baseline
+
+The black-box warm-standby scenario builds a default-on package, launches both
+processes, kills and hands ownership over repeatedly, preserves registrations,
+checks storage ownership, reclaims the preferred primary, and completes full
+machine shutdown. It records measurements without enforcing an SLO.
+
+The 2026-07-18 Windows development baseline from one local run was:
+
+| Measurement | Observed |
+| --- | ---: |
+| Initial standby journal catch-up | 61.9 ms |
+| Forced-kill promotion | 29.90 s |
+| Listener unavailable | 29.91 s |
+| Planned handover | 287 ms |
+| Standby working set | 16,396,288 bytes |
+
+These are development measurements, not production limits or percentiles. The
+forced-kill gap is close to the configured 30-second startup bound and is tracked
+as a performance investigation before any failover SLO is declared.
 

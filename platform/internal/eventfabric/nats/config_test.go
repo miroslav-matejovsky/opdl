@@ -118,8 +118,8 @@ func TestDefaultConfigForALargerSiteClustersTheStorageNodes(t *testing.T) {
 	require.Equal(t, 3, cfg.Replicas)
 	require.Equal(t, []string{"10.0.1.10:6222", "10.0.1.11:6222"}, cfg.Routes,
 		"node-c clusters with the other two storage nodes, and not with node-d")
-	require.Equal(t, []string{"10.0.1.12:4222"}, cfg.Servers,
-		"a storage node reaches the journal through its own server, which clusters with the rest")
+	require.Equal(t, []string{"10.0.1.12:4222", "10.0.1.10:4222", "10.0.1.11:4222"}, cfg.Servers,
+		"a storage node prefers its own server and retains peers for standby connectivity")
 }
 
 func TestDefaultConfigLeavesOutStorageForALaterNode(t *testing.T) {

@@ -19,6 +19,7 @@ func validDescriptor() deployment.Descriptor {
 		IP:          "10.0.1.10",
 		Services:    []string{"sensor-services"},
 		Features:    deployment.Features{Chaos: true},
+		Instances:   deployment.InstancePolicy{WarmStandby: true},
 		EventFabric: deployment.EventFabric{
 			Peers: []deployment.EventFabricPeer{
 				{Site: "north", Machine: "gateway", IP: "10.0.1.11"},

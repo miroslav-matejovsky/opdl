@@ -15,7 +15,9 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/embedded"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
@@ -83,6 +85,8 @@ func writeConfig(t *testing.T, dir string) string {
 	contents := fmt.Sprintf(`address = %q
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
+instance_dir = %q
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
@@ -90,7 +94,8 @@ catch_up_timeout = "30s"
 client_address = %q
 cluster_address = %q
 monitor_address = %q
-`, freeAddress(t), filepath.ToSlash(filepath.Join(dir, "nats")), client, cluster, monitor)
+`, freeAddress(t), filepath.ToSlash(filepath.Join(dir, "instance")),
+		filepath.ToSlash(filepath.Join(dir, "nats")), client, cluster, monitor)
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 	return path
 }
@@ -116,7 +121,7 @@ func openTestSite(t *testing.T) *site {
 	cfg, err := config.Load(writeConfig(t, t.TempDir()))
 	require.NoError(t, err)
 
-	s, err := open(t.Context(), cfg.Descriptor(), cfg)
+	s, err := open(t.Context(), cfg.Descriptor(), cfg, true, redundancy.RolePrimary)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.close(context.Background()) })
 	return s
@@ -224,7 +229,7 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
-		contents := "address = \"127.0.0.1:8080\"\nread_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\n[event_fabric.nats]\n" + nats
+		contents := "address = \"127.0.0.1:8080\"\nread_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\ninstance_dir = \"/var/lib/opdl/instance\"\nlag_bound = \"30s\"\n[event_fabric.nats]\n" + nats
 		require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 		cfg, err := config.Load(path)
 		require.NoError(t, err)
@@ -268,14 +273,11 @@ servers = ["127.0.0.1:4001"]
 		require.Equal(t, "127.0.0.1:8222", cfg.MonitorAddress)
 	})
 
-	t.Run("a storage node always reaches the journal on its own server", func(t *testing.T) {
-		// node-a stores the site journal, so where it connects follows where its
-		// own server listens. It is not a second setting that could disagree.
+	t.Run("a storage node prefers its own server and retains configured peers", func(t *testing.T) {
 		cfg, err := natsConfig(descriptor, settings(t,
 			required+"client_address = \"127.0.0.1:4001\"\nservers = [\"10.9.9.9:4222\"]\n"))
 		require.NoError(t, err)
-		require.Equal(t, []string{"127.0.0.1:4001"}, cfg.Servers,
-			"a storage node cannot be configured to run one journal and talk to another")
+		require.Equal(t, []string{"127.0.0.1:4001", "10.9.9.9:4222"}, cfg.Servers)
 	})
 
 	t.Run("storage and replicas come from the site, not the file", func(t *testing.T) {
@@ -294,6 +296,20 @@ servers = ["127.0.0.1:4001"]
 		require.Equal(t, "opdl", cfg.Username)
 		require.Equal(t, "s3cret", cfg.Password)
 	})
+}
+
+func TestClientOnlyRetainsEveryStorageServer(t *testing.T) {
+	cfg := clientOnly(natsfabric.Config{
+		HostsStorage:  true,
+		ClientAddress: "10.0.1.10:4222",
+		Servers:       []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
+		DataDir:       "journal",
+	})
+
+	require.False(t, cfg.HostsStorage)
+	require.Empty(t, cfg.ClientAddress)
+	require.Empty(t, cfg.DataDir)
+	require.Equal(t, []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"}, cfg.Servers)
 }
 
 // TestNodeDataDirIsNamedAfterTheMachine checks two machines sharing one
@@ -338,6 +354,202 @@ func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
 		"a one-machine site expects only itself")
 }
 
+// TestResolveRole checks role selection against the warm-standby policy.
+func TestResolveRole(t *testing.T) {
+	cases := map[string]struct {
+		instance    string
+		warmStandby bool
+		want        redundancy.ProcessRole
+		wantErr     string
+	}{
+		"opt-out requires a role":      {instance: "", warmStandby: false, wantErr: "-instance primary|standby is required"},
+		"opt-out accepts primary":      {instance: "primary", warmStandby: false, want: redundancy.RolePrimary},
+		"opt-out rejects standby":      {instance: "standby", warmStandby: false, wantErr: "does not run a warm standby"},
+		"warm standby requires a role": {instance: "", warmStandby: true, wantErr: "-instance primary|standby is required"},
+		"warm standby accepts primary": {instance: "primary", warmStandby: true, want: redundancy.RolePrimary},
+		"warm standby accepts standby": {instance: "standby", warmStandby: true, want: redundancy.RoleStandby},
+		"invalid role":                 {instance: "other", warmStandby: true, wantErr: "invalid process role"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := resolveRole(tc.instance, tc.warmStandby)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+type fixedStatusFabric struct {
+	state eventfabric.State
+}
+
+func (f fixedStatusFabric) State(context.Context) (eventfabric.State, error) {
+	return f.state, nil
+}
+
+// TestStartStatusFailsBeforeRuntimeStarts checks a process never serves while its
+// initial status cannot be written. Shutdown and handover tooling must not be
+// given a stale operational view.
+func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
+
+	done, err := startStatus(
+		t.Context(),
+		fixedStatusFabric{state: eventfabric.State{Connected: true, CaughtUp: true}},
+		redundancy.RolePrimary,
+		redundancy.StateActive,
+		filepath.Join(blocked, "primary.status"),
+		30*time.Second,
+		nil,
+		nil,
+	)
+	require.ErrorContains(t, err, "write status")
+	require.Nil(t, done)
+}
+
+// TestActiveAndStandbyRunTogether checks one all-in-one machine can run two
+// processes against one journal while only the active
+// owns active capabilities, the standby is client-only and produces nothing, and
+// the standby catches up and follows new journal events.
+func TestActiveAndStandbyRunTogether(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping redundant Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	descriptor := cfg.Descriptor()
+
+	active, err := open(t.Context(), descriptor, cfg, true, redundancy.RolePrimary)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = active.close(context.Background()) })
+	require.True(t, active.ready, "the active process announces readiness")
+	require.True(t, active.fabric.Info().HostsStorage, "the active process owns the journal store")
+
+	standby, err := open(t.Context(), descriptor, cfg, false, redundancy.RoleStandby)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = standby.close(context.Background()) })
+
+	// The standby holds no active capability: client-only transport, no handler,
+	// no command or query service, and it never announces readiness.
+	require.False(t, standby.fabric.Info().HostsStorage, "a warm standby opens no journal store or listener")
+	require.Nil(t, standby.commands, "a standby exposes no command service")
+	require.Nil(t, standby.queries, "a standby exposes no query service")
+	require.Empty(t, standby.services, "a standby attaches no durable handler")
+	require.False(t, standby.ready, "a standby never announces readiness")
+
+	// The standby caught up to the journal the active is on.
+	state, err := standby.fabric.State(t.Context())
+	require.NoError(t, err)
+	require.True(t, state.CaughtUp, "the standby caught up to the journal")
+	require.Positive(t, state.Applied, "the standby applied the active's readiness")
+
+	// It follows new journal events: a fact published on the active reaches the
+	// standby's projection.
+	receipt, err := active.fabric.Publish(t.Context(), eventfabric.NewReady(active.fabric.Info(), 0, redundancy.RolePrimary.String()))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		st, stateErr := standby.fabric.State(t.Context())
+		return stateErr == nil && st.Applied >= receipt.Sequence
+	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
+}
+
+// TestPromotionAndPrimaryReclamation exercises both ownership transfers.
+// The service-manager action is represented by canceling the active process only
+// after the waiting process reports a caught-up standby status.
+func TestPromotionAndPrimaryReclamation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping promotion integration test in -short mode")
+	}
+	dir := t.TempDir()
+	cfg, err := config.Load(writeConfig(t, dir))
+	require.NoError(t, err)
+	descriptor := cfg.Descriptor()
+	descriptor.Instances.WarmStandby = true
+
+	primaryCtx, stopPrimary := context.WithCancel(t.Context())
+	primaryDone := make(chan error, 1)
+	go func() { primaryDone <- runProcess(primaryCtx, cfg, descriptor, redundancy.RolePrimary) }()
+	waitForProcessState(t, cfg, descriptor, redundancy.RolePrimary, redundancy.StateActive, primaryDone)
+	require.True(t, get(t.Context(), cfg.Address()), "the preferred primary did not serve")
+
+	standbyCtx, stopStandby := context.WithCancel(t.Context())
+	standbyDone := make(chan error, 1)
+	go func() { standbyDone <- runProcess(standbyCtx, cfg, descriptor, redundancy.RoleStandby) }()
+	waitForPromotableStandby(t, cfg, descriptor, redundancy.RoleStandby, standbyDone)
+
+	stopPrimary()
+	require.NoError(t, waitProcess(t, primaryDone), "the primary did not stop cleanly")
+	waitForProcessState(t, cfg, descriptor, redundancy.RoleStandby, redundancy.StateActive, standbyDone)
+	require.True(t, get(t.Context(), cfg.Address()), "the promoted standby did not restore the API")
+
+	reclaimCtx, stopReclaim := context.WithCancel(t.Context())
+	reclaimDone := make(chan error, 1)
+	go func() { reclaimDone <- runProcess(reclaimCtx, cfg, descriptor, redundancy.RolePrimary) }()
+	waitForPromotableStandby(t, cfg, descriptor, redundancy.RolePrimary, reclaimDone)
+
+	// Deployment keeps the primary preferred by gracefully stopping the promoted
+	// standby only after the returning primary is caught up.
+	stopStandby()
+	require.NoError(t, waitProcess(t, standbyDone), "the promoted standby did not stop cleanly")
+	waitForProcessState(t, cfg, descriptor, redundancy.RolePrimary, redundancy.StateActive, reclaimDone)
+	require.True(t, get(t.Context(), cfg.Address()), "the reclaimed primary did not restore the API")
+
+	stopReclaim()
+	require.NoError(t, waitProcess(t, reclaimDone), "the reclaimed primary did not stop cleanly")
+}
+
+func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, state redundancy.State, done <-chan error) {
+	t.Helper()
+	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
+	var processErr error
+	exited := false
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			exited, processErr = true, err
+			return true
+		default:
+		}
+		status, err := redundancy.ReadStatus(path)
+		return err == nil && status.State == state
+	}, 30*time.Second, 20*time.Millisecond, "%s never reached %s", role, state)
+	require.Falsef(t, exited, "%s exited before reaching %s: %v", role, state, processErr)
+}
+
+func waitForPromotableStandby(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, done <-chan error) {
+	t.Helper()
+	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
+	var processErr error
+	exited := false
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			exited, processErr = true, err
+			return true
+		default:
+		}
+		status, err := redundancy.ReadStatus(path)
+		return err == nil && status.State == redundancy.StateStandby && status.Promotable && status.LastError == ""
+	}, 30*time.Second, 20*time.Millisecond, "%s never became a caught-up standby", role)
+	require.Falsef(t, exited, "%s exited before becoming a caught-up standby: %v", role, processErr)
+}
+
+func waitProcess(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatal("process did not stop")
+		return nil
+	}
+}
+
 func TestRunReportsMissingConfigFlag(t *testing.T) {
 	require.Error(t, Run([]string{"-unknown"}))
 }
@@ -360,14 +572,16 @@ func TestRunReportsUnusableJournalStorage(t *testing.T) {
 	contents := fmt.Sprintf(`address = "127.0.0.1:8080"
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
+instance_dir = %q
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
 catch_up_timeout = "30s"
-`, filepath.ToSlash(blocked))
+`, filepath.ToSlash(filepath.Join(dir, "instance")), filepath.ToSlash(blocked))
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 
-	err := Run([]string{"-config", path})
+	err := Run([]string{"-config", path, "-instance", "primary"})
 	require.ErrorContains(t, err, "data directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
 }

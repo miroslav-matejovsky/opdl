@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
@@ -39,6 +41,7 @@ type site struct {
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
+	role       redundancy.ProcessRole
 
 	// projector is the node-wide ordered consumer: one loop, from the first
 	// retained event through live delivery, so nothing falls in a replay-to-live
@@ -71,17 +74,30 @@ type service struct {
 	runner  *runner
 }
 
-// open composes and starts this node's Event Fabric, and returns only once the
-// node is ready to serve: connected to its site journal, caught up to a recorded
-// high-water mark, with its handlers attached and their retained work done.
+// open composes and starts this node's Event Fabric for the process role.
 //
-// A node that cannot reach that state does not serve. Answering registration
-// queries from a projection that has not seen the site's history would be
-// answering for a site this process has not caught up with.
-func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config) (*site, error) {
+// When active is true it returns only once the node is ready to serve: connected
+// to its site journal, caught up to a recorded high-water mark, with its handlers
+// attached and their retained work done. A node that cannot reach that state does
+// not serve, because answering from a projection that has not seen the site's
+// history would be answering for a site this process has not caught up with.
+//
+// When active is false it composes a warm standby: a client-only transport and
+// the continuous projector, caught up to the journal, and nothing else. A standby
+// opens no durable handler, publishes no readiness, and binds no listener, so it
+// follows the site's history without producing a decision or holding an
+// active-only capability.
+func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.ProcessRole) (*site, error) {
 	fabricCfg, err := natsConfig(descriptor, cfg)
 	if err != nil {
 		return nil, err
+	}
+	// A warm standby never opens the shared journal store or binds the storage
+	// node's listeners; the active process owns those. It reaches the journal as a
+	// client of the active's server, so it follows history without contending for
+	// the storage the fence protects.
+	if !active {
+		fabricCfg = clientOnly(fabricCfg)
 	}
 	// Open validates the configuration and probes the journal's storage before it
 	// binds a listener, so an unusable data directory or address fails here
@@ -98,9 +114,17 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 	s := &site{
 		fabric:          fabric,
 		projection:      registration.NewProjection(),
+		role:            role,
 		stopped:         make(chan struct{}),
 		catchUpTimeout:  fabricCfg.CatchUpTimeout,
 		shutdownTimeout: fabricCfg.ShutdownTimeout,
+	}
+
+	if !active {
+		if err := s.startStandby(ctx); err != nil {
+			return nil, errors.Join(err, s.close(ctx))
+		}
+		return s, nil
 	}
 
 	location, expected := topology(descriptor)
@@ -161,7 +185,7 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 		return err
 	}
 
-	receipt, err := s.fabric.Publish(catchUpCtx, eventfabric.NewReady(s.fabric.Info(), s.projection.Sequence()))
+	receipt, err := s.fabric.Publish(catchUpCtx, eventfabric.NewReady(s.fabric.Info(), s.projection.Sequence(), s.role.String()))
 	if err != nil {
 		return fmt.Errorf("state ready: %w", err)
 	}
@@ -170,6 +194,24 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 	}
 	s.ready = true
 	return nil
+}
+
+// startStandby runs the projection-only readiness a warm standby needs: it
+// attaches the continuous projector and catches up to the journal's high-water
+// mark, and nothing else.
+//
+// It attaches no durable handler, publishes no readiness, and binds no listener,
+// so a standby follows the site's history without producing a decision. The same
+// projector stays attached for live events, so the standby keeps following after
+// it has caught up.
+func (s *site) startStandby(ctx context.Context) error {
+	catchUpCtx, cancel := context.WithTimeout(ctx, s.catchUpTimeout)
+	defer cancel()
+
+	s.projector = s.run(ctx, "projector", func(runCtx context.Context) error {
+		return s.fabric.RunProjector(runCtx, s.projection)
+	})
+	return s.catchUp(catchUpCtx, "the retained journal")
 }
 
 // catchUp captures the journal's high-water mark and waits for the projection to
@@ -268,7 +310,7 @@ func (s *site) release(ctx context.Context) error {
 	// A node that never said it was ready has nothing to say about stopping. It
 	// would be stating the end of something the site never heard begin.
 	if s.ready {
-		if _, err := s.fabric.Publish(stopCtx, eventfabric.Stopping{Adapter: s.fabric.Info().Adapter}); err != nil {
+		if _, err := s.fabric.Publish(stopCtx, eventfabric.NewStopping(s.fabric.Info().Adapter, s.role.String())); err != nil {
 			errs = append(errs, fmt.Errorf("state stopping: %w", err))
 		}
 	}
@@ -374,6 +416,7 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 		return natsfabric.Config{}, err
 	}
 	settings := cfg.EventFabric().Nats
+	derivedClientAddress := fabricCfg.ClientAddress
 
 	fabricCfg.DataDir = nodeDataDir(settings.DataDir, descriptor)
 	fabricCfg.Username, fabricCfg.Password = cfg.Credentials()
@@ -406,15 +449,45 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 	}
 	if settings.Servers != nil {
 		fabricCfg.Servers = settings.Servers
+	} else if fabricCfg.HostsStorage && fabricCfg.ClientAddress != derivedClientAddress {
+		for i, server := range fabricCfg.Servers {
+			if server == derivedClientAddress {
+				fabricCfg.Servers[i] = fabricCfg.ClientAddress
+				break
+			}
+		}
 	}
-	// A storage node reaches the journal through its own server, so moving that
-	// server moves where the node connects. Deriving this rather than asking a
-	// site to keep two settings agreeing removes the way to configure a node that
-	// runs one journal and talks to another.
 	if fabricCfg.HostsStorage {
-		fabricCfg.Servers = []string{fabricCfg.ClientAddress}
+		peers := slices.DeleteFunc(slices.Clone(fabricCfg.Servers), func(server string) bool {
+			return server == fabricCfg.ClientAddress
+		})
+		fabricCfg.Servers = append([]string{fabricCfg.ClientAddress}, peers...)
 	}
 	return fabricCfg, nil
+}
+
+// clientOnly turns a storage node's Event Fabric configuration into a client-only
+// one for a warm standby. A storage node's active process binds the server and owns
+// the JetStream store; its standby must do neither, or two processes would try to
+// bind the same ports and open the same journal directory. The standby keeps the
+// servers it already reaches the journal through and drops everything it would
+// otherwise bind or store.
+//
+// A node that does not store the journal is already a client and is returned
+// unchanged.
+func clientOnly(cfg natsfabric.Config) natsfabric.Config {
+	if !cfg.HostsStorage {
+		return cfg
+	}
+	cfg.HostsStorage = false
+	// cfg.Servers keeps the local server first and all peer storage servers after
+	// it. Peers let the standby remain caught up if the local active disappears.
+	cfg.ClientAddress = ""
+	cfg.ClusterAddress = ""
+	cfg.MonitorAddress = ""
+	cfg.Routes = nil
+	cfg.DataDir = ""
+	return cfg
 }
 
 // nodeDataDir places this node's journal storage in its own subdirectory of the

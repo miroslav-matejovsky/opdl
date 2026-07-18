@@ -24,8 +24,35 @@ type Manifest struct {
 	Services []string `json:"services"`
 	// Deployment is the deployment descriptor filename in the package.
 	Deployment string `json:"deployment"`
+	// Primary is the preferred process.
+	Primary Launch `json:"primary"`
+	// Standby is the optional failover process.
+	Standby *Launch `json:"standby,omitempty"`
 	// GeneratedAt is when the package was produced (UTC).
 	GeneratedAt time.Time `json:"generated_at"`
+}
+
+// Launch is one process invocation from the deployment manifest.
+type Launch struct {
+	// Args are added to the binary's normal arguments.
+	Args []string `json:"args"`
+}
+
+// instanceFlag selects a process role.
+const instanceFlag = "-instance"
+
+const (
+	primaryInstance = "primary"
+	standbyInstance = "standby"
+)
+
+func launches(warmStandby bool) (primary Launch, standby *Launch) {
+	primary = Launch{Args: []string{instanceFlag, primaryInstance}}
+	if !warmStandby {
+		return primary, nil
+	}
+	standby = &Launch{Args: []string{instanceFlag, standbyInstance}}
+	return primary, standby
 }
 
 // Release is the release metadata shipped in a package.

@@ -13,10 +13,19 @@ import (
 // file is the schema of the platform's TOML configuration file. It carries the
 // settings a user may set without touching the embedded deployment descriptor.
 type file struct {
-	Address           string      `toml:"address"`
-	ReadHeaderTimeout string      `toml:"read_header_timeout"`
-	ShutdownTimeout   string      `toml:"shutdown_timeout"`
-	EventFabric       EventFabric `toml:"event_fabric"`
+	Address           string `toml:"address"`
+	ReadHeaderTimeout string `toml:"read_header_timeout"`
+	ShutdownTimeout   string `toml:"shutdown_timeout"`
+	// InstanceDir is the local runtime directory holding this machine's fence
+	// and per-process status files. It is required, is shared by both processes of
+	// a machine, and must be on a local filesystem. It is not the journal store:
+	// it carries local coordination and diagnostics, not site history.
+	InstanceDir string `toml:"instance_dir"`
+	// LagBound bounds how long a process's projection may lag the journal before it
+	// stops being promotable, and before an active process stops serving rather than
+	// answering from a stale view. It is required and must be positive.
+	LagBound    string      `toml:"lag_bound"`
+	EventFabric EventFabric `toml:"event_fabric"`
 }
 
 // EventFabric carries per-adapter runtime settings for the Event Fabric. It is
@@ -114,6 +123,14 @@ func loadFile(path string) (file, error) {
 	f.ShutdownTimeout = strings.TrimSpace(f.ShutdownTimeout)
 	if f.ShutdownTimeout == "" {
 		return file{}, fmt.Errorf("configuration file %s: shutdown_timeout is required", path)
+	}
+	f.InstanceDir = strings.TrimSpace(f.InstanceDir)
+	if f.InstanceDir == "" {
+		return file{}, fmt.Errorf("configuration file %s: instance_dir is required", path)
+	}
+	f.LagBound = strings.TrimSpace(f.LagBound)
+	if f.LagBound == "" {
+		return file{}, fmt.Errorf("configuration file %s: lag_bound is required", path)
 	}
 	nats := &f.EventFabric.Nats
 	nats.DataDir = strings.TrimSpace(nats.DataDir)

@@ -24,6 +24,9 @@
 //   - resilience_test.go is the platform interrupted or unable to start: a killed
 //     machine that must come back to the same answers, and a machine whose
 //     journal storage is unusable, which must refuse to serve.
+//   - warm_standby_test.go launches the packaged primary and standby, forces and
+//     gracefully hands ownership over repeatedly, checks preferred-primary
+//     reclamation and full shutdown, and records timing and memory baselines.
 //   - dotnet_sdk_e2e_test.go is the whole thing through the generated .NET SDK:
 //     the builder, two platform processes, a real site journal, and a consumer.
 //
@@ -65,9 +68,11 @@
 //
 // # Evidence
 //
-// Behavior is checked through the platform's public API: the projected
+// Domain behavior is checked through the platform's public API: the projected
 // registration state every machine answers from, and the fact that a machine
-// answers at all. The second is a real signal rather than a liveness check, since
+// answers at all. Process lifecycle is checked through each role's local atomic
+// status file, which is the deployment-tooling contract but never an ownership
+// fence. The API signal is real rather than a liveness check, since
 // the platform does not serve until its Event Fabric has connected, its
 // projection has replayed the retained journal, and its handlers have worked
 // through what was waiting for them.
@@ -82,10 +87,8 @@
 // importing the platform's Go types, so a scenario checks the published contract
 // and a change to it fails here rather than silently recompiling.
 //
-// Machines are force-stopped rather than signaled: a portable graceful interrupt
-// of a child process does not exist on Windows. That also makes the restart
-// scenario the more demanding one, since a killed machine must still come back to
-// the same state. The orderly shutdown a signal would cause, and the order it
-// releases dependencies in, are covered by the platform's own in-process
-// lifecycle tests.
+// Restart scenarios force-stop a process because crash recovery is the promise
+// they test. Warm-standby scenarios additionally use the operating system's
+// process-control signal for planned handover and full shutdown. No runtime
+// promotion endpoint exists.
 package scenarios

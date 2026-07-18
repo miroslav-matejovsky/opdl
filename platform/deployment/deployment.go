@@ -1,5 +1,11 @@
 package deployment
 
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+)
+
 // Descriptor is one machine's deployment definition as the platform consumes it:
 // its identity (platform, project, environment, site, machine, role, ip), the
 // services it hosts, and the project features enabled on it.
@@ -22,15 +28,59 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches enabled on the machine.
 	Features Features `json:"features"`
+	// Instances is the machine's warm-standby policy. It is always present.
+	Instances InstancePolicy `json:"instances"`
 	// EventFabric is the resolved Event Fabric topology for this machine.
 	EventFabric EventFabric `json:"event_fabric"`
+}
+
+// UnmarshalJSON decodes a descriptor and requires its resolved instance policy
+// to be explicit. Without the presence checks, omitted JSON fields would decode
+// to false and silently turn an incomplete descriptor into a primary-only opt-out.
+func (d *Descriptor) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	instances, ok := fields["instances"]
+	if !ok || bytes.Equal(bytes.TrimSpace(instances), []byte("null")) {
+		return fmt.Errorf("deployment descriptor: instances is required")
+	}
+	var policy map[string]json.RawMessage
+	if err := json.Unmarshal(instances, &policy); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid instances policy: %w", err)
+	}
+	warmStandby, ok := policy["warm_standby"]
+	if !ok || bytes.Equal(bytes.TrimSpace(warmStandby), []byte("null")) {
+		return fmt.Errorf("deployment descriptor: instances.warm_standby is required")
+	}
+	var value bool
+	if err := json.Unmarshal(warmStandby, &value); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid instances.warm_standby: %w", err)
+	}
+
+	type plain Descriptor
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*d = Descriptor(decoded)
+	return nil
 }
 
 // Features are the capability switches carried from the project onto a machine.
 type Features struct {
 	Chaos bool `json:"chaos"`
-	// Redundancy is a legacy flag. The current runtime does not act on it.
-	Redundancy bool `json:"redundancy"`
+}
+
+// InstancePolicy is a machine's resolved warm-standby policy: whether the machine
+// runs an optional standby process alongside its primary process.
+// It is always present in a generated descriptor, so a reader never has to infer
+// the default.
+type InstancePolicy struct {
+	// WarmStandby enables the standby process. An omitted blueprint policy
+	// resolves to true; an explicit false runs only the primary.
+	WarmStandby bool `json:"warm_standby"`
 }
 
 // EventFabric is this machine's resolved view of the site's Event Fabric: the

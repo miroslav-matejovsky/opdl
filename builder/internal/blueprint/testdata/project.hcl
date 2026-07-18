@@ -7,9 +7,6 @@ project "customer-a" {
   # or to test the resilience of the system in production in a controlled way, with the customer aware of the test and its potential impact on their operations
   features {
     chaos = true
-    # redundancy is enabling two instances of platform services to run in parallel on the same machine, to provide redundancy in case one instance fails.
-    # This is useful for critical services that need to be highly available, but it also increases resource usage and complexity.
-    redundancy = true
   }
 
   site "north" {
@@ -17,6 +14,12 @@ project "customer-a" {
       role     = "sensor-node"
       ip       = "10.0.1.10"
       services = ["sensor-services"]
+
+      # warm standby is enabled by default; this machine opts out and runs only
+      # the preferred primary process.
+      platform {
+        warm_standby = false
+      }
     }
 
     machine "local-server" {

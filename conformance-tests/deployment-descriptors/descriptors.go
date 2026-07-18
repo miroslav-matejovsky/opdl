@@ -58,7 +58,8 @@ func checkRoundTrip() error {
 		Role:        "sensor-node",
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
-		Features:    builderdeployment.Features{Chaos: true, Redundancy: true},
+		Features:    builderdeployment.Features{Chaos: true},
+		Instances:   builderdeployment.InstancePolicy{WarmStandby: true},
 		EventFabric: builderdeployment.EventFabric{
 			Peers: []builderdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
@@ -69,6 +70,21 @@ func checkRoundTrip() error {
 	data, err := json.Marshal(built)
 	if err != nil {
 		return err
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	instances, ok := wire["instances"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted instances")
+	}
+	var policy map[string]json.RawMessage
+	if err := json.Unmarshal(instances, &policy); err != nil {
+		return err
+	}
+	if _, ok := policy["warm_standby"]; !ok {
+		return fmt.Errorf("builder descriptor omitted instances.warm_standby")
 	}
 
 	var got platformdeployment.Descriptor
@@ -85,7 +101,8 @@ func checkRoundTrip() error {
 		Role:        "sensor-node",
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
-		Features:    platformdeployment.Features{Chaos: true, Redundancy: true},
+		Features:    platformdeployment.Features{Chaos: true},
+		Instances:   platformdeployment.InstancePolicy{WarmStandby: true},
 		EventFabric: platformdeployment.EventFabric{
 			Peers: []platformdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},

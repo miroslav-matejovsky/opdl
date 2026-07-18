@@ -12,8 +12,7 @@
 //	  environment = "production"
 //
 //	  features {
-//	    chaos      = true
-//	    redundancy = true
+//	    chaos = true
 //	  }
 //
 //	  site "north" {
@@ -21,16 +20,24 @@
 //	      role     = "sensor-node"
 //	      ip       = "10.0.1.10"
 //	      services = ["sensor-services"]
+//
+//	      platform {
+//	        warm_standby = false
+//	      }
 //	    }
 //	  }
 //	}
 //
 // A Project names an environment and holds Features and Sites; a Site holds
-// Machines; a Machine names a role, an IP address, and the services assigned
-// to it. Chaos is an implemented project-level capability switch. Redundancy is
-// currently only carried into deployment descriptors; the runtime does not act
-// on it. The next descriptor revision replaces it with an explicit machine-level
-// warm-standby policy.
+// Machines; a Machine names a role, an IP address, the services assigned to it,
+// and an optional platform subsection. Chaos is an implemented project-level
+// capability switch.
+//
+// The machine platform subsection carries platform-runtime policy, as opposed to
+// what the machine deploys. Its warm_standby attribute opts a machine in or out
+// of running a standby process; it is presence-aware, so an omitted block or
+// attribute resolves to the default of enabled and only an explicit false
+// disables it.
 //
 // The hcl struct tags on these types are the authoring wire format and the
 // only contract this package exposes; there is no separate model to keep in

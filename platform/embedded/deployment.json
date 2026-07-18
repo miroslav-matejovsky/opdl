@@ -10,8 +10,10 @@
     "core-services"
   ],
   "features": {
-    "chaos": false,
-    "redundancy": false
+    "chaos": false
+  },
+  "instances": {
+    "warm_standby": false
   },
   "event_fabric": {
     "peers": []

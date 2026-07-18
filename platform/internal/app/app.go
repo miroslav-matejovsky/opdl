@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,15 +13,15 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 )
 
 // Run starts the platform runtime with the given command-line arguments. It
-// loads configuration, brings this node's Event Fabric up to readiness, and
-// serves the HTTP API until signaled.
+// loads configuration, validates this process role against the machine
+// fence, and runs either the active runtime or a warm standby until signaled.
 func Run(args []string) error {
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
 	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")
+	instance := fs.String("instance", "", "process role: primary or standby")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -29,27 +30,21 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
+	descriptor := cfg.Descriptor()
+
+	// Validate the explicit role before opening sockets or storage. Primary-only
+	// machines reject standby.
+	role, err := resolveRole(*instance, descriptor.Instances.WarmStandby)
+	if err != nil {
+		return err
+	}
 	fmt.Println(cfg.Summary())
+	fmt.Printf("    instance     role=%s warm_standby=%t\n", role, descriptor.Instances.WarmStandby)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The Event Fabric comes up before the public API, and a machine that cannot
-	// reach readiness does not serve: answering queries from a projection that
-	// has not caught up would be answering for a site this process has not seen.
-	site, err := open(ctx, cfg.Descriptor(), cfg)
-	if err != nil {
-		return err
-	}
-
-	addr := cfg.Address()
-	fmt.Printf("platform: listening on %s\n", addr)
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           httpapi.NewHandler(site.commands, site.queries),
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout(),
-	}
-	return serve(ctx, srv, site, cfg.ShutdownTimeout())
+	return runProcess(ctx, cfg, descriptor, role)
 }
 
 // serve runs srv until it stops on its own, its site stops carrying events, or
@@ -65,8 +60,17 @@ func Run(args []string) error {
 // journal cannot answer for the site any more; serving on would mean quietly
 // returning a view the platform already knows is incomplete.
 func serve(ctx context.Context, srv *http.Server, site *site, timeout time.Duration) error {
+	var listen net.ListenConfig
+	listener, err := listen.Listen(ctx, "tcp", srv.Addr)
+	if err != nil {
+		return errors.Join(fmt.Errorf("serve HTTP: %w", err), site.close(ctx))
+	}
+	return serveListener(ctx, srv, listener, site, timeout, nil)
+}
+
+func serveListener(ctx context.Context, srv *http.Server, listener net.Listener, site *site, timeout time.Duration, onStopping func() error) error {
 	listen := make(chan error, 1)
-	go func() { listen <- srv.ListenAndServe() }()
+	go func() { listen <- srv.Serve(listener) }()
 
 	select {
 	case err := <-listen:
@@ -76,6 +80,10 @@ func serve(ctx context.Context, srv *http.Server, site *site, timeout time.Durat
 		fmt.Fprintln(os.Stderr, "platform: the event fabric stopped carrying events; shutting down")
 	case <-ctx.Done():
 	}
+	var transitionErr error
+	if onStopping != nil {
+		transitionErr = onStopping()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -83,7 +91,7 @@ func serve(ctx context.Context, srv *http.Server, site *site, timeout time.Durat
 	if err != nil {
 		err = fmt.Errorf("shut down HTTP server: %w", err)
 	}
-	return errors.Join(err, listenError(<-listen), site.close(ctx))
+	return errors.Join(transitionErr, err, listenError(<-listen), site.close(ctx))
 }
 
 // listenError discards the expected end of a server that was shut down and

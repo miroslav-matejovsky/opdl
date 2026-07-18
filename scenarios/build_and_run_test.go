@@ -22,6 +22,8 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 
 	deployment := prepareSite(t, outDir, t.TempDir(), "scenario", "node")
 	node := deployment.machine(t, "node")
+	require.Nil(t, readManifest(t, node.binaryPath).Standby,
+		"an explicit per-machine opt-out must package only the primary launch")
 	node.start(ctx, t)
 	waitForAPI(ctx, t, node)
 

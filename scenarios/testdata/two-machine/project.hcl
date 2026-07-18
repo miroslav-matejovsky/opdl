@@ -6,21 +6,29 @@ project "two-machine" {
   environment = "development"
 
   features {
-    chaos      = false
-    redundancy = false
+    chaos = false
   }
 
   site "local" {
+    # This fixture isolates site coordination from local process redundancy.
     machine "node-a" {
       role     = "all-in-one"
       ip       = "127.0.0.1"
       services = ["core-services"]
+
+      platform {
+        warm_standby = false
+      }
     }
 
     machine "node-b" {
       role     = "all-in-one"
       ip       = "127.0.0.2"
       services = ["core-services"]
+
+      platform {
+        warm_standby = false
+      }
     }
   }
 }

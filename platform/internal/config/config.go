@@ -20,6 +20,8 @@ type Config struct {
 	address           string
 	readHeaderTimeout time.Duration
 	shutdownTimeout   time.Duration
+	instanceDir       string
+	lagBound          time.Duration
 	eventFabric       EventFabric
 	username          string
 	password          string
@@ -51,12 +53,18 @@ func Load(configPath string) (*Config, error) {
 	if _, err := validateDuration("[event_fabric.nats] catch_up_timeout", f.EventFabric.Nats.CatchUpTimeout); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	lagBound, err := validateLagBound(f.LagBound)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
 
 	cfg := &Config{
 		descriptor:        d,
 		address:           f.Address,
 		readHeaderTimeout: readHeaderTimeout,
 		shutdownTimeout:   shutdownTimeout,
+		instanceDir:       f.InstanceDir,
+		lagBound:          lagBound,
 		eventFabric:       f.EventFabric,
 	}
 	// Credentials are read here rather than by the adapter: composition owns
@@ -79,6 +87,21 @@ func validateDuration(name, s string) (time.Duration, error) {
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("invalid %s %s: duration must be positive", name, d)
+	}
+	return d, nil
+}
+
+// validateLagBound parses the required positive projection lag bound.
+func validateLagBound(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, fmt.Errorf("lag_bound is required")
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid lag_bound %q: %w", s, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid lag_bound %s: duration must be positive", d)
 	}
 	return d, nil
 }
@@ -113,6 +136,14 @@ func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout 
 // Event Fabric shutdown.
 func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
 
+// InstanceDir returns the local runtime directory holding this machine's fence
+// and per-process status files. Both processes share it.
+func (c *Config) InstanceDir() string { return c.instanceDir }
+
+// LagBound returns the configured projection lag bound. A process lagging beyond
+// it is not promotable, and an active process beyond it stops serving.
+func (c *Config) LagBound() time.Duration { return c.lagBound }
+
 // EventFabric returns the Event Fabric adapter settings from the configuration
 // file. Only runtime composition reads it: it is how a site places the journal's
 // storage and moves the transport's sockets, and no domain package has any
@@ -140,12 +171,15 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    role         %s\n", d.Role)
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
-	fmt.Fprintf(&b, "    features     chaos=%t redundancy=%t\n", d.Features.Chaos, d.Features.Redundancy)
+	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
+	fmt.Fprintf(&b, "    instances    warm_standby=%t\n", d.Instances.WarmStandby)
 	fmt.Fprintf(&b, "    event_fabric %s\n", eventFabricSummary(d.EventFabric))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    address             %s\n", c.address)
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
+	fmt.Fprintf(&b, "    instance_dir        %s\n", c.instanceDir)
+	fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
 	fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
 	return b.String()
 }
@@ -194,6 +228,9 @@ func natsSummary(n EventFabricNats) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// lagBoundSummary renders the required projection lag bound.
+func lagBoundSummary(bound time.Duration) string { return bound.String() }
 
 // credentialsSummary renders an unset credentials file as an explicit statement
 // that the deployment is running unauthenticated, so the startup block never

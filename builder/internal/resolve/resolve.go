@@ -49,11 +49,24 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		IP:          machine.IP,
 		Services:    append([]string(nil), machine.Services...),
 		Features: deployment.Features{
-			Chaos:      p.Features.Chaos,
-			Redundancy: p.Features.Redundancy,
+			Chaos: p.Features.Chaos,
+		},
+		Instances: deployment.InstancePolicy{
+			WarmStandby: warmStandby(machine),
 		},
 		EventFabric: eventFabric(site, machine),
 	}
+}
+
+// warmStandby resolves a machine's warm-standby policy. Warm standby is enabled
+// by default: an omitted platform block, or an omitted warm_standby attribute
+// inside it, means enabled. Only an explicit false disables it, so a descriptor
+// always states the result rather than leaving a reader to infer the default.
+func warmStandby(machine blueprint.Machine) bool {
+	if machine.Platform == nil || machine.Platform.WarmStandby == nil {
+		return true
+	}
+	return *machine.Platform.WarmStandby
 }
 
 // eventFabric derives one machine's Event Fabric topology from its site. The

@@ -3,6 +3,7 @@ package scenarios
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -71,6 +72,25 @@ func machineBinary(outDir, project, machine string) string {
 	return filepath.Join(outDir, project, scenarioSite, machine, name)
 }
 
+type launch struct {
+	Args []string `json:"args"`
+}
+
+type packageManifest struct {
+	Primary launch  `json:"primary"`
+	Standby *launch `json:"standby"`
+}
+
+func readManifest(t *testing.T, binaryPath string) packageManifest {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(binaryPath), "manifest.json"))
+	require.NoError(t, err)
+	var manifest packageManifest
+	require.NoError(t, json.Unmarshal(data, &manifest))
+	require.NotEmpty(t, manifest.Primary.Args)
+	return manifest
+}
+
 // sockets are one machine's reserved addresses and its journal storage.
 //
 // A deployment derives all of these from the machine's own IP on fixed ports.
@@ -79,11 +99,12 @@ func machineBinary(outDir, project, machine string) string {
 // hands them to the platform as runtime overrides, which move sockets and
 // nothing else. Which machine a process is remains what it was built with.
 type sockets struct {
-	api     string
-	client  string
-	cluster string
-	monitor string
-	dataDir string
+	api         string
+	client      string
+	cluster     string
+	monitor     string
+	dataDir     string
+	instanceDir string
 }
 
 // site is the machines of one built project under a scenario's control.
@@ -113,11 +134,12 @@ func prepareSite(t *testing.T, outDir, workDir, project string, names ...string)
 	reserved := make([]sockets, len(names))
 	for i, name := range names {
 		reserved[i] = sockets{
-			api:     addrs[4*i],
-			client:  addrs[4*i+1],
-			cluster: addrs[4*i+2],
-			monitor: addrs[4*i+3],
-			dataDir: filepath.Join(workDir, "nats-"+name),
+			api:         addrs[4*i],
+			client:      addrs[4*i+1],
+			cluster:     addrs[4*i+2],
+			monitor:     addrs[4*i+3],
+			dataDir:     filepath.Join(workDir, "nats-"+name),
+			instanceDir: filepath.Join(workDir, "instance-"+name),
 		}
 	}
 
@@ -197,6 +219,8 @@ func (s *site) startAll(ctx context.Context, t *testing.T) {
 // machine is one platform process under a scenario's control: prepared, and
 // running once started.
 type machine struct {
+	// project is part of the compiled deployment identity and local status path.
+	project string
 	// name is the deployment machine identity.
 	name string
 	// url is the base URL of its registration API, known from the moment it is
@@ -208,13 +232,133 @@ type machine struct {
 
 	binaryPath string
 	configPath string
+	launchArgs []string
 	output     *bytes.Buffer
 	cmd        *exec.Cmd
 	stopped    bool
 }
 
+// processStatus is the local operational contract deployment tooling reads.
+// It is re-declared here so scenarios consume the packaged runtime as a black
+// box instead of importing platform internals.
+type processStatus struct {
+	Role       string    `json:"role"`
+	State      string    `json:"state"`
+	PID        int       `json:"pid"`
+	Applied    uint64    `json:"applied"`
+	HighWater  uint64    `json:"high_water"`
+	Promotable bool      `json:"promotable"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	LastError  string    `json:"last_error"`
+}
+
+// managedProcess is one explicitly named primary or standby process. It is used
+// by redundancy scenarios that need to stop one process without stopping the
+// other process of the same machine.
+type managedProcess struct {
+	role   string
+	output *bytes.Buffer
+	cmd    *exec.Cmd
+	done   chan struct{}
+	err    error
+}
+
 // running reports whether the machine has been started.
 func (m *machine) running() bool { return m.cmd != nil && !m.stopped }
+
+func (m *machine) startManaged(ctx context.Context, t *testing.T, role string, args []string) *managedProcess {
+	t.Helper()
+	p := &managedProcess{
+		role:   role,
+		output: &bytes.Buffer{},
+		done:   make(chan struct{}),
+	}
+	commandArgs := append([]string{"-config", m.configPath}, args...)
+	p.cmd = exec.CommandContext(ctx, m.binaryPath, commandArgs...)
+	configureManagedCommand(p.cmd)
+	p.cmd.Stdout = p.output
+	p.cmd.Stderr = p.output
+	require.NoError(t, p.cmd.Start())
+	go func() {
+		p.err = p.cmd.Wait()
+		close(p.done)
+	}()
+	t.Cleanup(p.kill)
+	return p
+}
+
+func (p *managedProcess) pid() int { return p.cmd.Process.Pid }
+
+func (p *managedProcess) running() bool {
+	select {
+	case <-p.done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (p *managedProcess) kill() {
+	if !p.running() {
+		return
+	}
+	_ = p.cmd.Process.Kill()
+	<-p.done
+}
+
+func (p *managedProcess) stopGracefully(t *testing.T) {
+	t.Helper()
+	if !p.running() {
+		return
+	}
+	require.NoError(t, signalManagedProcess(p.cmd.Process))
+	select {
+	case <-p.done:
+		require.NoError(t, p.err, "%s did not stop cleanly:\n%s", p.role, p.output.String())
+	case <-time.After(apiWaitTimeout):
+		p.kill()
+		require.FailNowf(t, p.role+" did not stop", "%s", p.output.String())
+	}
+}
+
+func (p *managedProcess) logs() string { return p.output.String() }
+
+func (m *machine) statusPath(role string) string {
+	machineDir := strings.Join([]string{m.project, "development", scenarioSite, m.name}, "-")
+	return filepath.Join(m.sockets.instanceDir, machineDir, "process-"+role+".status")
+}
+
+func (m *machine) readStatus(role string) (processStatus, error) {
+	data, err := os.ReadFile(m.statusPath(role))
+	if err != nil {
+		return processStatus{}, err
+	}
+	var status processStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		return processStatus{}, err
+	}
+	return status, nil
+}
+
+func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string, promotable bool) processStatus {
+	t.Helper()
+	var last processStatus
+	require.Eventually(t, func() bool {
+		if !process.running() {
+			return false
+		}
+		status, err := m.readStatus(process.role)
+		if err != nil {
+			return false
+		}
+		last = status
+		return status.Role == process.role && status.PID == process.pid() && status.State == state &&
+			(!promotable || status.Promotable) && status.LastError == ""
+	}, apiWaitTimeout, apiPollInterval,
+		"%s process %d never reached %s; last status %+v; logs:\n%s",
+		process.role, process.pid(), state, &last, process.logs())
+	return last
+}
 
 // prepareMachine writes a configuration file for one built machine without
 // starting it.
@@ -233,11 +377,13 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets, routes
 	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved, routes, servers), 0o644))
 
 	return &machine{
+		project:    s.project,
 		name:       name,
 		url:        "http://" + reserved.api,
 		sockets:    reserved,
 		binaryPath: binaryPath,
 		configPath: configPath,
+		launchArgs: readManifest(t, binaryPath).Primary.Args,
 		output:     &bytes.Buffer{},
 	}
 }
@@ -252,6 +398,8 @@ func platformConfig(reserved sockets, routes, servers []string) []byte {
 	return fmt.Appendf(nil, `address = %q
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
+instance_dir = %q
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
@@ -261,7 +409,7 @@ cluster_address = %q
 monitor_address = %q
 routes = [%s]
 servers = [%s]
-`, reserved.api, filepath.ToSlash(reserved.dataDir),
+`, reserved.api, filepath.ToSlash(reserved.instanceDir), filepath.ToSlash(reserved.dataDir),
 		reserved.client, reserved.cluster, reserved.monitor, quoteList(routes), quoteList(servers))
 }
 
@@ -278,7 +426,8 @@ func quoteList(addrs []string) string {
 func (m *machine) start(ctx context.Context, t *testing.T) {
 	t.Helper()
 	require.Nil(t, m.cmd, "%s is already started", m.name)
-	m.cmd = exec.CommandContext(ctx, m.binaryPath, "-config", m.configPath)
+	args := append([]string{"-config", m.configPath}, m.launchArgs...)
+	m.cmd = exec.CommandContext(ctx, m.binaryPath, args...)
 	m.cmd.Stdout = m.output
 	m.cmd.Stderr = m.output
 	require.NoError(t, m.cmd.Start())

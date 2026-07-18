@@ -44,6 +44,12 @@
 // part of a proposal or decision ID, so the same fact always hashes to the same
 // identity regardless of when or in what order it was delivered.
 //
+// The local process role is never part of these identities either.
+// Proposal IDs, decision IDs, and the durable handler's consumer name are
+// machine-scoped, so a machine running a warm standby second process (see
+// internal/redundancy) still confirms once and decides once. A role is lifecycle
+// and diagnostics, not a second voter.
+//
 // # Ordering and conflict
 //
 // Order is the site journal order, delivered as eventfabric.Delivery.Sequence.

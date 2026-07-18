@@ -1,24 +1,14 @@
-// Package app implements the top-level execution and runtime orchestration for
-// the platform. It composes the runtime's dependencies — configuration, the
-// Event Fabric and its site journal, the node-local registration projection, the
-// registration services, and the durable registration handler — and owns their
-// lifecycle through startup, execution, and shutdown.
+// Package app composes and runs the platform runtime.
 //
-// It is the only package that knows the platform coordinates through events on a
-// particular transport. Domain packages are handed the narrow roles they need: a
-// publisher to state facts, a projector to fold them, a handler to react. The
-// HTTP boundary is handed the two registration services. Nothing below this
-// package can reach the transport, name a subject, or configure a stream.
+// The preferred primary and optional standby share one machine fence. Only the
+// fence owner opens storage, attaches durable handlers, publishes readiness, and
+// serves the public API. The other process runs a client-only projector. Each
+// process writes local status and stops if that status cannot be maintained. A
+// standby waits for the fence independently of its projector and recomposes the
+// active runtime after acquiring it. A returning primary uses the same path
+// after controlled handover from a promoted standby.
 //
-// Composition also owns what no single component can conclude. Readiness is a
-// statement about a whole node — its journal, its projections, and its handlers —
-// so this package runs the bounded startup sequence, decides the node is ready,
-// and states that into the journal; a transport announcing itself ready would be
-// claiming something it cannot know. Shutdown is the same in reverse.
-//
-// The current runtime starts one process for one machine identity. It has no
-// local standby, fencing, or process failover. Journal replication preserves
-// history but does not make this process redundant.
-//
-// Run is the entry point invoked by the platform command-line interface.
+// App owns startup, readiness, lag enforcement, and ordered shutdown. Domain
+// packages receive narrow Event Fabric and registration contracts and never
+// configure the transport directly.
 package app
