@@ -15,7 +15,8 @@ Backward compatibility is out of scope. The unused project-level
 
 - Enable one warm standby by default for every machine in its resolved
   deployment descriptor.
-- Allow `warm_standby = false` on an individual blueprint machine.
+- Allow `warm_standby = false` in an individual blueprint machine's `platform`
+  subsection.
 - Run the active and standby as separate OS processes using the same packaged
   binary and descriptor.
 - Guarantee that only one process on a machine serves the public API, runs
@@ -69,14 +70,20 @@ Backward compatibility is out of scope. The unused project-level
 
 ## Descriptor and authoring shape
 
-Warm standby is a machine policy. An omitted blueprint attribute means enabled:
+Warm standby is a machine policy, authored under a `platform` subsection of the
+machine so a blueprint reader sees platform-runtime policy grouped and explicit.
+An omitted `platform` block, or an omitted `warm_standby` inside it, means
+enabled:
 
 ```hcl
 machine "sensor" {
-  role         = "sensor-node"
-  ip           = "10.0.1.10"
-  services     = ["sensor-services"]
-  warm_standby = false # optional opt-out
+  role     = "sensor-node"
+  ip       = "10.0.1.10"
+  services = ["sensor-services"]
+
+  platform {
+    warm_standby = false # optional opt-out
+  }
 }
 ```
 

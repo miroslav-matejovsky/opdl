@@ -15,9 +15,12 @@ Depends on: [Stage 1](01-instance-contract.md).
 
 1. Remove project-level `features.redundancy` from the blueprint and from both
    deployment descriptor representations. Do not preserve a compatibility alias.
-2. Add optional `warm_standby` to `blueprint.Machine` as a pointer or equivalent
-   presence-aware value. An omitted attribute resolves to `true`; explicit
-   `false` disables the second slot for that machine.
+2. Add an optional `platform` subsection to `blueprint.Machine` carrying
+   `warm_standby` as a pointer or equivalent presence-aware value. An omitted
+   `platform` block, or an omitted `warm_standby` inside it, resolves to `true`;
+   explicit `false` disables the second slot for that machine. Grouping the
+   attribute under `platform` keeps platform-runtime policy explicit for a
+   blueprint reader.
 3. Add an explicit descriptor section in builder and platform modules:
 
    ```go
