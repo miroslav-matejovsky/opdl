@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -19,6 +20,18 @@ import (
 // is short enough to be useful to a watching deployment tool and long enough not
 // to churn the disk.
 const statusInterval = time.Second
+
+const standbyRetryInterval = 200 * time.Millisecond
+
+const unknownLag = "unknown"
+
+type activationKind string
+
+const (
+	activationInitial     activationKind = "initial activation"
+	activationPromotion   activationKind = "standby promotion"
+	activationReclamation activationKind = "primary reclamation"
+)
 
 // resolveRole validates the requested process role against the deployment policy.
 //
@@ -60,31 +73,46 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.D
 		return err
 	}
 	if acquired {
-		// The fence is released only after the active resources have closed, so no
-		// second process can open the same listener or server while this one is up.
-		return errors.Join(runActive(ctx, cfg, descriptor, role, statusPath), fence.Release())
+		return runFencedActive(ctx, cfg, descriptor, role, statusPath, fence, activationInitial)
 	}
 	if !descriptor.Instances.WarmStandby {
 		return fmt.Errorf("another process already holds the active fence for machine %q and this machine does not run a warm standby", descriptor.Machine)
 	}
-	return runStandby(ctx, cfg, descriptor, role, statusPath)
+	return runStandby(ctx, cfg, descriptor, role, statusPath, fence)
 }
 
 // runActive brings this node's Event Fabric up to readiness and serves the public
 // API until signaled or until its projection falls too far behind the journal.
 func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string) error {
-	site, err := open(ctx, descriptor, cfg, true)
+	site, err := open(ctx, descriptor, cfg, true, role)
 	if err != nil {
-		return errors.Join(err, writeFailedStatus(statusPath, role, err))
+		return err
+	}
+
+	var listen net.ListenConfig
+	listener, err := listen.Listen(ctx, "tcp", cfg.Address())
+	if err != nil {
+		return errors.Join(fmt.Errorf("listen on %s: %w", cfg.Address(), err), site.close(ctx))
 	}
 
 	// A projection that falls too far behind stops serving rather than answering
 	// from a stale view: the status loop cancels serving when it crosses the bound.
 	serveCtx, stopServing := context.WithCancel(ctx)
 	defer stopServing()
-	statusDone, err := startStatus(serveCtx, site.fabric, role, redundancy.StateActive, statusPath, cfg.LagBound(), stopServing, stopServing)
+	statusCtx, stopStatus := context.WithCancel(context.WithoutCancel(ctx))
+	statusDone, err := startStatus(statusCtx, site.fabric, role, redundancy.StateActive, statusPath, cfg.LagBound(), stopServing, stopServing)
 	if err != nil {
-		return errors.Join(err, site.close(ctx), writeFailedStatus(statusPath, role, err))
+		stopStatus()
+		return errors.Join(err, listener.Close(), site.close(ctx))
+	}
+	statusStopped := false
+	stopActiveStatus := func() error {
+		if statusStopped {
+			return nil
+		}
+		statusStopped = true
+		stopStatus()
+		return <-statusDone
 	}
 
 	addr := cfg.Address()
@@ -94,54 +122,140 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 		Handler:           httpapi.NewHandler(site.commands, site.queries),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout(),
 	}
-	serveErr := serve(serveCtx, srv, site, cfg.ShutdownTimeout())
+	serveErr := serveListener(serveCtx, srv, listener, site, cfg.ShutdownTimeout(), func() error {
+		return errors.Join(stopActiveStatus(), writeTransitionStatus(statusPath, role, redundancy.StateStopping))
+	})
 	stopServing()
-	statusErr := <-statusDone
+	statusErr := stopActiveStatus()
 	if statusErr != nil {
-		return errors.Join(serveErr, statusErr, writeFailedStatus(statusPath, role, statusErr))
+		return errors.Join(serveErr, statusErr)
 	}
 	return serveErr
 }
 
-// runStandby follows the journal as a warm standby until signaled. It opens a
-// client-only transport and the projector, catches up, and keeps its projection
-// current, holding no active capability.
-func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string) error {
-	site, err := open(ctx, descriptor, cfg, false)
-	if err != nil {
-		return errors.Join(err, writeFailedStatus(statusPath, role, err))
-	}
-
-	// A standby never stops serving on lag because it serves nothing; it only
-	// records whether it is current enough to be promoted, so onLagExceeded is nil.
-	standbyCtx, stopStandby := context.WithCancel(ctx)
+// runStandby keeps a client-only projection while independently waiting for the
+// fence. Fence acquisition cancels the client composition and starts activation.
+func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string, fence *redundancy.Fence) error {
+	waitCtx, stopWaiting := context.WithCancel(ctx)
+	defer stopWaiting()
+	standbyCtx, stopStandby := context.WithCancel(waitCtx)
 	defer stopStandby()
-	statusDone, err := startStatus(standbyCtx, site.fabric, role, redundancy.StateStandby, statusPath, cfg.LagBound(), nil, stopStandby)
+
+	fenceDone := make(chan error, 1)
+	go func() {
+		err := fence.Acquire(waitCtx)
+		if err == nil {
+			stopStandby()
+		}
+		fenceDone <- err
+	}()
+
+	opened, err := openWaitingStandby(ctx, standbyCtx, cfg, descriptor, role, statusPath, fence)
 	if err != nil {
-		return errors.Join(err, site.close(ctx), writeFailedStatus(statusPath, role, err))
+		stopWaiting()
+		<-fenceDone
+		return err
+	}
+	standby := opened.site
+	if err := awaitFence(ctx, waitCtx, cfg, role, statusPath, standby, fence, fenceDone, stopWaiting); err != nil {
+		return err
 	}
 
-	fmt.Printf("platform: %s following the journal\n", role)
-	standbyErr := serveStandby(standbyCtx, site)
-	stopStandby()
-	statusErr := <-statusDone
-	if statusErr != nil {
-		return errors.Join(standbyErr, statusErr, writeFailedStatus(statusPath, role, statusErr))
+	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
+		var closeErr error
+		if standby != nil {
+			closeErr = standby.close(ctx)
+		}
+		return errors.Join(err, closeErr, fence.Release())
 	}
-	return standbyErr
+	if standby != nil {
+		if err := standby.close(ctx); err != nil {
+			return errors.Join(err, fence.Release(), writeFailedStatus(statusPath, role, err))
+		}
+	}
+
+	kind := activationPromotion
+	if role == redundancy.RolePrimary {
+		kind = activationReclamation
+	}
+	return runFencedActive(ctx, cfg, descriptor, role, statusPath, fence, kind)
 }
 
-// serveStandby follows the journal until ctx is canceled or the projector stops,
-// then releases the standby. A standby has no listener to stop; it exists to keep
-// its projection current, so its projector giving up is the only thing besides a
-// signal that ends it. Canceling a standby ends it without promotion.
-func serveStandby(ctx context.Context, site *site) error {
-	select {
-	case <-ctx.Done():
-	case <-site.stopped:
-		fmt.Fprintln(os.Stderr, "platform: the standby projector stopped following the journal; shutting down")
+type standbyOpenResult struct {
+	site *site
+}
+
+func openWaitingStandby(ctx, standbyCtx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string, fence *redundancy.Fence) (standbyOpenResult, error) {
+	for !fence.Held() {
+		standby, err := open(standbyCtx, descriptor, cfg, false, role)
+		if err == nil {
+			return standbyOpenResult{site: standby}, nil
+		}
+		if fence.Held() || ctx.Err() != nil {
+			return standbyOpenResult{}, nil
+		}
+		fmt.Fprintf(os.Stderr, "platform: %s standby projection unavailable: %v; waiting for the active fence\n", role, err)
+		if writeErr := writeUnavailableStatus(statusPath, role, err); writeErr != nil {
+			return standbyOpenResult{}, errors.Join(err, writeErr)
+		}
+		select {
+		case <-time.After(standbyRetryInterval):
+		case <-standbyCtx.Done():
+		}
 	}
-	return site.close(ctx)
+	return standbyOpenResult{}, nil
+}
+
+func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundancy.ProcessRole, statusPath string, standby *site, fence *redundancy.Fence, fenceDone <-chan error, stopWaiting context.CancelFunc) error {
+	var statusDone <-chan error
+	var stopStatus context.CancelFunc
+	if standby != nil && !fence.Held() {
+		statusCtx, cancelStatus := context.WithCancel(context.WithoutCancel(waitCtx))
+		stopStatus = cancelStatus
+		var err error
+		statusDone, err = startStatus(statusCtx, standby.fabric, role, redundancy.StateStandby, statusPath, cfg.LagBound(), nil, stopWaiting)
+		if err != nil {
+			stopStatus()
+			stopWaiting()
+			<-fenceDone
+			return errors.Join(err, standby.close(ctx), writeFailedStatus(statusPath, role, err))
+		}
+		fmt.Printf("platform: %s caught up and waiting for the active fence\n", role)
+	}
+
+	acquireErr := <-fenceDone
+	if stopStatus != nil {
+		stopStatus()
+	}
+	var statusErr error
+	if statusDone != nil {
+		statusErr = <-statusDone
+	}
+	if acquireErr == nil {
+		return statusErr
+	}
+	var closeErr error
+	if standby != nil {
+		closeErr = standby.close(ctx)
+	}
+	if ctx.Err() != nil && statusErr == nil {
+		return errors.Join(writeTransitionStatus(statusPath, role, redundancy.StateStopping), closeErr)
+	}
+	return errors.Join(acquireErr, statusErr, closeErr)
+}
+
+func runFencedActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string, fence *redundancy.Fence, kind activationKind) error {
+	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
+		return errors.Join(err, fence.Release())
+	}
+	fmt.Printf("platform: %s started for %s\n", kind, role)
+	err := runActive(ctx, cfg, descriptor, role, statusPath)
+	releaseErr := fence.Release()
+	if err != nil {
+		return errors.Join(err, releaseErr, writeFailedStatus(statusPath, role, err))
+	}
+	fmt.Printf("platform: %s completed for %s\n", kind, role)
+	return releaseErr
 }
 
 type statusFabric interface {
@@ -159,7 +273,7 @@ func startStatus(ctx context.Context, fabric statusFabric, role redundancy.Proce
 		st, err := fabric.State(ctx)
 		if err != nil {
 			status.LastError = err.Error()
-			status.Lag = "unknown"
+			status.Lag = unknownLag
 			status.Promotable = false
 		} else {
 			status.Applied, status.HighWater = st.Applied, st.HighWater
@@ -207,6 +321,27 @@ func writeFailedStatus(statusPath string, role redundancy.ProcessRole, cause err
 		Role:      role,
 		State:     redundancy.StateFailed,
 		PID:       os.Getpid(),
+		UpdatedAt: time.Now().UTC(),
+		LastError: cause.Error(),
+	}.Write(statusPath)
+}
+
+func writeTransitionStatus(statusPath string, role redundancy.ProcessRole, state redundancy.State) error {
+	return redundancy.Status{
+		Role:      role,
+		State:     state,
+		PID:       os.Getpid(),
+		Lag:       unknownLag,
+		UpdatedAt: time.Now().UTC(),
+	}.Write(statusPath)
+}
+
+func writeUnavailableStatus(statusPath string, role redundancy.ProcessRole, cause error) error {
+	return redundancy.Status{
+		Role:      role,
+		State:     redundancy.StateStandby,
+		PID:       os.Getpid(),
+		Lag:       unknownLag,
 		UpdatedAt: time.Now().UTC(),
 		LastError: cause.Error(),
 	}.Write(statusPath)

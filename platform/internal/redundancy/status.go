@@ -53,7 +53,7 @@ func (s Status) Write(path string) error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("redundancy: write status %s: %w", tmp, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := replaceStatusFile(tmp, path); err != nil {
 		return fmt.Errorf("redundancy: replace status %s: %w", path, err)
 	}
 	return nil

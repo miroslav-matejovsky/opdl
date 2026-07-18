@@ -179,8 +179,11 @@ co-located active server and retains peer storage addresses as fallbacks.
 The primary and standby contend for one non-expiring OS file lock under the
 configured local instance directory. Only the lock holder may compose active
 capabilities. The lock is released after active resources close, or
-automatically when the holding process exits. Stage 3 decides ownership once at
-startup. Promotion and preferred-primary reclamation are Stage 4 work.
+automatically when the holding process exits. A standby waits for the fence
+independently of its projector. After acquisition it marks itself activating,
+closes the client-only composition, opens the active Event Fabric, catches up
+again, drains retained handler work, publishes readiness, binds HTTP, and marks
+itself active.
 
 The whole readiness sequence is bounded by `catch_up_timeout`. A node that cannot
 finish it does not serve, and reports how far its projector got and what each
@@ -212,9 +215,10 @@ projection. Both retain the same compiled machine identity, so they remain one
 registration voter. After failover, a returning primary reclaims ownership only
 through graceful handover from the promoted standby.
 
-Stage 3 provides fencing and the projection-only standby, but it does not yet
-promote a standby after the active exits. Journal replication also remains
-separate from service redundancy: storage replicas protect site history, while
-the local process fence protects one machine's active capabilities. Promotion and
-controlled handover are defined in [Stage 4](plan/04-promotion-and-handover.md).
+After failover, a returning primary starts projection-only and waits. Deployment
+tooling verifies that it is caught up, gracefully stops the promoted standby,
+and waits for the primary to acquire the released fence. The primary never
+steals ownership from a live standby. Journal replication remains separate from
+service redundancy: storage replicas protect site history, while the local
+process fence protects one machine's active capabilities.
 

@@ -1,6 +1,6 @@
 # Local warm standby redundancy
 
-Status: In progress. Stages 1 through 3 are implemented.
+Status: In progress. Stages 1 through 4 are implemented.
 
 This plan adds two independent platform processes on one machine. One process is
 active. The other keeps a warm local projection and can take over after the
@@ -112,7 +112,7 @@ Estimates are for one engineer and include code, tests, and documentation.
 | [1. Instance and fencing contract](01-instance-contract.md) | Freeze identities, states, ownership, and failure rules | Medium | 2-3 days | Complete |
 | [2. Descriptor and package contract](02-descriptor-and-package.md) | Make standby default-on and machine-specific | Medium | 3-5 days | Complete |
 | [3. Warm standby runtime](03-warm-standby-runtime.md) | Run a caught-up projection-only second process under local fencing | High | 5-8 days | Complete |
-| [4. Promotion and handover](04-promotion-and-handover.md) | Promote safely after crash or controlled active shutdown | High | 4-7 days | Not started |
+| [4. Promotion and handover](04-promotion-and-handover.md) | Promote safely after crash or controlled active shutdown | High | 4-7 days | Complete |
 | [5. Resilience validation and cleanup](05-validation-and-cleanup.md) | Prove failover, opt-out, recovery, and remove the legacy flag | High | 3-5 days | Not started |
 
 Total estimate: 17-28 engineering days.

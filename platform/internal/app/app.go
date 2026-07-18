@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -59,8 +60,17 @@ func Run(args []string) error {
 // journal cannot answer for the site any more; serving on would mean quietly
 // returning a view the platform already knows is incomplete.
 func serve(ctx context.Context, srv *http.Server, site *site, timeout time.Duration) error {
+	var listen net.ListenConfig
+	listener, err := listen.Listen(ctx, "tcp", srv.Addr)
+	if err != nil {
+		return errors.Join(fmt.Errorf("serve HTTP: %w", err), site.close(ctx))
+	}
+	return serveListener(ctx, srv, listener, site, timeout, nil)
+}
+
+func serveListener(ctx context.Context, srv *http.Server, listener net.Listener, site *site, timeout time.Duration, onStopping func() error) error {
 	listen := make(chan error, 1)
-	go func() { listen <- srv.ListenAndServe() }()
+	go func() { listen <- srv.Serve(listener) }()
 
 	select {
 	case err := <-listen:
@@ -70,6 +80,10 @@ func serve(ctx context.Context, srv *http.Server, site *site, timeout time.Durat
 		fmt.Fprintln(os.Stderr, "platform: the event fabric stopped carrying events; shutting down")
 	case <-ctx.Done():
 	}
+	var transitionErr error
+	if onStopping != nil {
+		transitionErr = onStopping()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -77,7 +91,7 @@ func serve(ctx context.Context, srv *http.Server, site *site, timeout time.Durat
 	if err != nil {
 		err = fmt.Errorf("shut down HTTP server: %w", err)
 	}
-	return errors.Join(err, listenError(<-listen), site.close(ctx))
+	return errors.Join(transitionErr, err, listenError(<-listen), site.close(ctx))
 }
 
 // listenError discards the expected end of a server that was shut down and

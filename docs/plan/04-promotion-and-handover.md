@@ -1,5 +1,7 @@
 # Stage 4: Promotion and handover
 
+Status: Complete.
+
 ## Outcome
 
 Promote a caught-up standby after active process death or graceful shutdown,
@@ -65,6 +67,24 @@ Depends on: [Stage 3](03-warm-standby-runtime.md).
 - Redelivery across failover emits no duplicate logical decision.
 - A planned stop drains accepted HTTP work before ownership transfers.
 - Stopping the primary and standby services leaves no process running.
+
+## Implemented behavior
+
+- Fence waiting runs independently from the standby projector. If the active
+  storage process disappears, the waiter can acquire the fence, close any
+  remaining client-only composition, and reopen the retained journal as active.
+- Every activation writes `activating`, rebuilds the active composition, catches
+  up before handlers run, drains retained handler work, catches up to its
+  consequences, publishes instance-aware readiness, binds HTTP, and then writes
+  `active`.
+- Active shutdown writes `stopping`, drains HTTP and Event Fabric resources, and
+  releases the fence last. Activation failure also closes opened resources before
+  releasing the fence and recording `failed`.
+- A returning primary first becomes a caught-up standby. Deployment tooling
+  verifies its status, gracefully stops the promoted standby, and waits for the
+  primary to reclaim the released fence. The runtime never steals a live fence.
+- Readiness and stopping event payloads carry `process_role` and
+  `process_state`. Their event envelope remains machine-scoped.
 
 ## Open questions and recommendations
 

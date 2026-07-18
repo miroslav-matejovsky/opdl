@@ -14,6 +14,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
@@ -40,6 +41,7 @@ type site struct {
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
+	role       redundancy.ProcessRole
 
 	// projector is the node-wide ordered consumer: one loop, from the first
 	// retained event through live delivery, so nothing falls in a replay-to-live
@@ -85,7 +87,7 @@ type service struct {
 // opens no durable handler, publishes no readiness, and binds no listener, so it
 // follows the site's history without producing a decision or holding an
 // active-only capability.
-func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool) (*site, error) {
+func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.ProcessRole) (*site, error) {
 	fabricCfg, err := natsConfig(descriptor, cfg)
 	if err != nil {
 		return nil, err
@@ -112,6 +114,7 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 	s := &site{
 		fabric:          fabric,
 		projection:      registration.NewProjection(),
+		role:            role,
 		stopped:         make(chan struct{}),
 		catchUpTimeout:  fabricCfg.CatchUpTimeout,
 		shutdownTimeout: fabricCfg.ShutdownTimeout,
@@ -182,7 +185,7 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 		return err
 	}
 
-	receipt, err := s.fabric.Publish(catchUpCtx, eventfabric.NewReady(s.fabric.Info(), s.projection.Sequence()))
+	receipt, err := s.fabric.Publish(catchUpCtx, eventfabric.NewReady(s.fabric.Info(), s.projection.Sequence(), s.role.String()))
 	if err != nil {
 		return fmt.Errorf("state ready: %w", err)
 	}
@@ -307,7 +310,7 @@ func (s *site) release(ctx context.Context) error {
 	// A node that never said it was ready has nothing to say about stopping. It
 	// would be stating the end of something the site never heard begin.
 	if s.ready {
-		if _, err := s.fabric.Publish(stopCtx, eventfabric.Stopping{Adapter: s.fabric.Info().Adapter}); err != nil {
+		if _, err := s.fabric.Publish(stopCtx, eventfabric.NewStopping(s.fabric.Info().Adapter, s.role.String())); err != nil {
 			errs = append(errs, fmt.Errorf("state stopping: %w", err))
 		}
 	}

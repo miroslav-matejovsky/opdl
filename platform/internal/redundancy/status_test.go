@@ -48,6 +48,25 @@ func TestStatusWriteIsAtomic(t *testing.T) {
 	require.NoFileExists(t, path+".tmp", "the temporary file is renamed away, not left behind")
 }
 
+func TestStatusCanBeReplacedWhileDeploymentReadsIt(t *testing.T) {
+	path := redundancy.StatusPath(t.TempDir(), "p", "e", "s", "m", redundancy.RoleStandby)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, redundancy.Status{Role: redundancy.RoleStandby, State: redundancy.StateStandby}.Write(path))
+
+	reader, err := os.Open(path)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		done <- redundancy.Status{Role: redundancy.RoleStandby, State: redundancy.StateActivating}.Write(path)
+	}()
+	require.NoError(t, reader.Close())
+	require.NoError(t, <-done)
+
+	status, err := redundancy.ReadStatus(path)
+	require.NoError(t, err)
+	require.Equal(t, redundancy.StateActivating, status.State)
+}
+
 func TestReadStatusMissingFile(t *testing.T) {
 	t.Parallel()
 

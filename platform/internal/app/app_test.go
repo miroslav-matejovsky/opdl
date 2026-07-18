@@ -121,7 +121,7 @@ func openTestSite(t *testing.T) *site {
 	cfg, err := config.Load(writeConfig(t, t.TempDir()))
 	require.NoError(t, err)
 
-	s, err := open(t.Context(), cfg.Descriptor(), cfg, true)
+	s, err := open(t.Context(), cfg.Descriptor(), cfg, true, redundancy.RolePrimary)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.close(context.Background()) })
 	return s
@@ -424,13 +424,13 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 	require.NoError(t, err)
 	descriptor := cfg.Descriptor()
 
-	active, err := open(t.Context(), descriptor, cfg, true)
+	active, err := open(t.Context(), descriptor, cfg, true, redundancy.RolePrimary)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = active.close(context.Background()) })
 	require.True(t, active.ready, "the active process announces readiness")
 	require.True(t, active.fabric.Info().HostsStorage, "the active process owns the journal store")
 
-	standby, err := open(t.Context(), descriptor, cfg, false)
+	standby, err := open(t.Context(), descriptor, cfg, false, redundancy.RoleStandby)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = standby.close(context.Background()) })
 
@@ -450,12 +450,104 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 
 	// It follows new journal events: a fact published on the active reaches the
 	// standby's projection.
-	receipt, err := active.fabric.Publish(t.Context(), eventfabric.NewReady(active.fabric.Info(), 0))
+	receipt, err := active.fabric.Publish(t.Context(), eventfabric.NewReady(active.fabric.Info(), 0, redundancy.RolePrimary.String()))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		st, stateErr := standby.fabric.State(t.Context())
 		return stateErr == nil && st.Applied >= receipt.Sequence
 	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
+}
+
+// TestPromotionAndPrimaryReclamation exercises both Stage 4 ownership transfers.
+// The service-manager action is represented by canceling the active process only
+// after the waiting process reports a caught-up standby status.
+func TestPromotionAndPrimaryReclamation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping promotion integration test in -short mode")
+	}
+	dir := t.TempDir()
+	cfg, err := config.Load(writeConfig(t, dir))
+	require.NoError(t, err)
+	descriptor := cfg.Descriptor()
+	descriptor.Instances.WarmStandby = true
+
+	primaryCtx, stopPrimary := context.WithCancel(t.Context())
+	primaryDone := make(chan error, 1)
+	go func() { primaryDone <- runProcess(primaryCtx, cfg, descriptor, redundancy.RolePrimary) }()
+	waitForProcessState(t, cfg, descriptor, redundancy.RolePrimary, redundancy.StateActive, primaryDone)
+	require.True(t, get(t.Context(), cfg.Address()), "the preferred primary did not serve")
+
+	standbyCtx, stopStandby := context.WithCancel(t.Context())
+	standbyDone := make(chan error, 1)
+	go func() { standbyDone <- runProcess(standbyCtx, cfg, descriptor, redundancy.RoleStandby) }()
+	waitForPromotableStandby(t, cfg, descriptor, redundancy.RoleStandby, standbyDone)
+
+	stopPrimary()
+	require.NoError(t, waitProcess(t, primaryDone), "the primary did not stop cleanly")
+	waitForProcessState(t, cfg, descriptor, redundancy.RoleStandby, redundancy.StateActive, standbyDone)
+	require.True(t, get(t.Context(), cfg.Address()), "the promoted standby did not restore the API")
+
+	reclaimCtx, stopReclaim := context.WithCancel(t.Context())
+	reclaimDone := make(chan error, 1)
+	go func() { reclaimDone <- runProcess(reclaimCtx, cfg, descriptor, redundancy.RolePrimary) }()
+	waitForPromotableStandby(t, cfg, descriptor, redundancy.RolePrimary, reclaimDone)
+
+	// Deployment keeps the primary preferred by gracefully stopping the promoted
+	// standby only after the returning primary is caught up.
+	stopStandby()
+	require.NoError(t, waitProcess(t, standbyDone), "the promoted standby did not stop cleanly")
+	waitForProcessState(t, cfg, descriptor, redundancy.RolePrimary, redundancy.StateActive, reclaimDone)
+	require.True(t, get(t.Context(), cfg.Address()), "the reclaimed primary did not restore the API")
+
+	stopReclaim()
+	require.NoError(t, waitProcess(t, reclaimDone), "the reclaimed primary did not stop cleanly")
+}
+
+func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, state redundancy.State, done <-chan error) {
+	t.Helper()
+	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
+	var processErr error
+	exited := false
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			exited, processErr = true, err
+			return true
+		default:
+		}
+		status, err := redundancy.ReadStatus(path)
+		return err == nil && status.State == state
+	}, 30*time.Second, 20*time.Millisecond, "%s never reached %s", role, state)
+	require.Falsef(t, exited, "%s exited before reaching %s: %v", role, state, processErr)
+}
+
+func waitForPromotableStandby(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, done <-chan error) {
+	t.Helper()
+	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
+	var processErr error
+	exited := false
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			exited, processErr = true, err
+			return true
+		default:
+		}
+		status, err := redundancy.ReadStatus(path)
+		return err == nil && status.State == redundancy.StateStandby && status.Promotable && status.LastError == ""
+	}, 30*time.Second, 20*time.Millisecond, "%s never became a caught-up standby", role)
+	require.Falsef(t, exited, "%s exited before becoming a caught-up standby: %v", role, processErr)
+}
+
+func waitProcess(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatal("process did not stop")
+		return nil
+	}
 }
 
 func TestRunReportsMissingConfigFlag(t *testing.T) {
