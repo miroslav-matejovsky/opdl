@@ -1,176 +1,132 @@
-# NATS event architecture migration
+# Local warm standby redundancy
 
-Status: Complete for the POC (2026-07-17).
+Status: Proposed for the POC.
 
-This plan replaces the shared Olric collections with an event-driven model.
-NATS JetStream becomes the durable site event journal. Each platform node
-rebuilds its own local projections from that journal and uses those projections
-to answer queries. No service reads or writes distributed maps.
+This plan adds two independent platform processes on one machine. One process is
+active. The other keeps a warm local projection and can take over after the
+active process exits. The design preserves the event-driven architecture: NATS
+JetStream remains the source of truth, and a local operating-system lock is used
+only to fence active process capabilities on one machine.
 
-Backward compatibility and migration of existing in-memory state are out of
-scope. The cutover may change configuration, event contracts, HTTP response
-details, tests, and deployment descriptors.
+Backward compatibility is out of scope. The unused project-level
+`features.redundancy` switch will be replaced rather than preserved.
 
 ## Objectives
 
-- Make immutable events the source of truth for service coordination.
-- Replace Olric with NATS and JetStream.
-- Put an OPDL-specific Event Fabric API in front of NATS.
-- Keep NATS subjects, stream names, consumers, acknowledgements, and retry
-  details out of domain packages.
-- Build node-local state with deterministic, idempotent projections.
-- Support replay after restart and delivery to nodes that were offline.
-- Remove Olric, the shared in-memory fabric, periodic distributed-state scans,
-  and the in-memory fabric test adapter.
+- Enable one warm standby by default for every machine in its resolved
+  deployment descriptor.
+- Allow `warm_standby = false` on an individual blueprint machine.
+- Run the active and standby as separate OS processes using the same packaged
+  binary and descriptor.
+- Guarantee that only one process on a machine serves the public API, runs
+  decision handlers, or owns that machine's embedded NATS server and storage.
+- Keep the standby caught up from the retained site journal without producing
+  domain decisions.
+- Promote the standby automatically after the active process exits and releases
+  its OS lock.
+- Support a controlled upgrade by starting a new standby, verifying catch-up,
+  and gracefully stopping the old active.
+- Preserve machine-scoped registration decisions. Instance identity is for
+  lifecycle and diagnostics, not a second domain voter.
 
-## Target architecture
+## Terms
 
-```text
-external client
-      |
-      v
-HTTP command/query API on one OPDL node
-      |                         ^
-      | publish                 | query
-      v                         |
-OPDL Event Fabric          local projections
-      |                         ^
-      v                         | replay and live events
-NATS JetStream site journal ----+
-      |
-      +--> durable node handlers --> resulting events
-```
-
-HTTP remains the external API. Communication and coordination between OPDL
-services goes only through the Event Fabric.
+| Term | Meaning |
+| --- | --- |
+| Machine | The existing compiled deployment identity and one registration voter. |
+| Slot | Stable local process identity `a` or `b`. It does not change when active ownership changes. |
+| Active | The slot holding the machine's exclusive active fence. It owns externally visible and decision-producing capabilities. |
+| Warm standby | A slot connected to the journal with caught-up local projections, but no public listener, durable domain handlers, or embedded server. |
+| Fence | An exclusive OS file lock shared only by the two processes on one machine. Process exit releases it automatically. |
+| Promotion | Recomposition of a fenced standby into the active runtime. |
+| Handover | Graceful stop of the active after a caught-up standby is ready to promote. |
 
 ## Core decisions
 
-- Use JetStream, not Core NATS alone. A node must receive events published while
-  it was offline and must be able to rebuild a projection from retained history.
-- Keep one ordered journal per site. Journal order is the common ordering used
-  by every projection. The first published proposal claims a registration key;
-  a later different proposal is a conflict.
-- Use limits-based retention with file storage. Reaching a configured limit
-  must reject new events instead of silently deleting history needed for replay.
-- Treat delivery as at least once. Event handlers and projections must be
-  idempotent. NATS message deduplication is an optimization, not correctness.
-- Carry deployment node identity in every event envelope. The current JSONL
-  convention of keeping node identity only in the filename cannot work in a
-  shared journal.
-- Run an embedded NATS server on each of the site's storage nodes and derive its
-  cluster peers from the deployment descriptor.
-- Enable JetStream on one deterministic storage node in one-node and two-node
-  POC sites. Enable it on three deterministic storage nodes when a site has at
-  least three nodes. Use one and three stream replicas respectively. This avoids
-  a two-member JetStream metadata group that loses quorum when one member fails.
-- Make the site's NATS cluster exactly its storage nodes. Every other machine
-  runs no server and reaches the journal as a client of the storage nodes.
-  Stage 4 measured why: NATS sizes a JetStream metadata group from the routes a
-  server is configured with, not from the servers that actually hold storage, so
-  a Core NATS node inside the cluster enlarges the quorum that decides whether
-  the site can write without adding anywhere to write to. See
-  [F013](findings/013-storage-only-nats-cluster.md).
-- Rebuild in-memory projections from the journal at process start for the POC.
-  Local projection persistence and snapshots are deferred until replay cost
-  proves they are needed.
-- Do not dual-write to Olric and NATS. Each use case moves directly to events,
-  then the obsolete state fabric is deleted.
+- Use two OS processes, not two goroutines. A process crash must not remove both
+  copies.
+- Use symmetric slots `a` and `b`. The first healthy slot to acquire the fence
+  is active; there is no permanently preferred primary.
+- Use a non-expiring OS lock. A paused or unhealthy process must be terminated by
+  its service manager before another slot can become active. A timeout lease
+  would allow the old process to wake and create split brain.
+- Store the lock and local status under a machine-specific local runtime
+  directory shared by both slots. The directory must be on a local filesystem.
+- Keep the same machine identity for proposal and decision IDs. Add slot identity
+  only to operational lifecycle identity and logs.
+- A standby on a storage machine connects as a NATS client to the active local
+  server or another storage node. It never opens the shared JetStream data
+  directory. After promotion it closes the client-only composition, opens the
+  embedded server under the fence, and catches up again before serving.
+- A standby runs projectors only. It does not attach the machine's durable
+  handlers, publish readiness, or bind the public API.
+- Planned handover may contain a short listener transfer gap. The POC promises
+  no lost accepted command and bounded failover, not uninterrupted TCP
+  acceptance. Strict zero-downtime listener handoff needs a separate front-door
+  design and is not hidden inside this work.
+- Full machine shutdown stops the standby before the active. Otherwise the
+  standby would correctly interpret active shutdown as a reason to promote.
 
-## Recommended POC baseline
+## Descriptor and authoring shape
 
-Use these defaults unless a stage records a different decision:
+Warm standby is a machine policy. An omitted blueprint attribute means enabled:
 
-| Area | Recommendation |
-| --- | --- |
-| Server | Link the NATS server into the platform process. Run one server per storage node; every other machine is a client of them. |
-| Site topology | Keep peer identities and IPs in the descriptor. Use fixed NATS ports with scenario-only overrides. |
-| Journal | One file-backed, limits-retained stream per site with `DiscardNew`. |
-| Storage and replicas | One JetStream node and replica for sites smaller than three nodes; three JetStream nodes and replicas otherwise. Select storage nodes by sorted machine name for the POC. |
-| History | No age or message-count deletion before snapshots exist. Configure a byte limit and fail writes when full. |
-| Delivery | At least once. Durable pull consumers for coordination. One node-wide continuous ordered consumer dispatches to local projectors. |
-| Registration acceptance | Require every expected machine, as today. Capture that machine set in the proposal event. |
-| HTTP proposal result | Return `202` plus a proposal ID after durable publish. Resolve conflicts asynchronously. Read a proposal's status back by its ID from any node. |
-| Projection storage | In memory, rebuilt from the complete retained journal on every start. |
-| Security | Require site credentials for non-loopback deployments. Allow unauthenticated loopback only in tests. |
-| Compatibility | No dual write, old-state import, forwarding package, or compatibility configuration. |
+```hcl
+machine "sensor" {
+  role         = "sensor-node"
+  ip           = "10.0.1.10"
+  services     = ["sensor-services"]
+  warm_standby = false # optional opt-out
+}
+```
 
-## OPDL Event Fabric vocabulary
+Every resolved descriptor states the result explicitly:
 
-| OPDL term | Meaning | NATS implementation detail |
-| --- | --- | --- |
-| Event Fabric | Runtime boundary for publishing, replay, handling, health, and shutdown | NATS connection and JetStream context |
-| Journal | Ordered, retained event history for one site | JetStream stream |
-| Route | Stable OPDL destination derived from deployment scope and event type | NATS subject |
-| Projector | Replays events and maintains one node-local query model | Ordered replay followed by live consumption |
-| Handler | Reacts to selected events for one service on one node | Durable pull consumer with explicit acknowledgement |
-| Receipt | Proof that the journal accepted an event | JetStream publish acknowledgement and stream sequence |
+```json
+{
+  "instances": {
+    "warm_standby": true
+  }
+}
+```
 
-Domain packages use OPDL event types, projectors, and narrow publisher or
-handler interfaces. They do not construct subjects or configure NATS resources.
-
-The initial route format should be
-`opdl.<site-scope>.event.<domain>.<fact>`. `site-scope` is a stable, safe token
-derived from project, environment, and site. Human-readable deployment identity
-stays in the event envelope. Use one stream named from the same scope and bind it
-to `opdl.<site-scope>.event.>`.
+The project-level `features.redundancy` field is removed. `features.chaos`
+remains project-level.
 
 ## Stages
 
-Estimates are for one engineer and include code, tests, and documentation. They
-assume the existing registration flow is the only stateful use case being moved.
+Estimates are for one engineer and include code, tests, and documentation.
 
 | Stage | Outcome | Complexity | Estimate | Status |
 | --- | --- | --- | --- | --- |
-| [1. Event model and decisions](01-event-model.md) | Freeze the event, ordering, topology, and projection rules | Medium | 2-3 days | Complete |
-| [2. OPDL Event Fabric](02-event-fabric.md) | Add the OPDL abstraction and NATS JetStream adapter | High | 4-6 days | Complete |
-| [3. Registration projections](03-registration-projections.md) | Build event-backed registration projections, services, and handlers | High | 5-8 days | Complete |
-| [4. Runtime cutover](04-runtime-cutover.md) | Run the platform and scenarios solely through NATS | High | 3-5 days | Complete |
-| [5. Remove distributed state](05-remove-distributed-state.md) | Delete Olric, memory fabric, and obsolete paths | Medium | 2-4 days | Complete |
+| [1. Instance and fencing contract](01-instance-contract.md) | Freeze identities, states, ownership, and failure rules | Medium | 2-3 days | Not started |
+| [2. Descriptor and package contract](02-descriptor-and-package.md) | Make standby default-on and machine-specific | Medium | 3-5 days | Not started |
+| [3. Warm standby runtime](03-warm-standby-runtime.md) | Run a caught-up projection-only second process under local fencing | High | 5-8 days | Not started |
+| [4. Promotion and handover](04-promotion-and-handover.md) | Promote safely after crash or controlled active shutdown | High | 4-7 days | Not started |
+| [5. Resilience validation and cleanup](05-validation-and-cleanup.md) | Prove failover, opt-out, recovery, and remove the legacy flag | High | 3-5 days | Not started |
 
-Total estimate: 16-26 engineering days.
-
-Stage 1 froze the contract in code: the event envelope, the OPDL Event Fabric
-package (`platform/internal/eventfabric`), and the route and journal naming.
-Stage 2 built the NATS JetStream adapter (`platform/internal/eventfabric/nats`)
-that implements the contract, with integration tests against a real embedded
-server. Stage 3 built the event-backed registration boundary. Stage 4 performed
-the cutover: the platform now composes NATS, replays the site journal into a
-node-local projection before it serves, runs a durable registration handler, and
-promoted the event model into `platform/internal/registration`, deleting the
-Olric-backed registration and the JSONL runtime path. The HTTP contract is
-asynchronous, and the OpenAPI description and .NET SDK are regenerated from it.
-
-Stage 5 deleted the old state fabric, its memory and Olric adapters, the JSONL
-recorder path, and their dependency tree. Strict architecture lint rules prevent
-direct domain-to-NATS coupling and deny unlisted vendor dependencies.
-
-Issues surfaced across all stages are classified and analyzed in the
-[migration findings catalog](findings/README.md). It includes resolved decisions,
-accepted POC constraints, deployment mitigations, and prioritized open work.
+Total estimate: 17-28 engineering days.
 
 ## Completion criteria
 
-- NATS JetStream is the only communication and coordination mechanism between
-  services.
-- Every node can rebuild its registration views from the retained site journal.
-- A node that was offline consumes missed events when it returns.
-- Duplicate delivery does not change a projection or emit duplicate decisions.
-- No runtime or test depends on `fabric.Collection`, Olric, or a shared
-  in-memory fabric.
-- The Olric dependency, adapter, configuration, tests, and documentation are
-  removed.
-- The periodic registration reconciler and its collection scans are removed.
-- Startup does not serve the HTTP API until NATS is ready and local projections
-  have caught up to a recorded journal high-water mark.
+- A descriptor without an override explicitly enables warm standby.
+- A machine-level `warm_standby = false` produces a single-slot package.
+- Two independently launched processes never hold active capabilities together.
+- Killing the active process promotes a caught-up standby without losing retained
+  registrations or producing a second machine decision.
+- A storage-machine standby never opens the active server's data directory until
+  it owns the fence.
+- A controlled handover drains accepted work, promotes the standby, and restores
+  service on the same public address.
+- Live projection lag prevents activation and removes a lagging active from
+  service.
+- Full machine shutdown does not accidentally promote the standby.
 - `task all` passes.
 
-All five migration stages are complete. Remaining production-readiness work is
-explicitly outside this migration and tracked in the findings catalog.
+## Non-goals
 
-## NATS references
-
-- [JetStream overview](https://docs.nats.io/nats-concepts/jetstream)
-- [Streams and retention](https://docs.nats.io/nats-concepts/jetstream/streams)
-- [Consumers and delivery](https://docs.nats.io/nats-concepts/jetstream/consumers)
-- [JetStream clustering](https://docs.nats.io/running-a-nats-service/configuration/clustering/jetstream_clustering)
+- Active-active service execution.
+- Failover to another physical machine.
+- A distributed election or shared state store.
+- Automatic preemption of a live process that still owns the OS fence.
+- Compatibility with descriptors or journals produced before this POC change.

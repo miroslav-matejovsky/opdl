@@ -16,5 +16,9 @@
 // and states that into the journal; a transport announcing itself ready would be
 // claiming something it cannot know. Shutdown is the same in reverse.
 //
+// The current runtime starts one process for one machine identity. It has no
+// local standby, fencing, or process failover. Journal replication preserves
+// history but does not make this process redundant.
+//
 // Run is the entry point invoked by the platform command-line interface.
 package app

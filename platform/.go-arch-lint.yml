@@ -29,8 +29,6 @@ components:
   events: { in: internal/events }
   eventfabric: { in: internal/eventfabric }
   eventfabric-nats: { in: internal/eventfabric/nats }
-  # Reserved name for the deleted boundary. No component may depend on it.
-  legacy-state-fabric: { in: internal/fabric }
   httpapi: { in: internal/httpapi }
   registration: { in: internal/registration }
 

@@ -153,6 +153,6 @@ proposal, so a historical proposal naming a machine the deployment no longer has
 reports that instance with an empty IP. Authentication, authorization, removal,
 leases, heartbeats, and quorum are outside the current implementation.
 
-Deployment requirements and the accepted availability consequences of
-all-machine confirmation are analyzed in the
-[migration findings catalog](plan/findings/README.md).
+These limits are acceptable while the registration model remains a POC. New
+events should be added only when a concrete removal, lease, or quorum workflow is
+implemented.
