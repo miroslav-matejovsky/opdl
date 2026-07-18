@@ -30,10 +30,6 @@ type Features struct {
 	// controlled way with the customer aware of the test and its potential
 	// impact on their operations.
 	Chaos bool `hcl:"chaos,optional"`
-	// Redundancy is a legacy project-level switch carried into the deployment
-	// descriptor. The current runtime does not act on it. It will be replaced by
-	// an explicit machine-level warm-standby policy.
-	Redundancy bool `hcl:"redundancy,optional"`
 }
 
 // Site is one location within a project holding a set of machines.
@@ -54,6 +50,22 @@ type Machine struct {
 	IP string `hcl:"ip"`
 	// Services lists the service groups assigned to this machine.
 	Services []string `hcl:"services"`
+	// Platform is the optional platform-runtime policy subsection. An omitted
+	// block leaves every platform policy at its default.
+	Platform *Platform `hcl:"platform,block"`
+}
+
+// Platform is a machine's platform-runtime policy: how the platform runs on the
+// machine, as opposed to what it deploys. It is authored as a platform {}
+// subsection of a machine so a blueprint reader sees these policies grouped and
+// explicit rather than mixed in with the machine's identity and services.
+type Platform struct {
+	// WarmStandby opts the machine in or out of running one warm standby slot: a
+	// second local process that stays caught up and can take over after the active
+	// process exits. It is presence-aware. An omitted attribute (or an omitted
+	// platform block) leaves it nil and resolves to the default of enabled; an
+	// explicit true or false overrides that default.
+	WarmStandby *bool `hcl:"warm_standby,optional"`
 }
 
 // Validate checks a project against the model's structural rules. It fails

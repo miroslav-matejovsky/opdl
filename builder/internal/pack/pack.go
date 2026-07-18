@@ -121,6 +121,7 @@ func (p *Packer) compile(ctx context.Context, out string) error {
 // writeMetadata writes the manifest, release metadata, and checksums file.
 func (p *Packer) writeMetadata(pkgDir string, d deployment.Descriptor, binary, sum string) error {
 	now := time.Now().UTC()
+	instances, stopOrder := launchInstances(d.Instances.WarmStandby)
 	man := Manifest{
 		Project:     d.Project,
 		Site:        d.Site,
@@ -130,6 +131,8 @@ func (p *Packer) writeMetadata(pkgDir string, d deployment.Descriptor, binary, s
 		Binary:      binary,
 		Services:    d.Services,
 		Deployment:  deploymentFile,
+		Instances:   instances,
+		StopOrder:   stopOrder,
 		GeneratedAt: now,
 	}
 	rel := Release{

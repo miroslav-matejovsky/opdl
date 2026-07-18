@@ -24,8 +24,57 @@ type Manifest struct {
 	Services []string `json:"services"`
 	// Deployment is the deployment descriptor filename in the package.
 	Deployment string `json:"deployment"`
+	// Instances are the independent processes (slots) a deployer must launch for
+	// this machine, in start order. Every slot runs the same Binary with the same
+	// Deployment descriptor and differs only by its Args. A machine with warm
+	// standby lists two slots; a machine that opted out lists one.
+	Instances []Instance `json:"instances"`
+	// StopOrder lists the slots by name in the order a full machine shutdown stops
+	// them: the standby candidate before the active candidate. A service manager
+	// may start the slots in either order but must stop them in this one, so a
+	// whole-machine shutdown does not look like an active failure that the
+	// surviving slot should promote into.
+	StopOrder []string `json:"stop_order"`
 	// GeneratedAt is when the package was produced (UTC).
 	GeneratedAt time.Time `json:"generated_at"`
+}
+
+// Instance is one launchable process (slot) of a machine's deployment. Both slots
+// of a machine share one Binary and one Deployment descriptor; only the Args that
+// select the local slot differ.
+type Instance struct {
+	// Slot is the stable local process identity, "a" or "b".
+	Slot string `json:"slot"`
+	// Args are the command-line arguments that select this slot, added to the
+	// binary's normal arguments, e.g. ["-instance", "a"].
+	Args []string `json:"args"`
+}
+
+// slotFlag is the platform binary argument that selects a local slot.
+const slotFlag = "-instance"
+
+const (
+	slotA = "a"
+	slotB = "b"
+)
+
+// launchInstances derives the processes a deployer must launch for a machine and
+// the order a full machine shutdown stops them, from the machine's warm-standby
+// policy.
+//
+// A machine with warm standby runs two slots, a and b, each the same binary and
+// descriptor selected by a different -instance argument. A machine that opted out
+// runs only slot a. Stop order is the standby candidate (b) before the active
+// candidate (a): a full shutdown stopping the active first would look like a
+// failure the surviving slot should promote into.
+func launchInstances(warmStandby bool) (instances []Instance, stopOrder []string) {
+	instances = []Instance{{Slot: slotA, Args: []string{slotFlag, slotA}}}
+	stopOrder = []string{slotA}
+	if warmStandby {
+		instances = append(instances, Instance{Slot: slotB, Args: []string{slotFlag, slotB}})
+		stopOrder = []string{slotB, slotA}
+	}
+	return instances, stopOrder
 }
 
 // Release is the release metadata shipped in a package.

@@ -6,8 +6,7 @@ project "two-machine" {
   environment = "development"
 
   features {
-    chaos      = false
-    redundancy = false
+    chaos = false
   }
 
   site "local" {

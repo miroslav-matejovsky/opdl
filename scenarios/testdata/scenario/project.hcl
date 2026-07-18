@@ -2,8 +2,7 @@ project "scenario" {
   environment = "development"
 
   features {
-    chaos      = false
-    redundancy = false
+    chaos = false
   }
 
   site "local" {

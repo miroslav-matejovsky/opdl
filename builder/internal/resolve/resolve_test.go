@@ -49,7 +49,7 @@ func project() *blueprint.Project {
 	return &blueprint.Project{
 		Name:        "customer-a",
 		Environment: "production",
-		Features:    blueprint.Features{Chaos: true, Redundancy: true},
+		Features:    blueprint.Features{Chaos: true},
 		Sites: []blueprint.Site{{
 			Name: "north",
 			Machines: []blueprint.Machine{{
@@ -77,7 +77,64 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.Equal(t, "10.0.1.10", m.IP)
 	require.Equal(t, []string{"sensor-services"}, m.Services)
 	require.True(t, m.Features.Chaos)
-	require.True(t, m.Features.Redundancy)
+	// Warm standby is on by default: the sensor machine declares no platform block.
+	require.True(t, m.Instances.WarmStandby)
+}
+
+// TestBuildWarmStandbyPolicy checks warm standby defaults on and honors an
+// explicit per-machine opt-out. An omitted platform block, an empty one, and an
+// explicit true all resolve to enabled; only an explicit false disables it.
+func TestBuildWarmStandbyPolicy(t *testing.T) {
+	cases := map[string]struct {
+		platform *blueprint.Platform
+		want     bool
+	}{
+		"omitted block":    {platform: nil, want: true},
+		"empty block":      {platform: &blueprint.Platform{}, want: true},
+		"explicit true":    {platform: &blueprint.Platform{WarmStandby: new(true)}, want: true},
+		"explicit opt-out": {platform: &blueprint.Platform{WarmStandby: new(false)}, want: false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := project()
+			p.Sites[0].Machines[0].Platform = tc.platform
+			plan, err := resolve.Build(p, "acme-opdl")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, plan.Machines[0].Instances.WarmStandby)
+		})
+	}
+}
+
+// TestBuildWarmStandbyIsPerMachine checks one machine opting out does not change
+// another's policy, and that the result is independent of declaration order.
+func TestBuildWarmStandbyIsPerMachine(t *testing.T) {
+	build := func(machines []blueprint.Machine) *resolve.Plan {
+		p := &blueprint.Project{
+			Name:        "customer-a",
+			Environment: "production",
+			Sites:       []blueprint.Site{{Name: "north", Machines: machines}},
+		}
+		plan, err := resolve.Build(p, "acme-opdl")
+		require.NoError(t, err)
+		return plan
+	}
+
+	optOut := blueprint.Machine{
+		Name: "sensor", Role: "node", IP: "10.0.1.10", Services: []string{"core-services"},
+		Platform: &blueprint.Platform{WarmStandby: new(false)},
+	}
+	def := blueprint.Machine{
+		Name: "gateway", Role: "node", IP: "10.0.1.11", Services: []string{"core-services"},
+	}
+
+	forward := build([]blueprint.Machine{optOut, def})
+	require.False(t, machineByName(t, forward, "sensor").Instances.WarmStandby)
+	require.True(t, machineByName(t, forward, "gateway").Instances.WarmStandby)
+
+	// Declaration order must not change the resolved policy of either machine.
+	reversed := build([]blueprint.Machine{def, optOut})
+	require.False(t, machineByName(t, reversed, "sensor").Instances.WarmStandby)
+	require.True(t, machineByName(t, reversed, "gateway").Instances.WarmStandby)
 }
 
 // TestBuildDerivesOneMemberEventFabricForSingleMachineSite checks a standalone

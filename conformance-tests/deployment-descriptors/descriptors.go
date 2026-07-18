@@ -58,7 +58,8 @@ func checkRoundTrip() error {
 		Role:        "sensor-node",
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
-		Features:    builderdeployment.Features{Chaos: true, Redundancy: true},
+		Features:    builderdeployment.Features{Chaos: true},
+		Instances:   builderdeployment.InstancePolicy{WarmStandby: true},
 		EventFabric: builderdeployment.EventFabric{
 			Peers: []builderdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
@@ -85,7 +86,8 @@ func checkRoundTrip() error {
 		Role:        "sensor-node",
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
-		Features:    platformdeployment.Features{Chaos: true, Redundancy: true},
+		Features:    platformdeployment.Features{Chaos: true},
+		Instances:   platformdeployment.InstancePolicy{WarmStandby: true},
 		EventFabric: platformdeployment.EventFabric{
 			Peers: []platformdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},

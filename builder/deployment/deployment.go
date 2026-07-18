@@ -25,6 +25,8 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches carried onto the machine.
 	Features Features `json:"features"`
+	// Instances is the machine's warm-standby policy. It is always present.
+	Instances InstancePolicy `json:"instances"`
 	// EventFabric is the resolved Event Fabric topology for this machine.
 	EventFabric EventFabric `json:"event_fabric"`
 }
@@ -32,8 +34,16 @@ type Descriptor struct {
 // Features are the capability switches carried from the project onto a machine.
 type Features struct {
 	Chaos bool `json:"chaos"`
-	// Redundancy is a legacy flag. The current runtime does not act on it.
-	Redundancy bool `json:"redundancy"`
+}
+
+// InstancePolicy is a machine's resolved warm-standby policy: whether the machine
+// runs a second local process (a warm standby slot) alongside its active process.
+// It is always present in a generated descriptor, so a reader never has to infer
+// the default.
+type InstancePolicy struct {
+	// WarmStandby enables one warm standby slot for the machine. An omitted
+	// blueprint policy resolves to true; an explicit false runs a single slot.
+	WarmStandby bool `json:"warm_standby"`
 }
 
 // EventFabric is this machine's resolved view of the site's Event Fabric: the
