@@ -91,19 +91,17 @@ func validateDuration(name, s string) (time.Duration, error) {
 	return d, nil
 }
 
-// validateLagBound parses the optional projection lag bound. An empty value
-// disables the check and yields zero; a set value must be a non-negative
-// duration, where zero also disables it.
+// validateLagBound parses the required positive projection lag bound.
 func validateLagBound(s string) (time.Duration, error) {
 	if s == "" {
-		return 0, nil
+		return 0, fmt.Errorf("lag_bound is required")
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
 		return 0, fmt.Errorf("invalid lag_bound %q: %w", s, err)
 	}
-	if d < 0 {
-		return 0, fmt.Errorf("invalid lag_bound %s: duration must not be negative", d)
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid lag_bound %s: duration must be positive", d)
 	}
 	return d, nil
 }
@@ -142,9 +140,8 @@ func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
 // fence and per-slot status files. Both slots of a machine share it.
 func (c *Config) InstanceDir() string { return c.instanceDir }
 
-// LagBound returns the configured projection lag bound, or zero when the check is
-// disabled. A slot lagging beyond it is not promotable, and an active slot beyond
-// it stops serving.
+// LagBound returns the configured projection lag bound. A slot lagging beyond it
+// is not promotable, and an active slot beyond it stops serving.
 func (c *Config) LagBound() time.Duration { return c.lagBound }
 
 // EventFabric returns the Event Fabric adapter settings from the configuration
@@ -232,14 +229,8 @@ func natsSummary(n EventFabricNats) string {
 	return strings.Join(parts, " ")
 }
 
-// lagBoundSummary renders a disabled lag bound as an explicit statement rather
-// than a bare "0s", so the startup block does not read as a zero-second bound.
-func lagBoundSummary(bound time.Duration) string {
-	if bound <= 0 {
-		return "(disabled)"
-	}
-	return bound.String()
-}
+// lagBoundSummary renders the required projection lag bound.
+func lagBoundSummary(bound time.Duration) string { return bound.String() }
 
 // credentialsSummary renders an unset credentials file as an explicit statement
 // that the deployment is running unauthenticated, so the startup block never

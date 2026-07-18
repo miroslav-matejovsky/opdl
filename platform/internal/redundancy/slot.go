@@ -45,17 +45,3 @@ func (s Slot) Valid() bool { return s == SlotA || s == SlotB }
 func OperationalName(machine string, slot Slot) string {
 	return machine + "/" + string(slot)
 }
-
-// StopOrder returns the two slots in the order a full machine shutdown stops
-// them: slot B before slot A.
-//
-// Stopping B first keeps a whole-machine shutdown from looking like an active
-// failure to the surviving slot. A slot that saw the active leave while it was
-// still running would correctly promote, which a full shutdown does not want.
-// The order is by slot name because a service manager stopping a machine cannot
-// know which slot is currently active.
-func StopOrder() []Slot { return []Slot{SlotB, SlotA} }
-
-// StopsBefore reports whether s is stopped before other in a full machine
-// shutdown. Slot B stops before slot A; every other pairing is false.
-func (s Slot) StopsBefore(other Slot) bool { return s == SlotB && other == SlotA }

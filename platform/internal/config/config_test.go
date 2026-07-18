@@ -15,6 +15,7 @@ const validSections = `
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
@@ -53,6 +54,7 @@ func TestLoadReadsEventFabricSettings(t *testing.T) {
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = " /var/lib/opdl/nats "
 startup_timeout = "30s"
@@ -96,6 +98,7 @@ func TestLoadAcceptsUnusableDataDir(t *testing.T) {
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "\\\\no-such-host\\share"
 startup_timeout = "30s"
@@ -176,6 +179,7 @@ func TestLoadMissingRequiredSettingsFails(t *testing.T) {
 			contents: `read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
@@ -187,6 +191,7 @@ catch_up_timeout = "25s"`,
 			contents: `address = "127.0.0.1:8080"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
@@ -204,11 +209,24 @@ catch_up_timeout = "25s"`,
 			err: "shutdown_timeout is required",
 		},
 		{
+			name: "missing lag_bound",
+			contents: `address = "127.0.0.1:8080"
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+instance_dir = "/var/lib/opdl/instance"
+[event_fabric.nats]
+data_dir = "/var/lib/opdl/nats"
+startup_timeout = "30s"
+catch_up_timeout = "25s"`,
+			err: "lag_bound is required",
+		},
+		{
 			name: "missing data_dir",
 			contents: `address = "127.0.0.1:8080"
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 startup_timeout = "30s"
 catch_up_timeout = "25s"`,
@@ -220,6 +238,7 @@ catch_up_timeout = "25s"`,
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 catch_up_timeout = "25s"`,
@@ -231,6 +250,7 @@ catch_up_timeout = "25s"`,
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"`,
@@ -241,7 +261,8 @@ startup_timeout = "30s"`,
 			contents: `address = "127.0.0.1:8080"
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"`,
+instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"`,
 			err: "[event_fabric.nats] data_dir is required",
 		},
 		{
@@ -269,6 +290,7 @@ func TestLoadRejectsUnusableDurations(t *testing.T) {
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "soon"
@@ -280,6 +302,7 @@ catch_up_timeout = "25s"
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
@@ -288,9 +311,8 @@ catch_up_timeout = "0s"
 	require.ErrorContains(t, err, "duration must be positive")
 }
 
-// TestLoadReadsLagBound checks the optional projection lag bound: absent disables
-// the check, a valid duration is read, and a negative one is refused. lag_bound is
-// a top-level key, so it is set before the [event_fabric.nats] table.
+// TestLoadReadsLagBound checks the required projection lag bound: a positive
+// duration is read, while absent, zero, and negative values are refused.
 func TestLoadReadsLagBound(t *testing.T) {
 	// withLagBound renders a valid config carrying the given top-level lag_bound.
 	withLagBound := func(bound string) string {
@@ -306,16 +328,16 @@ catch_up_timeout = "25s"
 `
 	}
 
-	absent, err := config.Load(writeConfig(t, validBaseConfig))
-	require.NoError(t, err)
-	require.Zero(t, absent.LagBound(), "an omitted lag_bound disables the check")
-
 	set, err := config.Load(writeConfig(t, withLagBound(`"3s"`)))
 	require.NoError(t, err)
 	require.Equal(t, 3*time.Second, set.LagBound())
 
 	_, err = config.Load(writeConfig(t, withLagBound(`"-1s"`)))
 	require.ErrorContains(t, err, "lag_bound")
+	require.ErrorContains(t, err, "must be positive")
+
+	_, err = config.Load(writeConfig(t, withLagBound(`"0s"`)))
+	require.ErrorContains(t, err, "must be positive")
 }
 
 // TestLoadReadsInstanceDir checks the required local runtime directory is read
@@ -353,7 +375,7 @@ func TestSummaryShowsConfiguration(t *testing.T) {
 	require.Contains(t, s, "read_header_timeout 5s")
 	require.Contains(t, s, "shutdown_timeout    10s")
 	require.Contains(t, s, "instance_dir        /var/lib/opdl/instance")
-	require.Contains(t, s, "lag_bound           (disabled)", "an unset lag bound reads as disabled")
+	require.Contains(t, s, "lag_bound           30s")
 	require.Contains(t, s, "data_dir=/var/lib/opdl/nats")
 	require.Contains(t, s, "startup_timeout=30s")
 	require.Contains(t, s, "catch_up_timeout=25s")

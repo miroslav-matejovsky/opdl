@@ -86,6 +86,7 @@ func writeConfig(t *testing.T, dir string) string {
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = %q
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
@@ -228,7 +229,7 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
-		contents := "address = \"127.0.0.1:8080\"\nread_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\ninstance_dir = \"/var/lib/opdl/instance\"\n[event_fabric.nats]\n" + nats
+		contents := "address = \"127.0.0.1:8080\"\nread_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\ninstance_dir = \"/var/lib/opdl/instance\"\nlag_bound = \"30s\"\n[event_fabric.nats]\n" + nats
 		require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 		cfg, err := config.Load(path)
 		require.NoError(t, err)
@@ -272,14 +273,11 @@ servers = ["127.0.0.1:4001"]
 		require.Equal(t, "127.0.0.1:8222", cfg.MonitorAddress)
 	})
 
-	t.Run("a storage node always reaches the journal on its own server", func(t *testing.T) {
-		// node-a stores the site journal, so where it connects follows where its
-		// own server listens. It is not a second setting that could disagree.
+	t.Run("a storage node prefers its own server and retains configured peers", func(t *testing.T) {
 		cfg, err := natsConfig(descriptor, settings(t,
 			required+"client_address = \"127.0.0.1:4001\"\nservers = [\"10.9.9.9:4222\"]\n"))
 		require.NoError(t, err)
-		require.Equal(t, []string{"127.0.0.1:4001"}, cfg.Servers,
-			"a storage node cannot be configured to run one journal and talk to another")
+		require.Equal(t, []string{"127.0.0.1:4001", "10.9.9.9:4222"}, cfg.Servers)
 	})
 
 	t.Run("storage and replicas come from the site, not the file", func(t *testing.T) {
@@ -298,6 +296,20 @@ servers = ["127.0.0.1:4001"]
 		require.Equal(t, "opdl", cfg.Username)
 		require.Equal(t, "s3cret", cfg.Password)
 	})
+}
+
+func TestClientOnlyRetainsEveryStorageServer(t *testing.T) {
+	cfg := clientOnly(natsfabric.Config{
+		HostsStorage:  true,
+		ClientAddress: "10.0.1.10:4222",
+		Servers:       []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
+		DataDir:       "journal",
+	})
+
+	require.False(t, cfg.HostsStorage)
+	require.Empty(t, cfg.ClientAddress)
+	require.Empty(t, cfg.DataDir)
+	require.Equal(t, []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"}, cfg.Servers)
 }
 
 // TestNodeDataDirIsNamedAfterTheMachine checks two machines sharing one
@@ -373,6 +385,35 @@ func TestResolveSlot(t *testing.T) {
 	}
 }
 
+type fixedStatusFabric struct {
+	state eventfabric.State
+}
+
+func (f fixedStatusFabric) State(context.Context) (eventfabric.State, error) {
+	return f.state, nil
+}
+
+// TestStartStatusFailsBeforeRuntimeStarts checks a slot never serves while its
+// initial status cannot be written. Stage 4 shutdown and handover tooling must
+// not be given a stale operational view.
+func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
+
+	done, err := startStatus(
+		t.Context(),
+		fixedStatusFabric{state: eventfabric.State{Connected: true, CaughtUp: true}},
+		redundancy.SlotA,
+		redundancy.StateActive,
+		filepath.Join(blocked, "a.status"),
+		30*time.Second,
+		nil,
+		nil,
+	)
+	require.ErrorContains(t, err, "write status")
+	require.Nil(t, done)
+}
+
 // TestActiveAndStandbyRunTogether checks the Stage 3 exit criteria on one
 // all-in-one machine: two slots run against one journal while only the active
 // owns active capabilities, the standby is client-only and produces nothing, and
@@ -442,6 +483,7 @@ func TestRunReportsUnusableJournalStorage(t *testing.T) {
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = %q
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"

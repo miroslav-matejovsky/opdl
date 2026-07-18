@@ -71,6 +71,21 @@ func checkRoundTrip() error {
 	if err != nil {
 		return err
 	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	instances, ok := wire["instances"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted instances")
+	}
+	var policy map[string]json.RawMessage
+	if err := json.Unmarshal(instances, &policy); err != nil {
+		return err
+	}
+	if _, ok := policy["warm_standby"]; !ok {
+		return fmt.Errorf("builder descriptor omitted instances.warm_standby")
+	}
 
 	var got platformdeployment.Descriptor
 	if err := json.Unmarshal(data, &got); err != nil {

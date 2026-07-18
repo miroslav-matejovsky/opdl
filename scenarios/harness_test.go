@@ -3,6 +3,7 @@ package scenarios
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -69,6 +70,37 @@ func machineBinary(outDir, project, machine string) string {
 		name += ".exe"
 	}
 	return filepath.Join(outDir, project, scenarioSite, machine, name)
+}
+
+type slotLaunch struct {
+	Slot string   `json:"slot"`
+	Args []string `json:"args"`
+}
+
+type packageManifest struct {
+	Slots            []slotLaunch `json:"slots"`
+	ShutdownStrategy string       `json:"shutdown_strategy"`
+}
+
+func readManifest(t *testing.T, binaryPath string) packageManifest {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(binaryPath), "manifest.json"))
+	require.NoError(t, err)
+	var manifest packageManifest
+	require.NoError(t, json.Unmarshal(data, &manifest))
+	require.NotEmpty(t, manifest.Slots)
+	return manifest
+}
+
+func manifestSlot(t *testing.T, binaryPath, slot string) slotLaunch {
+	t.Helper()
+	for _, launch := range readManifest(t, binaryPath).Slots {
+		if launch.Slot == slot {
+			return launch
+		}
+	}
+	require.FailNowf(t, "missing manifest slot", "slot %s is not in %s", slot, binaryPath)
+	return slotLaunch{}
 }
 
 // sockets are one machine's reserved addresses and its journal storage.
@@ -210,6 +242,7 @@ type machine struct {
 
 	binaryPath string
 	configPath string
+	launchArgs []string
 	output     *bytes.Buffer
 	cmd        *exec.Cmd
 	stopped    bool
@@ -240,6 +273,7 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets, routes
 		sockets:    reserved,
 		binaryPath: binaryPath,
 		configPath: configPath,
+		launchArgs: manifestSlot(t, binaryPath, "a").Args,
 		output:     &bytes.Buffer{},
 	}
 }
@@ -255,6 +289,7 @@ func platformConfig(reserved sockets, routes, servers []string) []byte {
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = %q
+lag_bound = "30s"
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
@@ -281,7 +316,8 @@ func quoteList(addrs []string) string {
 func (m *machine) start(ctx context.Context, t *testing.T) {
 	t.Helper()
 	require.Nil(t, m.cmd, "%s is already started", m.name)
-	m.cmd = exec.CommandContext(ctx, m.binaryPath, "-config", m.configPath)
+	args := append([]string{"-config", m.configPath}, m.launchArgs...)
+	m.cmd = exec.CommandContext(ctx, m.binaryPath, args...)
 	m.cmd.Stdout = m.output
 	m.cmd.Stderr = m.output
 	require.NoError(t, m.cmd.Start())

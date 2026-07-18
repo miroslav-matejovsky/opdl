@@ -52,15 +52,3 @@ func TestOperationalName(t *testing.T) {
 	require.Equal(t, "sensor/a", redundancy.OperationalName("sensor", redundancy.SlotA))
 	require.Equal(t, "sensor/b", redundancy.OperationalName("sensor", redundancy.SlotB))
 }
-
-func TestStopOrder(t *testing.T) {
-	t.Parallel()
-
-	// A full machine shutdown stops slot B before slot A.
-	require.Equal(t, []redundancy.Slot{redundancy.SlotB, redundancy.SlotA}, redundancy.StopOrder())
-
-	require.True(t, redundancy.SlotB.StopsBefore(redundancy.SlotA))
-	require.False(t, redundancy.SlotA.StopsBefore(redundancy.SlotB))
-	require.False(t, redundancy.SlotA.StopsBefore(redundancy.SlotA))
-	require.False(t, redundancy.SlotB.StopsBefore(redundancy.SlotB))
-}

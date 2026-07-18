@@ -32,13 +32,15 @@ Depends on: [Stage 1](01-instance-contract.md).
    `Descriptor.Instances` always exists in generated JSON.
 4. Update resolution tests to prove default-on, explicit opt-out, mixed machines
    in one project, and declaration-order independence.
-5. Update descriptor validation and cross-module conformance signatures. Reject
-   an impossible or incomplete instance policy before building.
-6. Add slot launch entries to the deployment manifest. An enabled machine lists
-   slot `a` and slot `b`, both using the same binary and descriptor with different
-   `-instance` arguments. A disabled machine lists only slot `a`.
-7. Make stop order explicit in the manifest: standby candidate first, current
-   active second. A service manager may start slots in either order.
+5. Update descriptor validation and cross-module conformance signatures. The
+   platform rejects JSON that omits `instances` or `instances.warm_standby`, so
+   an incomplete descriptor cannot silently decode as an opt-out.
+6. Add a `slots` launch collection to the deployment manifest. An enabled
+   machine lists slot `a` and slot `b`, both using the same binary and descriptor
+   with different `-instance` arguments. A disabled machine lists only slot `a`.
+7. Add a shutdown strategy to the manifest. A redundant machine uses
+   `standby_then_active`, which requires deployment tooling to inspect live slot
+   status. Do not encode a static slot-name stop order.
 8. Update examples, test blueprints, neutral embedded descriptor, plan output,
    package metadata tests, and blueprint package documentation.
 9. Keep runtime socket and directory locations out of the descriptor. The
@@ -49,8 +51,8 @@ Depends on: [Stage 1](01-instance-contract.md).
 
 - Omission produces `instances.warm_standby: true` in every descriptor.
 - One machine can opt out without changing other machines.
-- The package manifest tells a deployer exactly which independent processes to
-  launch and with which slot arguments.
+- The package manifest tells a deployer exactly which slots to launch, with
+  which arguments, and which state-aware shutdown strategy to use.
 - The old project-wide redundancy flag no longer exists.
 
 ## Open questions and recommendations

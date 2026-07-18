@@ -1,6 +1,6 @@
 # Local warm standby redundancy
 
-Status: Proposed for the POC.
+Status: In progress. Stages 1 through 3 are implemented.
 
 This plan adds two independent platform processes on one machine. One process is
 active. The other keeps a warm local projection and can take over after the
@@ -65,8 +65,9 @@ Backward compatibility is out of scope. The unused project-level
   no lost accepted command and bounded failover, not uninterrupted TCP
   acceptance. Strict zero-downtime listener handoff needs a separate front-door
   design and is not hidden inside this work.
-- Full machine shutdown stops the standby before the active. Otherwise the
-  standby would correctly interpret active shutdown as a reason to promote.
+- Full machine shutdown is state-aware. Deployment tooling reads live slot
+  status, stops the current standby, waits for it to exit, and then stops the
+  current active. Static slot order is unsafe after ownership changes.
 
 ## Descriptor and authoring shape
 
@@ -106,9 +107,9 @@ Estimates are for one engineer and include code, tests, and documentation.
 
 | Stage | Outcome | Complexity | Estimate | Status |
 | --- | --- | --- | --- | --- |
-| [1. Instance and fencing contract](01-instance-contract.md) | Freeze identities, states, ownership, and failure rules | Medium | 2-3 days | Not started |
-| [2. Descriptor and package contract](02-descriptor-and-package.md) | Make standby default-on and machine-specific | Medium | 3-5 days | Not started |
-| [3. Warm standby runtime](03-warm-standby-runtime.md) | Run a caught-up projection-only second process under local fencing | High | 5-8 days | Not started |
+| [1. Instance and fencing contract](01-instance-contract.md) | Freeze identities, states, ownership, and failure rules | Medium | 2-3 days | Complete |
+| [2. Descriptor and package contract](02-descriptor-and-package.md) | Make standby default-on and machine-specific | Medium | 3-5 days | Complete |
+| [3. Warm standby runtime](03-warm-standby-runtime.md) | Run a caught-up projection-only second process under local fencing | High | 5-8 days | Complete |
 | [4. Promotion and handover](04-promotion-and-handover.md) | Promote safely after crash or controlled active shutdown | High | 4-7 days | Not started |
 | [5. Resilience validation and cleanup](05-validation-and-cleanup.md) | Prove failover, opt-out, recovery, and remove the legacy flag | High | 3-5 days | Not started |
 

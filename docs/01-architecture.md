@@ -2,8 +2,10 @@
 
 OPDL builds one platform binary for each machine in a project blueprint. The
 builder resolves the machine's deployment descriptor, embeds it in the runtime,
-and packages the result. Identity is compiled into the artifact. A deployment
-site does not assign identity through runtime configuration.
+and packages the result. A package runs one process when warm standby is
+disabled, or two independently launched slots when it is enabled. Identity is
+compiled into the artifact. A deployment site does not assign identity through
+runtime configuration.
 
 ## Distribution line
 
@@ -14,7 +16,7 @@ project blueprint
 builder -> resolved descriptor per machine -> platform binary per machine
                                                 |
                                                 v
-                                      one runtime at the site
+                                      one or two local slots
 ```
 
 The repository is a Go workspace of four modules plus a generated .NET SDK.
@@ -34,14 +36,15 @@ artifacts and then regenerate `sdk-dotnet` from that contract.
 ## Deployment descriptor
 
 Every built platform binary embeds one `deployment.Descriptor`. It contains the
-project, environment, site, machine, role, IP, services, features, and resolved
-Event Fabric peers.
+project, environment, site, machine, role, IP, services, features, resolved
+warm-standby policy, and Event Fabric peers.
 
 The runtime trusts the descriptor as its identity. Registration origins, event
 nodes, and Event Fabric members come from it. A client cannot claim a different
 machine or site. Runtime TOML configuration contains only site-adjustable
-settings: the HTTP listen address, timeouts, the journal's storage directory, a
-credentials file, and Event Fabric socket overrides.
+settings: the HTTP listen address, timeouts, the local instance directory, the
+required projection lag bound, the journal's storage directory, a credentials
+file, and Event Fabric socket overrides.
 
 ## Runtime boundaries
 
@@ -52,6 +55,7 @@ The platform is composed around three boundaries:
 | `internal/httpapi` | Decodes and encodes the public HTTP contract. It does not decide registration state. |
 | `internal/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
 | `internal/eventfabric` | Publishes facts to the site's ordered journal, replays them, delivers them, and reports health. Runtime code does not depend on a transport. |
+| `internal/redundancy` | Owns local slot identity, lifecycle state, the machine fence, projection-lag state, and atomic status files. |
 
 The production adapter is `eventfabric/nats`. NATS is imported only by it.
 
@@ -151,7 +155,7 @@ stopped.
 
 ## Bootstrap and lifecycle
 
-Startup order is strict, and each step exists because the next one would
+Active startup order is strict, and each step exists because the next one would
 otherwise be a lie:
 
 1. Validate the configuration and probe the journal's storage.
@@ -165,6 +169,18 @@ otherwise be a lie:
 7. State `platform.event_fabric.ready` and wait for the node's own projection to
    apply it.
 8. Serve the public HTTP API.
+
+A warm standby opens only a client Event Fabric connection and a distinct
+projector. It catches up and follows the journal, writes its local slot status,
+and owns no public listener, durable handler, lifecycle readiness publication,
+embedded NATS server, or JetStream storage. On a storage machine it prefers the
+co-located active server and retains peer storage addresses as fallbacks.
+
+Both slots contend for one non-expiring OS file lock under the configured local
+instance directory. Only the lock holder may compose active capabilities. The
+lock is released after active resources close, or automatically when the
+holding process exits. Stage 3 decides the role once at startup. Automatic
+promotion after later fence acquisition is Stage 4 work.
 
 The whole readiness sequence is bounded by `catch_up_timeout`. A node that cannot
 finish it does not serve, and reports how far its projector got and what each
@@ -180,20 +196,25 @@ still accept it; then the projector stops and the transport closes. A projector 
 handler that stops on its own also ends serving: the projection is what every
 query is answered from.
 
+Full-machine shutdown cannot use a static slot-name order because either slot
+may be active. Deployment tooling reads live status, stops the current standby,
+waits for it to exit, and then stops the current active.
+
 The site journal is the platform's durable state. A node rebuilds its projections
 by replaying it at every start, so a machine that is killed comes back to the same
 answers. Local projections are memory-only and are not snapshotted; replay cost
 has not yet justified it.
 
-## No redundancy
+## Local warm standby
 
-There is one platform per machine. OPDL currently has no primary/secondary
-instance, election, fencing, failover, or zero-downtime upgrade mechanism.
-Journal replication must not be interpreted as service redundancy: three storage
-nodes keep three copies of the site's history, and nothing takes over a
-machine's registration decisions when that machine is down. A proposal simply
-stays pending until it comes back.
+OPDL can run two symmetric process slots for one machine. One slot holds the
+local fence and runs the active capabilities. The other maintains a warm local
+projection. Both retain the same compiled machine identity, so they remain one
+registration voter.
 
-The current implementation plan adds one local warm standby process per machine;
-see [Local warm standby redundancy](plan/README.md).
+Stage 3 provides fencing and the projection-only standby, but it does not yet
+promote a standby after the active exits. Journal replication also remains
+separate from service redundancy: storage replicas protect site history, while
+the local slot fence protects one machine's active capabilities. Promotion and
+controlled handover are defined in [Stage 4](plan/04-promotion-and-handover.md).
 

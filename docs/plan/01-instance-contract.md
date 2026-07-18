@@ -18,21 +18,22 @@ Estimated time: 2-3 engineering days.
 3. Freeze the ownership rule: only the process holding the exclusive active
    fence may bind the public API, start durable domain handlers, publish machine
    lifecycle readiness, or host the embedded NATS server.
-4. Specify an `internal/instance` boundary with a small consumer-owned contract:
+4. Specify an `internal/redundancy` boundary with a small consumer-owned contract:
    acquire or wait for the machine fence, release it after active resources
    close, report the current slot state, and stop on context cancellation.
 5. Define the fence path from project, environment, site, and machine under a
    configured local runtime directory. Slot names must not produce different
    fence paths.
-6. Add slot identity to operational event node identity and logs. Keep proposal,
-   decision, and durable-handler identities machine-scoped so two slots never
-   become two domain voters.
+6. Add slot identity to operational lifecycle payloads, logs, and local status.
+   Keep the event envelope node, proposal, decision, and durable-handler
+   identities machine-scoped so two slots never become two domain voters.
 7. Define shutdown semantics:
    - process crash releases the OS lock automatically;
    - graceful active shutdown closes HTTP, handlers, projector, and NATS before
      releasing the fence;
    - cancelling a standby ends its fence wait without promotion;
-   - full machine shutdown stops slot `b` before slot `a`.
+   - full machine shutdown reads live status, stops the current standby, waits
+     for it to exit, and then stops the current active.
 8. Update package documentation for `events`, `eventfabric`, `registration`, and
    `app` with the final invariants. Keep the documentation self-contained.
 

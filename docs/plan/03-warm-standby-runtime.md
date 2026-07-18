@@ -18,7 +18,7 @@ Depends on: [Stage 2](02-descriptor-and-package.md).
 2. Add a required local `instance_dir` setting. Derive one machine directory for
    the shared fence and one diagnostic/status file per slot. Reject a path that
    is not writable. Document that both slots must use the same local filesystem.
-3. Implement the exclusive process fence behind `internal/instance`, with small
+3. Implement the exclusive process fence behind `internal/redundancy`, with small
    OS-specific files where required. Test real cross-process exclusion and
    automatic release after process death on supported operating systems.
 4. Split runtime composition into projection-only and active layers:
@@ -35,10 +35,12 @@ Depends on: [Stage 2](02-descriptor-and-package.md).
    active.
 7. Track projector applied sequence, journal high-water sequence, lag duration,
    slot state, PID, and last error in memory. Write them atomically to a local
-   status file for deployment diagnostics. The file is not coordination state;
-   the OS lock remains authoritative.
-8. Add a live lag bound. A standby that exceeds it is not promotable. An active
-   that exceeds it stops serving rather than answering from stale projections.
+   status file for deployment diagnostics. Initial and later write failures stop
+   the slot so deployment tooling never acts on known-stale status. The file is
+   not an active fence; the OS lock remains authoritative.
+8. Require a positive live lag bound. A standby that exceeds it is not
+   promotable. An active that exceeds it stops serving rather than answering
+   from stale projections.
 9. Ensure cancellation stops projector consumption and fence waiting promptly,
    without turning cancellation into a processing failure.
 

@@ -10,7 +10,7 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
-	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
@@ -80,15 +80,17 @@ func runSlot(ctx context.Context, cfg *config.Config, descriptor deployment.Desc
 func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, slot redundancy.Slot, statusPath string) error {
 	site, err := open(ctx, descriptor, cfg, true)
 	if err != nil {
-		writeFailedStatus(statusPath, slot, err)
-		return err
+		return errors.Join(err, writeFailedStatus(statusPath, slot, err))
 	}
 
 	// A projection that falls too far behind stops serving rather than answering
 	// from a stale view: the status loop cancels serving when it crosses the bound.
 	serveCtx, stopServing := context.WithCancel(ctx)
 	defer stopServing()
-	go runStatus(serveCtx, site.fabric, slot, redundancy.StateActive, statusPath, cfg.LagBound(), stopServing)
+	statusDone, err := startStatus(serveCtx, site.fabric, slot, redundancy.StateActive, statusPath, cfg.LagBound(), stopServing, stopServing)
+	if err != nil {
+		return errors.Join(err, site.close(ctx), writeFailedStatus(statusPath, slot, err))
+	}
 
 	addr := cfg.Address()
 	fmt.Printf("platform: slot %s active, listening on %s\n", slot, addr)
@@ -97,7 +99,13 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 		Handler:           httpapi.NewHandler(site.commands, site.queries),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout(),
 	}
-	return serve(serveCtx, srv, site, cfg.ShutdownTimeout())
+	serveErr := serve(serveCtx, srv, site, cfg.ShutdownTimeout())
+	stopServing()
+	statusErr := <-statusDone
+	if statusErr != nil {
+		return errors.Join(serveErr, statusErr, writeFailedStatus(statusPath, slot, statusErr))
+	}
+	return serveErr
 }
 
 // runStandby follows the journal as a warm standby until signaled. It opens a
@@ -106,16 +114,26 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, slot redundancy.Slot, statusPath string) error {
 	site, err := open(ctx, descriptor, cfg, false)
 	if err != nil {
-		writeFailedStatus(statusPath, slot, err)
-		return err
+		return errors.Join(err, writeFailedStatus(statusPath, slot, err))
 	}
 
 	// A standby never stops serving on lag because it serves nothing; it only
 	// records whether it is current enough to be promoted, so onLagExceeded is nil.
-	go runStatus(ctx, site.fabric, slot, redundancy.StateStandby, statusPath, cfg.LagBound(), nil)
+	standbyCtx, stopStandby := context.WithCancel(ctx)
+	defer stopStandby()
+	statusDone, err := startStatus(standbyCtx, site.fabric, slot, redundancy.StateStandby, statusPath, cfg.LagBound(), nil, stopStandby)
+	if err != nil {
+		return errors.Join(err, site.close(ctx), writeFailedStatus(statusPath, slot, err))
+	}
 
 	fmt.Printf("platform: slot %s warm standby, following the journal\n", slot)
-	return serveStandby(ctx, site)
+	standbyErr := serveStandby(standbyCtx, site)
+	stopStandby()
+	statusErr := <-statusDone
+	if statusErr != nil {
+		return errors.Join(standbyErr, statusErr, writeFailedStatus(statusPath, slot, statusErr))
+	}
+	return standbyErr
 }
 
 // serveStandby follows the journal until ctx is canceled or the projector stops,
@@ -131,16 +149,16 @@ func serveStandby(ctx context.Context, site *site) error {
 	return site.close(ctx)
 }
 
-// runStatus periodically writes slot's status file from the fabric's live state
-// and tracks how long its projection has been behind the journal. When the lag
-// crosses the configured bound it marks the slot not promotable, and for an active
-// slot it calls onLagExceeded to stop serving. It returns when ctx is done.
-//
-// The status file is diagnostics, not coordination: the OS fence stays
-// authoritative, so a failed write is logged nowhere and never blocks the slot.
-func runStatus(ctx context.Context, fabric *natsfabric.Fabric, slot redundancy.Slot, state redundancy.State, statusPath string, lagBound time.Duration, onLagExceeded func()) {
+type statusFabric interface {
+	State(context.Context) (eventfabric.State, error)
+}
+
+// startStatus writes the initial status synchronously, then periodically writes
+// live state until ctx ends. A write failure stops the runtime because deployment
+// tooling must not act on a stale file during handover or machine shutdown.
+func startStatus(ctx context.Context, fabric statusFabric, slot redundancy.Slot, state redundancy.State, statusPath string, lagBound time.Duration, onLagExceeded, onFailure func()) (<-chan error, error) {
 	var lag redundancy.LagState
-	write := func() {
+	write := func() error {
 		now := time.Now()
 		status := redundancy.Status{Slot: slot, State: state, PID: os.Getpid(), UpdatedAt: now.UTC(), Promotable: true}
 		st, err := fabric.State(ctx)
@@ -159,26 +177,39 @@ func runStatus(ctx context.Context, fabric *natsfabric.Fabric, slot redundancy.S
 				}
 			}
 		}
-		_ = status.Write(statusPath)
+		return status.Write(statusPath)
 	}
 
-	write()
-	ticker := time.NewTicker(statusInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			write()
-		}
+	if err := write(); err != nil {
+		return nil, err
 	}
+	done := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(statusInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				done <- nil
+				return
+			case <-ticker.C:
+				if err := write(); err != nil {
+					if onFailure != nil {
+						onFailure()
+					}
+					done <- err
+					return
+				}
+			}
+		}
+	}()
+	return done, nil
 }
 
-// writeFailedStatus records that a slot could not open, best-effort, so a stopped
-// slot leaves a reason behind rather than a stale or missing file.
-func writeFailedStatus(statusPath string, slot redundancy.Slot, cause error) {
-	_ = redundancy.Status{
+// writeFailedStatus records that a slot could not open so a stopped slot leaves
+// a reason behind rather than a stale or missing file.
+func writeFailedStatus(statusPath string, slot redundancy.Slot, cause error) error {
+	return redundancy.Status{
 		Slot:      slot,
 		State:     redundancy.StateFailed,
 		PID:       os.Getpid(),

@@ -16,6 +16,11 @@ Depends on: [Stage 3](03-warm-standby-runtime.md).
 1. At startup, attempt the active fence before composing the runtime. The winner
    opens the active path. The other slot opens projection-only standby and waits
    for the same fence while its projector remains live.
+   A storage-machine standby keeps every storage-node client address, preferring
+   its co-located server while it is available.
+   Fence waiting is independent of the projector connection. Losing the local
+   server must not make a single-storage-node standby exit before it can acquire
+   the fence and reopen that server during promotion.
 2. Promotion begins only after fence acquisition. A standby must never infer
    active ownership from a missing status file, closed port, timeout, or NATS
    disconnect alone.
@@ -39,10 +44,11 @@ Depends on: [Stage 3](03-warm-standby-runtime.md).
    verify the new slot as caught-up standby, gracefully stop the active through
    the service manager, then wait for the standby status to become active. Do
    not add a remote promotion API.
-7. Define full machine shutdown as standby-first cancellation followed by active
-   shutdown. Add explicit logs when a process promotes or declines promotion.
-8. Add instance slot and active state to lifecycle event payloads and operational
-   logs. Domain payloads remain machine-scoped.
+7. Define full machine shutdown as a state-aware operation: read live status,
+   stop the current standby and wait for it to exit, then stop the current
+   active. Add explicit logs when a process promotes or declines promotion.
+8. Add slot and active state to lifecycle event payloads and operational logs.
+   Keep the event envelope node and domain payloads machine-scoped.
 9. Bound activation with startup and catch-up timeouts. A failed activation keeps
    the fence until opened resources are closed, then exits so the service manager
    can restart it.

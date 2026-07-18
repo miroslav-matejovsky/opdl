@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -412,6 +413,7 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 		return natsfabric.Config{}, err
 	}
 	settings := cfg.EventFabric().Nats
+	derivedClientAddress := fabricCfg.ClientAddress
 
 	fabricCfg.DataDir = nodeDataDir(settings.DataDir, descriptor)
 	fabricCfg.Username, fabricCfg.Password = cfg.Credentials()
@@ -444,13 +446,19 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 	}
 	if settings.Servers != nil {
 		fabricCfg.Servers = settings.Servers
+	} else if fabricCfg.HostsStorage && fabricCfg.ClientAddress != derivedClientAddress {
+		for i, server := range fabricCfg.Servers {
+			if server == derivedClientAddress {
+				fabricCfg.Servers[i] = fabricCfg.ClientAddress
+				break
+			}
+		}
 	}
-	// A storage node reaches the journal through its own server, so moving that
-	// server moves where the node connects. Deriving this rather than asking a
-	// site to keep two settings agreeing removes the way to configure a node that
-	// runs one journal and talks to another.
 	if fabricCfg.HostsStorage {
-		fabricCfg.Servers = []string{fabricCfg.ClientAddress}
+		peers := slices.DeleteFunc(slices.Clone(fabricCfg.Servers), func(server string) bool {
+			return server == fabricCfg.ClientAddress
+		})
+		fabricCfg.Servers = append([]string{fabricCfg.ClientAddress}, peers...)
 	}
 	return fabricCfg, nil
 }
@@ -469,9 +477,8 @@ func clientOnly(cfg natsfabric.Config) natsfabric.Config {
 		return cfg
 	}
 	cfg.HostsStorage = false
-	// cfg.Servers already points at the storage node's server, which the standby
-	// follows the journal through; only the things a server binds or stores are
-	// dropped.
+	// cfg.Servers keeps the local server first and all peer storage servers after
+	// it. Peers let the standby remain caught up if the local active disappears.
 	cfg.ClientAddress = ""
 	cfg.ClusterAddress = ""
 	cfg.MonitorAddress = ""

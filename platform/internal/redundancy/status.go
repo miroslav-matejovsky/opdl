@@ -12,10 +12,10 @@ import (
 // process id, how far its projection has applied of the journal, how long it has
 // been lagging, whether it is promotable, and its last error.
 //
-// It is not coordination state. The OS fence remains authoritative, and a status
-// file can be stale after a crash, so nothing reads it to decide who is active.
-// It exists so a deployment tool or an operator can see what each slot is doing
-// without a control API.
+// It is not an active fence. The OS lock remains authoritative, and the runtime
+// never grants active ownership from this file. Deployment tooling may use a
+// fresh status whose PID is still live to select shutdown and handover actions.
+// A stale status after a crash is only historical diagnostics.
 type Status struct {
 	// Slot is the local process identity this status is for.
 	Slot Slot `json:"slot"`

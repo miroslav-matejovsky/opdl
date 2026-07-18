@@ -23,8 +23,7 @@ type file struct {
 	InstanceDir string `toml:"instance_dir"`
 	// LagBound bounds how long a slot's projection may lag the journal before it
 	// stops being promotable, and before an active slot stops serving rather than
-	// answering from a stale view. It is optional; an omitted or zero bound
-	// disables the check.
+	// answering from a stale view. It is required and must be positive.
 	LagBound    string      `toml:"lag_bound"`
 	EventFabric EventFabric `toml:"event_fabric"`
 }
@@ -130,6 +129,9 @@ func loadFile(path string) (file, error) {
 		return file{}, fmt.Errorf("configuration file %s: instance_dir is required", path)
 	}
 	f.LagBound = strings.TrimSpace(f.LagBound)
+	if f.LagBound == "" {
+		return file{}, fmt.Errorf("configuration file %s: lag_bound is required", path)
+	}
 	nats := &f.EventFabric.Nats
 	nats.DataDir = strings.TrimSpace(nats.DataDir)
 	if nats.DataDir == "" {

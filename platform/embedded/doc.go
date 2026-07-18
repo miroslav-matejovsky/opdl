@@ -6,6 +6,11 @@
 // standalone with no customer deployment present. This is what keeps the
 // repository always compilable without any project selected.
 //
+// The neutral descriptor explicitly disables warm standby because `task run`
+// launches one development process. Built machine descriptors still resolve an
+// omitted blueprint policy to enabled and declare their slot launches in the
+// package manifest.
+//
 // When the builder produces a machine package it overwrites deployment.json
 // with that machine's resolved descriptor (from the project blueprint), runs go
 // build, then restores the mock. The platform reads the same embedded file

@@ -81,8 +81,9 @@ type Config struct {
 	Routes []string
 
 	// Servers are the client host:port addresses this node's Event Fabric client
-	// connects to: its own server on a storage node, and the site's storage nodes
-	// on a machine that does not store the journal.
+	// connects to. A storage node lists its own server first and then the other
+	// storage nodes, so its client-only standby can remain connected across local
+	// active loss when the site has another storage node.
 	Servers []string
 
 	// HostsStorage reports whether this node runs the site journal. Only the
@@ -131,9 +132,8 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	storage := StorageNodes(slices.Sorted(maps.Keys(ips)))
 	hostsStorage := slices.Contains(storage, descriptor.Machine)
 
-	// A machine that does not store the journal reaches it through any of the
-	// storage nodes' servers. A storage node reaches it through its own, which is
-	// why Servers is derived from ClientAddress below rather than listed here.
+	// Every machine can reach all storage nodes. A storage machine puts its own
+	// server first below, while retaining the peers for its client-only standby.
 	//
 	// The cluster is exactly the storage nodes: they are the only servers, and a
 	// server that is not one of them would only add a peer to the journal's
@@ -178,10 +178,9 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	if cfg.ClientAddress, err = address(descriptor.IP, ClientPort); err != nil {
 		return Config{}, fmt.Errorf("nats: client address: %w", err)
 	}
-	// A storage node reaches the journal through its own server, which already
-	// clusters with the site's others. Sending it across the network to a peer
-	// would be a hop to reach what is in this process.
-	cfg.Servers = []string{cfg.ClientAddress}
+	cfg.Servers = append([]string{cfg.ClientAddress}, slices.DeleteFunc(cfg.Servers, func(server string) bool {
+		return server == cfg.ClientAddress
+	})...)
 	if cfg.ClusterAddress, err = address(descriptor.IP, ClusterPort); err != nil {
 		return Config{}, fmt.Errorf("nats: cluster address: %w", err)
 	}

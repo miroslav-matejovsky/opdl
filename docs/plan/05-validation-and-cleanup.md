@@ -14,7 +14,8 @@ Depends on: [Stage 4](04-promotion-and-handover.md).
 ## Work
 
 1. Add descriptor and package tests for default-on standby, per-machine opt-out,
-   two launch entries, explicit slot arguments, and standby-first stop order.
+   two slot launch entries, explicit slot arguments, and the state-aware
+   `standby_then_active` shutdown strategy.
 2. Add deterministic unit tests for lifecycle transitions, activation gating,
    lag gating, cancellation, cleanup order, and machine-scoped handler identity.
 3. Add real cross-process fence tests. Verify one owner, cancelled wait, release
@@ -34,8 +35,8 @@ Depends on: [Stage 4](04-promotion-and-handover.md).
    time, and standby memory. Do not declare an SLO until scenarios provide a
    baseline.
 7. Update root architecture, platform, builder, scenario, deployment, app,
-   Event Fabric, NATS, and registration documentation. Include launch and stop
-   order in package metadata documentation.
+   Event Fabric, NATS, and registration documentation. Include slot launches
+   and the live-role shutdown strategy in package metadata documentation.
 8. Remove the old `features.redundancy` vocabulary, stale examples, and temporary
    single-process compatibility paths.
 9. Run repository searches for the legacy field and for active capabilities used
@@ -47,8 +48,8 @@ Depends on: [Stage 4](04-promotion-and-handover.md).
 
 - Every completion criterion in the plan overview is covered by a deterministic
   test or black-box scenario.
-- Package output is sufficient for deployment tooling to launch and stop slots
-  in the safe order.
+- Package output is sufficient for deployment tooling to launch slots and stop
+  the current standby before the current active.
 - Documentation describes the implemented process model without referring to
   the removed project feature.
 - The measured failover gap and resource cost are recorded for the next design

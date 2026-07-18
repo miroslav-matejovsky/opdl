@@ -65,9 +65,9 @@
 //
 // Status is a slot's live snapshot — its slot, state, PID, applied and journal
 // high-water sequences, projection lag, and last error — written atomically to
-// the slot's status file for deployment diagnostics. It is not coordination
-// state: the OS fence remains authoritative, and a status file can be stale after
-// a crash, so it must never be treated as a fence.
+// the slot's status file. Deployment tooling may use a fresh status whose PID is
+// live for shutdown and handover. It is not an active fence: the OS lock remains
+// authoritative, and stale status after a crash grants no ownership.
 //
 // LagState tracks how long a slot's projection has continuously been behind the
 // journal. A projection that lags beyond a configured bound is not promotable,
@@ -90,7 +90,7 @@
 //     closed. Releasing earlier could let a second slot open the same listener or
 //     embedded server while this one is still up.
 //   - Canceling a standby ends its projector and any fence wait without promotion.
-//   - A full machine shutdown stops slot B before slot A (see StopOrder), so the
-//     machine leaving does not look like an active failure the other slot should
-//     promote into.
+//   - A full machine shutdown is state-aware: deployment tooling reads live
+//     status, stops the current standby, waits for it to exit, and then stops the
+//     current active. No static slot-name order is safe after ownership changes.
 package redundancy

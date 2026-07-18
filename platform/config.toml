@@ -21,10 +21,11 @@ shutdown_timeout = "10s"
 # diagnostics, not site history.
 instance_dir = ".data/instance"
 
-# Optional bound on how long a slot's projection may lag the journal before it
+# Required bound on how long a slot's projection may lag the journal before it
 # stops being promotable, and before an active slot stops serving rather than
-# answering from a stale view. Omit or set "0s" to disable the check.
-# lag_bound = "10s"
+# answering from a stale view. This provisional value is an operational safety
+# bound, not a failover-time SLO.
+lag_bound = "30s"
 
 [event_fabric.nats]
 # Directory holding the site journal's JetStream file store. Required.
