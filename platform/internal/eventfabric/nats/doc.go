@@ -40,6 +40,11 @@
 // Server name, cluster name, addresses, routes, and servers are all derived from
 // the deployment descriptor; see Config.
 //
+// On a storage machine, only the process holding the machine fence enables the
+// embedded server and opens the JetStream directory. Its standby uses the same
+// server list in client-only mode. Promotion closes that client composition
+// before reopening the embedded server and retained directory under the fence.
+//
 // # Journal
 //
 // The site journal is one file-backed stream named from the site scope, bound to

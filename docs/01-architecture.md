@@ -222,3 +222,43 @@ steals ownership from a live standby. Journal replication remains separate from
 service redundancy: storage replicas protect site history, while the local
 process fence protects one machine's active capabilities.
 
+### Package and service-manager contract
+
+Each package manifest contains one required `primary` launch and, when the
+resolved machine policy enables warm standby, one optional `standby` launch.
+Both name the same binary and configuration. Their direct arguments are
+`-instance primary` and `-instance standby`.
+
+Deployment starts the primary and waits for its local status to become `active`
+before starting the standby. A handover requires a fresh, live standby status
+with `promotable=true`, no last error, and a caught-up sequence. The service
+manager then gracefully stops the active process and waits for the other process
+to become `active`. A returning primary uses this procedure to reclaim
+ownership. Full machine shutdown stops the primary service and then the standby
+service; the standby may briefly promote between those operations.
+
+Status files are operational evidence, not ownership. They identify the process
+role and PID and report lifecycle state, projection progress, lag, promotability,
+and the last error. Only the OS fence grants active ownership.
+
+### Validation baseline
+
+The black-box warm-standby scenario builds a default-on package, launches both
+processes, kills and hands ownership over repeatedly, preserves registrations,
+checks storage ownership, reclaims the preferred primary, and completes full
+machine shutdown. It records measurements without enforcing an SLO.
+
+The 2026-07-18 Windows development baseline from one local run was:
+
+| Measurement | Observed |
+| --- | ---: |
+| Initial standby journal catch-up | 61.9 ms |
+| Forced-kill promotion | 29.90 s |
+| Listener unavailable | 29.91 s |
+| Planned handover | 287 ms |
+| Standby working set | 16,396,288 bytes |
+
+These are development measurements, not production limits or percentiles. The
+forced-kill gap is close to the configured 30-second startup bound and is tracked
+as a performance investigation before any failover SLO is declared.
+

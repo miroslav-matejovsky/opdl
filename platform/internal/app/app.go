@@ -21,7 +21,7 @@ import (
 func Run(args []string) error {
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
 	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")
-	instance := fs.String("instance", "", "process role: primary or standby; required when warm standby is enabled")
+	instance := fs.String("instance", "", "process role: primary or standby")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -32,8 +32,8 @@ func Run(args []string) error {
 	}
 	descriptor := cfg.Descriptor()
 
-	// Validate the role before opening sockets or storage. Redundant machines
-	// require an explicit role, and primary-only machines reject standby.
+	// Validate the explicit role before opening sockets or storage. Primary-only
+	// machines reject standby.
 	role, err := resolveRole(*instance, descriptor.Instances.WarmStandby)
 	if err != nil {
 		return err

@@ -10,8 +10,7 @@ project "two-machine" {
   }
 
   site "local" {
-    # The harness launches one process per machine, so each machine runs a single
-    # slot rather than an active/standby pair.
+    # This fixture isolates site coordination from local process redundancy.
     machine "node-a" {
       role     = "all-in-one"
       ip       = "127.0.0.1"

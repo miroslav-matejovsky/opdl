@@ -15,7 +15,7 @@ project "customer-a" {
       services = ["sensor-services"]
 
       # Warm standby is enabled by default for every machine. This sensor opts
-      # out: it runs a single slot with no second local process.
+      # out: it runs only the preferred primary process.
       platform {
         warm_standby = false
       }

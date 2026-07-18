@@ -7,6 +7,9 @@
 // deployment manifest, release metadata, and a checksums file into the package
 // directory. Every package is self-describing: it can be audited on the
 // customer premises without reference to the build environment.
+// The manifest declares the preferred primary launch directly and includes an
+// optional standby launch when the resolved machine policy enables it. Both use
+// the packaged binary and differ only by their explicit -instance argument.
 //
 // Because every machine shares the one embedded descriptor file, builds are
 // sequential: stage, compile, package, repeat. The placeholder descriptor

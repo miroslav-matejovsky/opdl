@@ -35,14 +35,11 @@ const (
 
 // resolveRole validates the requested process role against the deployment policy.
 //
-// A machine that runs a warm standby requires an explicit role. A machine that
-// opted out defaults to primary and rejects standby.
+// Every packaged launch has an explicit role. A machine that opted out rejects
+// standby.
 func resolveRole(instance string, warmStandby bool) (redundancy.ProcessRole, error) {
 	if instance == "" {
-		if warmStandby {
-			return "", fmt.Errorf("this machine runs a warm standby: -instance primary|standby is required")
-		}
-		return redundancy.RolePrimary, nil
+		return "", fmt.Errorf("-instance primary|standby is required")
 	}
 	role, err := redundancy.ParseRole(instance)
 	if err != nil {

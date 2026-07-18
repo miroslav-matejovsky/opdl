@@ -362,7 +362,7 @@ func TestResolveRole(t *testing.T) {
 		want        redundancy.ProcessRole
 		wantErr     string
 	}{
-		"opt-out defaults to primary":  {instance: "", warmStandby: false, want: redundancy.RolePrimary},
+		"opt-out requires a role":      {instance: "", warmStandby: false, wantErr: "-instance primary|standby is required"},
 		"opt-out accepts primary":      {instance: "primary", warmStandby: false, want: redundancy.RolePrimary},
 		"opt-out rejects standby":      {instance: "standby", warmStandby: false, wantErr: "does not run a warm standby"},
 		"warm standby requires a role": {instance: "", warmStandby: true, wantErr: "-instance primary|standby is required"},
@@ -392,8 +392,8 @@ func (f fixedStatusFabric) State(context.Context) (eventfabric.State, error) {
 }
 
 // TestStartStatusFailsBeforeRuntimeStarts checks a process never serves while its
-// initial status cannot be written. Stage 4 shutdown and handover tooling must
-// not be given a stale operational view.
+// initial status cannot be written. Shutdown and handover tooling must not be
+// given a stale operational view.
 func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
@@ -412,8 +412,8 @@ func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
 	require.Nil(t, done)
 }
 
-// TestActiveAndStandbyRunTogether checks the Stage 3 exit criteria on one
-// all-in-one machine: two processes run against one journal while only the active
+// TestActiveAndStandbyRunTogether checks one all-in-one machine can run two
+// processes against one journal while only the active
 // owns active capabilities, the standby is client-only and produces nothing, and
 // the standby catches up and follows new journal events.
 func TestActiveAndStandbyRunTogether(t *testing.T) {
@@ -458,7 +458,7 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
 }
 
-// TestPromotionAndPrimaryReclamation exercises both Stage 4 ownership transfers.
+// TestPromotionAndPrimaryReclamation exercises both ownership transfers.
 // The service-manager action is represented by canceling the active process only
 // after the waiting process reports a caught-up standby status.
 func TestPromotionAndPrimaryReclamation(t *testing.T) {
@@ -581,7 +581,7 @@ catch_up_timeout = "30s"
 `, filepath.ToSlash(filepath.Join(dir, "instance")), filepath.ToSlash(blocked))
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 
-	err := Run([]string{"-config", path})
+	err := Run([]string{"-config", path, "-instance", "primary"})
 	require.ErrorContains(t, err, "data directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
 }

@@ -22,7 +22,9 @@ finally {
 Write-Host "--- scenarios ---"
 Push-Location (Join-Path $RepoRoot "scenarios")
 try {
-    gotestsum --format testname ./...
+    # Process failover must execute on every resilience gate. Cached results can
+    # hide changes to fencing, signals, listeners, or child-process cleanup.
+    gotestsum --format testname -- -count=1 ./...
     if ($LASTEXITCODE -ne 0) {
         throw "scenarios failed (exit $LASTEXITCODE)"
     }

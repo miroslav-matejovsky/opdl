@@ -5,3 +5,9 @@ The `platform` directory contains the runtime assembled into every machine-speci
 Runtime identity comes only from the embedded descriptor. Configuration may move sockets, place the journal's storage, and bound startup and shutdown, but it cannot change which project, site, or machine the binary represents.
 
 The internal packages keep the HTTP contract, registration decisions, and the event transport behind separate boundaries: the registration package is handed a publisher, a projector, and a handler, and never learns which transport carries them. For system contracts and architectural details, refer to the overview in [`docs`](../docs/README.md).
+
+Each machine runs the manifest's preferred primary and, unless its descriptor
+opts out, an optional standby. Only the local OS-fence owner opens storage,
+handlers, readiness publication, and HTTP. The other process maintains a
+client-only projection and promotes after the fence is released. Local status
+files support service-manager handover and diagnostics but never grant ownership.

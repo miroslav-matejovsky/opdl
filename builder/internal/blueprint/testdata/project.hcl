@@ -15,8 +15,8 @@ project "customer-a" {
       ip       = "10.0.1.10"
       services = ["sensor-services"]
 
-      # warm standby is enabled by default; this machine opts out and runs a
-      # single slot.
+      # warm standby is enabled by default; this machine opts out and runs only
+      # the preferred primary process.
       platform {
         warm_standby = false
       }
