@@ -13,11 +13,11 @@ import (
 func TestStatusWriteReadRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	path := redundancy.StatusPath(t.TempDir(), "p", "e", "s", "m", redundancy.SlotB)
+	path := redundancy.StatusPath(t.TempDir(), "p", "e", "s", "m", redundancy.RoleStandby)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 
 	want := redundancy.Status{
-		Slot:       redundancy.SlotB,
+		Role:       redundancy.RoleStandby,
 		State:      redundancy.StateStandby,
 		PID:        4321,
 		Applied:    41,
@@ -40,10 +40,10 @@ func TestStatusWriteIsAtomic(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	path := redundancy.StatusPath(dir, "p", "e", "s", "m", redundancy.SlotA)
+	path := redundancy.StatusPath(dir, "p", "e", "s", "m", redundancy.RolePrimary)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 
-	require.NoError(t, redundancy.Status{Slot: redundancy.SlotA, State: redundancy.StateActive}.Write(path))
+	require.NoError(t, redundancy.Status{Role: redundancy.RolePrimary, State: redundancy.StateActive}.Write(path))
 	require.FileExists(t, path)
 	require.NoFileExists(t, path+".tmp", "the temporary file is renamed away, not left behind")
 }

@@ -35,7 +35,7 @@
 //
 // The machine platform subsection carries platform-runtime policy, as opposed to
 // what the machine deploys. Its warm_standby attribute opts a machine in or out
-// of running one warm standby slot; it is presence-aware, so an omitted block or
+// of running a standby process; it is presence-aware, so an omitted block or
 // attribute resolves to the default of enabled and only an explicit false
 // disables it.
 //

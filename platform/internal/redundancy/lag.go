@@ -2,7 +2,7 @@ package redundancy
 
 import "time"
 
-// LagState tracks how long a slot's projection has continuously been behind the
+// LagState tracks how long a process projection has continuously been behind the
 // journal. The runtime updates it from one monitoring loop, so it is not safe for
 // concurrent use.
 //
@@ -29,7 +29,7 @@ func (l *LagState) Observe(behind bool, now time.Time) time.Duration {
 }
 
 // Exceeds reports whether lag is beyond bound. A non-positive bound disables the
-// check, so lag never counts against a slot whose deployment has not set one.
+// check, so lag never counts against a process whose deployment has not set one.
 func Exceeds(lag, bound time.Duration) bool {
 	return bound > 0 && lag > bound
 }

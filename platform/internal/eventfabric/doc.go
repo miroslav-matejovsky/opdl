@@ -38,11 +38,11 @@
 // rebuild a read model without re-causing the side effects a Handler performs,
 // so projection and coordination never share one mechanism.
 //
-// This separation is also what a warm standby slot runs on. A machine may run a
+// This separation is also what a warm standby process runs on. A machine may run a
 // second local process that keeps its projections caught up from the journal but
 // holds no active capability. Publishing is active-only: running durable Handlers
 // and stating the node's readiness and stopping lifecycle events belong to the
-// one slot that holds the machine fence. A standby runs Projectors only, so it
+// the process that holds the machine fence. A standby runs Projectors only, so it
 // stays current without causing a fact or exposing a second listener. See
 // internal/redundancy for the fence and the ownership rule.
 //

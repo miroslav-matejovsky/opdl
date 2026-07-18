@@ -16,13 +16,13 @@ type file struct {
 	Address           string `toml:"address"`
 	ReadHeaderTimeout string `toml:"read_header_timeout"`
 	ShutdownTimeout   string `toml:"shutdown_timeout"`
-	// InstanceDir is the local runtime directory holding this machine's slot
-	// fence and per-slot status files. It is required, is shared by both slots of
+	// InstanceDir is the local runtime directory holding this machine's fence
+	// and per-process status files. It is required, is shared by both processes of
 	// a machine, and must be on a local filesystem. It is not the journal store:
 	// it carries local coordination and diagnostics, not site history.
 	InstanceDir string `toml:"instance_dir"`
-	// LagBound bounds how long a slot's projection may lag the journal before it
-	// stops being promotable, and before an active slot stops serving rather than
+	// LagBound bounds how long a process's projection may lag the journal before it
+	// stops being promotable, and before an active process stops serving rather than
 	// answering from a stale view. It is required and must be positive.
 	LagBound    string      `toml:"lag_bound"`
 	EventFabric EventFabric `toml:"event_fabric"`

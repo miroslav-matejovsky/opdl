@@ -7,24 +7,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseSlot(t *testing.T) {
+func TestParseRole(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
 		in      string
-		want    redundancy.Slot
+		want    redundancy.ProcessRole
 		wantErr bool
 	}{
-		"a":         {in: "a", want: redundancy.SlotA},
-		"b":         {in: "b", want: redundancy.SlotB},
+		"primary":   {in: "primary", want: redundancy.RolePrimary},
+		"standby":   {in: "standby", want: redundancy.RoleStandby},
 		"empty":     {in: "", wantErr: true},
-		"uppercase": {in: "A", wantErr: true},
-		"other":     {in: "c", wantErr: true},
+		"uppercase": {in: "PRIMARY", wantErr: true},
+		"other":     {in: "other", wantErr: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := redundancy.ParseSlot(tc.in)
+			got, err := redundancy.ParseRole(tc.in)
 			if tc.wantErr {
 				require.Error(t, err)
 				return
@@ -35,20 +35,20 @@ func TestParseSlot(t *testing.T) {
 	}
 }
 
-func TestSlotStringAndValid(t *testing.T) {
+func TestRoleStringAndValid(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, "a", redundancy.SlotA.String())
-	require.Equal(t, "b", redundancy.SlotB.String())
-	require.True(t, redundancy.SlotA.Valid())
-	require.True(t, redundancy.SlotB.Valid())
-	require.False(t, redundancy.Slot("c").Valid())
-	require.False(t, redundancy.Slot("").Valid())
+	require.Equal(t, "primary", redundancy.RolePrimary.String())
+	require.Equal(t, "standby", redundancy.RoleStandby.String())
+	require.True(t, redundancy.RolePrimary.Valid())
+	require.True(t, redundancy.RoleStandby.Valid())
+	require.False(t, redundancy.ProcessRole("other").Valid())
+	require.False(t, redundancy.ProcessRole("").Valid())
 }
 
 func TestOperationalName(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, "sensor/a", redundancy.OperationalName("sensor", redundancy.SlotA))
-	require.Equal(t, "sensor/b", redundancy.OperationalName("sensor", redundancy.SlotB))
+	require.Equal(t, "sensor/primary", redundancy.OperationalName("sensor", redundancy.RolePrimary))
+	require.Equal(t, "sensor/standby", redundancy.OperationalName("sensor", redundancy.RoleStandby))
 }

@@ -13,11 +13,11 @@ Depends on: [Stage 2](02-descriptor-and-package.md).
 
 ## Work
 
-1. Add `-instance a|b` parsing and validate it against the embedded instance
-   policy before opening any socket or storage.
+1. Add `-instance primary|standby` parsing and validate it against the embedded
+   instance policy before opening any socket or storage.
 2. Add a required local `instance_dir` setting. Derive one machine directory for
-   the shared fence and one diagnostic/status file per slot. Reject a path that
-   is not writable. Document that both slots must use the same local filesystem.
+   the shared fence and one diagnostic/status file per process. Reject a path that
+   is not writable. Document that both processes must use the same local filesystem.
 3. Implement the exclusive process fence behind `internal/redundancy`, with small
    OS-specific files where required. Test real cross-process exclusion and
    automatic release after process death on supported operating systems.
@@ -30,23 +30,23 @@ Depends on: [Stage 2](02-descriptor-and-package.md).
 5. Add a client-only NATS adapter open mode for a standby on a storage machine.
    It must never bind client, cluster, or monitoring ports and must never open
    the shared JetStream data directory.
-6. Give each slot a distinct NATS connection and projector identity. Keep the
+6. Give each process a distinct NATS connection and projector identity. Keep the
    durable registration-handler identity machine-scoped and attach it only while
    active.
 7. Track projector applied sequence, journal high-water sequence, lag duration,
-   slot state, PID, and last error in memory. Write them atomically to a local
+   process state, PID, and last error in memory. Write them atomically to a local
    status file for deployment diagnostics. Initial and later write failures stop
-   the slot so deployment tooling never acts on known-stale status. The file is
+   the process so deployment tooling never acts on known-stale status. The file is
    not an active fence; the OS lock remains authoritative.
 8. Require a positive live lag bound. A standby that exceeds it is not
    promotable. An active that exceeds it stops serving rather than answering
    from stale projections.
-9. Ensure cancellation stops projector consumption and fence waiting promptly,
-   without turning cancellation into a processing failure.
+9. Ensure cancellation stops projector consumption promptly without turning
+   cancellation into a processing failure. Fence waiting begins in Stage 4.
 
 ## Exit criteria
 
-- Two slots can run together while only one owns active capabilities.
+- The primary and standby can run together while only one owns active capabilities.
 - The standby catches up and follows new journal events.
 - A storage-machine standby opens neither listeners nor JetStream files.
 - No standby publishes registration decisions or node readiness.
@@ -59,7 +59,7 @@ Depends on: [Stage 2](02-descriptor-and-package.md).
   atomic local status file for the POC and add a local control API only when a
   real deployment tool needs one.
 - Can the active and standby share local projection snapshots?
-  Recommendation: no. Each slot owns its local cache. Full replay remains the
+  Recommendation: no. Each process owns its local cache. Full replay remains the
   baseline until measured startup cost justifies snapshots.
 - Which process owns the embedded NATS server on a storage machine?
   Recommendation: only the fence owner. The standby uses client-only mode and

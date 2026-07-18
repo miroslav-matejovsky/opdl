@@ -11,8 +11,8 @@ Estimated time: 2-3 engineering days.
 
 ## Work
 
-1. Define two stable local slots, `a` and `b`. A slot is process identity, not a
-   machine, service, registration voter, or permanent primary.
+1. Define two process roles: the preferred primary and the optional standby. A
+   process role is not a machine, service, or registration voter.
 2. Define the lifecycle states used by runtime code and local diagnostics:
    `starting`, `standby`, `activating`, `active`, `stopping`, and `failed`.
 3. Freeze the ownership rule: only the process holding the exclusive active
@@ -20,26 +20,26 @@ Estimated time: 2-3 engineering days.
    lifecycle readiness, or host the embedded NATS server.
 4. Specify an `internal/redundancy` boundary with a small consumer-owned contract:
    acquire or wait for the machine fence, release it after active resources
-   close, report the current slot state, and stop on context cancellation.
+   close, report the current process state, and stop on context cancellation.
 5. Define the fence path from project, environment, site, and machine under a
-   configured local runtime directory. Slot names must not produce different
+   configured local runtime directory. Process roles must not produce different
    fence paths.
-6. Add slot identity to operational lifecycle payloads, logs, and local status.
+6. Add process-role identity to operational lifecycle payloads, logs, and local status.
    Keep the event envelope node, proposal, decision, and durable-handler
-   identities machine-scoped so two slots never become two domain voters.
+   identities machine-scoped so two processes never become two domain voters.
 7. Define shutdown semantics:
    - process crash releases the OS lock automatically;
    - graceful active shutdown closes HTTP, handlers, projector, and NATS before
      releasing the fence;
    - cancelling a standby ends its fence wait without promotion;
-   - full machine shutdown reads live status, stops the current standby, waits
-     for it to exit, and then stops the current active.
+   - full machine shutdown stops the primary service and then the standby
+     service; bounded standby promotion during that interval is allowed.
 8. Update package documentation for `events`, `eventfabric`, `registration`, and
    `app` with the final invariants. Keep the documentation self-contained.
 
 ## Exit criteria
 
-- One document and tested core types use the same machine, slot, active, standby,
+- One document and tested core types use the same machine, primary, standby, active,
   and fence terminology.
 - Domain identities remain machine-scoped.
 - Every active-only capability has an explicit fence ownership rule.
@@ -47,9 +47,9 @@ Estimated time: 2-3 engineering days.
 
 ## Open questions and recommendations
 
-- Should slot `a` always become active first?
-  Recommendation: no. Let the first healthy process acquiring the lock become
-  active. Fixed preference delays recovery when the preferred slot is absent.
+- Should the primary always be preferred?
+  Recommendation: yes. Deployment starts it first. After failover, it reclaims
+  active ownership through graceful handover when it returns.
 - Should an unhealthy live active be preempted after a timeout?
   Recommendation: no. The service manager must terminate it. Time-based lock
   stealing cannot fence a paused process when it resumes.
@@ -60,7 +60,7 @@ Estimated time: 2-3 engineering days.
 
 ## Risks
 
-- Treating slot identity as machine identity would duplicate registration votes.
+- Treating process-role identity as machine identity would duplicate registration votes.
 - Releasing the fence before active resources close can allow two publishers or
   two NATS servers to overlap.
 - A lock placed on a network filesystem may not provide the required process

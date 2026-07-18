@@ -72,14 +72,13 @@ func machineBinary(outDir, project, machine string) string {
 	return filepath.Join(outDir, project, scenarioSite, machine, name)
 }
 
-type slotLaunch struct {
-	Slot string   `json:"slot"`
+type launch struct {
 	Args []string `json:"args"`
 }
 
 type packageManifest struct {
-	Slots            []slotLaunch `json:"slots"`
-	ShutdownStrategy string       `json:"shutdown_strategy"`
+	Primary launch  `json:"primary"`
+	Standby *launch `json:"standby"`
 }
 
 func readManifest(t *testing.T, binaryPath string) packageManifest {
@@ -88,19 +87,8 @@ func readManifest(t *testing.T, binaryPath string) packageManifest {
 	require.NoError(t, err)
 	var manifest packageManifest
 	require.NoError(t, json.Unmarshal(data, &manifest))
-	require.NotEmpty(t, manifest.Slots)
+	require.NotEmpty(t, manifest.Primary.Args)
 	return manifest
-}
-
-func manifestSlot(t *testing.T, binaryPath, slot string) slotLaunch {
-	t.Helper()
-	for _, launch := range readManifest(t, binaryPath).Slots {
-		if launch.Slot == slot {
-			return launch
-		}
-	}
-	require.FailNowf(t, "missing manifest slot", "slot %s is not in %s", slot, binaryPath)
-	return slotLaunch{}
 }
 
 // sockets are one machine's reserved addresses and its journal storage.
@@ -273,7 +261,7 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets, routes
 		sockets:    reserved,
 		binaryPath: binaryPath,
 		configPath: configPath,
-		launchArgs: manifestSlot(t, binaryPath, "a").Args,
+		launchArgs: readManifest(t, binaryPath).Primary.Args,
 		output:     &bytes.Buffer{},
 	}
 }

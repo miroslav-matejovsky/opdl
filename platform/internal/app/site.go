@@ -72,7 +72,7 @@ type service struct {
 	runner  *runner
 }
 
-// open composes and starts this node's Event Fabric for the given slot role.
+// open composes and starts this node's Event Fabric for the process role.
 //
 // When active is true it returns only once the node is ready to serve: connected
 // to its site journal, caught up to a recorded high-water mark, with its handlers
@@ -91,7 +91,7 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 		return nil, err
 	}
 	// A warm standby never opens the shared journal store or binds the storage
-	// node's listeners; the active slot owns those. It reaches the journal as a
+	// node's listeners; the active process owns those. It reaches the journal as a
 	// client of the active's server, so it follows history without contending for
 	// the storage the fence protects.
 	if !active {
@@ -464,7 +464,7 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 }
 
 // clientOnly turns a storage node's Event Fabric configuration into a client-only
-// one for a warm standby. A storage node's active slot binds the server and owns
+// one for a warm standby. A storage node's active process binds the server and owns
 // the JetStream store; its standby must do neither, or two processes would try to
 // bind the same ports and open the same journal directory. The standby keeps the
 // servers it already reaches the journal through and drops everything it would

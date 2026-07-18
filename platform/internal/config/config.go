@@ -136,12 +136,12 @@ func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout 
 // Event Fabric shutdown.
 func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
 
-// InstanceDir returns the local runtime directory holding this machine's slot
-// fence and per-slot status files. Both slots of a machine share it.
+// InstanceDir returns the local runtime directory holding this machine's fence
+// and per-process status files. Both processes share it.
 func (c *Config) InstanceDir() string { return c.instanceDir }
 
-// LagBound returns the configured projection lag bound. A slot lagging beyond it
-// is not promotable, and an active slot beyond it stops serving.
+// LagBound returns the configured projection lag bound. A process lagging beyond
+// it is not promotable, and an active process beyond it stops serving.
 func (c *Config) LagBound() time.Duration { return c.lagBound }
 
 // EventFabric returns the Event Fabric adapter settings from the configuration

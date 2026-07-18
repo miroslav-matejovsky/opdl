@@ -35,9 +35,10 @@ Backward compatibility is out of scope. The unused project-level
 | Term | Meaning |
 | --- | --- |
 | Machine | The existing compiled deployment identity and one registration voter. |
-| Slot | Stable local process identity `a` or `b`. It does not change when active ownership changes. |
-| Active | The slot holding the machine's exclusive active fence. It owns externally visible and decision-producing capabilities. |
-| Warm standby | A slot connected to the journal with caught-up local projections, but no public listener, durable domain handlers, or embedded server. |
+| Primary | Preferred local process, selected by `-instance primary`. Deployment starts it before the standby. |
+| Standby | Optional failover process, selected by `-instance standby`. It promotes when the primary is unavailable. |
+| Active | The process holding the machine's exclusive active fence. It owns externally visible and decision-producing capabilities. |
+| Warm standby | A process connected to the journal with caught-up local projections, but no public listener, durable domain handlers, or embedded server. |
 | Fence | An exclusive OS file lock shared only by the two processes on one machine. Process exit releases it automatically. |
 | Promotion | Recomposition of a fenced standby into the active runtime. |
 | Handover | Graceful stop of the active after a caught-up standby is ready to promote. |
@@ -46,14 +47,15 @@ Backward compatibility is out of scope. The unused project-level
 
 - Use two OS processes, not two goroutines. A process crash must not remove both
   copies.
-- Use symmetric slots `a` and `b`. The first healthy slot to acquire the fence
-  is active; there is no permanently preferred primary.
+- Use a preferred primary and an optional standby. Deployment starts
+  the primary first and waits for it to become active before starting the
+  standby.
 - Use a non-expiring OS lock. A paused or unhealthy process must be terminated by
-  its service manager before another slot can become active. A timeout lease
+  its service manager before another process can become active. A timeout lease
   would allow the old process to wake and create split brain.
 - Store the lock and local status under a machine-specific local runtime
-  directory shared by both slots. The directory must be on a local filesystem.
-- Keep the same machine identity for proposal and decision IDs. Add slot identity
+  directory shared by both processes. The directory must be on a local filesystem.
+- Keep the same machine identity for proposal and decision IDs. Add process-role identity
   only to operational lifecycle identity and logs.
 - A standby on a storage machine connects as a NATS client to the active local
   server or another storage node. It never opens the shared JetStream data
@@ -65,9 +67,9 @@ Backward compatibility is out of scope. The unused project-level
   no lost accepted command and bounded failover, not uninterrupted TCP
   acceptance. Strict zero-downtime listener handoff needs a separate front-door
   design and is not hidden inside this work.
-- Full machine shutdown is state-aware. Deployment tooling reads live slot
-  status, stops the current standby, waits for it to exit, and then stops the
-  current active. Static slot order is unsafe after ownership changes.
+- Deployment tooling directly manages the named primary and standby processes.
+  Full machine shutdown stops the primary service and then the standby service.
+  A standby may promote during this bounded interval and is stopped immediately.
 
 ## Descriptor and authoring shape
 
@@ -118,7 +120,7 @@ Total estimate: 17-28 engineering days.
 ## Completion criteria
 
 - A descriptor without an override explicitly enables warm standby.
-- A machine-level `warm_standby = false` produces a single-slot package.
+- A machine-level `warm_standby = false` produces a primary-only package.
 - Two independently launched processes never hold active capabilities together.
 - Killing the active process promotes a caught-up standby without losing retained
   registrations or producing a second machine decision.
@@ -128,7 +130,8 @@ Total estimate: 17-28 engineering days.
   service on the same public address.
 - Live projection lag prevents activation and removes a lagging active from
   service.
-- Full machine shutdown does not accidentally promote the standby.
+- Full machine shutdown stops both named processes. A bounded standby
+  promotion between the two stop operations is acceptable.
 - `task all` passes.
 
 ## Non-goals
@@ -136,5 +139,6 @@ Total estimate: 17-28 engineering days.
 - Active-active service execution.
 - Failover to another physical machine.
 - A distributed election or shared state store.
-- Automatic preemption of a live process that still owns the OS fence.
+- Lock stealing from a live process that still owns the OS fence. Preferred
+  primary reclamation uses graceful handover.
 - Compatibility with descriptors or journals produced before this POC change.

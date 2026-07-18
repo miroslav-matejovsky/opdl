@@ -24,56 +24,35 @@ type Manifest struct {
 	Services []string `json:"services"`
 	// Deployment is the deployment descriptor filename in the package.
 	Deployment string `json:"deployment"`
-	// Slots are the independent processes a deployer must launch for this machine,
-	// in start order. Every slot runs the same Binary with the same Deployment
-	// descriptor and differs only by its Args. A machine with warm standby lists
-	// two slots; a machine that opted out lists one.
-	Slots []SlotLaunch `json:"slots"`
-	// ShutdownStrategy tells deployment tooling how to stop the machine. A
-	// redundant machine must inspect live slot status and stop the current standby
-	// before the current active; symmetric slots cannot have a safe static order.
-	ShutdownStrategy string `json:"shutdown_strategy"`
+	// Primary is the preferred process.
+	Primary Launch `json:"primary"`
+	// Standby is the optional failover process.
+	Standby *Launch `json:"standby,omitempty"`
 	// GeneratedAt is when the package was produced (UTC).
 	GeneratedAt time.Time `json:"generated_at"`
 }
 
-// SlotLaunch is one launchable process slot of a machine's deployment. Both
-// slots share one Binary and one Deployment descriptor; only the Args that
-// select the local slot differ.
-type SlotLaunch struct {
-	// Slot is the stable local process identity, "a" or "b".
-	Slot string `json:"slot"`
-	// Args are the command-line arguments that select this slot, added to the
-	// binary's normal arguments, e.g. ["-instance", "a"].
+// Launch is one process invocation from the deployment manifest.
+type Launch struct {
+	// Args are added to the binary's normal arguments.
 	Args []string `json:"args"`
 }
 
-// slotFlag is the platform binary argument that selects a local slot.
-const slotFlag = "-instance"
+// instanceFlag selects a process role.
+const instanceFlag = "-instance"
 
 const (
-	slotA = "a"
-	slotB = "b"
-
-	shutdownSingleSlot        = "single_slot"
-	shutdownStandbyThenActive = "standby_then_active"
+	primaryInstance = "primary"
+	standbyInstance = "standby"
 )
 
-// launchSlots derives the processes a deployer must launch for a machine and its
-// full-machine shutdown strategy from the warm-standby policy.
-//
-// A machine with warm standby runs two slots, a and b, each the same binary and
-// descriptor selected by a different -instance argument. A machine that opted out
-// runs only slot a. Redundant slots are symmetric, so shutdown tooling reads
-// their live status and stops whichever slot is standby before the active.
-func launchSlots(warmStandby bool) (slots []SlotLaunch, shutdownStrategy string) {
-	slots = []SlotLaunch{{Slot: slotA, Args: []string{slotFlag, slotA}}}
-	shutdownStrategy = shutdownSingleSlot
-	if warmStandby {
-		slots = append(slots, SlotLaunch{Slot: slotB, Args: []string{slotFlag, slotB}})
-		shutdownStrategy = shutdownStandbyThenActive
+func launches(warmStandby bool) (primary Launch, standby *Launch) {
+	primary = Launch{Args: []string{instanceFlag, primaryInstance}}
+	if !warmStandby {
+		return primary, nil
 	}
-	return slots, shutdownStrategy
+	standby = &Launch{Args: []string{instanceFlag, standbyInstance}}
+	return primary, standby
 }
 
 // Release is the release metadata shipped in a package.

@@ -36,7 +36,7 @@ type Descriptor struct {
 
 // UnmarshalJSON decodes a descriptor and requires its resolved instance policy
 // to be explicit. Without the presence checks, omitted JSON fields would decode
-// to false and silently turn an incomplete descriptor into a single-slot opt-out.
+// to false and silently turn an incomplete descriptor into a primary-only opt-out.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
@@ -74,12 +74,12 @@ type Features struct {
 }
 
 // InstancePolicy is a machine's resolved warm-standby policy: whether the machine
-// runs a second local process (a warm standby slot) alongside its active process.
+// runs an optional standby process alongside its primary process.
 // It is always present in a generated descriptor, so a reader never has to infer
 // the default.
 type InstancePolicy struct {
-	// WarmStandby enables one warm standby slot for the machine. An omitted
-	// blueprint policy resolves to true; an explicit false runs a single slot.
+	// WarmStandby enables the standby process. An omitted blueprint policy
+	// resolves to true; an explicit false runs only the primary.
 	WarmStandby bool `json:"warm_standby"`
 }
 

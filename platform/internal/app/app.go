@@ -15,12 +15,12 @@ import (
 )
 
 // Run starts the platform runtime with the given command-line arguments. It
-// loads configuration, decides this process's slot role against the machine
+// loads configuration, validates this process role against the machine
 // fence, and runs either the active runtime or a warm standby until signaled.
 func Run(args []string) error {
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
 	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")
-	instance := fs.String("instance", "", "local slot to run as, a or b; required on a machine that runs a warm standby")
+	instance := fs.String("instance", "", "process role: primary or standby; required when warm standby is enabled")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -31,21 +31,19 @@ func Run(args []string) error {
 	}
 	descriptor := cfg.Descriptor()
 
-	// The slot is decided before any socket or storage is opened: a machine that
-	// runs a warm standby requires an explicit slot so two service definitions
-	// cannot share one local identity, and a machine that opted out rejects a
-	// second slot outright.
-	slot, err := resolveSlot(*instance, descriptor.Instances.WarmStandby)
+	// Validate the role before opening sockets or storage. Redundant machines
+	// require an explicit role, and primary-only machines reject standby.
+	role, err := resolveRole(*instance, descriptor.Instances.WarmStandby)
 	if err != nil {
 		return err
 	}
 	fmt.Println(cfg.Summary())
-	fmt.Printf("    instance     slot=%s warm_standby=%t\n", slot, descriptor.Instances.WarmStandby)
+	fmt.Printf("    instance     role=%s warm_standby=%t\n", role, descriptor.Instances.WarmStandby)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	return runSlot(ctx, cfg, descriptor, slot)
+	return runProcess(ctx, cfg, descriptor, role)
 }
 
 // serve runs srv until it stops on its own, its site stops carrying events, or

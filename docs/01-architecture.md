@@ -3,7 +3,7 @@
 OPDL builds one platform binary for each machine in a project blueprint. The
 builder resolves the machine's deployment descriptor, embeds it in the runtime,
 and packages the result. A package runs one process when warm standby is
-disabled, or two independently launched slots when it is enabled. Identity is
+disabled, or a primary and standby when it is enabled. Identity is
 compiled into the artifact. A deployment site does not assign identity through
 runtime configuration.
 
@@ -16,7 +16,7 @@ project blueprint
 builder -> resolved descriptor per machine -> platform binary per machine
                                                 |
                                                 v
-                                      one or two local slots
+                                      primary and optional standby
 ```
 
 The repository is a Go workspace of four modules plus a generated .NET SDK.
@@ -55,7 +55,7 @@ The platform is composed around three boundaries:
 | `internal/httpapi` | Decodes and encodes the public HTTP contract. It does not decide registration state. |
 | `internal/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
 | `internal/eventfabric` | Publishes facts to the site's ordered journal, replays them, delivers them, and reports health. Runtime code does not depend on a transport. |
-| `internal/redundancy` | Owns local slot identity, lifecycle state, the machine fence, projection-lag state, and atomic status files. |
+| `internal/redundancy` | Owns process roles, lifecycle state, the machine fence, projection-lag state, and atomic status files. |
 
 The production adapter is `eventfabric/nats`. NATS is imported only by it.
 
@@ -171,16 +171,16 @@ otherwise be a lie:
 8. Serve the public HTTP API.
 
 A warm standby opens only a client Event Fabric connection and a distinct
-projector. It catches up and follows the journal, writes its local slot status,
+projector. It catches up and follows the journal, writes its local process status,
 and owns no public listener, durable handler, lifecycle readiness publication,
 embedded NATS server, or JetStream storage. On a storage machine it prefers the
 co-located active server and retains peer storage addresses as fallbacks.
 
-Both slots contend for one non-expiring OS file lock under the configured local
-instance directory. Only the lock holder may compose active capabilities. The
-lock is released after active resources close, or automatically when the
-holding process exits. Stage 3 decides the role once at startup. Automatic
-promotion after later fence acquisition is Stage 4 work.
+The primary and standby contend for one non-expiring OS file lock under the
+configured local instance directory. Only the lock holder may compose active
+capabilities. The lock is released after active resources close, or
+automatically when the holding process exits. Stage 3 decides ownership once at
+startup. Promotion and preferred-primary reclamation are Stage 4 work.
 
 The whole readiness sequence is bounded by `catch_up_timeout`. A node that cannot
 finish it does not serve, and reports how far its projector got and what each
@@ -196,9 +196,8 @@ still accept it; then the projector stops and the transport closes. A projector 
 handler that stops on its own also ends serving: the projection is what every
 query is answered from.
 
-Full-machine shutdown cannot use a static slot-name order because either slot
-may be active. Deployment tooling reads live status, stops the current standby,
-waits for it to exit, and then stops the current active.
+Full-machine shutdown stops the primary service and then the standby service. A
+standby may promote during this bounded interval and is stopped immediately.
 
 The site journal is the platform's durable state. A node rebuilds its projections
 by replaying it at every start, so a machine that is killed comes back to the same
@@ -207,14 +206,15 @@ has not yet justified it.
 
 ## Local warm standby
 
-OPDL can run two symmetric process slots for one machine. One slot holds the
-local fence and runs the active capabilities. The other maintains a warm local
+OPDL can run a preferred primary and an optional standby for one machine. The
+fence owner runs active capabilities; the other process maintains a warm local
 projection. Both retain the same compiled machine identity, so they remain one
-registration voter.
+registration voter. After failover, a returning primary reclaims ownership only
+through graceful handover from the promoted standby.
 
 Stage 3 provides fencing and the projection-only standby, but it does not yet
 promote a standby after the active exits. Journal replication also remains
 separate from service redundancy: storage replicas protect site history, while
-the local slot fence protects one machine's active capabilities. Promotion and
+the local process fence protects one machine's active capabilities. Promotion and
 controlled handover are defined in [Stage 4](plan/04-promotion-and-handover.md).
 

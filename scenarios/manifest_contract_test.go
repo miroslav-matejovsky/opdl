@@ -8,10 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestManifestSlotArgumentsMatchRuntime consumes the packaged launch contract
-// without importing builder or platform internals. Both declared slot argument
-// sets must start the packaged binary successfully.
-func TestManifestSlotArgumentsMatchRuntime(t *testing.T) {
+// TestManifestArgumentsMatchRuntime consumes the packaged launch contract
+// without importing builder or platform internals.
+func TestManifestArgumentsMatchRuntime(t *testing.T) {
 	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
@@ -21,13 +20,20 @@ func TestManifestSlotArgumentsMatchRuntime(t *testing.T) {
 	deployment := prepareSite(t, outDir, t.TempDir(), "manifest-contract", "node")
 	node := deployment.machine(t, "node")
 	manifest := readManifest(t, node.binaryPath)
-	require.Equal(t, "standby_then_active", manifest.ShutdownStrategy)
-	require.Len(t, manifest.Slots, 2)
-	require.Equal(t, []string{"a", "b"}, []string{manifest.Slots[0].Slot, manifest.Slots[1].Slot})
+	require.Equal(t, []string{"-instance", "primary"}, manifest.Primary.Args)
+	require.NotNil(t, manifest.Standby)
+	require.Equal(t, []string{"-instance", "standby"}, manifest.Standby.Args)
 
-	for _, launch := range manifest.Slots {
-		t.Run("slot "+launch.Slot, func(t *testing.T) {
-			node.launchArgs = launch.Args
+	launches := []struct {
+		name   string
+		launch launch
+	}{
+		{name: "primary", launch: manifest.Primary},
+		{name: "standby", launch: *manifest.Standby},
+	}
+	for _, process := range launches {
+		t.Run(process.name, func(t *testing.T) {
+			node.launchArgs = process.launch.Args
 			node.output = &bytes.Buffer{}
 			node.cmd = nil
 			node.start(ctx, t)

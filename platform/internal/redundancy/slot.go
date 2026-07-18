@@ -2,46 +2,37 @@ package redundancy
 
 import "fmt"
 
-// Slot is a stable local process identity on one machine: A or B. A slot is
-// process identity only. It is never a machine, a service, a registration voter,
-// or a permanent primary: which slot holds the active fence can change across
-// restarts, and the machine keeps exactly one registration vote no matter how
-// many slots run.
-type Slot string
+// ProcessRole identifies the primary or standby process.
+type ProcessRole string
 
 const (
-	// SlotA is the first local process slot.
-	SlotA Slot = "a"
-	// SlotB is the second local process slot.
-	SlotB Slot = "b"
+	// RolePrimary is the preferred process.
+	RolePrimary ProcessRole = "primary"
+	// RoleStandby is the optional failover process.
+	RoleStandby ProcessRole = "standby"
 )
 
-// ParseSlot parses s into a Slot, rejecting anything but "a" or "b". A two-slot
-// machine requires an explicit slot per process, so a launch argument that is
-// blank or misspelled fails here rather than defaulting two processes to one
-// identity.
-func ParseSlot(s string) (Slot, error) {
-	switch Slot(s) {
-	case SlotA, SlotB:
-		return Slot(s), nil
+// ParseRole parses a process role.
+func ParseRole(s string) (ProcessRole, error) {
+	switch ProcessRole(s) {
+	case RolePrimary, RoleStandby:
+		return ProcessRole(s), nil
 	default:
-		return "", fmt.Errorf("redundancy: invalid slot %q: want %q or %q", s, SlotA, SlotB)
+		return "", fmt.Errorf("redundancy: invalid process role %q: want %q or %q", s, RolePrimary, RoleStandby)
 	}
 }
 
-// String returns the slot's token, "a" or "b".
-func (s Slot) String() string { return string(s) }
+// String returns the process role.
+func (r ProcessRole) String() string { return string(r) }
 
-// Valid reports whether s is one of the two defined slots.
-func (s Slot) Valid() bool { return s == SlotA || s == SlotB }
+// Valid reports whether r is a defined process role.
+func (r ProcessRole) Valid() bool { return r == RolePrimary || r == RoleStandby }
 
-// OperationalName composes the operational identity of one slot on one machine,
-// "<machine>/<slot>". It labels logs and operational diagnostics so the two slots
-// of a machine are told apart.
+// OperationalName returns "<machine>/<role>" for logs and diagnostics.
 //
 // It is never a domain identity. Registration proposal, decision, and
-// durable-handler identities stay machine-scoped, so two slots on one machine
+// durable-handler identities stay machine-scoped, so two processes on one machine
 // never become two registration voters.
-func OperationalName(machine string, slot Slot) string {
-	return machine + "/" + string(slot)
+func OperationalName(machine string, role ProcessRole) string {
+	return machine + "/" + string(role)
 }

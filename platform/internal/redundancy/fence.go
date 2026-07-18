@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	// FenceFileName is the lock file both slots on one machine contend for under
-	// the machine's local runtime directory.
+	// FenceFileName is the shared active lock file.
 	FenceFileName = "active.lock"
 
 	// fencePollInterval is how often Acquire retries a held fence while it waits.
@@ -21,17 +20,11 @@ const (
 	fencePollInterval = 100 * time.Millisecond
 )
 
-// machineDir is the machine-specific subdirectory both slots share under the
-// local runtime directory, named by deployment identity. The two slots share it,
-// so it never includes the slot.
 func machineDir(runtimeDir, project, environment, site, machine string) string {
 	return filepath.Join(runtimeDir, strings.Join([]string{project, environment, site, machine}, "-"))
 }
 
-// FencePath returns the machine fence's lock-file path under runtimeDir, derived
-// from the deployment identity and deliberately not from the slot: both slots of
-// a machine must contend for the same lock, so the slot must never change the
-// path.
+// FencePath returns the machine fence's lock-file path under runtimeDir.
 //
 // runtimeDir is a local configuration value the composer supplies; it must be on
 // a local filesystem, because the fence relies on the lock being dropped on
@@ -40,19 +33,17 @@ func FencePath(runtimeDir, project, environment, site, machine string) string {
 	return filepath.Join(machineDir(runtimeDir, project, environment, site, machine), FenceFileName)
 }
 
-// StatusPath returns slot's status-file path under runtimeDir. Unlike the fence,
-// the status file is per slot, so each slot reports its own state without
-// overwriting the other's.
-func StatusPath(runtimeDir, project, environment, site, machine string, slot Slot) string {
-	return filepath.Join(machineDir(runtimeDir, project, environment, site, machine), "slot-"+string(slot)+".status")
+// StatusPath returns the process role's status-file path under runtimeDir.
+func StatusPath(runtimeDir, project, environment, site, machine string, role ProcessRole) string {
+	return filepath.Join(machineDir(runtimeDir, project, environment, site, machine), "process-"+string(role)+".status")
 }
 
 // Fence is one machine's exclusive active lock, held through an OS file lock in
 // the machine's local runtime directory. It is the only thing that decides which
-// of a machine's two slots owns the active, externally visible, decision-producing
+// process owns the active, externally visible, decision-producing
 // capabilities.
 //
-// The lock is exclusive and non-expiring: exactly one slot holds it, and it is
+// The lock is exclusive and non-expiring: exactly one process holds it, and it is
 // released only when the holder releases it or the holding process exits. A crash
 // releases it automatically, because the operating system drops the lock when the
 // file handle closes; a clean stop releases it explicitly. There is no lease and
@@ -62,32 +53,31 @@ func StatusPath(runtimeDir, project, environment, site, machine string, slot Slo
 // A Fence is safe for concurrent use.
 type Fence struct {
 	path string
-	slot Slot
+	role ProcessRole
 
 	mu   sync.Mutex
-	file *os.File // non-nil while this slot holds the fence
+	file *os.File
 }
 
-// OpenFence prepares slot's contender for the machine fence at path. It creates
+// OpenFence prepares a process contender for the machine fence at path. It creates
 // the runtime directory but does not take the lock; call TryAcquire or Acquire to
-// contend for it. path is the same for both slots of a machine, so slot is
+// contend for it. path is the same for both processes of a machine, so role is
 // carried only for diagnostics.
-func OpenFence(path string, slot Slot) (*Fence, error) {
-	if !slot.Valid() {
-		return nil, fmt.Errorf("redundancy: open fence: invalid slot %q", slot)
+func OpenFence(path string, role ProcessRole) (*Fence, error) {
+	if !role.Valid() {
+		return nil, fmt.Errorf("redundancy: open fence: invalid process role %q", role)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("redundancy: create runtime directory: %w", err)
 	}
-	return &Fence{path: path, slot: slot}, nil
+	return &Fence{path: path, role: role}, nil
 }
 
 // TryAcquire takes the machine fence without blocking. It reports whether this
-// slot now holds it, and an error only for an unexpected failure, not for a fence
-// another slot legitimately holds.
+// this process now holds it, and an error only for an unexpected failure, not
+// for a fence another process legitimately holds.
 //
-// It is how a starting slot decides its role: the slot that takes the fence is
-// active, and a slot that finds it held is a warm standby.
+// The process that takes the fence becomes active. The other remains standby.
 func (f *Fence) TryAcquire() (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -111,12 +101,12 @@ func (f *Fence) TryAcquire() (bool, error) {
 	return true, nil
 }
 
-// Acquire blocks until this slot holds the machine fence or ctx is canceled. It
-// tries the OS lock immediately and, while another slot holds it, retries until
+// Acquire blocks until this process holds the machine fence or ctx is canceled. It
+// tries the OS lock immediately and, while another process holds it, retries until
 // the holder releases it or exits, or until ctx is done. Canceling a waiting
 // standby ends the wait without acquiring and without promotion.
 //
-// Acquire returning is not the moment a slot becomes active. The caller composes
+// Acquire returning is not the moment a process becomes active. The caller composes
 // its active resources after Acquire returns, serves only then, and must Release
 // after those resources have closed.
 func (f *Fence) Acquire(ctx context.Context) error {
@@ -139,9 +129,9 @@ func (f *Fence) Acquire(ctx context.Context) error {
 	}
 }
 
-// Release drops the machine fence so another slot may become active. It must be
+// Release drops the machine fence so another process may become active. It must be
 // called only after the caller's active resources have closed: releasing while a
-// listener, handler, or embedded server is still up would let a second slot open
+// listener, handler, or embedded server is still up would let a second process open
 // the same resources and overlap. Release is idempotent.
 func (f *Fence) Release() error {
 	f.mu.Lock()
@@ -161,7 +151,7 @@ func (f *Fence) Release() error {
 	return nil
 }
 
-// Held reports whether this slot currently holds the machine fence.
+// Held reports whether this process currently holds the machine fence.
 func (f *Fence) Held() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -171,5 +161,5 @@ func (f *Fence) Held() bool {
 // Path returns the fence's lock-file path.
 func (f *Fence) Path() string { return f.path }
 
-// Slot returns the slot this fence contends for.
-func (f *Fence) Slot() Slot { return f.slot }
+// Role returns the process role this fence contends for.
+func (f *Fence) Role() ProcessRole { return f.role }

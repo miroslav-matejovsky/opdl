@@ -64,25 +64,16 @@ func TestBinaryExtByTarget(t *testing.T) {
 	require.Empty(t, (&Packer{goos: "linux"}).binaryExt())
 }
 
-// TestLaunchSlots checks the manifest's slot launch entries and shutdown strategy.
-// A machine with warm standby lists slots a and b, each selected by a distinct
-// -instance argument, and requires live-role shutdown; a machine that opted out
-// lists only slot a.
-func TestLaunchSlots(t *testing.T) {
+func TestLaunches(t *testing.T) {
 	t.Run("warm standby enabled", func(t *testing.T) {
-		slots, shutdownStrategy := launchSlots(true)
-		require.Equal(t, []SlotLaunch{
-			{Slot: "a", Args: []string{"-instance", "a"}},
-			{Slot: "b", Args: []string{"-instance", "b"}},
-		}, slots)
-		require.Equal(t, shutdownStandbyThenActive, shutdownStrategy)
+		primary, standby := launches(true)
+		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
+		require.Equal(t, &Launch{Args: []string{"-instance", "standby"}}, standby)
 	})
 
 	t.Run("warm standby disabled", func(t *testing.T) {
-		slots, shutdownStrategy := launchSlots(false)
-		require.Equal(t, []SlotLaunch{
-			{Slot: "a", Args: []string{"-instance", "a"}},
-		}, slots)
-		require.Equal(t, shutdownSingleSlot, shutdownStrategy)
+		primary, standby := launches(false)
+		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
+		require.Nil(t, standby)
 	})
 }

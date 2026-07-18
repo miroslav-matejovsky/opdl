@@ -60,7 +60,7 @@ type Machine struct {
 // subsection of a machine so a blueprint reader sees these policies grouped and
 // explicit rather than mixed in with the machine's identity and services.
 type Platform struct {
-	// WarmStandby opts the machine in or out of running one warm standby slot: a
+	// WarmStandby opts the machine in or out of running a standby process: a
 	// second local process that stays caught up and can take over after the active
 	// process exits. It is presence-aware. An omitted attribute (or an omitted
 	// platform block) leaves it nil and resolves to the default of enabled; an

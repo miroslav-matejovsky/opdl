@@ -354,27 +354,25 @@ func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
 		"a one-machine site expects only itself")
 }
 
-// TestResolveSlot checks the slot a process runs as: a warm-standby machine
-// requires an explicit slot, an opted-out machine defaults to slot a and rejects
-// slot b, and a misspelled slot is refused.
-func TestResolveSlot(t *testing.T) {
+// TestResolveRole checks role selection against the warm-standby policy.
+func TestResolveRole(t *testing.T) {
 	cases := map[string]struct {
 		instance    string
 		warmStandby bool
-		want        redundancy.Slot
+		want        redundancy.ProcessRole
 		wantErr     string
 	}{
-		"opt-out defaults to a":        {instance: "", warmStandby: false, want: redundancy.SlotA},
-		"opt-out accepts a":            {instance: "a", warmStandby: false, want: redundancy.SlotA},
-		"opt-out rejects b":            {instance: "b", warmStandby: false, wantErr: "does not run a warm standby"},
-		"warm standby requires a slot": {instance: "", warmStandby: true, wantErr: "-instance a|b is required"},
-		"warm standby accepts a":       {instance: "a", warmStandby: true, want: redundancy.SlotA},
-		"warm standby accepts b":       {instance: "b", warmStandby: true, want: redundancy.SlotB},
-		"invalid slot":                 {instance: "c", warmStandby: true, wantErr: "invalid slot"},
+		"opt-out defaults to primary":  {instance: "", warmStandby: false, want: redundancy.RolePrimary},
+		"opt-out accepts primary":      {instance: "primary", warmStandby: false, want: redundancy.RolePrimary},
+		"opt-out rejects standby":      {instance: "standby", warmStandby: false, wantErr: "does not run a warm standby"},
+		"warm standby requires a role": {instance: "", warmStandby: true, wantErr: "-instance primary|standby is required"},
+		"warm standby accepts primary": {instance: "primary", warmStandby: true, want: redundancy.RolePrimary},
+		"warm standby accepts standby": {instance: "standby", warmStandby: true, want: redundancy.RoleStandby},
+		"invalid role":                 {instance: "other", warmStandby: true, wantErr: "invalid process role"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got, err := resolveSlot(tc.instance, tc.warmStandby)
+			got, err := resolveRole(tc.instance, tc.warmStandby)
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
 				return
@@ -393,7 +391,7 @@ func (f fixedStatusFabric) State(context.Context) (eventfabric.State, error) {
 	return f.state, nil
 }
 
-// TestStartStatusFailsBeforeRuntimeStarts checks a slot never serves while its
+// TestStartStatusFailsBeforeRuntimeStarts checks a process never serves while its
 // initial status cannot be written. Stage 4 shutdown and handover tooling must
 // not be given a stale operational view.
 func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
@@ -403,9 +401,9 @@ func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
 	done, err := startStatus(
 		t.Context(),
 		fixedStatusFabric{state: eventfabric.State{Connected: true, CaughtUp: true}},
-		redundancy.SlotA,
+		redundancy.RolePrimary,
 		redundancy.StateActive,
-		filepath.Join(blocked, "a.status"),
+		filepath.Join(blocked, "primary.status"),
 		30*time.Second,
 		nil,
 		nil,
@@ -415,12 +413,12 @@ func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
 }
 
 // TestActiveAndStandbyRunTogether checks the Stage 3 exit criteria on one
-// all-in-one machine: two slots run against one journal while only the active
+// all-in-one machine: two processes run against one journal while only the active
 // owns active capabilities, the standby is client-only and produces nothing, and
 // the standby catches up and follows new journal events.
 func TestActiveAndStandbyRunTogether(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping two-slot Event Fabric composition in -short mode")
+		t.Skip("skipping redundant Event Fabric composition in -short mode")
 	}
 	cfg, err := config.Load(writeConfig(t, t.TempDir()))
 	require.NoError(t, err)
@@ -429,8 +427,8 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 	active, err := open(t.Context(), descriptor, cfg, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = active.close(context.Background()) })
-	require.True(t, active.ready, "the active slot announces readiness")
-	require.True(t, active.fabric.Info().HostsStorage, "the active slot owns the journal store")
+	require.True(t, active.ready, "the active process announces readiness")
+	require.True(t, active.fabric.Info().HostsStorage, "the active process owns the journal store")
 
 	standby, err := open(t.Context(), descriptor, cfg, false)
 	require.NoError(t, err)

@@ -14,13 +14,12 @@ Depends on: [Stage 4](04-promotion-and-handover.md).
 ## Work
 
 1. Add descriptor and package tests for default-on standby, per-machine opt-out,
-   two slot launch entries, explicit slot arguments, and the state-aware
-   `standby_then_active` shutdown strategy.
+   and explicit primary and optional standby launch arguments.
 2. Add deterministic unit tests for lifecycle transitions, activation gating,
    lag gating, cancellation, cleanup order, and machine-scoped handler identity.
 3. Add real cross-process fence tests. Verify one owner, cancelled wait, release
    after graceful close, and release after forced process death.
-4. Extend the black-box harness to launch both slots for one built machine and
+4. Extend the black-box harness to launch both processes for one built machine and
    observe their local status independently.
 5. Add black-box scenarios for:
    - default descriptor launches active plus caught-up standby;
@@ -29,14 +28,15 @@ Depends on: [Stage 4](04-promotion-and-handover.md).
    - a proposal around failover produces one logical machine decision;
    - planned handover drains and restores the API on the same address;
    - a storage-machine standby does not open the journal until promotion;
-   - full machine shutdown does not promote;
-   - repeated `a` to `b` to `a` failover remains deterministic.
+   - full machine shutdown stops both named processes;
+   - a returning primary reclaims ownership through graceful handover;
+   - repeated failover and primary reclamation remain deterministic.
 6. Measure and report promotion time, listener-unavailable time, journal catch-up
    time, and standby memory. Do not declare an SLO until scenarios provide a
    baseline.
 7. Update root architecture, platform, builder, scenario, deployment, app,
-   Event Fabric, NATS, and registration documentation. Include slot launches
-   and the live-role shutdown strategy in package metadata documentation.
+   Event Fabric, NATS, and registration documentation. Include primary and
+   standby launch definitions in package metadata documentation.
 8. Remove the old `features.redundancy` vocabulary, stale examples, and temporary
    single-process compatibility paths.
 9. Run repository searches for the legacy field and for active capabilities used
@@ -48,8 +48,8 @@ Depends on: [Stage 4](04-promotion-and-handover.md).
 
 - Every completion criterion in the plan overview is covered by a deterministic
   test or black-box scenario.
-- Package output is sufficient for deployment tooling to launch slots and stop
-  the current standby before the current active.
+- Package output is sufficient for deployment tooling to launch and stop the
+  named primary and optional standby processes.
 - Documentation describes the implemented process model without referring to
   the removed project feature.
 - The measured failover gap and resource cost are recorded for the next design

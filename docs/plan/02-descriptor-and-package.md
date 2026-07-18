@@ -18,7 +18,7 @@ Depends on: [Stage 1](01-instance-contract.md).
 2. Add an optional `platform` subsection to `blueprint.Machine` carrying
    `warm_standby` as a pointer or equivalent presence-aware value. An omitted
    `platform` block, or an omitted `warm_standby` inside it, resolves to `true`;
-   explicit `false` disables the second slot for that machine. Grouping the
+   explicit `false` disables the standby process for that machine. Grouping the
    attribute under `platform` keeps platform-runtime policy explicit for a
    blueprint reader.
 3. Add an explicit descriptor section in builder and platform modules:
@@ -35,12 +35,12 @@ Depends on: [Stage 1](01-instance-contract.md).
 5. Update descriptor validation and cross-module conformance signatures. The
    platform rejects JSON that omits `instances` or `instances.warm_standby`, so
    an incomplete descriptor cannot silently decode as an opt-out.
-6. Add a `slots` launch collection to the deployment manifest. An enabled
-   machine lists slot `a` and slot `b`, both using the same binary and descriptor
-   with different `-instance` arguments. A disabled machine lists only slot `a`.
-7. Add a shutdown strategy to the manifest. A redundant machine uses
-   `standby_then_active`, which requires deployment tooling to inspect live slot
-   status. Do not encode a static slot-name stop order.
+6. Add explicit `primary` and optional `standby` launch definitions to the
+   deployment manifest. Both use the same binary and descriptor. Their arguments
+   are `-instance primary` and `-instance standby`. Omit `standby` when warm
+   standby is disabled.
+7. Deployment starts the primary and waits for active status before starting the
+   standby. Process roles make a separate shutdown-strategy field unnecessary.
 8. Update examples, test blueprints, neutral embedded descriptor, plan output,
    package metadata tests, and blueprint package documentation.
 9. Keep runtime socket and directory locations out of the descriptor. The
@@ -51,8 +51,8 @@ Depends on: [Stage 1](01-instance-contract.md).
 
 - Omission produces `instances.warm_standby: true` in every descriptor.
 - One machine can opt out without changing other machines.
-- The package manifest tells a deployer exactly which slots to launch, with
-  which arguments, and which state-aware shutdown strategy to use.
+- The package manifest tells a deployer exactly how to launch the primary and
+  optional standby processes.
 - The old project-wide redundancy flag no longer exists.
 
 ## Open questions and recommendations
@@ -64,15 +64,14 @@ Depends on: [Stage 1](01-instance-contract.md).
 - Should enabled descriptors carry an instance count instead of a boolean?
   Recommendation: no. The supported model is exactly one active plus one warm
   standby. A count suggests unsupported N-way election.
-- Should `-instance` default to slot `a`?
-  Recommendation: only when standby is disabled. Require an explicit slot for a
-  two-slot descriptor so two service definitions cannot accidentally share one
-  local identity.
+- Should `-instance` default to `primary`?
+  Recommendation: only when standby is disabled. Require an explicit role when
+  standby is enabled so two service definitions cannot share one identity.
 
 ## Risks
 
 - Default-on doubles process memory and journal-consumer load on every machine.
 - A plain bool in the blueprint cannot distinguish omitted from explicit false.
-- A package that declares two slots without deployment tooling launching both
-  gives a false redundancy expectation; surface desired and observed slots in
+- A package that declares a standby without deployment tooling launching it
+  gives a false redundancy expectation; surface desired and observed processes in
   diagnostics.
