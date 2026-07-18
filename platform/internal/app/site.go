@@ -71,17 +71,30 @@ type service struct {
 	runner  *runner
 }
 
-// open composes and starts this node's Event Fabric, and returns only once the
-// node is ready to serve: connected to its site journal, caught up to a recorded
-// high-water mark, with its handlers attached and their retained work done.
+// open composes and starts this node's Event Fabric for the given slot role.
 //
-// A node that cannot reach that state does not serve. Answering registration
-// queries from a projection that has not seen the site's history would be
-// answering for a site this process has not caught up with.
-func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config) (*site, error) {
+// When active is true it returns only once the node is ready to serve: connected
+// to its site journal, caught up to a recorded high-water mark, with its handlers
+// attached and their retained work done. A node that cannot reach that state does
+// not serve, because answering from a projection that has not seen the site's
+// history would be answering for a site this process has not caught up with.
+//
+// When active is false it composes a warm standby: a client-only transport and
+// the continuous projector, caught up to the journal, and nothing else. A standby
+// opens no durable handler, publishes no readiness, and binds no listener, so it
+// follows the site's history without producing a decision or holding an
+// active-only capability.
+func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool) (*site, error) {
 	fabricCfg, err := natsConfig(descriptor, cfg)
 	if err != nil {
 		return nil, err
+	}
+	// A warm standby never opens the shared journal store or binds the storage
+	// node's listeners; the active slot owns those. It reaches the journal as a
+	// client of the active's server, so it follows history without contending for
+	// the storage the fence protects.
+	if !active {
+		fabricCfg = clientOnly(fabricCfg)
 	}
 	// Open validates the configuration and probes the journal's storage before it
 	// binds a listener, so an unusable data directory or address fails here
@@ -101,6 +114,13 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 		stopped:         make(chan struct{}),
 		catchUpTimeout:  fabricCfg.CatchUpTimeout,
 		shutdownTimeout: fabricCfg.ShutdownTimeout,
+	}
+
+	if !active {
+		if err := s.startStandby(ctx); err != nil {
+			return nil, errors.Join(err, s.close(ctx))
+		}
+		return s, nil
 	}
 
 	location, expected := topology(descriptor)
@@ -170,6 +190,24 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 	}
 	s.ready = true
 	return nil
+}
+
+// startStandby runs the projection-only readiness a warm standby needs: it
+// attaches the continuous projector and catches up to the journal's high-water
+// mark, and nothing else.
+//
+// It attaches no durable handler, publishes no readiness, and binds no listener,
+// so a standby follows the site's history without producing a decision. The same
+// projector stays attached for live events, so the standby keeps following after
+// it has caught up.
+func (s *site) startStandby(ctx context.Context) error {
+	catchUpCtx, cancel := context.WithTimeout(ctx, s.catchUpTimeout)
+	defer cancel()
+
+	s.projector = s.run(ctx, "projector", func(runCtx context.Context) error {
+		return s.fabric.RunProjector(runCtx, s.projection)
+	})
+	return s.catchUp(catchUpCtx, "the retained journal")
 }
 
 // catchUp captures the journal's high-water mark and waits for the projection to
@@ -415,6 +453,31 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 		fabricCfg.Servers = []string{fabricCfg.ClientAddress}
 	}
 	return fabricCfg, nil
+}
+
+// clientOnly turns a storage node's Event Fabric configuration into a client-only
+// one for a warm standby. A storage node's active slot binds the server and owns
+// the JetStream store; its standby must do neither, or two processes would try to
+// bind the same ports and open the same journal directory. The standby keeps the
+// servers it already reaches the journal through and drops everything it would
+// otherwise bind or store.
+//
+// A node that does not store the journal is already a client and is returned
+// unchanged.
+func clientOnly(cfg natsfabric.Config) natsfabric.Config {
+	if !cfg.HostsStorage {
+		return cfg
+	}
+	cfg.HostsStorage = false
+	// cfg.Servers already points at the storage node's server, which the standby
+	// follows the journal through; only the things a server binds or stores are
+	// dropped.
+	cfg.ClientAddress = ""
+	cfg.ClusterAddress = ""
+	cfg.MonitorAddress = ""
+	cfg.Routes = nil
+	cfg.DataDir = ""
+	return cfg
 }
 
 // nodeDataDir places this node's journal storage in its own subdirectory of the

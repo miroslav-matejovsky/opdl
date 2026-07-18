@@ -1,6 +1,6 @@
 //go:build !windows
 
-package instance
+package redundancy
 
 import (
 	"errors"

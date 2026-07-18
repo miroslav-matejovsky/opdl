@@ -47,7 +47,7 @@
 // The local slot a process runs as is never part of these identities either.
 // Proposal IDs, decision IDs, and the durable handler's consumer name are
 // machine-scoped, so a machine running a warm standby second process (see
-// internal/instance) still confirms once and decides once. A slot is lifecycle
+// internal/redundancy) still confirms once and decides once. A slot is lifecycle
 // and diagnostics, not a second voter.
 //
 // # Ordering and conflict

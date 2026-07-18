@@ -79,11 +79,12 @@ func machineBinary(outDir, project, machine string) string {
 // hands them to the platform as runtime overrides, which move sockets and
 // nothing else. Which machine a process is remains what it was built with.
 type sockets struct {
-	api     string
-	client  string
-	cluster string
-	monitor string
-	dataDir string
+	api         string
+	client      string
+	cluster     string
+	monitor     string
+	dataDir     string
+	instanceDir string
 }
 
 // site is the machines of one built project under a scenario's control.
@@ -113,11 +114,12 @@ func prepareSite(t *testing.T, outDir, workDir, project string, names ...string)
 	reserved := make([]sockets, len(names))
 	for i, name := range names {
 		reserved[i] = sockets{
-			api:     addrs[4*i],
-			client:  addrs[4*i+1],
-			cluster: addrs[4*i+2],
-			monitor: addrs[4*i+3],
-			dataDir: filepath.Join(workDir, "nats-"+name),
+			api:         addrs[4*i],
+			client:      addrs[4*i+1],
+			cluster:     addrs[4*i+2],
+			monitor:     addrs[4*i+3],
+			dataDir:     filepath.Join(workDir, "nats-"+name),
+			instanceDir: filepath.Join(workDir, "instance-"+name),
 		}
 	}
 
@@ -252,6 +254,7 @@ func platformConfig(reserved sockets, routes, servers []string) []byte {
 	return fmt.Appendf(nil, `address = %q
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
+instance_dir = %q
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
@@ -261,7 +264,7 @@ cluster_address = %q
 monitor_address = %q
 routes = [%s]
 servers = [%s]
-`, reserved.api, filepath.ToSlash(reserved.dataDir),
+`, reserved.api, filepath.ToSlash(reserved.instanceDir), filepath.ToSlash(reserved.dataDir),
 		reserved.client, reserved.cluster, reserved.monitor, quoteList(routes), quoteList(servers))
 }
 

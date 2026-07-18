@@ -31,7 +31,7 @@ components:
   eventfabric: { in: internal/eventfabric }
   eventfabric-nats: { in: internal/eventfabric/nats }
   httpapi: { in: internal/httpapi }
-  instance: { in: internal/instance }
+  redundancy: { in: internal/redundancy }
   registration: { in: internal/registration }
 
 deps:
@@ -40,8 +40,8 @@ deps:
   embedded:
     mayDependOn: [deployment]
   app:
-    mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, instance, registration]
-  instance:
+    mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, redundancy, registration]
+  redundancy:
     canUse: [sys]
   config:
     canUse: [toml]

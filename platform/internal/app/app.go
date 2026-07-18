@@ -12,15 +12,15 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 )
 
 // Run starts the platform runtime with the given command-line arguments. It
-// loads configuration, brings this node's Event Fabric up to readiness, and
-// serves the HTTP API until signaled.
+// loads configuration, decides this process's slot role against the machine
+// fence, and runs either the active runtime or a warm standby until signaled.
 func Run(args []string) error {
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
 	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")
+	instance := fs.String("instance", "", "local slot to run as, a or b; required on a machine that runs a warm standby")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -29,27 +29,23 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
+	descriptor := cfg.Descriptor()
+
+	// The slot is decided before any socket or storage is opened: a machine that
+	// runs a warm standby requires an explicit slot so two service definitions
+	// cannot share one local identity, and a machine that opted out rejects a
+	// second slot outright.
+	slot, err := resolveSlot(*instance, descriptor.Instances.WarmStandby)
+	if err != nil {
+		return err
+	}
 	fmt.Println(cfg.Summary())
+	fmt.Printf("    instance     slot=%s warm_standby=%t\n", slot, descriptor.Instances.WarmStandby)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The Event Fabric comes up before the public API, and a machine that cannot
-	// reach readiness does not serve: answering queries from a projection that
-	// has not caught up would be answering for a site this process has not seen.
-	site, err := open(ctx, cfg.Descriptor(), cfg)
-	if err != nil {
-		return err
-	}
-
-	addr := cfg.Address()
-	fmt.Printf("platform: listening on %s\n", addr)
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           httpapi.NewHandler(site.commands, site.queries),
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout(),
-	}
-	return serve(ctx, srv, site, cfg.ShutdownTimeout())
+	return runSlot(ctx, cfg, descriptor, slot)
 }
 
 // serve runs srv until it stops on its own, its site stops carrying events, or

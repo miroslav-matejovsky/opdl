@@ -20,6 +20,8 @@ type Config struct {
 	address           string
 	readHeaderTimeout time.Duration
 	shutdownTimeout   time.Duration
+	instanceDir       string
+	lagBound          time.Duration
 	eventFabric       EventFabric
 	username          string
 	password          string
@@ -51,12 +53,18 @@ func Load(configPath string) (*Config, error) {
 	if _, err := validateDuration("[event_fabric.nats] catch_up_timeout", f.EventFabric.Nats.CatchUpTimeout); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	lagBound, err := validateLagBound(f.LagBound)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
 
 	cfg := &Config{
 		descriptor:        d,
 		address:           f.Address,
 		readHeaderTimeout: readHeaderTimeout,
 		shutdownTimeout:   shutdownTimeout,
+		instanceDir:       f.InstanceDir,
+		lagBound:          lagBound,
 		eventFabric:       f.EventFabric,
 	}
 	// Credentials are read here rather than by the adapter: composition owns
@@ -79,6 +87,23 @@ func validateDuration(name, s string) (time.Duration, error) {
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("invalid %s %s: duration must be positive", name, d)
+	}
+	return d, nil
+}
+
+// validateLagBound parses the optional projection lag bound. An empty value
+// disables the check and yields zero; a set value must be a non-negative
+// duration, where zero also disables it.
+func validateLagBound(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid lag_bound %q: %w", s, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("invalid lag_bound %s: duration must not be negative", d)
 	}
 	return d, nil
 }
@@ -112,6 +137,15 @@ func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout 
 // ShutdownTimeout returns the maximum duration allowed for graceful server and
 // Event Fabric shutdown.
 func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
+
+// InstanceDir returns the local runtime directory holding this machine's slot
+// fence and per-slot status files. Both slots of a machine share it.
+func (c *Config) InstanceDir() string { return c.instanceDir }
+
+// LagBound returns the configured projection lag bound, or zero when the check is
+// disabled. A slot lagging beyond it is not promotable, and an active slot beyond
+// it stops serving.
+func (c *Config) LagBound() time.Duration { return c.lagBound }
 
 // EventFabric returns the Event Fabric adapter settings from the configuration
 // file. Only runtime composition reads it: it is how a site places the journal's
@@ -147,6 +181,8 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    address             %s\n", c.address)
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
+	fmt.Fprintf(&b, "    instance_dir        %s\n", c.instanceDir)
+	fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
 	fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
 	return b.String()
 }
@@ -194,6 +230,15 @@ func natsSummary(n EventFabricNats) string {
 		parts = append(parts, "servers="+strings.Join(n.Servers, ","))
 	}
 	return strings.Join(parts, " ")
+}
+
+// lagBoundSummary renders a disabled lag bound as an explicit statement rather
+// than a bare "0s", so the startup block does not read as a zero-second bound.
+func lagBoundSummary(bound time.Duration) string {
+	if bound <= 0 {
+		return "(disabled)"
+	}
+	return bound.String()
 }
 
 // credentialsSummary renders an unset credentials file as an explicit statement

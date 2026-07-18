@@ -74,7 +74,7 @@
 // A Node names a machine, which is a domain identity and stays machine-scoped. A
 // machine may run two local processes (slots) for warm standby, but the local
 // slot that stated a fact is operational identity only: it belongs in logs and in
-// an operational node label (see internal/instance.OperationalName), never in a
+// an operational node label (see internal/redundancy.OperationalName), never in a
 // domain identity. Folding the slot into a Node would turn one machine into two
 // registration voters, so it deliberately is not here.
 //

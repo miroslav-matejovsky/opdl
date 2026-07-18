@@ -14,6 +14,18 @@ read_header_timeout = "5s"
 # Maximum duration allowed for graceful server and Event Fabric shutdown when terminating in-flight requests.
 shutdown_timeout = "10s"
 
+# Local runtime directory holding this machine's slot fence and per-slot status
+# files. Required. Both slots (a and b) of a machine share it, and it must be on a
+# local filesystem so the OS lock is dropped on process death and enforced
+# exclusively. It is not the journal store: it carries local coordination and
+# diagnostics, not site history.
+instance_dir = ".data/instance"
+
+# Optional bound on how long a slot's projection may lag the journal before it
+# stops being promotable, and before an active slot stops serving rather than
+# answering from a stale view. Omit or set "0s" to disable the check.
+# lag_bound = "10s"
+
 [event_fabric.nats]
 # Directory holding the site journal's JetStream file store. Required.
 #

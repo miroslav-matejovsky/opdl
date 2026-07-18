@@ -10,16 +10,26 @@ project "two-machine" {
   }
 
   site "local" {
+    # The harness launches one process per machine, so each machine runs a single
+    # slot rather than an active/standby pair.
     machine "node-a" {
       role     = "all-in-one"
       ip       = "127.0.0.1"
       services = ["core-services"]
+
+      platform {
+        warm_standby = false
+      }
     }
 
     machine "node-b" {
       role     = "all-in-one"
       ip       = "127.0.0.2"
       services = ["core-services"]
+
+      platform {
+        warm_standby = false
+      }
     }
   }
 }

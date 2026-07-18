@@ -1,4 +1,6 @@
-package instance
+package redundancy
+
+import "slices"
 
 // State is a slot's lifecycle state, used by runtime code and local diagnostics.
 // A slot moves through these states in order; only the active state owns the
@@ -56,13 +58,8 @@ func (s State) Valid() bool {
 func (s State) Active() bool { return s == StateActive }
 
 // CanTransition reports whether a slot may move directly from s to next. It is
-// how runtime code guards a state change so a slot cannot, for example, jump
-// from standby to active without composing its active resources first.
+// how runtime code guards a state change so a slot cannot, for example, jump from
+// standby to active without composing its active resources first.
 func (s State) CanTransition(next State) bool {
-	for _, allowed := range transitions[s] {
-		if allowed == next {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(transitions[s], next)
 }

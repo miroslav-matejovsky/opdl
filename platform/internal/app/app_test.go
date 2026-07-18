@@ -15,7 +15,9 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/embedded"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
@@ -83,6 +85,7 @@ func writeConfig(t *testing.T, dir string) string {
 	contents := fmt.Sprintf(`address = %q
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
+instance_dir = %q
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
@@ -90,7 +93,8 @@ catch_up_timeout = "30s"
 client_address = %q
 cluster_address = %q
 monitor_address = %q
-`, freeAddress(t), filepath.ToSlash(filepath.Join(dir, "nats")), client, cluster, monitor)
+`, freeAddress(t), filepath.ToSlash(filepath.Join(dir, "instance")),
+		filepath.ToSlash(filepath.Join(dir, "nats")), client, cluster, monitor)
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 	return path
 }
@@ -116,7 +120,7 @@ func openTestSite(t *testing.T) *site {
 	cfg, err := config.Load(writeConfig(t, t.TempDir()))
 	require.NoError(t, err)
 
-	s, err := open(t.Context(), cfg.Descriptor(), cfg)
+	s, err := open(t.Context(), cfg.Descriptor(), cfg, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.close(context.Background()) })
 	return s
@@ -224,7 +228,7 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
-		contents := "address = \"127.0.0.1:8080\"\nread_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\n[event_fabric.nats]\n" + nats
+		contents := "address = \"127.0.0.1:8080\"\nread_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\ninstance_dir = \"/var/lib/opdl/instance\"\n[event_fabric.nats]\n" + nats
 		require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 		cfg, err := config.Load(path)
 		require.NoError(t, err)
@@ -338,6 +342,83 @@ func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
 		"a one-machine site expects only itself")
 }
 
+// TestResolveSlot checks the slot a process runs as: a warm-standby machine
+// requires an explicit slot, an opted-out machine defaults to slot a and rejects
+// slot b, and a misspelled slot is refused.
+func TestResolveSlot(t *testing.T) {
+	cases := map[string]struct {
+		instance    string
+		warmStandby bool
+		want        redundancy.Slot
+		wantErr     string
+	}{
+		"opt-out defaults to a":        {instance: "", warmStandby: false, want: redundancy.SlotA},
+		"opt-out accepts a":            {instance: "a", warmStandby: false, want: redundancy.SlotA},
+		"opt-out rejects b":            {instance: "b", warmStandby: false, wantErr: "does not run a warm standby"},
+		"warm standby requires a slot": {instance: "", warmStandby: true, wantErr: "-instance a|b is required"},
+		"warm standby accepts a":       {instance: "a", warmStandby: true, want: redundancy.SlotA},
+		"warm standby accepts b":       {instance: "b", warmStandby: true, want: redundancy.SlotB},
+		"invalid slot":                 {instance: "c", warmStandby: true, wantErr: "invalid slot"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := resolveSlot(tc.instance, tc.warmStandby)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestActiveAndStandbyRunTogether checks the Stage 3 exit criteria on one
+// all-in-one machine: two slots run against one journal while only the active
+// owns active capabilities, the standby is client-only and produces nothing, and
+// the standby catches up and follows new journal events.
+func TestActiveAndStandbyRunTogether(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping two-slot Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	descriptor := cfg.Descriptor()
+
+	active, err := open(t.Context(), descriptor, cfg, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = active.close(context.Background()) })
+	require.True(t, active.ready, "the active slot announces readiness")
+	require.True(t, active.fabric.Info().HostsStorage, "the active slot owns the journal store")
+
+	standby, err := open(t.Context(), descriptor, cfg, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = standby.close(context.Background()) })
+
+	// The standby holds no active capability: client-only transport, no handler,
+	// no command or query service, and it never announces readiness.
+	require.False(t, standby.fabric.Info().HostsStorage, "a warm standby opens no journal store or listener")
+	require.Nil(t, standby.commands, "a standby exposes no command service")
+	require.Nil(t, standby.queries, "a standby exposes no query service")
+	require.Empty(t, standby.services, "a standby attaches no durable handler")
+	require.False(t, standby.ready, "a standby never announces readiness")
+
+	// The standby caught up to the journal the active is on.
+	state, err := standby.fabric.State(t.Context())
+	require.NoError(t, err)
+	require.True(t, state.CaughtUp, "the standby caught up to the journal")
+	require.Positive(t, state.Applied, "the standby applied the active's readiness")
+
+	// It follows new journal events: a fact published on the active reaches the
+	// standby's projection.
+	receipt, err := active.fabric.Publish(t.Context(), eventfabric.NewReady(active.fabric.Info(), 0))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		st, stateErr := standby.fabric.State(t.Context())
+		return stateErr == nil && st.Applied >= receipt.Sequence
+	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
+}
+
 func TestRunReportsMissingConfigFlag(t *testing.T) {
 	require.Error(t, Run([]string{"-unknown"}))
 }
@@ -360,11 +441,12 @@ func TestRunReportsUnusableJournalStorage(t *testing.T) {
 	contents := fmt.Sprintf(`address = "127.0.0.1:8080"
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
+instance_dir = %q
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
 catch_up_timeout = "30s"
-`, filepath.ToSlash(blocked))
+`, filepath.ToSlash(filepath.Join(dir, "instance")), filepath.ToSlash(blocked))
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 
 	err := Run([]string{"-config", path})

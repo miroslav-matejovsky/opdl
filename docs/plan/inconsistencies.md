@@ -7,8 +7,19 @@ decision or follow-up. This file is for investigation; it is not itself a plan.
 Status legend: **open** (needs a decision), **accepted** (deliberate divergence,
 recorded), **later-stage** (expected to be resolved by a named stage).
 
-Found during: Stage 1 (instance and fencing contract) and Stage 2 (descriptor and
-package contract).
+Found during: Stage 1 (instance and fencing contract), Stage 2 (descriptor and
+package contract), and Stage 3 (warm standby runtime).
+
+## 0. The fencing package is internal/redundancy, not internal/instance
+
+- **Where:** the plan names the boundary `internal/instance` (Stage 1 item 4,
+  Stage 3 item 3). The implementation is `platform/internal/redundancy`.
+- **Reason:** requested consolidation. One cohesive package now owns the slot,
+  state, fence, status, and lag mechanism, and "slot" is the dominant term, so a
+  separate "instance" package name would split the same concern and clash with the
+  descriptor's `instances` policy and the registration API's `platform_instances`.
+- **Status:** accepted (deliberate divergence). Plan prose still says
+  `internal/instance`; treat it as `internal/redundancy`.
 
 ---
 
@@ -18,22 +29,27 @@ package contract).
   emits per-slot args `["-instance", "a"]`; `platform/internal/app/app.go`
   (`Run`) only accepts `-config`.
 - **Tension:** Stage 2's manifest is described as the portable launch contract, so
-  a deployer copies its args verbatim. Today the binary would reject `-instance`
-  at `flag.Parse`. The manifest promises something the binary cannot yet honor.
-- **Status:** later-stage (Stage 3, "Warm standby runtime"). Stage 3 must add
-  `-instance` to `app.Run`, validate it with `instance.ParseSlot`, and confirm the
-  flag name equals the manifest's `slotFlag`.
+  a deployer copies its args verbatim. Before Stage 3 the binary rejected
+  `-instance` at `flag.Parse`.
+- **Status:** RESOLVED in Stage 3. `app.Run` now parses `-instance` and validates
+  it with `redundancy.ParseSlot` (`resolveSlot`). One residual risk remains: the
+  manifest's flag name (`pack.slotFlag = "-instance"`) and the runtime's flag name
+  are still two independent string literals (see entry 2).
 
 ## 2. The slot contract is duplicated across two modules that cannot import each other
 
-- **Where:** `platform/internal/instance` defines `SlotA`/`SlotB`;
-  `builder/internal/pack` re-defines `slotA`/`slotB` and `slotFlag`. The builder
-  cannot import a platform `internal/` package.
+- **Where:** `platform/internal/redundancy` defines `SlotA`/`SlotB` and the
+  runtime's `-instance` flag; `builder/internal/pack` re-defines `slotA`/`slotB`
+  and `slotFlag = "-instance"`. The builder cannot import a platform `internal/`
+  package.
 - **Risk:** the two definitions can drift (a slot rename or a flag rename on one
-  side is silent on the other), and nothing fails when they disagree.
+  side is silent on the other), and nothing fails when they disagree. Stage 3
+  resolving entry 1 makes this the live coupling between the manifest and the
+  binary.
 - **Status:** open. Options: (a) a small exported (non-internal) shared constants
   package both modules import; (b) a conformance-tests check asserting the
-  manifest's slot tokens and flag match the platform's `instance` package.
+  manifest's slot tokens and flag match the platform's `redundancy` package and
+  `-instance` flag.
 
 ## 3. "Instance" now has two externally visible meanings
 
@@ -104,28 +120,65 @@ package contract).
 ## 8. Slot identity is defined for operational events but not yet stamped
 
 - **Where:** Stage 1 item 6: "Add slot identity to operational event node identity
-  and logs." Delivered: `instance.OperationalName` plus documentation. Not done:
-  `events.Node` is unchanged and nothing stamps a slot, because no slot value
-  exists at runtime until `-instance` is parsed (Stage 3).
-- **Status:** later-stage (Stage 3). Decide whether `events.Node` gains a slot
-  field or whether the slot rides only in logs and the ready/stopping payloads,
-  keeping domain identity machine-scoped.
+  and logs." Delivered: `redundancy.OperationalName`, the slot in the startup
+  summary, and the slot in the per-slot status file. Not done: `events.Node` is
+  still unchanged, so the operational `ready`/`stopping` events carry machine
+  identity without a slot. Only the active slot publishes those, so the slot is
+  currently inferable but not stated.
+- **Status:** partially addressed; `events.Node` stamping still open. Decide
+  whether `events.Node` gains a slot field or whether the slot rides only in logs,
+  the status file, and the ready/stopping payloads, keeping domain identity
+  machine-scoped. `redundancy.OperationalName` exists for this but is so far used
+  only in tests.
 
-## 9. The fence path has no configured runtime directory yet
+## 9. The fence path's runtime directory
 
-- **Where:** `instance.FencePath(runtimeDir, ...)` exists; nothing supplies
-  `runtimeDir`. Stage 2 item 9 correctly keeps runtime directory locations out of
-  the descriptor, so it must come from the platform's TOML config, which has no
-  such field yet.
-- **Status:** later-stage (Stage 3). Add a local runtime-directory setting to
-  `platform/internal/config` and wire `FencePath` at composition.
+- **Where:** `redundancy.FencePath(runtimeDir, ...)` needs a runtime directory.
+  Stage 2 item 9 keeps runtime directory locations out of the descriptor.
+- **Status:** RESOLVED in Stage 3. `config` now requires `instance_dir` and
+  `app.runSlot` derives the fence and per-slot status paths from it. Residual:
+  Stage 3 item 2 also asked for an up-front writability check; `OpenFence` creates
+  the directory and the OS lock effectively probes it, but an unwritable
+  `instance_dir` fails when the fence is opened rather than in config validation.
 
-## 10. Manifest is explicit for the single-slot case, diverging from the `-instance` default recommendation
+## 10. Manifest is explicit for the single-slot case
 
 - **Where:** Stage 2 open question: "Should `-instance` default to slot a?
   Recommendation: only when standby is disabled." The manifest emits an explicit
   `["-instance", "a"]` even for a disabled (single-slot) machine.
-- **Rationale:** a launch contract should be explicit rather than rely on a runtime
-  default a deployer cannot see.
-- **Status:** accepted. When Stage 3 implements the runtime default (slot a when
-  standby disabled), keep the manifest explicit; the two are compatible.
+- **Status:** RESOLVED / consistent. Stage 3's `resolveSlot` defaults `-instance`
+  to slot a only when warm standby is disabled and rejects slot b there, matching
+  the recommendation. The manifest stays explicit, which is compatible.
+
+## 11. Promotion is not implemented; role is decided once at startup
+
+- **Where:** Stage 3 `runSlot` uses `Fence.TryAcquire` once at startup: the winner
+  is active, a loser is a standby, and a standby never later takes the fence.
+- **Tension:** this is correct for Stage 3 ("run a projection-only second process
+  under fencing") but means a standby does not yet promote when the active exits.
+  The blocking `Fence.Acquire` and the state machine's `activating` transition
+  exist for exactly this.
+- **Status:** later-stage (Stage 4, "promotion and handover"), by design.
+
+## 12. Lag enforcement is wired but off by default and unexercised end-to-end
+
+- **Where:** `app.runStatus` tracks lag and, for an active slot, stops serving
+  when it crosses `config.LagBound`; a standby is marked not promotable. But
+  `lag_bound` defaults to disabled, and no automated scenario drives a real lag
+  past the bound.
+- **Status:** later-stage (Stage 5, "resilience validation"). The pure lag logic
+  (`redundancy.LagState`, `redundancy.Exceeds`) is unit-tested; the live
+  enforcement path is not yet exercised against a stalled projection.
+
+## 13. A storage-machine standby follows only its co-located active's server
+
+- **Where:** `app.clientOnly` keeps `cfg.Servers`, which for a storage node the
+  descriptor derived as `[own client address]` — the co-located active's server.
+  So a storage-machine standby reads the journal through the active on the same
+  machine.
+- **Tension:** if that active is down, the standby cannot follow. That is
+  acceptable for Stage 3 (the active is up) and is the moment the standby should be
+  promoting anyway, but a promoted-then-standby topology or a multi-storage site
+  might prefer the standby to fall back to another storage node's server.
+- **Status:** later-stage (Stage 4). Revisit standby server selection alongside
+  promotion.

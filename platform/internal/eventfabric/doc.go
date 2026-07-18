@@ -44,7 +44,7 @@
 // and stating the node's readiness and stopping lifecycle events belong to the
 // one slot that holds the machine fence. A standby runs Projectors only, so it
 // stays current without causing a fact or exposing a second listener. See
-// internal/instance for the fence and the ownership rule.
+// internal/redundancy for the fence and the ownership rule.
 //
 // # Delivery guarantees
 //

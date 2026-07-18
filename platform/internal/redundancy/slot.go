@@ -1,4 +1,4 @@
-package instance
+package redundancy
 
 import "fmt"
 
@@ -25,7 +25,7 @@ func ParseSlot(s string) (Slot, error) {
 	case SlotA, SlotB:
 		return Slot(s), nil
 	default:
-		return "", fmt.Errorf("instance: invalid slot %q: want %q or %q", s, SlotA, SlotB)
+		return "", fmt.Errorf("redundancy: invalid slot %q: want %q or %q", s, SlotA, SlotB)
 	}
 }
 
@@ -36,8 +36,8 @@ func (s Slot) String() string { return string(s) }
 func (s Slot) Valid() bool { return s == SlotA || s == SlotB }
 
 // OperationalName composes the operational identity of one slot on one machine,
-// "<machine>/<slot>". It labels logs and operational event node identity so the
-// two slots of a machine are told apart in diagnostics.
+// "<machine>/<slot>". It labels logs and operational diagnostics so the two slots
+// of a machine are told apart.
 //
 // It is never a domain identity. Registration proposal, decision, and
 // durable-handler identities stay machine-scoped, so two slots on one machine
