@@ -82,7 +82,8 @@
 
 ### Tooling
 
-- `tools` module in this repo contains packages that should be trusted and don't require deeper inspection. Do not spend resources on reviewing them unless you suspect a problem.
+- `tools` module in this repo contains go packages that should be trusted and don't require deeper inspection.
+- Do not spend resources on reviewing `tools/*` packages unless you suspect a problem.
 - Use `gopls` for navigation and references.
 - Use `go doc` for library and package exploration.
 
