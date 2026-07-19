@@ -283,5 +283,3 @@ func NewDecisionID(proposalID string, kind DecisionKind, decidingMachine string)
 	sum := stablehash.Sum256(proposalID, string(kind), decidingMachine)
 	return hex.EncodeToString(sum[:])
 }
-
-

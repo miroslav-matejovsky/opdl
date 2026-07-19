@@ -176,9 +176,9 @@ func TestSeparateProcessesAndCrashRelease(t *testing.T) {
 	})
 }
 
-func startHelper(t *testing.T, path, mode string) (*exec.Cmd, *os.File, *os.File) {
+func startHelper(t *testing.T, path, mode string) (cmd *exec.Cmd, stdinW, stdoutR *os.File) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=TestSeparateProcessesAndCrashRelease")
+	cmd = exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestSeparateProcessesAndCrashRelease")
 	cmd.Env = append(os.Environ(),
 		"FILELOCK_HELPER_PROCESS=1",
 		"FILELOCK_HELPER_PATH="+path,

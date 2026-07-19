@@ -122,5 +122,3 @@ func NewRoute(scope SiteScope, eventType events.Type) (Route, error) {
 func (r Route) Subject() string {
 	return strings.Join([]string{routePrefix, string(r.scope), routeInfix, r.event.Domain, r.event.Fact}, ".")
 }
-
-

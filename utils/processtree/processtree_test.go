@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -24,7 +23,7 @@ func TestHelperProcessMain(t *testing.T) {
 	switch mode {
 	case "parent":
 		// Start a child/grandchild and report PID.
-		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcessMain")
+		cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=TestHelperProcessMain")
 		cmd.Env = append(os.Environ(), helperEnv+"=child")
 		if err := cmd.Start(); err != nil {
 			os.Exit(1)

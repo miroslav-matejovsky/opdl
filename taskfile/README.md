@@ -10,7 +10,7 @@ than once at the root.
   the first non-zero exit.
 - `tidy.ps1`, `vet.ps1`, `fmt.ps1`, `lint.ps1`: run `go mod tidy`, `go vet`,
   `go fmt`, and `golangci-lint` in every module.
-- `deadcode.ps1`: runs `deadcode -test ./...` in modules that have a command,
+- `deadcode.ps1`: runs `deadcode -test ./...` in modules that have a command or scenario tests,
   using command and test executables as reachability roots.
 - `deadcode.ps1` and `arch.ps1` use installed `deadcode` and `go-arch-lint`
   binaries when available, falling back to `go run ...@latest` only when a tool

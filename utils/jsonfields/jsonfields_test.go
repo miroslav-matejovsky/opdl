@@ -10,25 +10,19 @@ import (
 )
 
 type InnerA struct {
-	Promoted    string `json:"promoted"`
-	Conflicting int    `json:"conflict"`
-}
-
-type InnerB struct {
-	Conflicting int `json:"conflict"`
+	Promoted string `json:"promoted"`
 }
 
 type SampleStruct struct {
-	Tagged      string `json:"tagged_name"`
-	Untagged    int
-	Skipped     bool   `json:"-"`
-	OmitEmpty   string `json:"omit,omitempty"`
-	WithOption  int    `json:"with_string,string"`
-	unexported  string
-	EmptyTag    string `json:""`
-	Pointer     *int   `json:"ptr"`
+	Tagged     string `json:"tagged_name"`
+	Untagged   int
+	Skipped    bool   `json:"-"`
+	OmitEmpty  string `json:"omit,omitempty"`
+	WithOption int    `json:"with_string,string"`
+	unexported string
+	EmptyTag   string `json:""`
+	Pointer    *int   `json:"ptr"`
 	InnerA
-	InnerB
 }
 
 func TestFields_BasicAndPromotedRules(t *testing.T) {
@@ -43,7 +37,7 @@ func TestFields_BasicAndPromotedRules(t *testing.T) {
 	}
 
 	// Declaration order: Tagged, Untagged, OmitEmpty, WithOption, EmptyTag, Pointer, then Promoted from InnerA.
-	// Skipped, unexported, and conflicting fields ("conflict") should not be present.
+	// Skipped and unexported fields should not be present.
 	expectedNames := []string{"tagged_name", "Untagged", "omit", "with_string", "EmptyTag", "ptr", "promoted"}
 	require.Equal(t, expectedNames, names)
 
@@ -57,6 +51,25 @@ func TestFields_BasicAndPromotedRules(t *testing.T) {
 	}
 }
 
+func TestFields_ConflictingPromotedFields(t *testing.T) {
+	t.Parallel()
+
+	type conflictA struct {
+		ID string `json:"conflict"`
+	}
+	type conflictB struct {
+		ID string `json:"conflict"`
+	}
+	typ := reflect.StructOf([]reflect.StructField{
+		{Name: "A", Type: reflect.TypeOf(conflictA{}), Anonymous: true},
+		{Name: "B", Type: reflect.TypeOf(conflictB{}), Anonymous: true},
+	})
+
+	fields, err := jsonfields.Fields(typ)
+	require.NoError(t, err)
+	require.Empty(t, fields, "conflicting fields at the same depth must cancel out and be ignored")
+}
+
 func TestFields_CompareWithEncodingJSON(t *testing.T) {
 	t.Parallel()
 
@@ -67,8 +80,7 @@ func TestFields_CompareWithEncodingJSON(t *testing.T) {
 		WithOption: 42,
 		EmptyTag:   "e",
 		Pointer:    new(int),
-		InnerA:     InnerA{Promoted: "p", Conflicting: 1},
-		InnerB:     InnerB{Conflicting: 2},
+		InnerA:     InnerA{Promoted: "p"},
 	}
 
 	data, err := json.Marshal(val)
