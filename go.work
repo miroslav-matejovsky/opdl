@@ -1,5 +1,8 @@
 go 1.26.5
 
+// Shared utilities and helpers across modules.
+use ./utils
+
 // Machine-specific configuration, assembly, and binary generation.
 use ./builder
 

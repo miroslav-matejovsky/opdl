@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/miroslav-matejovsky/opdl/utils/atomicfile"
 )
 
 // fileSHA256 returns the hex-encoded SHA-256 of a file's contents.
@@ -31,5 +33,5 @@ func writeJSON(path string, v any) error {
 		return fmt.Errorf("marshal %s: %w", path, err)
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o644)
+	return atomicfile.WriteFile(path, data, 0o644)
 }

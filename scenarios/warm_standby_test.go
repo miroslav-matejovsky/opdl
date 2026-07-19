@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miroslav-matejovsky/opdl/utils/processinfo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +39,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	standby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
 	standbyStatus := node.waitStatus(t, standby, "standby", true)
 	catchUpTime := standbyStatus.UpdatedAt.Sub(standbyStarted)
-	standbyMemory, err := processMemoryBytes(standby.pid())
+	standbyMemory, err := processinfo.ResidentBytes(ctx, standby.pid())
 	require.NoError(t, err)
 
 	aroundFailover := propose(ctx, t, node,

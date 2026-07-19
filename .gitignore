@@ -1,3 +1,6 @@
+# GenAI
+.agents/
+
 # Windows-Native / .NET / C#
 [Bb]in/
 [Oo]bj/
@@ -26,7 +29,6 @@ bin/
 
 # Event Fabric journal storage written by `task run` (see platform/config.toml)
 .data/
-
 
 # Web / Frontend (TS / JS / UI)
 node_modules/

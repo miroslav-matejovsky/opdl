@@ -19,6 +19,9 @@ vendors:
   nats-server: { in: "github.com/nats-io/nats-server/v2/**" }
   nats-client: { in: "github.com/nats-io/nats.go**" }
   sys: { in: "golang.org/x/sys/**" }
+  atomicfile: { in: "github.com/miroslav-matejovsky/opdl/utils/atomicfile" }
+  filelock: { in: "github.com/miroslav-matejovsky/opdl/utils/filelock" }
+  stablehash: { in: "github.com/miroslav-matejovsky/opdl/utils/stablehash" }
 
 components:
   api: { in: api }
@@ -42,13 +45,14 @@ deps:
   app:
     mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, redundancy, registration]
   redundancy:
-    canUse: [sys]
+    canUse: [sys, atomicfile, filelock]
   config:
     canUse: [toml]
     mayDependOn: [deployment, embedded]
   events:
     mayDependOn: [deployment]
   eventfabric:
+    canUse: [stablehash]
     mayDependOn: [events]
   eventfabric-nats:
     canUse: [nats-server, nats-client]
@@ -56,4 +60,5 @@ deps:
   httpapi:
     mayDependOn: [api, registration]
   registration:
+    canUse: [stablehash]
     mayDependOn: [api, events, eventfabric]

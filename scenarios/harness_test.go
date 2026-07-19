@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/utils/processtree"
+	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
 // This file is the scenario harness: how a scenario builds a project and runs
@@ -58,8 +61,23 @@ func buildProject(ctx context.Context, t *testing.T, blueprintsDir, outDir, proj
 	build := exec.CommandContext(ctx, "go", "run", "./cmd/opdl", "build",
 		"-examples", blueprintsDir, "-out", outDir, project)
 	build.Dir = builderDir
-	output, err := build.CombinedOutput()
+	output, err := runCommand(build)
 	require.NoError(t, err, "builder build failed:\n%s", output)
+}
+
+// runCommand runs a command to completion while keeping its whole process tree
+// under scenario control. This matters on Windows, where killing a direct child
+// does not kill the go build processes it started.
+func runCommand(command *exec.Cmd) ([]byte, error) {
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	tree, err := processtree.Start(command)
+	if err != nil {
+		return output.Bytes(), err
+	}
+	err = errors.Join(command.Wait(), tree.Close())
+	return output.Bytes(), err
 }
 
 // machineBinary returns the path of one built machine's binary. The builder
@@ -130,7 +148,10 @@ func prepareSite(t *testing.T, outDir, workDir, project string, names ...string)
 
 	// Every address is reserved before any is released, so no two machines of the
 	// site are handed the same port.
-	addrs := freeAddresses(t, 4*len(names))
+	res, err := testnet.Reserve(t.Context(), 4*len(names))
+	require.NoError(t, err)
+	require.NoError(t, res.Release())
+	addrs := res.Addresses()
 	reserved := make([]sockets, len(names))
 	for i, name := range names {
 		reserved[i] = sockets{
@@ -235,6 +256,7 @@ type machine struct {
 	launchArgs []string
 	output     *bytes.Buffer
 	cmd        *exec.Cmd
+	tree       *processtree.Owner
 	stopped    bool
 }
 
@@ -259,6 +281,7 @@ type managedProcess struct {
 	role   string
 	output *bytes.Buffer
 	cmd    *exec.Cmd
+	tree   *processtree.Owner
 	done   chan struct{}
 	err    error
 }
@@ -275,12 +298,14 @@ func (m *machine) startManaged(ctx context.Context, t *testing.T, role string, a
 	}
 	commandArgs := append([]string{"-config", m.configPath}, args...)
 	p.cmd = exec.CommandContext(ctx, m.binaryPath, commandArgs...)
-	configureManagedCommand(p.cmd)
+	processtree.ConfigureGraceful(p.cmd)
 	p.cmd.Stdout = p.output
 	p.cmd.Stderr = p.output
-	require.NoError(t, p.cmd.Start())
+	var err error
+	p.tree, err = processtree.Start(p.cmd)
+	require.NoError(t, err)
 	go func() {
-		p.err = p.cmd.Wait()
+		p.err = errors.Join(p.cmd.Wait(), p.tree.Close())
 		close(p.done)
 	}()
 	t.Cleanup(p.kill)
@@ -302,7 +327,7 @@ func (p *managedProcess) kill() {
 	if !p.running() {
 		return
 	}
-	_ = p.cmd.Process.Kill()
+	_ = p.tree.Kill()
 	<-p.done
 }
 
@@ -311,7 +336,7 @@ func (p *managedProcess) stopGracefully(t *testing.T) {
 	if !p.running() {
 		return
 	}
-	require.NoError(t, signalManagedProcess(p.cmd.Process))
+	require.NoError(t, p.tree.Stop())
 	select {
 	case <-p.done:
 		require.NoError(t, p.err, "%s did not stop cleanly:\n%s", p.role, p.output.String())
@@ -430,7 +455,9 @@ func (m *machine) start(ctx context.Context, t *testing.T) {
 	m.cmd = exec.CommandContext(ctx, m.binaryPath, args...)
 	m.cmd.Stdout = m.output
 	m.cmd.Stderr = m.output
-	require.NoError(t, m.cmd.Start())
+	var err error
+	m.tree, err = processtree.Start(m.cmd)
+	require.NoError(t, err)
 	m.stopped = false
 	t.Cleanup(m.stop)
 }
@@ -456,7 +483,7 @@ func (m *machine) stop() {
 		return
 	}
 	m.stopped = true
-	_ = m.cmd.Process.Kill()
+	_ = m.tree.Kill()
 	_ = m.cmd.Wait()
 }
 
@@ -475,6 +502,7 @@ func (m *machine) wait(t *testing.T) string {
 	t.Helper()
 	require.NotNil(t, m.cmd, "%s was never started", m.name)
 	_ = m.cmd.Wait()
+	_ = m.tree.Close()
 	m.stopped = true
 	return m.output.String()
 }
@@ -514,6 +542,7 @@ func waitForMarker(t *testing.T, dir, name string, signaller *process, describe 
 // process is an external command a scenario runs and later collects.
 type process struct {
 	output *bytes.Buffer
+	tree   *processtree.Owner
 	// finished closes once the command has exited and err is set, which is what
 	// publishes err to every other goroutine.
 	finished chan struct{}
@@ -531,15 +560,17 @@ func startProcess(t *testing.T, cmd *exec.Cmd) *process {
 	p := &process{output: &bytes.Buffer{}, finished: make(chan struct{})}
 	cmd.Stdout = p.output
 	cmd.Stderr = p.output
-	require.NoError(t, cmd.Start())
+	var err error
+	p.tree, err = processtree.Start(cmd)
+	require.NoError(t, err)
 	go func() {
-		p.err = cmd.Wait()
+		p.err = errors.Join(cmd.Wait(), p.tree.Close())
 		close(p.finished)
 	}()
 	t.Cleanup(func() {
 		// Whatever went wrong, the child does not outlive the scenario, and the
 		// scenario does not return while it is still writing to the buffer.
-		_ = cmd.Process.Kill()
+		_ = p.tree.Kill()
 		// Cleanup deliberately kills the child, so its output and exit error are
 		// not assertions about the scenario result.
 		_, _ = p.wait()
@@ -569,27 +600,6 @@ func (p *process) exited() bool {
 // path where the process may still be running, so it is deliberately a snapshot
 // rather than the complete output wait returns.
 func (p *process) logs() string { return p.output.String() }
-
-// freeAddresses reserves n distinct ephemeral loopback ports, then releases them
-// so the machines can bind them. Holding every listener until all are reserved
-// is what guarantees they are distinct; a brief race with the rest of the host
-// afterwards is acceptable for a scenario.
-func freeAddresses(t *testing.T, n int) []string {
-	t.Helper()
-	var listen net.ListenConfig
-	listeners := make([]net.Listener, 0, n)
-	addrs := make([]string, 0, n)
-	for range n {
-		listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
-		require.NoError(t, err)
-		listeners = append(listeners, listener)
-		addrs = append(addrs, listener.Addr().String())
-	}
-	for _, listener := range listeners {
-		require.NoError(t, listener.Close())
-	}
-	return addrs
-}
 
 // diagnose renders everything worth knowing when a scenario fails: what each
 // machine printed, whether it was running, and where it answers.

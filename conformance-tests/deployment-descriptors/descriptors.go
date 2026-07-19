@@ -9,6 +9,7 @@ import (
 
 	builderdeployment "github.com/miroslav-matejovsky/opdl/builder/deployment"
 	platformdeployment "github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/utils/jsonfields"
 )
 
 // Run performs the deployment descriptor conformance check: it confirms the
@@ -122,16 +123,13 @@ func checkRoundTrip() error {
 func signature(t reflect.Type) string {
 	switch t.Kind() {
 	case reflect.Struct:
-		parts := make([]string, 0, t.NumField())
-		for f := range t.Fields() {
-			if !f.IsExported() {
-				continue
-			}
-			name := jsonName(f)
-			if name == "-" {
-				continue
-			}
-			parts = append(parts, name+":"+signature(f.Type))
+		fields, err := jsonfields.Fields(t)
+		if err != nil {
+			return t.Kind().String()
+		}
+		parts := make([]string, 0, len(fields))
+		for _, f := range fields {
+			parts = append(parts, f.Name+":"+signature(f.Type))
 		}
 		sort.Strings(parts)
 		return "{" + strings.Join(parts, ",") + "}"
@@ -142,17 +140,4 @@ func signature(t reflect.Type) string {
 	default:
 		return t.Kind().String()
 	}
-}
-
-// jsonName returns a field's JSON name: the json tag's name if present, else the
-// Go field name.
-func jsonName(f reflect.StructField) string {
-	tag, ok := f.Tag.Lookup("json")
-	if !ok {
-		return f.Name
-	}
-	if name := strings.Split(tag, ",")[0]; name != "" {
-		return name
-	}
-	return f.Name
 }

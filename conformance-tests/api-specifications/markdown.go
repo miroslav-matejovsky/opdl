@@ -146,7 +146,7 @@ func writePayload(b *strings.Builder, doc openAPIDoc, schema openAPISchema) {
 		writePayload(b, doc, *schema.Items)
 		return
 	}
-	if schema.Type != "object" {
+	if schema.Type != schemaTypeObject {
 		if schema.Type != "" {
 			fmt.Fprintf(b, "Type: %s\n\n", typeLabel(schema))
 		}
