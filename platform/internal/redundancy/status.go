@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/miroslav-matejovsky/opdl/utils/atomicfile"
 )
 
 // Status is a process's live operational snapshot, written to its status file
@@ -41,7 +43,7 @@ type Status struct {
 }
 
 // Write writes s to path atomically: it encodes to a sibling temporary file and
-// renames it into place, so a reader never sees a half-written status even if the
+// renames it into place using atomicfile, so a reader never sees a half-written status even if the
 // process is killed mid-write.
 func (s Status) Write(path string) error {
 	data, err := json.MarshalIndent(s, "", "  ")
@@ -49,12 +51,8 @@ func (s Status) Write(path string) error {
 		return fmt.Errorf("redundancy: encode status: %w", err)
 	}
 	data = append(data, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("redundancy: write status %s: %w", tmp, err)
-	}
-	if err := replaceStatusFile(tmp, path); err != nil {
-		return fmt.Errorf("redundancy: replace status %s: %w", path, err)
+	if err := atomicfile.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("redundancy: write status: %w", err)
 	}
 	return nil
 }

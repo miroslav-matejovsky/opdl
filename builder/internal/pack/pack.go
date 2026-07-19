@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/builder/deployment"
+	"github.com/miroslav-matejovsky/opdl/utils/atomicfile"
 )
 
 // builderName identifies this tool in release metadata.
@@ -101,7 +102,7 @@ func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (*Re
 // Restore rewrites the embedded deployment descriptor with the snapshot taken
 // at construction, leaving the working tree clean.
 func (p *Packer) Restore() error {
-	if err := os.WriteFile(p.embedFile, p.placeholder, 0o644); err != nil {
+	if err := atomicfile.WriteFile(p.embedFile, p.placeholder, 0o644); err != nil {
 		return fmt.Errorf("restore embedded deployment descriptor: %w", err)
 	}
 	return nil
@@ -162,7 +163,7 @@ func (p *Packer) writeChecksums(pkgDir, binary, binarySum string) error {
 		return err
 	}
 	fmt.Fprintf(&b, "%s  %s\n", sum, deploymentFile)
-	return os.WriteFile(filepath.Join(pkgDir, "checksums.txt"), []byte(b.String()), 0o644)
+	return atomicfile.WriteFile(filepath.Join(pkgDir, "checksums.txt"), []byte(b.String()), 0o644)
 }
 
 func (p *Packer) buildEnv() []string {

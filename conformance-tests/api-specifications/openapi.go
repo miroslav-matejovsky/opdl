@@ -1,7 +1,6 @@
 package apispecifications
 
 import (
-	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -11,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	platformapi "github.com/miroslav-matejovsky/opdl/platform/api"
+	"github.com/miroslav-matejovsky/opdl/utils/atomicfile"
 )
 
 // contractPath is the OpenAPI specification this package generates. It is relative
@@ -44,11 +44,11 @@ func generateOpenAPISpec() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(contractPath, yamlBytes, 0o644); err != nil {
+	if err := atomicfile.WriteFile(contractPath, yamlBytes, 0o644); err != nil {
 		return err
 	}
 
-	return os.WriteFile(markdownPath, renderMarkdown(doc), 0o644)
+	return atomicfile.WriteFile(markdownPath, renderMarkdown(doc), 0o644)
 }
 
 // buildOpenAPIDoc turns the platform's API contract into an OpenAPI 3.0.3
