@@ -19,6 +19,7 @@ type SampleStruct struct {
 	Skipped    bool   `json:"-"`
 	OmitEmpty  string `json:"omit,omitempty"`
 	WithOption int    `json:"with_string,string"`
+	//nolint:unused // unexported field verified by reflection to be ignored by json encoding
 	unexported string
 	EmptyTag   string `json:""`
 	Pointer    *int   `json:"ptr"`

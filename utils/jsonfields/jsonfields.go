@@ -18,6 +18,12 @@ type Field struct {
 	OmitEmpty bool
 }
 
+type candidate struct {
+	field Field
+	index []int
+	depth int
+}
+
 // Fields extracts and describes the JSON-exposed fields for the struct type t
 // in declaration order, strictly following encoding/json rules.
 func Fields(t reflect.Type) ([]Field, error) {
@@ -31,18 +37,31 @@ func Fields(t reflect.Type) ([]Field, error) {
 		return nil, fmt.Errorf("jsonfields: expected struct type, got %s", t.Kind())
 	}
 
-	type candidate struct {
-		field Field
-		index []int
-		depth int
+	candidates, err := collectCandidates(t)
+	if err != nil {
+		return nil, err
 	}
 
-	var candidates []candidate
-	type queueItem struct {
-		typ   reflect.Type
-		index []int
-		depth int
+	resolved := resolveConflicts(candidates)
+	slices.SortFunc(resolved, func(a, b candidate) int {
+		return slices.Compare(a.index, b.index)
+	})
+
+	result := make([]Field, len(resolved))
+	for i, r := range resolved {
+		result[i] = r.field
 	}
+	return result, nil
+}
+
+type queueItem struct {
+	typ   reflect.Type
+	index []int
+	depth int
+}
+
+func collectCandidates(t reflect.Type) ([]candidate, error) {
+	var candidates []candidate
 	queue := []queueItem{{typ: t, index: nil, depth: 0}}
 	visited := map[reflect.Type]struct{}{t: {}}
 
@@ -54,65 +73,79 @@ func Fields(t reflect.Type) ([]Field, error) {
 			f := item.typ.Field(i)
 			idx := append(slices.Clone(item.index), i)
 
-			tag, hasTag := f.Tag.Lookup("json")
-			tagParts := strings.Split(tag, ",")
-			tagName := tagParts[0]
-
-			if hasTag && tagName == "-" {
+			if isIgnored(f) {
 				continue
 			}
-
-			if f.Anonymous && !hasTag {
-				ft := f.Type
-				if ft.Kind() == reflect.Pointer {
-					ft = ft.Elem()
+			if embed, ok := embeddedStruct(f); ok {
+				if _, seen := visited[embed]; !seen {
+					visited[embed] = struct{}{}
+					queue = append(queue, queueItem{typ: embed, index: idx, depth: item.depth + 1})
 				}
-				if !f.IsExported() && ft.Kind() != reflect.Struct {
-					continue
-				}
-				if ft.Kind() == reflect.Struct {
-					if _, seen := visited[ft]; !seen {
-						visited[ft] = struct{}{}
-						queue = append(queue, queueItem{typ: ft, index: idx, depth: item.depth + 1})
-					}
-					continue
-				}
+				continue
 			}
-
 			if !f.IsExported() {
 				continue
 			}
 
-			name := f.Name
-			if hasTag && tagName != "" {
-				name = tagName
+			c, err := newCandidate(f, idx, item.depth)
+			if err != nil {
+				return nil, err
 			}
-
-			omitempty := false
-			if hasTag {
-				for _, opt := range tagParts[1:] {
-					if opt == "omitempty" {
-						omitempty = true
-					}
-				}
-			}
-
-			if err := validateType(f.Type); err != nil {
-				return nil, fmt.Errorf("jsonfields: field %q has unsupported type: %w", name, err)
-			}
-
-			candidates = append(candidates, candidate{
-				field: Field{
-					Name:      name,
-					Type:      f.Type,
-					OmitEmpty: omitempty,
-				},
-				index: idx,
-				depth: item.depth,
-			})
+			candidates = append(candidates, c)
 		}
 	}
+	return candidates, nil
+}
 
+func isIgnored(f reflect.StructField) bool {
+	tag, hasTag := f.Tag.Lookup("json")
+	return hasTag && strings.Split(tag, ",")[0] == "-"
+}
+
+func embeddedStruct(f reflect.StructField) (reflect.Type, bool) {
+	_, hasTag := f.Tag.Lookup("json")
+	if !f.Anonymous || hasTag {
+		return nil, false
+	}
+	ft := f.Type
+	if ft.Kind() == reflect.Pointer {
+		ft = ft.Elem()
+	}
+	if !f.IsExported() && ft.Kind() != reflect.Struct {
+		return nil, false
+	}
+	if ft.Kind() == reflect.Struct {
+		return ft, true
+	}
+	return nil, false
+}
+
+func newCandidate(f reflect.StructField, index []int, depth int) (candidate, error) {
+	tag, hasTag := f.Tag.Lookup("json")
+	tagParts := strings.Split(tag, ",")
+	name := f.Name
+	if hasTag && tagParts[0] != "" {
+		name = tagParts[0]
+	}
+	omitempty := false
+	if hasTag {
+		for _, opt := range tagParts[1:] {
+			if opt == "omitempty" {
+				omitempty = true
+			}
+		}
+	}
+	if err := validateType(f.Type); err != nil {
+		return candidate{}, fmt.Errorf("jsonfields: field %q has unsupported type: %w", name, err)
+	}
+	return candidate{
+		field: Field{Name: name, Type: f.Type, OmitEmpty: omitempty},
+		index: index,
+		depth: depth,
+	}, nil
+}
+
+func resolveConflicts(candidates []candidate) []candidate {
 	byName := make(map[string][]candidate)
 	for _, c := range candidates {
 		byName[c.field.Name] = append(byName[c.field.Name], c)
@@ -136,16 +169,7 @@ func Fields(t reflect.Type) ([]Field, error) {
 			resolved = append(resolved, atMinDepth[0])
 		}
 	}
-
-	slices.SortFunc(resolved, func(a, b candidate) int {
-		return slices.Compare(a.index, b.index)
-	})
-
-	result := make([]Field, len(resolved))
-	for i, r := range resolved {
-		result[i] = r.field
-	}
-	return result, nil
+	return resolved
 }
 
 func validateType(t reflect.Type) error {
@@ -171,6 +195,8 @@ func validateType(t reflect.Type) error {
 				}
 			}
 		}
+	default:
+		return nil
 	}
 	return nil
 }

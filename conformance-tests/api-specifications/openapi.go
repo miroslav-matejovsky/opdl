@@ -28,6 +28,7 @@ var markdownPath = filepath.Join(filepath.Dir(contractPath), "openapi.md")
 
 const (
 	schemaTypeArray   = "array"
+	schemaTypeObject  = "object"
 	schemaFormatInt32 = "int32"
 )
 
@@ -207,7 +208,7 @@ func (b schemaBuilder) structSchema(t reflect.Type) openAPISchema {
 	var required []string
 	fields, err := jsonfields.Fields(t)
 	if err != nil {
-		return openAPISchema{Type: "object", Properties: props, Required: required}
+		return openAPISchema{Type: schemaTypeObject, Properties: props, Required: required}
 	}
 	for _, f := range fields {
 		props[f.Name] = b.schemaFor(f.Type)
@@ -216,7 +217,7 @@ func (b schemaBuilder) structSchema(t reflect.Type) openAPISchema {
 		}
 	}
 	sort.Strings(required)
-	return openAPISchema{Type: "object", Properties: props, Required: required}
+	return openAPISchema{Type: schemaTypeObject, Properties: props, Required: required}
 }
 
 // The types below model the subset of OpenAPI 3.0 the generator emits. Field
