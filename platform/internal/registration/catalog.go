@@ -1,13 +1,12 @@
 package registration
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
-	"hash"
 	"slices"
 	"strconv"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/utils/stablehash"
 )
 
 // This file is the registration domain's event catalog in the event-sourced
@@ -261,39 +260,28 @@ func NewProposalID(identity ProposalIdentity) string {
 	expected := slices.Clone(identity.ExpectedMachines)
 	slices.Sort(expected)
 
-	digest := sha256.New()
-	writeField(digest, strconv.Itoa(schemaVersion))
-	writeField(digest, strconv.FormatUint(uint64(identity.UnitType), 10))
-	writeField(digest, strconv.FormatUint(uint64(identity.UnitID), 10))
-	writeField(digest, identity.UnitTypeNameAdvertised)
-	writeField(digest, identity.Role)
-	writeField(digest, identity.OriginMachine)
-	writeField(digest, identity.OriginIP)
-	writeField(digest, strconv.Itoa(len(expected)))
-	for _, machine := range expected {
-		writeField(digest, machine)
-	}
-	return hex.EncodeToString(digest.Sum(nil))
+	values := make([]string, 0, 8+len(expected))
+	values = append(values,
+		strconv.Itoa(schemaVersion),
+		strconv.FormatUint(uint64(identity.UnitType), 10),
+		strconv.FormatUint(uint64(identity.UnitID), 10),
+		identity.UnitTypeNameAdvertised,
+		identity.Role,
+		identity.OriginMachine,
+		identity.OriginIP,
+		strconv.Itoa(len(expected)),
+	)
+	values = append(values, expected...)
+	sum := stablehash.Sum256(values...)
+	return hex.EncodeToString(sum[:])
 }
 
 // NewDecisionID derives a decision's deterministic identity from the proposal it
 // is about, its kind, and the deciding machine. A node that republishes the same
 // decision produces the same ID, so redelivery never doubles a decision.
 func NewDecisionID(proposalID string, kind DecisionKind, decidingMachine string) string {
-	digest := sha256.New()
-	writeField(digest, proposalID)
-	writeField(digest, string(kind))
-	writeField(digest, decidingMachine)
-	return hex.EncodeToString(digest.Sum(nil))
+	sum := stablehash.Sum256(proposalID, string(kind), decidingMachine)
+	return hex.EncodeToString(sum[:])
 }
 
-// writeField writes one length-prefixed field into digest, so a sequence of
-// fields hashes unambiguously.
-func writeField(digest hash.Hash, value string) {
-	var length [8]byte
-	for i, shift := 0, 56; i < 8; i, shift = i+1, shift-8 {
-		length[i] = byte(uint64(len(value)) >> shift)
-	}
-	_, _ = digest.Write(length[:])
-	_, _ = digest.Write([]byte(value))
-}
+

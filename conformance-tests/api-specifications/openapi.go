@@ -11,6 +11,7 @@ import (
 
 	platformapi "github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/utils/atomicfile"
+	"github.com/miroslav-matejovsky/opdl/utils/jsonfields"
 )
 
 // contractPath is the OpenAPI specification this package generates. It is relative
@@ -204,45 +205,18 @@ func intPointer(value int) *int {
 func (b schemaBuilder) structSchema(t reflect.Type) openAPISchema {
 	props := map[string]openAPISchema{}
 	var required []string
-	for f := range t.Fields() {
-		if !f.IsExported() {
-			continue
-		}
-		name, omitempty, skip := jsonField(f)
-		if skip {
-			continue
-		}
-		props[name] = b.schemaFor(f.Type)
-		if !omitempty && f.Type.Kind() != reflect.Pointer {
-			required = append(required, name)
+	fields, err := jsonfields.Fields(t)
+	if err != nil {
+		return openAPISchema{Type: "object", Properties: props, Required: required}
+	}
+	for _, f := range fields {
+		props[f.Name] = b.schemaFor(f.Type)
+		if !f.OmitEmpty && f.Type.Kind() != reflect.Pointer {
+			required = append(required, f.Name)
 		}
 	}
 	sort.Strings(required)
 	return openAPISchema{Type: "object", Properties: props, Required: required}
-}
-
-// jsonField reports a struct field's JSON name, whether it carries omitempty, and
-// whether it is excluded from JSON (tag "-"). It falls back to the Go field name
-// when no json tag names the field.
-func jsonField(f reflect.StructField) (name string, omitempty, skip bool) {
-	tag, ok := f.Tag.Lookup("json")
-	if !ok {
-		return f.Name, false, false
-	}
-	parts := strings.Split(tag, ",")
-	if parts[0] == "-" {
-		return "", false, true
-	}
-	name = parts[0]
-	if name == "" {
-		name = f.Name
-	}
-	for _, opt := range parts[1:] {
-		if opt == "omitempty" {
-			omitempty = true
-		}
-	}
-	return name, omitempty, false
 }
 
 // The types below model the subset of OpenAPI 3.0 the generator emits. Field

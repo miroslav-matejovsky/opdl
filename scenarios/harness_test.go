@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/miroslav-matejovsky/opdl/utils/processtree"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
@@ -71,11 +72,11 @@ func runCommand(command *exec.Cmd) ([]byte, error) {
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output
-	tree, err := startCommand(command)
+	tree, err := processtree.Start(command)
 	if err != nil {
 		return output.Bytes(), err
 	}
-	err = errors.Join(command.Wait(), tree.close())
+	err = errors.Join(command.Wait(), tree.Close())
 	return output.Bytes(), err
 }
 
@@ -255,7 +256,7 @@ type machine struct {
 	launchArgs []string
 	output     *bytes.Buffer
 	cmd        *exec.Cmd
-	tree       *processTree
+	tree       *processtree.Owner
 	stopped    bool
 }
 
@@ -280,7 +281,7 @@ type managedProcess struct {
 	role   string
 	output *bytes.Buffer
 	cmd    *exec.Cmd
-	tree   *processTree
+	tree   *processtree.Owner
 	done   chan struct{}
 	err    error
 }
@@ -297,14 +298,14 @@ func (m *machine) startManaged(ctx context.Context, t *testing.T, role string, a
 	}
 	commandArgs := append([]string{"-config", m.configPath}, args...)
 	p.cmd = exec.CommandContext(ctx, m.binaryPath, commandArgs...)
-	configureManagedCommand(p.cmd)
+	processtree.ConfigureGraceful(p.cmd)
 	p.cmd.Stdout = p.output
 	p.cmd.Stderr = p.output
 	var err error
-	p.tree, err = startCommand(p.cmd)
+	p.tree, err = processtree.Start(p.cmd)
 	require.NoError(t, err)
 	go func() {
-		p.err = errors.Join(p.cmd.Wait(), p.tree.close())
+		p.err = errors.Join(p.cmd.Wait(), p.tree.Close())
 		close(p.done)
 	}()
 	t.Cleanup(p.kill)
@@ -326,7 +327,7 @@ func (p *managedProcess) kill() {
 	if !p.running() {
 		return
 	}
-	_ = p.tree.kill()
+	_ = p.tree.Kill()
 	<-p.done
 }
 
@@ -335,7 +336,7 @@ func (p *managedProcess) stopGracefully(t *testing.T) {
 	if !p.running() {
 		return
 	}
-	require.NoError(t, signalManagedProcess(p.cmd.Process))
+	require.NoError(t, p.tree.Stop())
 	select {
 	case <-p.done:
 		require.NoError(t, p.err, "%s did not stop cleanly:\n%s", p.role, p.output.String())
@@ -455,7 +456,7 @@ func (m *machine) start(ctx context.Context, t *testing.T) {
 	m.cmd.Stdout = m.output
 	m.cmd.Stderr = m.output
 	var err error
-	m.tree, err = startCommand(m.cmd)
+	m.tree, err = processtree.Start(m.cmd)
 	require.NoError(t, err)
 	m.stopped = false
 	t.Cleanup(m.stop)
@@ -482,7 +483,7 @@ func (m *machine) stop() {
 		return
 	}
 	m.stopped = true
-	_ = m.tree.kill()
+	_ = m.tree.Kill()
 	_ = m.cmd.Wait()
 }
 
@@ -501,7 +502,7 @@ func (m *machine) wait(t *testing.T) string {
 	t.Helper()
 	require.NotNil(t, m.cmd, "%s was never started", m.name)
 	_ = m.cmd.Wait()
-	_ = m.tree.close()
+	_ = m.tree.Close()
 	m.stopped = true
 	return m.output.String()
 }
@@ -541,7 +542,7 @@ func waitForMarker(t *testing.T, dir, name string, signaller *process, describe 
 // process is an external command a scenario runs and later collects.
 type process struct {
 	output *bytes.Buffer
-	tree   *processTree
+	tree   *processtree.Owner
 	// finished closes once the command has exited and err is set, which is what
 	// publishes err to every other goroutine.
 	finished chan struct{}
@@ -560,16 +561,16 @@ func startProcess(t *testing.T, cmd *exec.Cmd) *process {
 	cmd.Stdout = p.output
 	cmd.Stderr = p.output
 	var err error
-	p.tree, err = startCommand(cmd)
+	p.tree, err = processtree.Start(cmd)
 	require.NoError(t, err)
 	go func() {
-		p.err = errors.Join(cmd.Wait(), p.tree.close())
+		p.err = errors.Join(cmd.Wait(), p.tree.Close())
 		close(p.finished)
 	}()
 	t.Cleanup(func() {
 		// Whatever went wrong, the child does not outlive the scenario, and the
 		// scenario does not return while it is still writing to the buffer.
-		_ = p.tree.kill()
+		_ = p.tree.Kill()
 		// Cleanup deliberately kills the child, so its output and exit error are
 		// not assertions about the scenario result.
 		_, _ = p.wait()

@@ -1,21 +1,15 @@
 //go:build windows
 
-package scenarios
+package processtree
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"sync"
 	"syscall"
-	"testing"
-	"time"
 	"unsafe"
-
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -28,7 +22,6 @@ const (
 	threadSnapshot                    = 0x00000004
 	threadSuspendResume               = 0x0002
 	failedThreadResume                = 0xffffffff
-	waitObject0                       = 0x00000000
 )
 
 var (
@@ -43,7 +36,6 @@ var (
 	setInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
 	thread32First            = kernel32.NewProc("Thread32First")
 	thread32Next             = kernel32.NewProc("Thread32Next")
-	waitForSingleObject      = kernel32.NewProc("WaitForSingleObject")
 )
 
 type jobObjectBasicLimitInformation struct {
@@ -86,17 +78,27 @@ type threadEntry struct {
 	flags          uint32
 }
 
-// processTree owns a Windows job configured to terminate every member when its
-// handle closes. The OS closes the handle even when the test process exits on a
-// hard timeout, so descendants cannot outlive the scenario harness.
-type processTree struct {
-	handle syscall.Handle
-	once   sync.Once
-	err    error
+// Owner manages a running child process and its descendants inside an OS container.
+type Owner struct {
+	handle  syscall.Handle
+	process *os.Process
+	once    sync.Once
+	err     error
 }
 
-func startCommand(command *exec.Cmd) (*processTree, error) {
-	tree, err := newProcessTree()
+// ConfigureGraceful configures cmd so that graceful console control signals
+// can be sent without targeting the parent process group.
+func ConfigureGraceful(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= createNewProcessGroup
+}
+
+// Start launches cmd inside an OS process container (job object on Windows) and
+// returns an Owner to manage its lifecycle and containment.
+func Start(command *exec.Cmd) (*Owner, error) {
+	owner, err := newOwner()
 	if err != nil {
 		return nil, err
 	}
@@ -104,33 +106,32 @@ func startCommand(command *exec.Cmd) (*processTree, error) {
 		command.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	command.SysProcAttr.CreationFlags |= createSuspended
-	if command.Cancel != nil {
-		command.Cancel = tree.kill
-	}
+	command.Cancel = owner.Kill
 	if err := command.Start(); err != nil {
-		_ = tree.close()
+		_ = owner.Close()
 		return nil, err
 	}
-	if err := tree.assign(command.Process); err != nil {
+	owner.process = command.Process
+	if err := owner.assign(command.Process); err != nil {
 		_ = command.Process.Kill()
 		_, _ = command.Process.Wait()
-		_ = tree.close()
+		_ = owner.Close()
 		return nil, err
 	}
 	if err := resumeProcess(command.Process.Pid); err != nil {
-		_ = tree.kill()
+		_ = owner.Kill()
 		_, _ = command.Process.Wait()
 		return nil, err
 	}
-	return tree, nil
+	return owner, nil
 }
 
-func newProcessTree() (*processTree, error) {
+func newOwner() (*Owner, error) {
 	handle, _, callErr := createJobObject.Call(0, 0)
 	if handle == 0 {
 		return nil, windowsError("create process job", callErr)
 	}
-	tree := &processTree{handle: syscall.Handle(handle)}
+	owner := &Owner{handle: syscall.Handle(handle)}
 	info := jobObjectExtendedLimitInfo{}
 	info.basicLimitInformation.limitFlags = jobObjectLimitKillOnJobClose
 	ok, _, callErr := setInformationJobObject.Call(
@@ -140,16 +141,16 @@ func newProcessTree() (*processTree, error) {
 		unsafe.Sizeof(info),
 	)
 	if ok == 0 {
-		_ = tree.close()
+		_ = owner.Close()
 		return nil, windowsError("configure process job", callErr)
 	}
-	return tree, nil
+	return owner, nil
 }
 
-func (p *processTree) assign(process *os.Process) error {
+func (o *Owner) assign(process *os.Process) error {
 	var assignErr error
 	if err := process.WithHandle(func(processHandle uintptr) {
-		ok, _, callErr := assignProcessToJobObject.Call(uintptr(p.handle), processHandle)
+		ok, _, callErr := assignProcessToJobObject.Call(uintptr(o.handle), processHandle)
 		if ok == 0 {
 			assignErr = windowsError("assign process to job", callErr)
 		}
@@ -159,18 +160,32 @@ func (p *processTree) assign(process *os.Process) error {
 	return assignErr
 }
 
-func (p *processTree) close() error {
-	p.once.Do(func() {
-		ok, _, callErr := closeHandle.Call(uintptr(p.handle))
+// Close closes the OS handle for the process container. Close is idempotent and concurrency safe.
+func (o *Owner) Close() error {
+	o.once.Do(func() {
+		ok, _, callErr := closeHandle.Call(uintptr(o.handle))
 		if ok == 0 {
-			p.err = windowsError("close process job", callErr)
+			o.err = windowsError("close process job", callErr)
 		}
 	})
-	return p.err
+	return o.err
 }
 
-func (p *processTree) kill() error {
-	return p.close()
+// Kill terminates the process container and all its descendants, and closes handles.
+func (o *Owner) Kill() error {
+	return o.Close()
+}
+
+// Stop sends a graceful termination signal (CTRL_BREAK_EVENT) to the child process group.
+func (o *Owner) Stop() error {
+	if o.process == nil {
+		return nil
+	}
+	ok, _, callErr := generateConsoleCtrlEvent.Call(ctrlBreakEvent, uintptr(o.process.Pid))
+	if ok == 0 {
+		return fmt.Errorf("signal process group %d: %w", o.process.Pid, callErr)
+	}
+	return nil
 }
 
 func resumeProcess(pid int) error {
@@ -210,62 +225,4 @@ func windowsError(action string, err error) error {
 		err = syscall.EINVAL
 	}
 	return fmt.Errorf("%s: %w", action, err)
-}
-
-func configureManagedCommand(command *exec.Cmd) {
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewProcessGroup}
-}
-
-func signalManagedProcess(process *os.Process) error {
-	ok, _, callErr := generateConsoleCtrlEvent.Call(ctrlBreakEvent, uintptr(process.Pid))
-	if ok == 0 {
-		return fmt.Errorf("signal process group %d: %w", process.Pid, callErr)
-	}
-	return nil
-}
-
-const processTreeHelper = "OPDL_WINDOWS_PROCESS_TREE_HELPER"
-
-func TestWindowsProcessTreeKillsDescendants(t *testing.T) {
-	switch os.Getenv(processTreeHelper) {
-	case "parent":
-		command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestWindowsProcessTreeKillsDescendants$")
-		command.Env = append(os.Environ(), processTreeHelper+"=child")
-		require.NoError(t, command.Start())
-		fmt.Println(command.Process.Pid)
-		<-make(chan struct{})
-	case "child":
-		<-make(chan struct{})
-	}
-
-	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestWindowsProcessTreeKillsDescendants$")
-	command.Env = append(os.Environ(), processTreeHelper+"=parent")
-	stdout, err := command.StdoutPipe()
-	require.NoError(t, err)
-	tree, err := startCommand(command)
-	require.NoError(t, err)
-
-	scanner := bufio.NewScanner(stdout)
-	require.True(t, scanner.Scan(), "helper did not report its child PID")
-	childPID, err := strconv.Atoi(scanner.Text())
-	require.NoError(t, err)
-	require.NoError(t, tree.kill())
-	_ = command.Wait()
-
-	require.Eventually(t, func() bool { return processExited(childPID) },
-		5*time.Second, 10*time.Millisecond, "descendant process %d survived its job", childPID)
-}
-
-func processExited(pid int) bool {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return true
-	}
-	exited := false
-	err = process.WithHandle(func(handle uintptr) {
-		result, _, _ := waitForSingleObject.Call(handle, 0)
-		exited = result == waitObject0
-	})
-	_ = process.Release()
-	return err != nil || exited
 }

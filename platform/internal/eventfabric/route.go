@@ -1,16 +1,14 @@
 package eventfabric
 
 import (
-	"crypto/sha256"
 	"encoding/base32"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash"
 	"slices"
 	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/utils/stablehash"
 )
 
 // ErrInvalidEventType reports an event type that is not in platform.<domain>.<fact>
@@ -82,11 +80,8 @@ func NewSiteScope(project, environment, site string) SiteScope {
 // safe tokens, so deployment identity never leaks a character a subject or a
 // stream name cannot hold.
 func SafeToken(values ...string) string {
-	digest := sha256.New()
-	for _, value := range values {
-		writeLengthPrefixed(digest, value)
-	}
-	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest.Sum(nil))
+	sum := stablehash.Sum256(values...)
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
 	return strings.ToLower(encoded)
 }
 
@@ -128,12 +123,4 @@ func (r Route) Subject() string {
 	return strings.Join([]string{routePrefix, string(r.scope), routeInfix, r.event.Domain, r.event.Fact}, ".")
 }
 
-// writeLengthPrefixed writes value into h preceded by its byte length, so a
-// sequence of values hashes unambiguously and no boundary can be forged by
-// moving bytes from one value into the next.
-func writeLengthPrefixed(h hash.Hash, value string) {
-	var length [8]byte
-	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
-	_, _ = h.Write(length[:])
-	_, _ = h.Write([]byte(value))
-}
+

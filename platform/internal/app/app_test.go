@@ -19,6 +19,7 @@ import (
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
+	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
 // This file covers what runtime composition owns: deriving the Event Fabric's
@@ -45,12 +46,10 @@ var testDescriptor = deployment.Descriptor{
 // server under test can bind it.
 func freeAddress(t *testing.T) string {
 	t.Helper()
-	var listen net.ListenConfig
-	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	res, err := testnet.Reserve(t.Context(), 1)
 	require.NoError(t, err)
-	addr := listener.Addr().String()
-	require.NoError(t, listener.Close())
-	return addr
+	require.NoError(t, res.Release())
+	return res.Addresses()[0]
 }
 
 // newTestServer builds a server that answers on addr, so a test can tell a
