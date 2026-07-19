@@ -18,3 +18,5 @@ require (
 replace github.com/miroslav-matejovsky/opdl/builder => ../builder
 
 replace github.com/miroslav-matejovsky/opdl/platform => ../platform
+
+replace github.com/miroslav-matejovsky/opdl/utils => ../utils

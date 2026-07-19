@@ -80,7 +80,7 @@ tasks:
     desc: Run all checks, tests and scenarios. This is the main task to run before considering work complete.
     silent: true
     cmds:
-      - echo "Running all checks, tests and scenarios. This might take up to 10 minutes. Please be patient."
+      - echo "Running all checks, tests and scenarios. This might take up to 15 minutes. Please be patient."
       - task: clean
         # Set QUIET=1 to suppress output from clean since it can be very verbose and is not the main focus of this task.
         vars:
