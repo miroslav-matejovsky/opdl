@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -58,8 +59,23 @@ func buildProject(ctx context.Context, t *testing.T, blueprintsDir, outDir, proj
 	build := exec.CommandContext(ctx, "go", "run", "./cmd/opdl", "build",
 		"-examples", blueprintsDir, "-out", outDir, project)
 	build.Dir = builderDir
-	output, err := build.CombinedOutput()
+	output, err := runCommand(build)
 	require.NoError(t, err, "builder build failed:\n%s", output)
+}
+
+// runCommand runs a command to completion while keeping its whole process tree
+// under scenario control. This matters on Windows, where killing a direct child
+// does not kill the go build processes it started.
+func runCommand(command *exec.Cmd) ([]byte, error) {
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	tree, err := startCommand(command)
+	if err != nil {
+		return output.Bytes(), err
+	}
+	err = errors.Join(command.Wait(), tree.close())
+	return output.Bytes(), err
 }
 
 // machineBinary returns the path of one built machine's binary. The builder
@@ -235,6 +251,7 @@ type machine struct {
 	launchArgs []string
 	output     *bytes.Buffer
 	cmd        *exec.Cmd
+	tree       *processTree
 	stopped    bool
 }
 
@@ -259,6 +276,7 @@ type managedProcess struct {
 	role   string
 	output *bytes.Buffer
 	cmd    *exec.Cmd
+	tree   *processTree
 	done   chan struct{}
 	err    error
 }
@@ -278,9 +296,11 @@ func (m *machine) startManaged(ctx context.Context, t *testing.T, role string, a
 	configureManagedCommand(p.cmd)
 	p.cmd.Stdout = p.output
 	p.cmd.Stderr = p.output
-	require.NoError(t, p.cmd.Start())
+	var err error
+	p.tree, err = startCommand(p.cmd)
+	require.NoError(t, err)
 	go func() {
-		p.err = p.cmd.Wait()
+		p.err = errors.Join(p.cmd.Wait(), p.tree.close())
 		close(p.done)
 	}()
 	t.Cleanup(p.kill)
@@ -302,7 +322,7 @@ func (p *managedProcess) kill() {
 	if !p.running() {
 		return
 	}
-	_ = p.cmd.Process.Kill()
+	_ = p.tree.kill()
 	<-p.done
 }
 
@@ -430,7 +450,9 @@ func (m *machine) start(ctx context.Context, t *testing.T) {
 	m.cmd = exec.CommandContext(ctx, m.binaryPath, args...)
 	m.cmd.Stdout = m.output
 	m.cmd.Stderr = m.output
-	require.NoError(t, m.cmd.Start())
+	var err error
+	m.tree, err = startCommand(m.cmd)
+	require.NoError(t, err)
 	m.stopped = false
 	t.Cleanup(m.stop)
 }
@@ -456,7 +478,7 @@ func (m *machine) stop() {
 		return
 	}
 	m.stopped = true
-	_ = m.cmd.Process.Kill()
+	_ = m.tree.kill()
 	_ = m.cmd.Wait()
 }
 
@@ -475,6 +497,7 @@ func (m *machine) wait(t *testing.T) string {
 	t.Helper()
 	require.NotNil(t, m.cmd, "%s was never started", m.name)
 	_ = m.cmd.Wait()
+	_ = m.tree.close()
 	m.stopped = true
 	return m.output.String()
 }
@@ -514,6 +537,7 @@ func waitForMarker(t *testing.T, dir, name string, signaller *process, describe 
 // process is an external command a scenario runs and later collects.
 type process struct {
 	output *bytes.Buffer
+	tree   *processTree
 	// finished closes once the command has exited and err is set, which is what
 	// publishes err to every other goroutine.
 	finished chan struct{}
@@ -531,15 +555,17 @@ func startProcess(t *testing.T, cmd *exec.Cmd) *process {
 	p := &process{output: &bytes.Buffer{}, finished: make(chan struct{})}
 	cmd.Stdout = p.output
 	cmd.Stderr = p.output
-	require.NoError(t, cmd.Start())
+	var err error
+	p.tree, err = startCommand(cmd)
+	require.NoError(t, err)
 	go func() {
-		p.err = cmd.Wait()
+		p.err = errors.Join(cmd.Wait(), p.tree.close())
 		close(p.finished)
 	}()
 	t.Cleanup(func() {
 		// Whatever went wrong, the child does not outlive the scenario, and the
 		// scenario does not return while it is still writing to the buffer.
-		_ = cmd.Process.Kill()
+		_ = p.tree.kill()
 		// Cleanup deliberately kills the child, so its output and exit error are
 		// not assertions about the scenario result.
 		_, _ = p.wait()

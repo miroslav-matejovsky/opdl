@@ -90,5 +90,8 @@
 // Restart scenarios force-stop a process because crash recovery is the promise
 // they test. Warm-standby scenarios additionally use the operating system's
 // process-control signal for planned handover and full shutdown. No runtime
-// promotion endpoint exists.
+// promotion endpoint exists. On Windows every launched command is placed in a
+// kill-on-close job before it starts. This keeps nested builder, Go, and .NET
+// processes inside the scenario lifecycle even when the test process itself is
+// terminated by a hard timeout.
 package scenarios
