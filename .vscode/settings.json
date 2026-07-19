@@ -71,6 +71,7 @@
     "GOWORK",
     "hclparse",
     "httpapi",
+    "idempotently",
     "Kiota",
     "LASTEXITCODE",
     "lintcache",

@@ -3,7 +3,6 @@ package nats
 import (
 	"context"
 	"errors"
-	"net"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
 // The tests in this file run a real embedded NATS server with JetStream. They
@@ -51,7 +51,10 @@ func testConfig(t *testing.T) Config {
 // lives in dir, so a restart can reopen the same journal.
 func configForDir(t *testing.T, dir string) Config {
 	t.Helper()
-	addrs := freeAddrs(t, 3)
+	res, err := testnet.Reserve(t.Context(), 3)
+	require.NoError(t, err)
+	require.NoError(t, res.Release())
+	addrs := res.Addresses()
 	return Config{
 		ServerName:      "node",
 		ClusterName:     "test",
@@ -70,26 +73,6 @@ func configForDir(t *testing.T, dir string) Config {
 		CatchUpTimeout:  20 * time.Second,
 		ShutdownTimeout: 10 * time.Second,
 	}
-}
-
-// freeAddrs reserves n distinct loopback addresses, then releases them so a
-// server can bind them. Holding every listener at once guarantees the ports are
-// distinct.
-func freeAddrs(t *testing.T, n int) []string {
-	t.Helper()
-	var config net.ListenConfig
-	listeners := make([]net.Listener, n)
-	addrs := make([]string, n)
-	for i := range n {
-		listener, err := config.Listen(context.Background(), "tcp", "127.0.0.1:0")
-		require.NoError(t, err)
-		listeners[i] = listener
-		addrs[i] = listener.Addr().String()
-	}
-	for _, listener := range listeners {
-		require.NoError(t, listener.Close())
-	}
-	return addrs
 }
 
 // probeRoute is the site route for the probe event every handler test consumes.

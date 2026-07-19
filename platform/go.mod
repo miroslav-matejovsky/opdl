@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/miroslav-matejovsky/opdl/utils v0.0.0
 	github.com/nats-io/nats-server/v2 v2.11.9
 	github.com/nats-io/nats.go v1.46.1
 	github.com/stretchr/testify v1.11.1
@@ -25,3 +26,5 @@ require (
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/miroslav-matejovsky/opdl/utils => ../utils

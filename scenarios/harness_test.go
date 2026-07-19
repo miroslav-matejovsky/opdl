@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +17,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
 // This file is the scenario harness: how a scenario builds a project and runs
@@ -146,7 +147,10 @@ func prepareSite(t *testing.T, outDir, workDir, project string, names ...string)
 
 	// Every address is reserved before any is released, so no two machines of the
 	// site are handed the same port.
-	addrs := freeAddresses(t, 4*len(names))
+	res, err := testnet.Reserve(t.Context(), 4*len(names))
+	require.NoError(t, err)
+	require.NoError(t, res.Release())
+	addrs := res.Addresses()
 	reserved := make([]sockets, len(names))
 	for i, name := range names {
 		reserved[i] = sockets{
@@ -595,27 +599,6 @@ func (p *process) exited() bool {
 // path where the process may still be running, so it is deliberately a snapshot
 // rather than the complete output wait returns.
 func (p *process) logs() string { return p.output.String() }
-
-// freeAddresses reserves n distinct ephemeral loopback ports, then releases them
-// so the machines can bind them. Holding every listener until all are reserved
-// is what guarantees they are distinct; a brief race with the rest of the host
-// afterwards is acceptable for a scenario.
-func freeAddresses(t *testing.T, n int) []string {
-	t.Helper()
-	var listen net.ListenConfig
-	listeners := make([]net.Listener, 0, n)
-	addrs := make([]string, 0, n)
-	for range n {
-		listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
-		require.NoError(t, err)
-		listeners = append(listeners, listener)
-		addrs = append(addrs, listener.Addr().String())
-	}
-	for _, listener := range listeners {
-		require.NoError(t, listener.Close())
-	}
-	return addrs
-}
 
 // diagnose renders everything worth knowing when a scenario fails: what each
 // machine printed, whether it was running, and where it answers.
