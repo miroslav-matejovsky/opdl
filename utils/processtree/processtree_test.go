@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/miroslav-matejovsky/opdl/utils/processtree"
 	"github.com/stretchr/testify/require"
@@ -67,7 +66,7 @@ func TestContextCancellationKillsTree(t *testing.T) {
 	}
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcessMain")
@@ -75,6 +74,8 @@ func TestContextCancellationKillsTree(t *testing.T) {
 
 	owner, err := processtree.Start(cmd)
 	require.NoError(t, err)
+
+	cancel()
 
 	err = cmd.Wait()
 	require.Error(t, err)
