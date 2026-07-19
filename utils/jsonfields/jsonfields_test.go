@@ -71,6 +71,53 @@ func TestFields_ConflictingPromotedFields(t *testing.T) {
 	require.Empty(t, fields, "conflicting fields at the same depth must cancel out and be ignored")
 }
 
+func TestFields_EncodingJSONEmbeddingRules(t *testing.T) {
+	t.Parallel()
+
+	type common struct {
+		Value string `json:"value"`
+	}
+	type left struct{ common }
+	type right struct{ common }
+	type diamond struct {
+		left
+		right
+	}
+
+	fields, err := jsonfields.Fields(reflect.TypeFor[diamond]())
+	require.NoError(t, err)
+	require.Empty(t, fields, "the same field promoted through two paths is ambiguous")
+
+	type untagged struct{ Value string }
+	type tagged struct {
+		Value string `json:"Value"`
+	}
+	type dominant struct {
+		untagged
+		tagged
+	}
+
+	fields, err = jsonfields.Fields(reflect.TypeFor[dominant]())
+	require.NoError(t, err)
+	require.Equal(t, []jsonfields.Field{{Name: "Value", Type: reflect.TypeFor[string]()}}, fields)
+
+	type optionOnly struct {
+		InnerA `json:",omitempty"`
+	}
+	fields, err = jsonfields.Fields(reflect.TypeFor[optionOnly]())
+	require.NoError(t, err)
+	require.Equal(t, []jsonfields.Field{{Name: "promoted", Type: reflect.TypeFor[string]()}}, fields)
+}
+
+func TestFields_RecursiveEmbeddedStructTerminates(t *testing.T) {
+	t.Parallel()
+
+	type recursive struct{ *recursive }
+	fields, err := jsonfields.Fields(reflect.TypeFor[recursive]())
+	require.NoError(t, err)
+	require.Empty(t, fields)
+}
+
 func TestFields_CompareWithEncodingJSON(t *testing.T) {
 	t.Parallel()
 

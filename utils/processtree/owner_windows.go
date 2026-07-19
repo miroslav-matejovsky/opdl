@@ -82,6 +82,7 @@ type threadEntry struct {
 type Owner struct {
 	handle  syscall.Handle
 	process *os.Process
+	ready   chan struct{}
 	once    sync.Once
 	err     error
 }
@@ -102,6 +103,7 @@ func Start(command *exec.Cmd) (*Owner, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer close(owner.ready)
 	if command.SysProcAttr == nil {
 		command.SysProcAttr = &syscall.SysProcAttr{}
 	}
@@ -131,7 +133,7 @@ func newOwner() (*Owner, error) {
 	if handle == 0 {
 		return nil, windowsError("create process job", callErr)
 	}
-	owner := &Owner{handle: syscall.Handle(handle)}
+	owner := &Owner{handle: syscall.Handle(handle), ready: make(chan struct{})}
 	info := jobObjectExtendedLimitInfo{}
 	info.basicLimitInformation.limitFlags = jobObjectLimitKillOnJobClose
 	ok, _, callErr := setInformationJobObject.Call(
@@ -173,6 +175,9 @@ func (o *Owner) Close() error {
 
 // Kill terminates the process container and all its descendants, and closes handles.
 func (o *Owner) Kill() error {
+	if o.ready != nil {
+		<-o.ready
+	}
 	return o.Close()
 }
 

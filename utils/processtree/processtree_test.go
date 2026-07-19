@@ -35,6 +35,8 @@ func TestHelperProcessMain(t *testing.T) {
 	case "graceful":
 		// Block until graceful stop or kill.
 		<-make(chan struct{})
+	case "exit":
+		return
 	}
 	os.Exit(0)
 }
@@ -79,6 +81,22 @@ func TestContextCancellationKillsTree(t *testing.T) {
 
 	err = cmd.Wait()
 	require.Error(t, err)
+	require.NoError(t, owner.Close())
+}
+
+func TestKillAfterProcessExitIsIdempotent(t *testing.T) {
+	if os.Getenv(helperEnv) != "" {
+		return
+	}
+	t.Parallel()
+
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestHelperProcessMain")
+	cmd.Env = append(os.Environ(), helperEnv+"=exit")
+
+	owner, err := processtree.Start(cmd)
+	require.NoError(t, err)
+	require.NoError(t, cmd.Wait())
+	require.NoError(t, owner.Kill())
 	require.NoError(t, owner.Close())
 }
 

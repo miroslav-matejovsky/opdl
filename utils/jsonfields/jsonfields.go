@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Field describes one struct field exposed to JSON encoding.
@@ -19,9 +20,10 @@ type Field struct {
 }
 
 type candidate struct {
-	field Field
-	index []int
-	depth int
+	field  Field
+	index  []int
+	depth  int
+	tagged bool
 }
 
 // Fields extracts and describes the JSON-exposed fields for the struct type t
@@ -62,57 +64,78 @@ type queueItem struct {
 
 func collectCandidates(t reflect.Type) ([]candidate, error) {
 	var candidates []candidate
-	queue := []queueItem{{typ: t, index: nil, depth: 0}}
-	visited := map[reflect.Type]struct{}{t: {}}
+	current := []queueItem{}
+	next := []queueItem{{typ: t, index: nil, depth: 0}}
+	var count, nextCount map[reflect.Type]int
+	visited := make(map[reflect.Type]bool)
 
-	for len(queue) > 0 {
-		item := queue[0]
-		queue = queue[1:]
+	for len(next) > 0 {
+		current, next = next, current[:0]
+		count, nextCount = nextCount, make(map[reflect.Type]int)
 
-		for i := 0; i < item.typ.NumField(); i++ {
-			f := item.typ.Field(i)
-			idx := append(slices.Clone(item.index), i)
-
-			if isIgnored(f) {
+		for _, item := range current {
+			if visited[item.typ] {
 				continue
 			}
-			if embed, ok := embeddedStruct(f); ok {
-				if _, seen := visited[embed]; !seen {
-					visited[embed] = struct{}{}
-					queue = append(queue, queueItem{typ: embed, index: idx, depth: item.depth + 1})
+			visited[item.typ] = true
+
+			for i := 0; i < item.typ.NumField(); i++ {
+				f := item.typ.Field(i)
+				if shouldIgnore(f) {
+					continue
 				}
-				continue
-			}
-			if !f.IsExported() {
-				continue
-			}
+				idx := append(slices.Clone(item.index), i)
+				name, options := jsonTag(f)
 
-			c, err := newCandidate(f, idx, item.depth)
-			if err != nil {
-				return nil, err
+				if embed, ok := embeddedStruct(f, name); ok {
+					nextCount[embed]++
+					if nextCount[embed] == 1 {
+						next = append(next, queueItem{typ: embed, index: idx, depth: item.depth + 1})
+					}
+					continue
+				}
+				if !f.IsExported() {
+					continue
+				}
+
+				c, err := newCandidate(f, idx, item.depth, name, options)
+				if err != nil {
+					return nil, err
+				}
+				candidates = append(candidates, c)
+				if count[item.typ] > 1 {
+					// Preserve duplicate embedding paths so conflict resolution
+					// sees the same ambiguity as encoding/json.
+					candidates = append(candidates, c)
+				}
 			}
-			candidates = append(candidates, c)
 		}
 	}
 	return candidates, nil
 }
 
-func isIgnored(f reflect.StructField) bool {
-	tag, hasTag := f.Tag.Lookup("json")
-	return hasTag && strings.Split(tag, ",")[0] == "-"
+func shouldIgnore(f reflect.StructField) bool {
+	if f.Anonymous {
+		t := f.Type
+		if t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		if !f.IsExported() && t.Kind() != reflect.Struct {
+			return true
+		}
+	} else if !f.IsExported() {
+		return true
+	}
+	return f.Tag.Get("json") == "-"
 }
 
-func embeddedStruct(f reflect.StructField) (reflect.Type, bool) {
-	_, hasTag := f.Tag.Lookup("json")
-	if !f.Anonymous || hasTag {
+func embeddedStruct(f reflect.StructField, tagName string) (reflect.Type, bool) {
+	if !f.Anonymous || tagName != "" {
 		return nil, false
 	}
 	ft := f.Type
 	if ft.Kind() == reflect.Pointer {
 		ft = ft.Elem()
-	}
-	if !f.IsExported() && ft.Kind() != reflect.Struct {
-		return nil, false
 	}
 	if ft.Kind() == reflect.Struct {
 		return ft, true
@@ -120,29 +143,48 @@ func embeddedStruct(f reflect.StructField) (reflect.Type, bool) {
 	return nil, false
 }
 
-func newCandidate(f reflect.StructField, index []int, depth int) (candidate, error) {
-	tag, hasTag := f.Tag.Lookup("json")
-	tagParts := strings.Split(tag, ",")
-	name := f.Name
-	if hasTag && tagParts[0] != "" {
-		name = tagParts[0]
+func newCandidate(f reflect.StructField, index []int, depth int, name string, options []string) (candidate, error) {
+	tagged := name != ""
+	if !tagged {
+		name = f.Name
 	}
 	omitempty := false
-	if hasTag {
-		for _, opt := range tagParts[1:] {
-			if opt == "omitempty" {
-				omitempty = true
-			}
+	for _, opt := range options {
+		if opt == "omitempty" {
+			omitempty = true
 		}
 	}
 	if err := validateType(f.Type); err != nil {
 		return candidate{}, fmt.Errorf("jsonfields: field %q has unsupported type: %w", name, err)
 	}
 	return candidate{
-		field: Field{Name: name, Type: f.Type, OmitEmpty: omitempty},
-		index: index,
-		depth: depth,
+		field:  Field{Name: name, Type: f.Type, OmitEmpty: omitempty},
+		index:  index,
+		depth:  depth,
+		tagged: tagged,
 	}, nil
+}
+
+func jsonTag(f reflect.StructField) (name string, options []string) {
+	parts := strings.Split(f.Tag.Get("json"), ",")
+	if !isValidTag(parts[0]) {
+		parts[0] = ""
+	}
+	return parts[0], parts[1:]
+}
+
+func isValidTag(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, char := range name {
+		switch {
+		case strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", char):
+		case !unicode.IsLetter(char) && !unicode.IsDigit(char):
+			return false
+		}
+	}
+	return true
 }
 
 func resolveConflicts(candidates []candidate) []candidate {
@@ -167,6 +209,16 @@ func resolveConflicts(candidates []candidate) []candidate {
 		}
 		if len(atMinDepth) == 1 {
 			resolved = append(resolved, atMinDepth[0])
+			continue
+		}
+		var tagged []candidate
+		for _, c := range atMinDepth {
+			if c.tagged {
+				tagged = append(tagged, c)
+			}
+		}
+		if len(tagged) == 1 {
+			resolved = append(resolved, tagged[0])
 		}
 	}
 	return resolved
@@ -187,16 +239,10 @@ func validateType(t reflect.Type) error {
 		}
 		return validateType(t.Elem())
 	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
-			f := t.Field(i)
-			if f.IsExported() {
-				if err := validateType(f.Type); err != nil {
-					return fmt.Errorf("field %s: %w", f.Name, err)
-				}
-			}
-		}
+		// Nested structs are inspected by their consumer. Stopping here also
+		// keeps recursive structs finite.
+		return nil
 	default:
 		return nil
 	}
-	return nil
 }
