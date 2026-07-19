@@ -87,6 +87,7 @@
     "pkgname",
     "platformapi",
     "platformdeployment",
+    "processtree",
     "slnx",
     "stretchr",
     "taskfile",
