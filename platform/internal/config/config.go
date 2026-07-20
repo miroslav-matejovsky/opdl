@@ -172,7 +172,7 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
-	fmt.Fprintf(&b, "    slots        primary=true standby=%t\n", d.Slots.Standby != nil)
+	fmt.Fprintf(&b, "    slots        primary=true standby=%t\n", !d.Slots.Standby.Disabled)
 	fmt.Fprintf(&b, "    event_fabric %s\n", eventFabricSummary(d.EventFabric))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    address             %s\n", c.address)

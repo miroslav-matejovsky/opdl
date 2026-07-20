@@ -27,14 +27,20 @@ func TestLoad(t *testing.T) {
 	require.Equal(t, []string{"sensor-services"}, m1.Services)
 	require.NotNil(t, m1.Platform)
 	require.NotNil(t, m1.Platform.Nats)
-	require.Equal(t, "10.0.1.10:4222", m1.Platform.Nats.ClientAddress)
-	require.Nil(t, m1.Platform.Standby)
+	require.Equal(t, 4222, m1.Platform.Nats.ClientPort)
+	require.Equal(t, 6222, m1.Platform.Nats.ClusterPort)
+	// The sensor opts out of a local standby process; local-server opts in. Both
+	// state the decision, so the fixture proves each value survives loading rather
+	// than only the one that matches the zero value.
+	require.NotNil(t, m1.Platform.Standby)
+	require.True(t, m1.Platform.Standby.Disabled)
 
-	// The local-server machine has no standby block, so only primary slot is deployed.
-	require.NotNil(t, p.Sites[0].Machines[1].Platform)
-	require.Nil(t, p.Sites[0].Machines[1].Platform.Standby)
-	require.NotNil(t, p.Sites[0].Machines[1].Platform.Nats)
-	require.Equal(t, "10.0.1.11:4222", p.Sites[0].Machines[1].Platform.Nats.ClientAddress)
+	m2 := p.Sites[0].Machines[1]
+	require.NotNil(t, m2.Platform)
+	require.NotNil(t, m2.Platform.Nats)
+	require.Equal(t, 4222, m2.Platform.Nats.ClientPort)
+	require.NotNil(t, m2.Platform.Standby)
+	require.False(t, m2.Platform.Standby.Disabled)
 
 	require.Equal(t, "control-room", p.Sites[1].Name)
 	require.Len(t, p.Sites[1].Machines, 3)

@@ -52,10 +52,12 @@ catch_up_timeout = "30s"
 # are never logged.
 # credentials_file = "/etc/opdl/nats-credentials.toml"
 
-# Optional socket overrides, used when running several instances on one local
-# development host. The platform derives all of them from the deployment
-# descriptor's topology, so a real deployment needs none of them.
-# client_address = "127.0.0.1:4222"
-# cluster_address = "127.0.0.1:6222"
-# monitor_address = "127.0.0.1:8222"
-# routes = ["127.0.0.2:6222"]
+# There are no socket settings here. The Event Fabric's client and cluster
+# addresses, routes, and server list are deployment topology: they are authored
+# as ports in the project blueprint and resolved into the embedded deployment
+# descriptor. Setting them at a site could point a machine at a journal that is
+# not its own, so this file cannot.
+#
+# Unknown keys are rejected at load time. A setting this schema does not define
+# is an error rather than a value that is silently ignored, because a silently
+# ignored setting is indistinguishable from an applied one.

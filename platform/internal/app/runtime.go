@@ -72,7 +72,7 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.D
 	if acquired {
 		return runFencedActive(ctx, cfg, descriptor, role, statusPath, fence, activationInitial)
 	}
-	if descriptor.Slots.Standby == nil {
+	if descriptor.Slots.Standby.Disabled {
 		return fmt.Errorf("another process already holds the active fence for machine %q and this machine does not run a standby slot", descriptor.Machine)
 	}
 	return runStandby(ctx, cfg, descriptor, role, statusPath, fence)

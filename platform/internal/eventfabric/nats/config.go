@@ -62,11 +62,10 @@ type Config struct {
 	// only used on a storage node.
 	ClientAddress string
 	// ClusterAddress is the host:port this node's server routes to peers on. It
-	// is only used on a storage node.
+	// is only used on a storage node, and only when Routes is non-empty: a site
+	// with one storage node has no peer to route to and binds no cluster
+	// listener.
 	ClusterAddress string
-	// MonitorAddress is the host:port this node's server serves monitoring on. It
-	// is only used on a storage node.
-	MonitorAddress string
 	// Routes are the cluster host:port addresses of the site's other storage
 	// nodes. Only storage nodes route to each other, and a site with one storage
 	// node has none.
@@ -116,7 +115,13 @@ type Config struct {
 // whether this one runs a server at all, which peers it clusters with, and which
 // servers it connects to. It leaves DataDir and credentials for the composer,
 // which knows the runtime data path and reads secrets from files.
-func DefaultConfig(descriptor deployment.Descriptor, active bool) (Config, error) {
+//
+// It takes no process role. The machine has one NATS topology, and the primary
+// and standby processes are mutually exclusive owners of it: a standby that
+// derived its own endpoint would connect to an address no server is listening
+// on, because the process that owns the fence is serving on the machine's.
+// Turning a client-only standby into one is the composer's job, not this one's.
+func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	ips, err := siteIPs(descriptor)
 	if err != nil {
 		return Config{}, err
@@ -124,10 +129,7 @@ func DefaultConfig(descriptor deployment.Descriptor, active bool) (Config, error
 	storage := StorageNodes(slices.Sorted(maps.Keys(ips)))
 	hostsStorage := slices.Contains(storage, descriptor.Machine)
 
-	nats := descriptor.Slots.Primary.EventFabric.Nats
-	if !active && descriptor.Slots.Standby != nil {
-		nats = descriptor.Slots.Standby.EventFabric.Nats
-	}
+	nats := descriptor.EventFabric.Nats
 
 	cfg := Config{
 		ClusterName:     string(eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)),
@@ -147,7 +149,6 @@ func DefaultConfig(descriptor deployment.Descriptor, active bool) (Config, error
 		cfg.ServerName = descriptor.Machine
 		cfg.ClientAddress = nats.ClientAddress
 		cfg.ClusterAddress = nats.ClusterAddress
-		cfg.MonitorAddress = nats.MonitorAddress
 	}
 	return cfg, nil
 }
@@ -252,13 +253,12 @@ func (c Config) validateServer() error {
 	for what, addr := range map[string]string{
 		"client address":  c.ClientAddress,
 		"cluster address": c.ClusterAddress,
-		"monitor address": c.MonitorAddress,
 	} {
 		if err := validateAddress(what, addr); err != nil {
 			return err
 		}
 	}
-	if err := uniqueAddresses(c.ClientAddress, c.ClusterAddress, c.MonitorAddress); err != nil {
+	if err := uniqueAddresses(c.ClientAddress, c.ClusterAddress); err != nil {
 		return err
 	}
 	for _, route := range c.Routes {
@@ -305,7 +305,7 @@ func (c Config) validateStorage() error {
 func (c Config) validateCredentials() error {
 	all := slices.Concat(c.Servers, c.Routes)
 	if c.HostsStorage {
-		all = append(all, c.ClientAddress, c.ClusterAddress, c.MonitorAddress)
+		all = append(all, c.ClientAddress, c.ClusterAddress)
 	}
 	exposed := false
 	for _, addr := range all {

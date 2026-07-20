@@ -20,28 +20,16 @@ func validDescriptor() deployment.Descriptor {
 		Services:    []string{"sensor-services"},
 		Features:    deployment.Features{Chaos: true},
 		Slots: deployment.Slots{
-			Primary: deployment.Slot{
-				EventFabric: deployment.SlotEventFabric{
-					Nats: deployment.EventFabricNats{
-						ClientAddress:  "10.0.1.10:4222",
-						ClusterAddress: "10.0.1.10:6222",
-						MonitorAddress: "127.0.0.1:8222",
-						Servers:        []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
-					},
-				},
-			},
-			Standby: &deployment.Slot{
-				EventFabric: deployment.SlotEventFabric{
-					Nats: deployment.EventFabricNats{
-						ClientAddress:  "10.0.1.10:4223",
-						ClusterAddress: "10.0.1.10:6223",
-						MonitorAddress: "127.0.0.1:8223",
-						Servers:        []string{"10.0.1.10:4223", "10.0.1.11:4223", "10.0.1.12:4223"},
-					},
-				},
-			},
+			Primary: deployment.Slot{Disabled: false},
+			Standby: deployment.Slot{Disabled: false},
 		},
 		EventFabric: deployment.EventFabric{
+			Nats: deployment.EventFabricNats{
+				ClientAddress:  "10.0.1.10:4222",
+				ClusterAddress: "10.0.1.10:6222",
+				Routes:         []string{"10.0.1.11:6222", "10.0.1.12:6222"},
+				Servers:        []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
+			},
 			Peers: []deployment.EventFabricPeer{
 				{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
 				{Site: "north", Machine: "historian", IP: "10.0.1.12"},
@@ -127,29 +115,60 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			`event fabric peers are not ordered by machine: "gateway" after "historian"`,
 		},
 		{
-			"missing primary nats client_address",
-			func(d *deployment.Descriptor) { d.Slots.Primary.EventFabric.Nats.ClientAddress = "" },
-			"slots.primary.event_fabric.nats.client_address is required",
+			"disabled primary",
+			func(d *deployment.Descriptor) { d.Slots.Primary.Disabled = true },
+			"slots.primary.disabled: a machine must deploy a primary process",
 		},
 		{
-			"missing primary nats cluster_address",
-			func(d *deployment.Descriptor) { d.Slots.Primary.EventFabric.Nats.ClusterAddress = "" },
-			"slots.primary.event_fabric.nats.cluster_address is required",
+			"missing client_address",
+			func(d *deployment.Descriptor) { d.EventFabric.Nats.ClientAddress = "" },
+			"event_fabric.nats.client_address is required",
 		},
 		{
-			"missing primary nats monitor_address",
-			func(d *deployment.Descriptor) { d.Slots.Primary.EventFabric.Nats.MonitorAddress = "" },
-			"slots.primary.event_fabric.nats.monitor_address is required",
+			"invalid client_address",
+			func(d *deployment.Descriptor) { d.EventFabric.Nats.ClientAddress = "no-port" },
+			"event_fabric.nats.client_address:",
 		},
 		{
-			"missing primary nats servers",
-			func(d *deployment.Descriptor) { d.Slots.Primary.EventFabric.Nats.Servers = nil },
-			"slots.primary.event_fabric.nats.servers: at least one server is required",
+			"missing cluster_address",
+			func(d *deployment.Descriptor) { d.EventFabric.Nats.ClusterAddress = "" },
+			"event_fabric.nats.cluster_address is required",
 		},
 		{
-			"missing standby nats client_address",
-			func(d *deployment.Descriptor) { d.Slots.Standby.EventFabric.Nats.ClientAddress = "" },
-			"slots.standby.event_fabric.nats.client_address is required",
+			"missing servers",
+			func(d *deployment.Descriptor) { d.EventFabric.Nats.Servers = nil },
+			"event_fabric.nats.servers: at least one server is required",
+		},
+		{
+			"duplicate server",
+			func(d *deployment.Descriptor) {
+				d.EventFabric.Nats.Servers = append(d.EventFabric.Nats.Servers, d.EventFabric.Nats.Servers[1])
+			},
+			`event_fabric.nats.servers: "10.0.1.11:4222" is listed twice`,
+		},
+		{
+			"duplicate route",
+			func(d *deployment.Descriptor) {
+				d.EventFabric.Nats.Routes = append(d.EventFabric.Nats.Routes, d.EventFabric.Nats.Routes[0])
+			},
+			`event_fabric.nats.routes: "10.0.1.11:6222" is listed twice`,
+		},
+		{
+			"route points at this machine",
+			func(d *deployment.Descriptor) {
+				d.EventFabric.Nats.Routes[0] = d.EventFabric.Nats.ClusterAddress
+			},
+			`event_fabric.nats.routes: "10.0.1.10:6222" is this machine itself`,
+		},
+		{
+			// A storage machine that does not list itself first would send its
+			// own traffic to a peer while its local server is up.
+			"storage machine does not list itself first",
+			func(d *deployment.Descriptor) {
+				d.EventFabric.Nats.Servers[0], d.EventFabric.Nats.Servers[1] =
+					d.EventFabric.Nats.Servers[1], d.EventFabric.Nats.Servers[0]
+			},
+			"a storage machine must list its own client address",
 		},
 	}
 	for _, tc := range tests {
@@ -162,9 +181,56 @@ func TestDescriptorValidateFailures(t *testing.T) {
 }
 
 // TestDescriptorValidateAcceptsOneMemberFabric checks a single-machine site is a
-// valid deployment: it forms a fabric with itself and no peers.
+// valid deployment: it forms a fabric with itself and no peers. It stores the
+// journal alone, so it has no peer server to route to.
 func TestDescriptorValidateAcceptsOneMemberFabric(t *testing.T) {
 	d := validDescriptor()
 	d.EventFabric.Peers = nil
+	d.EventFabric.Nats.Routes = []string{}
+	d.EventFabric.Nats.Servers = []string{"10.0.1.10:4222"}
+	require.NoError(t, d.Validate())
+}
+
+// TestDescriptorValidateRejectsRoutesWithoutACluster checks a machine cannot
+// carry routes its site's storage selection does not justify.
+//
+// Both shapes are rejected for the same reason: a cluster listener is bound
+// because routes exist, so a route resolved where no peer server runs would open
+// a port nothing can connect to.
+func TestDescriptorValidateRejectsRoutesWithoutACluster(t *testing.T) {
+	t.Run("non-storage machine", func(t *testing.T) {
+		d := validDescriptor()
+		// A fourth machine sorts after the first three, so it stores nothing.
+		d.Machine = "zulu"
+		d.IP = "10.0.1.20"
+		d.EventFabric.Nats.ClientAddress = "10.0.1.20:4222"
+		d.EventFabric.Nats.ClusterAddress = "10.0.1.20:6222"
+		d.EventFabric.Peers = append(d.EventFabric.Peers,
+			deployment.EventFabricPeer{Site: "north", Machine: "sensor", IP: "10.0.1.10"})
+		require.ErrorContains(t, d.Validate(),
+			"a machine that does not store the journal has no cluster to route to")
+	})
+
+	t.Run("site with one storage machine", func(t *testing.T) {
+		d := validDescriptor()
+		d.EventFabric.Peers = nil
+		d.EventFabric.Nats.Servers = []string{"10.0.1.10:4222"}
+		require.ErrorContains(t, d.Validate(),
+			"a site with 1 storage machine(s) has no routes")
+	})
+}
+
+// TestDescriptorValidateAcceptsNonStorageMachine checks a machine that stores
+// nothing is still a valid deployment: it knows every storage server, lists none
+// of its own addresses among them, and binds nothing.
+func TestDescriptorValidateAcceptsNonStorageMachine(t *testing.T) {
+	d := validDescriptor()
+	d.Machine = "zulu"
+	d.IP = "10.0.1.20"
+	d.EventFabric.Nats.ClientAddress = "10.0.1.20:4222"
+	d.EventFabric.Nats.ClusterAddress = "10.0.1.20:6222"
+	d.EventFabric.Nats.Routes = []string{}
+	d.EventFabric.Peers = append(d.EventFabric.Peers,
+		deployment.EventFabricPeer{Site: "north", Machine: "sensor", IP: "10.0.1.10"})
 	require.NoError(t, d.Validate())
 }

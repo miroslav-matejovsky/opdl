@@ -26,9 +26,45 @@
 //     journal storage is unusable, which must refuse to serve.
 //   - warm_standby_test.go launches the packaged primary and standby, forces and
 //     gracefully hands ownership over repeatedly, checks preferred-primary
-//     reclamation and full shutdown, and records timing and memory baselines.
+//     reclamation and full shutdown, proves both processes share one machine
+//     endpoint, and records timing and memory baselines.
+//   - four_machine_storage_test.go is the three-storage-node topology proof: four
+//     machines from one blueprint, of which exactly the first three by sorted
+//     name store the journal and bind a cluster listener while the fourth is
+//     client-only, publication and replay across machines, continued service
+//     after a storage machine stops, and its rejoin onto its own storage.
 //   - dotnet_sdk_e2e_test.go is the whole thing through the generated .NET SDK:
 //     the builder, two platform processes, a real site journal, and a consumer.
+//
+// # Where the NATS ports come from
+//
+// A scenario builds from a rendered blueprint, not from checked-in HCL. The
+// harness reserves free client and cluster ports on each machine's own loopback
+// address, renders them into a temporary project.hcl through
+// testdata/project.hcl.tmpl, and builds that. The reservations are held through
+// rendering and building and released immediately before the first process that
+// needs to bind them.
+//
+// This matters because it is the same contract a customer build uses. NATS
+// endpoints are deployment topology: they are authored as ports in the blueprint
+// and compiled into each machine's descriptor, and the runtime configuration
+// cannot set them at all. An earlier harness passed them as runtime overrides
+// instead, which exercised a path no deployment has and is what allowed a warm
+// standby defect to survive a passing suite.
+//
+// Fixed ports in checked-in HCL would not do either: several machines share one
+// host and a developer's machine may already hold 4222. The machine names,
+// addresses, and standby policies live in the harness's fixture model, which is
+// their single source; only the ports are decided per run.
+//
+// # Proving what does not listen
+//
+// Scenarios assert the absence of a listener through the runtime's own effective
+// configuration output and the built artifacts, not by scanning the operating
+// system's sockets. A socket scan is a flaky proof: it cannot distinguish a port
+// this machine opened from one another test or a local process holds. The
+// startup line naming each process's composed endpoints, together with unit
+// tests of the embedded server options, is a deterministic contract instead.
 //
 // # Two machines and a machine that is not there
 //

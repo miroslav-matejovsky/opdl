@@ -51,7 +51,7 @@ func testConfig(t *testing.T) Config {
 // lives in dir, so a restart can reopen the same journal.
 func configForDir(t *testing.T, dir string) Config {
 	t.Helper()
-	res, err := testnet.Reserve(t.Context(), 3)
+	res, err := testnet.Reserve(t.Context(), 2)
 	require.NoError(t, err)
 	require.NoError(t, res.Release())
 	addrs := res.Addresses()
@@ -60,7 +60,6 @@ func configForDir(t *testing.T, dir string) Config {
 		ClusterName:     "test",
 		ClientAddress:   addrs[0],
 		ClusterAddress:  addrs[1],
-		MonitorAddress:  addrs[2],
 		Servers:         []string{addrs[0]},
 		HostsStorage:    true,
 		DataDir:         dir,

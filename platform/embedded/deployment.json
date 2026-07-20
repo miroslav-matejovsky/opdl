@@ -1,11 +1,11 @@
 {
   "platform": "opdl",
-  "project": "mock",
+  "project": "four-machine",
   "environment": "development",
   "site": "local",
-  "machine": "mock",
+  "machine": "node-c",
   "role": "all-in-one",
-  "ip": "127.0.0.1",
+  "ip": "127.0.0.3",
   "services": [
     "core-services"
   ],
@@ -14,20 +14,42 @@
   },
   "slots": {
     "primary": {
-      "event_fabric": {
-        "nats": {
-          "client_address": "127.0.0.1:4222",
-          "cluster_address": "127.0.0.1:6222",
-          "monitor_address": "127.0.0.1:8222",
-          "routes": null,
-          "servers": [
-            "127.0.0.1:4222"
-          ]
-        }
-      }
+      "disabled": false
+    },
+    "standby": {
+      "disabled": true
     }
   },
   "event_fabric": {
-    "peers": []
+    "nats": {
+      "client_address": "127.0.0.3:58057",
+      "cluster_address": "127.0.0.3:58058",
+      "routes": [
+        "127.0.0.1:58054",
+        "127.0.0.2:58056"
+      ],
+      "servers": [
+        "127.0.0.3:58057",
+        "127.0.0.1:58053",
+        "127.0.0.2:58055"
+      ]
+    },
+    "peers": [
+      {
+        "site": "local",
+        "machine": "node-a",
+        "ip": "127.0.0.1"
+      },
+      {
+        "site": "local",
+        "machine": "node-b",
+        "ip": "127.0.0.2"
+      },
+      {
+        "site": "local",
+        "machine": "node-d",
+        "ip": "127.0.0.4"
+      }
+    ]
   }
 }

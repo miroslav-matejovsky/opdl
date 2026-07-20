@@ -11,26 +11,26 @@ import (
 )
 
 // serverOptions translates the adapter's configuration into embedded server
-// options. It enables JetStream only on a storage node, configures the cluster
-// listener and routes only when the site has peers, and binds monitoring where
-// configured. The server's own logs are silenced; the platform reports Event
-// Fabric lifecycle through its own journal instead.
+// options. It enables JetStream only on a storage node and configures the
+// cluster listener and routes only when the site has peers to route to. The
+// server's own logs are silenced; the platform reports Event Fabric lifecycle
+// through its own journal instead.
+//
+// No monitoring listener is configured. HTTPPort and HTTPSPort are left at zero,
+// which is what makes the server start none: the runtime reads connection,
+// journal high-water, projection progress, and lag through the Event Fabric
+// client API and writes them to its own status files, so a second unauthenticated
+// HTTP surface would add an open port without adding a signal.
 func serverOptions(cfg Config) (*server.Options, error) {
 	clientHost, clientPort, err := splitHostPort(cfg.ClientAddress)
 	if err != nil {
 		return nil, fmt.Errorf("nats: client address: %w", err)
-	}
-	monitorHost, monitorPort, err := splitHostPort(cfg.MonitorAddress)
-	if err != nil {
-		return nil, fmt.Errorf("nats: monitor address: %w", err)
 	}
 
 	opts := &server.Options{
 		ServerName: cfg.ServerName,
 		Host:       clientHost,
 		Port:       clientPort,
-		HTTPHost:   monitorHost,
-		HTTPPort:   monitorPort,
 		NoLog:      true,
 		NoSigs:     true,
 		JetStream:  cfg.HostsStorage,
@@ -42,6 +42,10 @@ func serverOptions(cfg Config) (*server.Options, error) {
 		opts.Username = cfg.Username
 		opts.Password = cfg.Password
 	}
+	// The cluster listener is conditional on having somewhere to route. A
+	// configured cluster port is not permission to bind it: on a site whose
+	// topology selects one storage node there is no peer server, so binding it
+	// would open a port nothing can connect to.
 	if len(cfg.Routes) > 0 {
 		clusterHost, clusterPort, err := splitHostPort(cfg.ClusterAddress)
 		if err != nil {

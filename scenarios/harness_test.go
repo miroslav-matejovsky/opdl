@@ -7,13 +7,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -47,6 +50,148 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+// machineFixture is one machine of a scenario blueprint: its identity, the
+// loopback address it deploys on, and its local redundancy policy.
+//
+// Every fixture states the standby policy explicitly. The blueprint contract
+// requires it, and a scenario that let it default would be testing a decision
+// nobody made.
+type machineFixture struct {
+	name string
+	ip   string
+	// standbyDisabled opts the machine out of a second local process. Scenarios
+	// about site coordination disable it so a failure is about the site rather
+	// than about local redundancy; the warm standby scenario enables it.
+	standbyDisabled bool
+}
+
+// projectFixtures are the blueprints scenarios build from, keyed by project.
+//
+// The fixture model is the single source of each machine's name, address, and
+// standby policy; only the NATS ports are decided per run. Keeping the machines
+// here rather than in checked-in HCL is what lets the harness reserve ports on
+// the right loopback address before rendering the blueprint that names them.
+var projectFixtures = map[string][]machineFixture{
+	// One machine, one process. The base scenario for build, run, and restart.
+	"scenario": {
+		{name: "node", ip: "127.0.0.1", standbyDisabled: true},
+	},
+	// One machine running both local processes, for the manifest launch contract
+	// and the warm standby failover scenario.
+	"manifest-contract": {
+		{name: "node", ip: "127.0.0.1", standbyDisabled: false},
+	},
+	// Two machines in one site: the smallest topology that forms a real fabric.
+	// Both disable the standby so the scenario isolates site coordination from
+	// local process redundancy.
+	"two-machine": {
+		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
+		{name: "node-b", ip: "127.0.0.2", standbyDisabled: true},
+	},
+	// Four machines in one site: three store the journal and route to each other,
+	// and the fourth is a client of theirs. It is the topology that proves why the
+	// cluster port exists and that only the selected three bind it.
+	"four-machine": {
+		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
+		{name: "node-b", ip: "127.0.0.2", standbyDisabled: true},
+		{name: "node-c", ip: "127.0.0.3", standbyDisabled: true},
+		{name: "node-d", ip: "127.0.0.4", standbyDisabled: true},
+	},
+}
+
+// renderedMachine is one machine's template data: its fixture identity plus the
+// ports reserved for this run.
+type renderedMachine struct {
+	Name            string
+	IP              string
+	ClientPort      int
+	ClusterPort     int
+	StandbyDisabled bool
+}
+
+// renderedProject is the blueprint template's data.
+type renderedProject struct {
+	Name     string
+	Site     string
+	Machines []renderedMachine
+}
+
+// natsPorts is one machine's reserved NATS ports and the addresses they resolve
+// to, kept so a scenario can assert what the deployment should have derived.
+type natsPorts struct {
+	client  string
+	cluster string
+}
+
+// stageBlueprint reserves each machine's NATS ports and renders the project's
+// blueprint into a temporary blueprint root.
+//
+// The reservations are held, not released. They stay open through rendering and
+// building so nothing else on the host can take a port while the blueprint that
+// names it is being compiled into a binary. The returned release is called
+// immediately before the first process that has to bind those ports starts.
+func stageBlueprint(t *testing.T, project string) (root string, ports map[string]natsPorts, release func()) {
+	t.Helper()
+	fixtures, ok := projectFixtures[project]
+	require.Truef(t, ok, "no blueprint fixture for project %q", project)
+
+	data := renderedProject{Name: project, Site: scenarioSite}
+	ports = make(map[string]natsPorts, len(fixtures))
+	var reservations []*testnet.Reservation
+	t.Cleanup(func() {
+		for _, r := range reservations {
+			_ = r.Release()
+		}
+	})
+
+	for _, fixture := range fixtures {
+		// Reserve on this machine's own loopback address. A port is only free per
+		// interface, so reserving on 127.0.0.1 would say nothing about 127.0.0.2.
+		res, err := testnet.ReserveOn(t.Context(), fixture.ip, 2)
+		require.NoError(t, err)
+		reservations = append(reservations, res)
+
+		addrs := res.Addresses()
+		client, cluster := addrs[0], addrs[1]
+		data.Machines = append(data.Machines, renderedMachine{
+			Name:            fixture.name,
+			IP:              fixture.ip,
+			ClientPort:      portOf(t, client),
+			ClusterPort:     portOf(t, cluster),
+			StandbyDisabled: fixture.standbyDisabled,
+		})
+		ports[fixture.name] = natsPorts{client: client, cluster: cluster}
+	}
+
+	root = filepath.Join(t.TempDir(), "blueprints")
+	projectDir := filepath.Join(root, project)
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+
+	tmpl, err := template.ParseFiles(filepath.Join("testdata", "project.hcl.tmpl"))
+	require.NoError(t, err)
+	var rendered bytes.Buffer
+	require.NoError(t, tmpl.Execute(&rendered, data))
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "project.hcl"), rendered.Bytes(), 0o644))
+
+	// Release is idempotent, so the cleanup above remains a safety net for a
+	// scenario that fails before it gets this far.
+	return root, ports, func() {
+		for _, r := range reservations {
+			require.NoError(t, r.Release())
+		}
+	}
+}
+
+// portOf returns the numeric port of a host:port address.
+func portOf(t *testing.T, addr string) int {
+	t.Helper()
+	_, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	number, err := strconv.Atoi(port)
+	require.NoError(t, err)
+	return number
 }
 
 // buildProject drives the builder CLI to build every machine of a blueprint into
@@ -109,20 +254,25 @@ func readManifest(t *testing.T, binaryPath string) packageManifest {
 	return manifest
 }
 
-// sockets are one machine's reserved addresses and its journal storage.
+// sockets are one machine's addresses and its local directories.
 //
-// A deployment derives all of these from the machine's own IP on fixed ports.
-// A scenario cannot: several machines share one host, and a developer's machine
-// may already be using those ports. So the harness reserves ephemeral ports and
-// hands them to the platform as runtime overrides, which move sockets and
-// nothing else. Which machine a process is remains what it was built with.
+// Only api, dataDir, and instanceDir are runtime settings: they are the
+// machine's own concerns, and a site owns them. The client and cluster addresses
+// are not settings at all here. They were rendered into the blueprint before the
+// build and are carried only so a scenario can assert what the deployment should
+// have derived from them.
+//
+// There is no monitor address. The platform runs no NATS monitoring listener;
+// its status files are the local operational surface.
 type sockets struct {
 	api         string
-	client      string
-	cluster     string
-	monitor     string
 	dataDir     string
 	instanceDir string
+
+	// client and cluster are the addresses the blueprint was rendered with, for
+	// diagnostics and assertions only. Nothing writes them to a config file.
+	client  string
+	cluster string
 }
 
 // site is the machines of one built project under a scenario's control.
@@ -139,75 +289,68 @@ type site struct {
 	machines []*machine
 }
 
-// prepareSite builds nothing and starts nothing: it reserves each named
-// machine's sockets and storage, and writes each one a configuration that routes
-// to the others.
-func prepareSite(t *testing.T, outDir, workDir, project string, names ...string) *site {
+// deploySite renders the project's blueprint on reserved ports, builds every
+// machine from it, and prepares each one to run.
+//
+// It replaces the older split between building and preparing because the two are
+// no longer independent: the NATS ports are blueprint values now, so they must be
+// chosen before the build rather than handed to the runtime after it. That is the
+// point of the change. A scenario exercises the same contract a customer build
+// does, instead of a runtime override path that no deployment uses.
+func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project string) *site {
 	t.Helper()
+
+	blueprints, ports, releasePorts := stageBlueprint(t, project)
+	buildProject(ctx, t, blueprints, outDir, project)
+
 	s := &site{project: project, outDir: outDir, workDir: workDir}
-
-	// Every address is reserved before any is released, so no two machines of the
-	// site are handed the same port.
-	res, err := testnet.Reserve(t.Context(), 4*len(names))
+	// The API address stays a runtime setting: it is the machine's own public
+	// endpoint, not site topology, so a site may move it without a rebuild.
+	fixtures := projectFixtures[project]
+	api, err := testnet.Reserve(t.Context(), len(fixtures))
 	require.NoError(t, err)
-	require.NoError(t, res.Release())
-	addrs := res.Addresses()
-	reserved := make([]sockets, len(names))
-	for i, name := range names {
-		reserved[i] = sockets{
-			api:         addrs[4*i],
-			client:      addrs[4*i+1],
-			cluster:     addrs[4*i+2],
-			monitor:     addrs[4*i+3],
-			dataDir:     filepath.Join(workDir, "nats-"+name),
-			instanceDir: filepath.Join(workDir, "instance-"+name),
-		}
+	require.NoError(t, api.Release())
+	apiAddrs := api.Addresses()
+
+	for i, fixture := range fixtures {
+		s.machines = append(s.machines, prepareMachine(t, s, fixture.name, sockets{
+			api:         apiAddrs[i],
+			dataDir:     filepath.Join(workDir, "nats-"+fixture.name),
+			instanceDir: filepath.Join(workDir, "instance-"+fixture.name),
+			client:      ports[fixture.name].client,
+			cluster:     ports[fixture.name].cluster,
+		}))
 	}
 
-	// The site's storage nodes are chosen by sorted machine name, and a scenario
-	// declares its machines in that order, so the first is the storage node of a
-	// site smaller than three machines. Only storage nodes run a server; the rest
-	// reach the journal as clients of theirs.
-	//
-	// The harness has to know which is which because it hands out the addresses.
-	// It derives that the same way the platform does rather than being told,
-	// so a scenario cannot quietly disagree with the deployment about who stores
-	// what.
-	storage := storageNodes(names)
-	servers := make([]string, 0, len(storage))
-	for _, i := range storage {
-		servers = append(servers, reserved[i].client)
-	}
-
-	for i, name := range names {
-		var routes []string
-		if slices.Contains(storage, i) {
-			routes = make([]string, 0, len(storage)-1)
-			for _, j := range storage {
-				if j != i {
-					routes = append(routes, reserved[j].cluster)
-				}
-			}
-		}
-		s.machines = append(s.machines, prepareMachine(t, s, name, reserved[i], routes, servers))
-	}
+	// The blueprint is built, so the ports it named are now the deployment's.
+	// Releasing them here is what lets the first machine bind them.
+	releasePorts()
 	return s
 }
 
-// storageNodes returns the indexes of the machines that store the site journal,
-// mirroring the platform's own rule: one storage node for a site smaller than
+// storageMachines returns the names of the machines that store the site journal,
+// mirroring the platform's own rule: one storage machine for a site smaller than
 // three machines, the first three by sorted name otherwise.
-func storageNodes(names []string) []int {
+//
+// A scenario derives this the same way the platform does rather than being told,
+// so it cannot quietly disagree with the deployment about who stores what.
+func storageMachines(names []string) []string {
 	sorted := slices.Sorted(slices.Values(names))
 	count := 1
 	if len(sorted) > 2 {
 		count = 3
 	}
-	indexes := make([]int, 0, count)
-	for _, name := range sorted[:min(count, len(sorted))] {
-		indexes = append(indexes, slices.Index(names, name))
+	return sorted[:min(count, len(sorted))]
+}
+
+// machineNames returns the names of a project's fixture machines.
+func machineNames(project string) []string {
+	fixtures := projectFixtures[project]
+	names := make([]string, 0, len(fixtures))
+	for _, fixture := range fixtures {
+		names = append(names, fixture.name)
 	}
-	return indexes
+	return names
 }
 
 // machine returns one prepared machine of the site by name.
@@ -233,6 +376,26 @@ func (s *site) startAll(ctx context.Context, t *testing.T) {
 	t.Helper()
 	for _, m := range s.machines {
 		m.start(ctx, t)
+		waitForAPI(ctx, t, m)
+	}
+}
+
+// startTogether starts the named machines at once and only then waits for each
+// to serve.
+//
+// A site with three storage machines cannot be started one at a time. Their
+// journal's metadata group needs a quorum of the three servers before it can
+// create the stream, so the first machine cannot finish starting until the other
+// two are already running. Waiting for each in turn would deadlock on the first.
+func (s *site) startTogether(ctx context.Context, t *testing.T, names ...string) {
+	t.Helper()
+	started := make([]*machine, 0, len(names))
+	for _, name := range names {
+		m := s.machine(t, name)
+		m.start(ctx, t)
+		started = append(started, m)
+	}
+	for _, m := range started {
 		waitForAPI(ctx, t, m)
 	}
 }
@@ -348,6 +511,14 @@ func (p *managedProcess) stopGracefully(t *testing.T) {
 
 func (p *managedProcess) logs() string { return p.output.String() }
 
+// exitResult returns the complete output and exit error of a process that has
+// already finished. Waiting on done joins the exec copier goroutines, so the
+// buffer is only complete once it has closed.
+func (p *managedProcess) exitResult() (string, error) {
+	<-p.done
+	return p.output.String(), p.err
+}
+
 func (m *machine) statusPath(role string) string {
 	machineDir := strings.Join([]string{m.project, "development", scenarioSite, m.name}, "-")
 	return filepath.Join(m.sockets.instanceDir, machineDir, "process-"+role+".status")
@@ -365,24 +536,73 @@ func (m *machine) readStatus(role string) (processStatus, error) {
 	return status, nil
 }
 
+// waitStatus blocks until a process reports the expected lifecycle state.
+//
+// The bound is not weakened for a slow standby, and a state reached with a
+// non-empty LastError is not accepted. A standby that reports StateStandby while
+// still failing to reach the journal is exactly the failure this scenario exists
+// to catch, so treating it as success would make the scenario pass for the wrong
+// reason.
+//
+// A connection error while the process is alive is a retryable "not yet" and
+// polling continues. A process that has exited will never reach any state, so
+// that fails immediately with its output rather than burning the whole timeout.
 func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string, promotable bool) processStatus {
 	t.Helper()
 	var last processStatus
-	require.Eventually(t, func() bool {
+	var readErr error
+	deadline := time.Now().Add(apiWaitTimeout)
+	for {
 		if !process.running() {
-			return false
+			output, _ := process.exitResult()
+			require.FailNowf(t, process.role+" exited before reaching "+state,
+				"%s", statusDiagnostics(m, process, state, last, readErr, output))
 		}
 		status, err := m.readStatus(process.role)
-		if err != nil {
-			return false
+		readErr = err
+		if err == nil {
+			last = status
+			if status.Role == process.role && status.PID == process.pid() && status.State == state &&
+				(!promotable || status.Promotable) && status.LastError == "" {
+				return last
+			}
 		}
-		last = status
-		return status.Role == process.role && status.PID == process.pid() && status.State == state &&
-			(!promotable || status.Promotable) && status.LastError == ""
-	}, apiWaitTimeout, apiPollInterval,
-		"%s process %d never reached %s; last status %+v; logs:\n%s",
-		process.role, process.pid(), state, &last, process.logs())
-	return last
+		if time.Now().After(deadline) {
+			require.FailNowf(t, process.role+" never reached "+state,
+				"%s", statusDiagnostics(m, process, state, last, readErr, process.logs()))
+		}
+		time.Sleep(apiPollInterval)
+	}
+}
+
+// statusDiagnostics renders why a process never reached a state: what it last
+// reported, whether a status file existed at all, the endpoints it composed, and
+// its output.
+//
+// The distinction between a missing status file and a status that reports an
+// unreachable journal is the one worth preserving. The first means the process
+// never got far enough to write one; the second means it is running and cannot
+// reach the address it was told to use, which is a topology problem rather than a
+// startup one.
+func statusDiagnostics(m *machine, process *managedProcess, want string, last processStatus, readErr error, output string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "machine %s process %s wanted state %q\n", m.name, process.role, want)
+	fmt.Fprintf(&b, "status file: %s\n", m.statusPath(process.role))
+	switch {
+	case readErr != nil && os.IsNotExist(readErr):
+		b.WriteString("status: never written\n")
+	case readErr != nil:
+		fmt.Fprintf(&b, "status: unreadable: %v\n", readErr)
+	default:
+		fmt.Fprintf(&b, "status: %+v\n", last)
+		if last.LastError != "" {
+			fmt.Fprintf(&b, "status last error: %s\n", last.LastError)
+		}
+	}
+	fmt.Fprintf(&b, "expected event fabric endpoints: client=%s cluster=%s\n",
+		m.sockets.client, m.sockets.cluster)
+	fmt.Fprintf(&b, "logs:\n%s", output)
+	return b.String()
 }
 
 // prepareMachine writes a configuration file for one built machine without
@@ -393,13 +613,13 @@ func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string
 // offline for part of a scenario while something else is already configured to
 // call it, which is the only way to observe what the platform does about an
 // expected machine that is not there.
-func prepareMachine(t *testing.T, s *site, name string, reserved sockets, routes, servers []string) *machine {
+func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machine {
 	t.Helper()
 	binaryPath := machineBinary(s.outDir, s.project, name)
 	require.FileExists(t, binaryPath)
 
 	configPath := filepath.Join(s.workDir, "config-"+name+".toml")
-	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved, routes, servers), 0o644))
+	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved), 0o644))
 
 	return &machine{
 		project:    s.project,
@@ -413,13 +633,16 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets, routes
 	}
 }
 
-// platformConfig renders a platform configuration that pins every socket the
-// machine binds or reaches, and places its journal storage under the scenario's
-// own directory.
+// platformConfig renders a platform configuration holding only what a site
+// owns: where this machine answers, where its journal and coordination state
+// live, and its timeouts.
 //
-// Every list is explicit, including an empty one: an omitted list would keep the
-// addresses the descriptor derived, which on one host are the wrong ones.
-func platformConfig(reserved sockets, routes, servers []string) []byte {
+// It carries no NATS socket topology. Those addresses came from the blueprint
+// and are compiled into the machine's descriptor, and the runtime now rejects a
+// configuration file that sets them. That rejection is the point: a scenario
+// that could still override them would be exercising a path no deployment has,
+// which is what let the warm standby defect stay hidden.
+func platformConfig(reserved sockets) []byte {
 	return fmt.Appendf(nil, `address = %q
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
@@ -429,22 +652,7 @@ lag_bound = "30s"
 data_dir = %q
 startup_timeout = "30s"
 catch_up_timeout = "30s"
-client_address = %q
-cluster_address = %q
-monitor_address = %q
-routes = [%s]
-servers = [%s]
-`, reserved.api, filepath.ToSlash(reserved.instanceDir), filepath.ToSlash(reserved.dataDir),
-		reserved.client, reserved.cluster, reserved.monitor, quoteList(routes), quoteList(servers))
-}
-
-// quoteList renders addresses as a TOML array body.
-func quoteList(addrs []string) string {
-	quoted := make([]string, 0, len(addrs))
-	for _, addr := range addrs {
-		quoted = append(quoted, fmt.Sprintf("%q", addr))
-	}
-	return strings.Join(quoted, ", ")
+`, reserved.api, filepath.ToSlash(reserved.instanceDir), filepath.ToSlash(reserved.dataDir))
 }
 
 // start runs a prepared machine and registers its cleanup.

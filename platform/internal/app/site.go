@@ -87,7 +87,7 @@ type service struct {
 // follows the site's history without producing a decision or holding an
 // active-only capability.
 func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.ProcessRole) (*site, error) {
-	fabricCfg, err := natsConfig(descriptor, cfg, active)
+	fabricCfg, err := natsConfig(descriptor, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +98,7 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 	if !active {
 		fabricCfg = clientOnly(fabricCfg)
 	}
+	logEffectiveFabric(descriptor, fabricCfg)
 	// Open validates the configuration and probes the journal's storage before it
 	// binds a listener, so an unusable data directory or address fails here
 	// rather than half way through starting a server.
@@ -407,8 +408,13 @@ func (r *runner) failure() error {
 
 // natsConfig composes the Event Fabric adapter's configuration from the descriptor's
 // derived topology and runtime data paths/timeouts from the configuration file.
-func natsConfig(descriptor deployment.Descriptor, cfg *config.Config, active bool) (natsfabric.Config, error) {
-	fabricCfg, err := natsfabric.DefaultConfig(descriptor, active)
+//
+// It takes no process role. Every role on the machine composes the same
+// configuration from the same descriptor topology; only clientOnly distinguishes
+// a process that does not hold the fence, and it removes ownership rather than
+// selecting a different endpoint.
+func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabric.Config, error) {
+	fabricCfg, err := natsfabric.DefaultConfig(descriptor)
 	if err != nil {
 		return natsfabric.Config{}, err
 	}
@@ -446,14 +452,50 @@ func clientOnly(cfg natsfabric.Config) natsfabric.Config {
 		return cfg
 	}
 	cfg.HostsStorage = false
-	// cfg.Servers keeps the local server first and all peer storage servers after
-	// it. Peers let the standby remain caught up if the local active disappears.
+	// cfg.Servers is kept whole and unchanged: the local server first, then every
+	// peer storage server. That list is what the standby reaches the journal
+	// through, and its first entry is the address the local active process is
+	// serving on right now. Narrowing or substituting it here is exactly the bug
+	// this shape exists to prevent, because the standby would then wait on an
+	// address no process is listening on.
 	cfg.ClientAddress = ""
 	cfg.ClusterAddress = ""
-	cfg.MonitorAddress = ""
 	cfg.Routes = nil
 	cfg.DataDir = ""
 	return cfg
+}
+
+// logEffectiveFabric prints the Event Fabric endpoints this process actually
+// composed, before anything is bound or connected.
+//
+// It exists so the four cases a machine can be in are distinguishable from the
+// process output alone:
+//
+//	active storage server         endpoint=X binds=true  storage=true
+//	client-only local standby     endpoint=X binds=false storage=false, X in servers
+//	client-only non-storage node  endpoint=X binds=false storage=false, X not in servers
+//	storage node after promotion  endpoint=X binds=true  storage=true
+//
+// Those look alike in every other log line, and telling them apart after the
+// fact is what a failure to reach the journal actually needs. endpoint is the
+// machine's own address from the descriptor and is printed whether or not this
+// process binds it, so a standby and the active process it follows are visibly
+// talking about the same endpoint.
+//
+// Every value is a single token so the line can be parsed. No credential is
+// printed, and there is no monitor endpoint to print.
+func logEffectiveFabric(descriptor deployment.Descriptor, cfg natsfabric.Config) {
+	cluster := "none"
+	if len(cfg.Routes) > 0 {
+		cluster = cfg.ClusterAddress
+	}
+	routes := "none"
+	if len(cfg.Routes) > 0 {
+		routes = strings.Join(cfg.Routes, ",")
+	}
+	fmt.Printf("platform: event fabric configuration endpoint=%s binds=%t cluster=%s servers=%s routes=%s storage=%t replicas=%d\n",
+		descriptor.EventFabric.Nats.ClientAddress, cfg.ClientAddress != "", cluster,
+		strings.Join(cfg.Servers, ","), routes, cfg.HostsStorage, cfg.Replicas)
 }
 
 // nodeDataDir places this node's journal storage in its own subdirectory of the

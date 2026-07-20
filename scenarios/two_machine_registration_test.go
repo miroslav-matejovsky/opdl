@@ -2,7 +2,6 @@ package scenarios
 
 import (
 	"net/http"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -20,12 +19,8 @@ import (
 // the backlog — it finds the proposal in the retained journal and answers.
 func TestTwoMachineRegistration(t *testing.T) {
 	ctx := t.Context()
-	scenariosDir, err := filepath.Abs(".")
-	require.NoError(t, err)
 	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "two-machine")
-
-	deployment := prepareSite(t, outDir, t.TempDir(), "two-machine", "node-a", "node-b")
+	deployment := deploySite(ctx, t, outDir, t.TempDir(), "two-machine")
 	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
 	const request = `{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Billing","role":"Master"}`
 

@@ -34,12 +34,12 @@ func Run(args []string) error {
 
 	// Validate the explicit role before opening sockets or storage. Primary-only
 	// machines reject standby.
-	role, err := resolveRole(*instance, descriptor.Slots.Standby != nil)
+	role, err := resolveRole(*instance, !descriptor.Slots.Standby.Disabled)
 	if err != nil {
 		return err
 	}
 	fmt.Println(cfg.Summary())
-	fmt.Printf("    instance     role=%s standby=%t\n", role, descriptor.Slots.Standby != nil)
+	fmt.Printf("    instance     role=%s standby=%t\n", role, !descriptor.Slots.Standby.Disabled)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

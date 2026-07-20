@@ -3,7 +3,6 @@ package scenarios
 import (
 	"context"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,12 +16,8 @@ import (
 // registration assertions stay on the public API.
 func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	ctx := t.Context()
-	scenariosDir, err := filepath.Abs(".")
-	require.NoError(t, err)
 	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "manifest-contract")
-
-	deployment := prepareSite(t, outDir, t.TempDir(), "manifest-contract", "node")
+	deployment := deploySite(ctx, t, outDir, t.TempDir(), "manifest-contract")
 	node := deployment.machine(t, "node")
 	manifest := readManifest(t, node.binaryPath)
 	require.NotNil(t, manifest.Standby, "default policy must package a standby launch")
@@ -115,15 +110,120 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	require.False(t, primarySecond.running())
 	require.False(t, shutdownStandby.running())
 
-	standbyLogs := standby.logs()
-	clientOnly := strings.Index(standbyLogs, "storage=false")
-	activeStorage := strings.Index(standbyLogs, "storage=true")
-	require.NotEqual(t, -1, clientOnly, "standby never reported client-only composition:\n%s", standbyLogs)
-	require.Greater(t, activeStorage, clientOnly,
-		"storage opened before promotion or did not reopen after it:\n%s", standbyLogs)
+	// Every process of this machine has now exited, so its output is complete and
+	// safe to read.
+	assertSharedEndpoints(t, primary, standby)
 
 	t.Logf("warm standby baseline: catch-up=%s promotion=%s listener-unavailable=%s handover=%s standby-working-set=%d bytes",
 		catchUpTime, promotionTime, gap, handoverTime, standbyMemory)
+}
+
+// assertSharedEndpoints is the regression for the warm standby connection
+// failure.
+//
+// The defect was that the standby derived its own NATS configuration and got a
+// client address the active process was not serving on. Nothing was listening
+// there, so the standby retried forever and never became promotable, while every
+// log line about it looked ordinary. These assertions pin the property that makes
+// that impossible: the machine has one endpoint set, the standby connects to the
+// one the active process is serving on, and promotion rebinds that same address
+// rather than moving the site onto a second one.
+func assertSharedEndpoints(t *testing.T, primary, standby *managedProcess) {
+	t.Helper()
+
+	primaryFabrics := parseFabricConfigs(t, primary.role, primary.logs())
+	standbyFabrics := parseFabricConfigs(t, standby.role, standby.logs())
+	require.NotEmpty(t, primaryFabrics)
+	require.GreaterOrEqual(t, len(standbyFabrics), 2,
+		"the standby should report a client-only composition and then an active one after promotion:\n%s",
+		standby.logs())
+
+	active := primaryFabrics[0]
+	require.True(t, active.storage, "the primary owns the machine's storage:\n%s", primary.logs())
+	require.True(t, active.binds, "the primary binds the machine's NATS listener:\n%s", primary.logs())
+	require.NotEmpty(t, active.endpoint)
+
+	// The standby binds nothing while the primary holds the fence.
+	warm := standbyFabrics[0]
+	require.False(t, warm.storage, "the standby must not open the journal store:\n%s", standby.logs())
+	require.False(t, warm.binds, "the standby must bind no NATS listener:\n%s", standby.logs())
+	require.Equal(t, "none", warm.cluster, "the standby must bind no cluster listener:\n%s", standby.logs())
+
+	// It is nonetheless talking about the same machine endpoint, and reaches the
+	// journal through exactly the server list the active process is serving. This
+	// is the assertion the original defect would fail: the standby had its own
+	// address, and nothing was listening on it.
+	require.Equal(t, active.endpoint, warm.endpoint,
+		"the standby composed a different machine endpoint from the active process")
+	require.Equal(t, active.servers, warm.servers,
+		"the standby used a different server list from the active process")
+	require.Contains(t, warm.servers, warm.endpoint,
+		"a local standby follows the journal through its own machine's server")
+
+	// After promotion it owns the same endpoints the primary had, so nothing the
+	// rest of the site was told about this machine has changed.
+	promoted := standbyFabrics[len(standbyFabrics)-1]
+	require.True(t, promoted.storage, "the promoted process must own storage:\n%s", standby.logs())
+	require.True(t, promoted.binds, "the promoted process must bind the listener:\n%s", standby.logs())
+	require.Equal(t, active.endpoint, promoted.endpoint,
+		"promotion moved the machine's client endpoint")
+	require.Equal(t, active.cluster, promoted.cluster,
+		"promotion moved the machine's cluster endpoint")
+	require.Equal(t, active.servers, promoted.servers,
+		"promotion changed the machine's server list")
+}
+
+// fabricConfig is one effective Event Fabric configuration a process reported at
+// startup, before it bound or connected anything.
+type fabricConfig struct {
+	// endpoint is the machine's own client address from the descriptor. It is
+	// reported whether or not this process binds it, which is what lets a standby
+	// and the active process it follows be compared.
+	endpoint string
+	// binds reports whether this process opens the machine's NATS listener.
+	binds   bool
+	cluster string
+	servers string
+	routes  string
+	storage bool
+}
+
+// fabricConfigPrefix is the runtime's effective-configuration log line.
+const fabricConfigPrefix = "platform: event fabric configuration "
+
+// parseFabricConfigs extracts every effective Event Fabric configuration a
+// process reported, in the order it reported them.
+//
+// A scenario reads this from the process output rather than from a status file
+// because it is the only place the composed endpoints appear before anything is
+// bound. That ordering is what distinguishes a client-only standby from an
+// active storage server, and a promotion from a fresh start.
+func parseFabricConfigs(t *testing.T, role, logs string) []fabricConfig {
+	t.Helper()
+	var configs []fabricConfig
+	for _, line := range strings.Split(logs, "\n") {
+		line = strings.TrimSpace(line)
+		rest, found := strings.CutPrefix(line, fabricConfigPrefix)
+		if !found {
+			continue
+		}
+		fields := map[string]string{}
+		for _, field := range strings.Fields(rest) {
+			key, value, ok := strings.Cut(field, "=")
+			require.Truef(t, ok, "%s printed an unparsable configuration field %q", role, field)
+			fields[key] = value
+		}
+		configs = append(configs, fabricConfig{
+			endpoint: fields["endpoint"],
+			binds:    fields["binds"] == "true",
+			cluster:  fields["cluster"],
+			servers:  fields["servers"],
+			routes:   fields["routes"],
+			storage:  fields["storage"] == "true",
+		})
+	}
+	require.NotEmptyf(t, configs, "%s never reported its effective Event Fabric configuration:\n%s", role, logs)
+	return configs
 }
 
 func waitForManagedAPI(ctx context.Context, t *testing.T, machine *machine, process *managedProcess) {

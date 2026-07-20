@@ -8,8 +8,11 @@
 // directory. Every package is self-describing: it can be audited on the
 // customer premises without reference to the build environment.
 // The manifest declares the preferred primary launch directly and includes an
-// optional standby launch when the resolved machine policy enables it. Both use
-// the packaged binary and differ only by their explicit -instance argument.
+// optional standby launch when the descriptor's standby slot is not disabled.
+// Both use the packaged binary and differ only by their explicit -instance
+// argument. The decision is read from an explicit field rather than inferred
+// from an omitted one, so a package's process set always matches what its
+// blueprint stated.
 //
 // Because every machine shares the one embedded descriptor file, builds are
 // sequential: stage, compile, package, repeat. The placeholder descriptor

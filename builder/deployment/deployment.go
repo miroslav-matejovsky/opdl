@@ -3,6 +3,7 @@ package deployment
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -26,7 +27,8 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches carried onto the machine.
 	Features Features `json:"features"`
-	// Slots is the machine's primary and optional standby slot definition. It is always present.
+	// Slots is the machine's resolved primary and standby slot decision. Both
+	// records are always present.
 	Slots Slots `json:"slots"`
 	// EventFabric is the resolved Event Fabric topology for this machine.
 	EventFabric EventFabric `json:"event_fabric"`
@@ -37,22 +39,23 @@ type Features struct {
 	Chaos bool `json:"chaos"`
 }
 
-// Slots is a machine's resolved slot topology: the primary slot and optional standby slot.
-// It is always present in a generated descriptor, so a reader never has to infer
-// the default.
+// Slots is a machine's resolved slot topology. Both records are always present
+// and non-null, so a reader never infers a slot policy from an omitted field.
+//
+// The slots are process roles, not endpoint owners: they are mutually exclusive
+// owners of the machine's one set of Event Fabric endpoints, which is why the
+// resolved NATS topology lives on EventFabric rather than on a slot.
 type Slots struct {
-	Primary Slot  `json:"primary"`
-	Standby *Slot `json:"standby,omitempty"`
+	Primary Slot `json:"primary"`
+	Standby Slot `json:"standby"`
 }
 
-// Slot represents a process slot on the machine.
+// Slot is one process slot's resolved decision.
 type Slot struct {
-	EventFabric SlotEventFabric `json:"event_fabric"`
-}
-
-// SlotEventFabric holds the slot-specific Event Fabric adapter configurations.
-type SlotEventFabric struct {
-	Nats EventFabricNats `json:"nats"`
+	// Disabled reports that the slot's process is not deployed. It is always
+	// false for the primary: a machine with no primary process would deploy
+	// nothing that can serve.
+	Disabled bool `json:"disabled"`
 }
 
 // EventFabric is this machine's resolved view of the site's Event Fabric: the
@@ -66,6 +69,9 @@ type SlotEventFabric struct {
 // what it needs from these addresses, which is what keeps the transport
 // replaceable without changing what the builder produces.
 type EventFabric struct {
+	// Nats is the machine's one resolved NATS topology, shared by whichever
+	// process holds the machine fence.
+	Nats EventFabricNats `json:"nats"`
 	// Peers are the other Event Fabric members of this machine's site, ordered by
 	// machine name so every machine derives the same list. A machine never lists
 	// itself, and the fabric spans exactly one site: machines of another site,
@@ -75,15 +81,28 @@ type EventFabric struct {
 	Peers []EventFabricPeer `json:"peers"`
 }
 
-// EventFabricNats is this machine's explicit NATS configuration resolved from
-// the blueprint. It carries the exact addresses where the machine serves NATS
-// and connects to its peers.
+// EventFabricNats is the machine's resolved NATS topology: the addresses its own
+// server would bind, and the addresses it reaches the site's journal through.
+//
+// There is exactly one of these per machine. The primary and standby processes
+// are mutually exclusive fence owners, so they share it: promotion does not
+// change the address other machines were told to connect to.
 type EventFabricNats struct {
-	ClientAddress  string   `json:"client_address"`
-	ClusterAddress string   `json:"cluster_address"`
-	MonitorAddress string   `json:"monitor_address"`
-	Routes         []string `json:"routes"`
-	Servers        []string `json:"servers"`
+	// ClientAddress is where this machine's server serves the client protocol,
+	// derived from the machine ip and the authored client port. It is present on
+	// every machine; only a storage node binds it.
+	ClientAddress string `json:"client_address"`
+	// ClusterAddress is where this machine's server routes to the site's other
+	// storage nodes, derived from the machine ip and the authored cluster port.
+	// It is present on every machine; it is bound only when Routes is non-empty.
+	ClusterAddress string `json:"cluster_address"`
+	// Routes are the cluster addresses of the site's other storage nodes. It is
+	// empty for a non-storage machine and for a site with one storage node, which
+	// has no peer server to route to.
+	Routes []string `json:"routes"`
+	// Servers are the client addresses this machine reaches the journal through,
+	// ordered so a storage node lists its own address first.
+	Servers []string `json:"servers"`
 }
 
 // EventFabricPeer is one other Event Fabric member this machine expects to meet.
@@ -159,18 +178,20 @@ func (d Descriptor) validateEventFabric() error {
 		ips[peer.IP] = true
 		previous = peer.Machine
 	}
-	if err := validateSlotNats("slots.primary.event_fabric.nats", d.Slots.Primary.EventFabric.Nats); err != nil {
-		return err
+	if d.Slots.Primary.Disabled {
+		return fmt.Errorf("slots.primary.disabled: a machine must deploy a primary process")
 	}
-	if d.Slots.Standby != nil {
-		if err := validateSlotNats("slots.standby.event_fabric.nats", d.Slots.Standby.EventFabric.Nats); err != nil {
-			return err
-		}
-	}
-	return nil
+	return d.validateNats()
 }
 
-func validateSlotNats(prefix string, nats EventFabricNats) error {
+// validateNats checks the resolved NATS topology matches the site's storage
+// selection. The resolver derives all of it, so a violation here is a resolver
+// defect rather than an authoring mistake: it means a machine would boot
+// pointing at the wrong journal, binding a route it must not bind, or with no
+// server to connect to at all.
+func (d Descriptor) validateNats() error {
+	const prefix = "event_fabric.nats"
+	nats := d.EventFabric.Nats
 	if strings.TrimSpace(nats.ClientAddress) == "" {
 		return fmt.Errorf("%s.client_address is required", prefix)
 	}
@@ -183,26 +204,104 @@ func validateSlotNats(prefix string, nats EventFabricNats) error {
 	if err := validateAddress(nats.ClusterAddress); err != nil {
 		return fmt.Errorf("%s.cluster_address: %w", prefix, err)
 	}
-	if strings.TrimSpace(nats.MonitorAddress) == "" {
-		return fmt.Errorf("%s.monitor_address is required", prefix)
-	}
-	if err := validateAddress(nats.MonitorAddress); err != nil {
-		return fmt.Errorf("%s.monitor_address: %w", prefix, err)
-	}
 	if len(nats.Servers) == 0 {
 		return fmt.Errorf("%s.servers: at least one server is required", prefix)
-	}
-	for _, route := range nats.Routes {
-		if err := validateAddress(route); err != nil {
-			return fmt.Errorf("%s.routes: %w", prefix, err)
-		}
 	}
 	for _, server := range nats.Servers {
 		if err := validateAddress(server); err != nil {
 			return fmt.Errorf("%s.servers: %w", prefix, err)
 		}
 	}
+	if duplicate, found := firstDuplicate(nats.Servers); found {
+		return fmt.Errorf("%s.servers: %q is listed twice", prefix, duplicate)
+	}
+	for _, route := range nats.Routes {
+		if err := validateAddress(route); err != nil {
+			return fmt.Errorf("%s.routes: %w", prefix, err)
+		}
+		if route == nats.ClusterAddress {
+			return fmt.Errorf("%s.routes: %q is this machine itself", prefix, route)
+		}
+	}
+	if duplicate, found := firstDuplicate(nats.Routes); found {
+		return fmt.Errorf("%s.routes: %q is listed twice", prefix, duplicate)
+	}
+	return d.validateStorageTopology(prefix)
+}
+
+// validateStorageTopology checks the machine's listener ownership against the
+// storage selection the descriptor implies. The selection is derived from the
+// site membership the descriptor already carries, so the check needs nothing the
+// runtime does not also have.
+func (d Descriptor) validateStorageTopology(prefix string) error {
+	nats := d.EventFabric.Nats
+	storage := StorageMachines(d.siteMachines())
+	hostsStorage := slices.Contains(storage, d.Machine)
+
+	if hostsStorage {
+		// A storage node answers its own clients. Listing its own address first
+		// keeps its client on the local server while that server is up, so a
+		// promoted process does not route its own traffic through a peer.
+		if nats.Servers[0] != nats.ClientAddress {
+			return fmt.Errorf("%s.servers: a storage machine must list its own client address %q first, got %q",
+				prefix, nats.ClientAddress, nats.Servers[0])
+		}
+	} else if len(nats.Routes) > 0 {
+		return fmt.Errorf("%s.routes: a machine that does not store the journal has no cluster to route to", prefix)
+	}
+	// A site with one storage node has no peer server to route to, so binding a
+	// cluster listener there would open a port nothing can connect to.
+	if len(storage) < 2 && len(nats.Routes) > 0 {
+		return fmt.Errorf("%s.routes: a site with %d storage machine(s) has no routes", prefix, len(storage))
+	}
 	return nil
+}
+
+// siteMachines returns every machine of this machine's site, including itself.
+func (d Descriptor) siteMachines() []string {
+	machines := make([]string, 0, len(d.EventFabric.Peers)+1)
+	machines = append(machines, d.Machine)
+	for _, peer := range d.EventFabric.Peers {
+		machines = append(machines, peer.Machine)
+	}
+	return machines
+}
+
+// StorageMachines returns the machines of a site that host the site journal,
+// sorted by machine name: one for a site smaller than three machines, the first
+// three otherwise.
+//
+// The rule is deterministic by name so every machine of the site derives the
+// same set without coordinating. Three rather than two is what keeps the
+// journal's metadata group able to hold quorum when one member is lost.
+func StorageMachines(machines []string) []string {
+	sorted := slices.Clone(machines)
+	slices.Sort(sorted)
+	sorted = slices.Compact(sorted)
+	switch {
+	case len(sorted) == 0:
+		return nil
+	case len(sorted) <= smallSiteMax:
+		return sorted[:1]
+	default:
+		return sorted[:3]
+	}
+}
+
+// smallSiteMax is the largest site that runs one storage machine. A site with
+// three or more machines runs three.
+const smallSiteMax = 2
+
+// firstDuplicate returns the first repeated value in values.
+func firstDuplicate(values []string) (string, bool) {
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		if seen[value] {
+			return value, true
+		}
+		seen[value] = true
+	}
+	return "", false
 }
 
 func validateAddress(addr string) error {

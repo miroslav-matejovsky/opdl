@@ -326,6 +326,61 @@ func TestLoadReadsInstanceDir(t *testing.T) {
 	require.Equal(t, "/var/lib/opdl/instance", cfg.InstanceDir())
 }
 
+// TestLoadRejectsUnknownKeys checks a configuration file that sets something
+// this schema does not define fails at load time.
+//
+// The obsolete socket overrides are the case that matters. They were silently
+// ignored while the decoder tolerated unknown keys, so a machine kept using the
+// deployment's addresses while its configuration file said otherwise and the
+// platform reported a healthy startup either way. The failure that produced was
+// slow to diagnose precisely because nothing said the setting had been dropped.
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	tests := map[string]struct {
+		extra string
+		want  string
+	}{
+		"obsolete nats client address": {
+			extra: "client_address = \"127.0.0.1:4222\"\n",
+			want:  "event_fabric.nats.client_address",
+		},
+		"obsolete nats cluster address": {
+			extra: "cluster_address = \"127.0.0.1:6222\"\n",
+			want:  "event_fabric.nats.cluster_address",
+		},
+		"obsolete nats monitor address": {
+			extra: "monitor_address = \"127.0.0.1:8222\"\n",
+			want:  "event_fabric.nats.monitor_address",
+		},
+		"obsolete nats routes": {
+			extra: "routes = [\"127.0.0.2:6222\"]\n",
+			want:  "event_fabric.nats.routes",
+		},
+		"obsolete nats servers": {
+			extra: "servers = [\"127.0.0.1:4222\"]\n",
+			want:  "event_fabric.nats.servers",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := config.Load(writeConfig(t, validBaseConfig+test.extra))
+			require.ErrorContains(t, err, "unknown key")
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+
+	t.Run("unknown top-level key", func(t *testing.T) {
+		_, err := config.Load(writeConfig(t, validBaseConfig+"totally_made_up = 1\n"))
+		require.ErrorContains(t, err, "unknown key")
+		require.ErrorContains(t, err, "totally_made_up")
+	})
+
+	t.Run("every unknown key is named", func(t *testing.T) {
+		_, err := config.Load(writeConfig(t, validBaseConfig+"client_address = \"127.0.0.1:4222\"\nmonitor_address = \"127.0.0.1:8222\"\n"))
+		require.ErrorContains(t, err, "event_fabric.nats.client_address")
+		require.ErrorContains(t, err, "event_fabric.nats.monitor_address")
+	})
+}
+
 func TestLoadRejectsMalformedFile(t *testing.T) {
 	_, err := config.Load(writeConfig(t, `[invalid`))
 	require.ErrorContains(t, err, "invalid configuration file")

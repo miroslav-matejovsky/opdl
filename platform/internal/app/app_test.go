@@ -74,12 +74,16 @@ func get(ctx context.Context, addr string) bool {
 	return true
 }
 
-// writeConfig writes a loopback platform configuration whose Event Fabric binds
-// free ports and stores its journal under the test's own directory, so several
-// tests can run at once without colliding.
+// writeConfig writes a loopback platform configuration that stores its journal
+// and coordination state under the test's own directory, so several tests can
+// run at once without colliding.
+//
+// It sets no socket topology. The Event Fabric's addresses are the deployment's,
+// not the site's, and this file cannot move them: a runtime that could would be
+// able to point a machine at a journal that is not its own. Tests that need free
+// ports move the descriptor instead, through descriptorOnFreePorts.
 func writeConfig(t *testing.T, dir string) string {
 	t.Helper()
-	client, cluster, monitor := freeAddress(t), freeAddress(t), freeAddress(t)
 	path := filepath.Join(dir, "config.toml")
 	contents := fmt.Sprintf(`address = %q
 read_header_timeout = "5s"
@@ -90,13 +94,29 @@ lag_bound = "30s"
 data_dir = %q
 startup_timeout = "30s"
 catch_up_timeout = "30s"
-client_address = %q
-cluster_address = %q
-monitor_address = %q
 `, freeAddress(t), filepath.ToSlash(filepath.Join(dir, "instance")),
-		filepath.ToSlash(filepath.Join(dir, "nats")), client, cluster, monitor)
+		filepath.ToSlash(filepath.Join(dir, "nats")))
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 	return path
+}
+
+// descriptorOnFreePorts returns the embedded descriptor with its Event Fabric
+// addresses moved onto reserved loopback ports.
+//
+// The embedded mock names the deployment's real ports, which several tests
+// running at once cannot all bind. Moving them here rather than in the runtime
+// configuration keeps the contract intact: the descriptor is still the single
+// source of the machine's topology, and both processes of the machine still
+// derive the same endpoints from it.
+func descriptorOnFreePorts(t *testing.T, cfg *config.Config) deployment.Descriptor {
+	t.Helper()
+	descriptor := cfg.Descriptor()
+	client, cluster := freeAddress(t), freeAddress(t)
+	descriptor.EventFabric.Nats.ClientAddress = client
+	descriptor.EventFabric.Nats.ClusterAddress = cluster
+	descriptor.EventFabric.Nats.Servers = []string{client}
+	descriptor.EventFabric.Nats.Routes = []string{}
+	return descriptor
 }
 
 // embeddedDescriptor is the identity this test binary was compiled with. A
@@ -120,7 +140,7 @@ func openTestSite(t *testing.T) *site {
 	cfg, err := config.Load(writeConfig(t, t.TempDir()))
 	require.NoError(t, err)
 
-	s, err := open(t.Context(), cfg.Descriptor(), cfg, true, redundancy.RolePrimary)
+	s, err := open(t.Context(), descriptorOnFreePorts(t, cfg), cfg, true, redundancy.RolePrimary)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.close(context.Background()) })
 	return s
@@ -213,27 +233,29 @@ func TestCloseIsIdempotent(t *testing.T) {
 	require.NoError(t, s.close(t.Context()), "closing an already closed site is not a failure")
 }
 
-// TestNatsConfigDerivesFromDescriptorAndAppliesOverrides pins the precedence
-// rule: the deployment decides, and the configuration file may move sockets and
-// place storage.
-func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
+// TestNatsConfigDerivesFromDescriptor pins the ownership rule: the deployment
+// descriptor owns the Event Fabric's topology, and the configuration file owns
+// only the machine's own runtime concerns, such as where storage lives, how long
+// startup may take, and where credentials are read from.
+//
+// The file cannot move a socket. Doing so could point a machine at a journal
+// that is not its own, and nothing downstream would be able to tell.
+func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 	descriptor := deployment.Descriptor{
 		Project: "customer-a", Environment: "production",
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
-		EventFabric: deployment.EventFabric{
-			Peers: []deployment.EventFabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
-		},
 		Slots: deployment.Slots{
-			Primary: deployment.Slot{
-				EventFabric: deployment.SlotEventFabric{
-					Nats: deployment.EventFabricNats{
-						ClientAddress:  "10.0.1.10:4222",
-						ClusterAddress: "10.0.1.10:6222",
-						MonitorAddress: "127.0.0.1:8222",
-						Servers:        []string{"10.0.1.10:4222"},
-					},
-				},
+			Primary: deployment.Slot{Disabled: false},
+			Standby: deployment.Slot{Disabled: false},
+		},
+		EventFabric: deployment.EventFabric{
+			Nats: deployment.EventFabricNats{
+				ClientAddress:  "10.0.1.10:4222",
+				ClusterAddress: "10.0.1.10:6222",
+				Routes:         []string{},
+				Servers:        []string{"10.0.1.10:4222"},
 			},
+			Peers: []deployment.EventFabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
 		},
 	}
 	settings := func(t *testing.T, nats string) *config.Config {
@@ -248,8 +270,8 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	}
 	const required = "data_dir = \"/var/lib/opdl\"\nstartup_timeout = \"45s\"\ncatch_up_timeout = \"25s\"\n"
 
-	t.Run("no overrides uses the deployment", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t, required), true)
+	t.Run("endpoints come from the deployment", func(t *testing.T) {
+		cfg, err := natsConfig(descriptor, settings(t, required))
 		require.NoError(t, err)
 		require.Equal(t, "10.0.1.10:4222", cfg.ClientAddress)
 		require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress)
@@ -262,7 +284,7 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	})
 
 	t.Run("storage and replicas come from the site, not the file", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t, required), true)
+		cfg, err := natsConfig(descriptor, settings(t, required))
 		require.NoError(t, err)
 		require.True(t, cfg.HostsStorage, "node-a sorts first in a two-machine site")
 		require.Equal(t, 1, cfg.Replicas, "a site smaller than three machines runs one replica")
@@ -272,7 +294,7 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		dir := t.TempDir()
 		secrets := filepath.Join(dir, "creds.toml")
 		require.NoError(t, os.WriteFile(secrets, []byte("username = \"opdl\"\npassword = \"s3cret\"\n"), 0o600))
-		cfg, err := natsConfig(descriptor, settings(t, required+fmt.Sprintf("credentials_file = %q\n", filepath.ToSlash(secrets))), true)
+		cfg, err := natsConfig(descriptor, settings(t, required+fmt.Sprintf("credentials_file = %q\n", filepath.ToSlash(secrets))))
 		require.NoError(t, err)
 		require.Equal(t, "opdl", cfg.Username)
 		require.Equal(t, "s3cret", cfg.Password)
@@ -403,7 +425,7 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 	}
 	cfg, err := config.Load(writeConfig(t, t.TempDir()))
 	require.NoError(t, err)
-	descriptor := cfg.Descriptor()
+	descriptor := descriptorOnFreePorts(t, cfg)
 
 	active, err := open(t.Context(), descriptor, cfg, true, redundancy.RolePrimary)
 	require.NoError(t, err)
@@ -449,17 +471,12 @@ func TestPromotionAndPrimaryReclamation(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := config.Load(writeConfig(t, dir))
 	require.NoError(t, err)
-	descriptor := cfg.Descriptor()
-	descriptor.Slots.Standby = &deployment.Slot{
-		EventFabric: deployment.SlotEventFabric{
-			Nats: deployment.EventFabricNats{
-				ClientAddress:  "127.0.0.1:4223",
-				ClusterAddress: "127.0.0.1:6223",
-				MonitorAddress: "127.0.0.1:8223",
-				Servers:        []string{"127.0.0.1:4222"},
-			},
-		},
-	}
+	descriptor := descriptorOnFreePorts(t, cfg)
+	// The standby is enabled and nothing else changes. It shares the machine's
+	// one NATS topology with the active process, so it connects to the address
+	// the active process is serving on and, once promoted, rebinds that same
+	// address rather than moving the site onto a second one.
+	descriptor.Slots.Standby = deployment.Slot{Disabled: false}
 
 	primaryCtx, stopPrimary := context.WithCancel(t.Context())
 	primaryDone := make(chan error, 1)

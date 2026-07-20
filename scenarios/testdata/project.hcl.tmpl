@@ -1,0 +1,39 @@
+# Scenario blueprint template.
+#
+# Scenarios build from the same blueprint contract a customer does, so the NATS
+# ports come from here rather than from a runtime setting. They cannot be fixed
+# numbers: several machines share one host and a developer's machine may already
+# hold 4222, so the harness reserves free ports and renders them in.
+#
+# The .tmpl extension is deliberate. The builder loads every *.hcl file in a
+# blueprint directory, so an unrendered template must not look like one.
+#
+# Everything else is authored per fixture in the harness's fixture model, which
+# is the single source of each machine's name, address, and standby policy.
+project "{{ .Name }}" {
+  environment = "development"
+
+  features {
+    chaos = false
+  }
+
+  site "{{ .Site }}" {
+{{- range .Machines }}
+    machine "{{ .Name }}" {
+      role     = "all-in-one"
+      ip       = "{{ .IP }}"
+      services = ["core-services"]
+
+      platform {
+        nats {
+          client_port  = {{ .ClientPort }}
+          cluster_port = {{ .ClusterPort }}
+        }
+
+        standby {
+          disabled = {{ .StandbyDisabled }}
+        }
+      }
+    }
+{{ end }}  }
+}

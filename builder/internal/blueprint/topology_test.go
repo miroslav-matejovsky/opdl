@@ -23,11 +23,8 @@ func validProject() *blueprint.Project {
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
 				Platform: &blueprint.Platform{
-					Nats: &blueprint.Nats{
-						ClientAddress:  "10.0.1.10:4222",
-						ClusterAddress: "10.0.1.10:6222",
-						MonitorAddress: "127.0.0.1:8222",
-					},
+					Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+					Standby: &blueprint.Standby{Disabled: false},
 				},
 			}},
 		}},
@@ -96,11 +93,8 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 			IP:       "10.0.1.12",
 			Services: []string{"sensor-services"},
 			Platform: &blueprint.Platform{
-				Nats: &blueprint.Nats{
-					ClientAddress:  "10.0.1.12:4222",
-					ClusterAddress: "10.0.1.12:6222",
-					MonitorAddress: "127.0.0.1:8222",
-				},
+				Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+				Standby: &blueprint.Standby{Disabled: false},
 			},
 		}},
 	})
@@ -119,11 +113,8 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 			IP:       "10.0.1.10",
 			Services: []string{"core-services"},
 			Platform: &blueprint.Platform{
-				Nats: &blueprint.Nats{
-					ClientAddress:  "10.0.1.10:4222",
-					ClusterAddress: "10.0.1.10:6222",
-					MonitorAddress: "127.0.0.1:8222",
-				},
+				Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+				Standby: &blueprint.Standby{Disabled: false},
 			},
 		})
 		require.ErrorContains(t, p.Validate(), `machines "sensor" and "gateway" share ip "10.0.1.10"`)
@@ -139,11 +130,8 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
 				Platform: &blueprint.Platform{
-					Nats: &blueprint.Nats{
-						ClientAddress:  "10.0.1.10:4222",
-						ClusterAddress: "10.0.1.10:6222",
-						MonitorAddress: "127.0.0.1:8222",
-					},
+					Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+					Standby: &blueprint.Standby{Disabled: false},
 				},
 			}},
 		})
@@ -180,39 +168,112 @@ func TestMachinePlatformStandby(t *testing.T) {
 	t.Run("no platform block", func(t *testing.T) {
 		require.Nil(t, machine(t, "").Platform)
 	})
-	t.Run("platform block without standby", func(t *testing.T) {
+	t.Run("standby enabled", func(t *testing.T) {
 		m := machine(t, `platform {
 		  nats {
-		    client_address  = "10.0.1.10:4222"
-		    cluster_address = "10.0.1.10:6222"
-		    monitor_address = "127.0.0.1:8222"
-		  }
-		}`)
-		require.NotNil(t, m.Platform)
-		require.NotNil(t, m.Platform.Nats)
-		require.Nil(t, m.Platform.Standby)
-	})
-	t.Run("explicit standby", func(t *testing.T) {
-		m := machine(t, `platform {
-		  nats {
-		    client_address  = "10.0.1.10:4222"
-		    cluster_address = "10.0.1.10:6222"
-		    monitor_address = "127.0.0.1:8222"
+		    client_port  = 4222
+		    cluster_port = 6222
 		  }
 		  standby {
-		    nats {
-		      client_address  = "10.0.1.10:4223"
-		      cluster_address = "10.0.1.10:6223"
-		      monitor_address = "127.0.0.1:8223"
-		    }
+		    disabled = false
 		  }
 		}`)
 		require.NotNil(t, m.Platform)
 		require.NotNil(t, m.Platform.Nats)
+		require.Equal(t, 4222, m.Platform.Nats.ClientPort)
+		require.Equal(t, 6222, m.Platform.Nats.ClusterPort)
 		require.NotNil(t, m.Platform.Standby)
-		require.NotNil(t, m.Platform.Standby.Nats)
-		require.Equal(t, "10.0.1.10:4223", m.Platform.Standby.Nats.ClientAddress)
+		require.False(t, m.Platform.Standby.Disabled)
 	})
+	t.Run("standby explicitly disabled", func(t *testing.T) {
+		m := machine(t, `platform {
+		  nats {
+		    client_port  = 4222
+		    cluster_port = 6222
+		  }
+		  standby {
+		    disabled = true
+		  }
+		}`)
+		require.NotNil(t, m.Platform.Standby)
+		require.True(t, m.Platform.Standby.Disabled)
+	})
+}
+
+// TestMachinePlatformDecodeFailures checks the mandatory parts of the platform
+// subsection are enforced by the decoder itself, before any validation runs.
+//
+// The disabled attribute matters most here. It is a bool, so an omitted one
+// would decode to false and enable redundancy nobody asked for. Requiring it at
+// decode time is what makes that impossible to express rather than merely
+// invalid.
+func TestMachinePlatformDecodeFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		errText string
+	}{
+		{
+			name: "standby block without disabled attribute",
+			body: `platform {
+			  nats {
+			    client_port  = 4222
+			    cluster_port = 6222
+			  }
+			  standby {}
+			}`,
+			errText: `"disabled"`,
+		},
+		{
+			name: "nats block without client_port",
+			body: `platform {
+			  nats {
+			    cluster_port = 6222
+			  }
+			  standby {
+			    disabled = true
+			  }
+			}`,
+			errText: `"client_port"`,
+		},
+		{
+			name: "nats block without cluster_port",
+			body: `platform {
+			  nats {
+			    client_port = 4222
+			  }
+			  standby {
+			    disabled = true
+			  }
+			}`,
+			errText: `"cluster_port"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src := `project "p" {
+			  environment = "production"
+			  features {}
+			  site "north" {
+			    machine "m1" {
+			      role     = "node"
+			      ip       = "10.0.1.10"
+			      services = ["core-services"]
+			      ` + tc.body + `
+			    }
+			  }
+			}`
+			parser := hclparse.NewParser()
+			file, diags := parser.ParseHCL([]byte(src), "test.hcl")
+			require.False(t, diags.HasErrors(), diags.Error())
+
+			var tf topologyFile
+			diags = gohcl.DecodeBody(file.Body, nil, &tf)
+			require.True(t, diags.HasErrors(), "expected a decode error")
+			require.Contains(t, diags.Error(), tc.errText)
+		})
+	}
 }
 
 type topologyFile struct {
@@ -295,9 +356,11 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      services = ["core-services"]
 			      platform {
 			        nats {
-			          client_address  = "10.0.1.10:4222"
-			          cluster_address = "10.0.1.10:6222"
-			          monitor_address = "127.0.0.1:8222"
+			          client_port  = 4222
+			          cluster_port = 6222
+			        }
+			        standby {
+			          disabled = false
 			        }
 			      }
 			    }
@@ -309,9 +372,11 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      services = ["core-services"]
 			      platform {
 			        nats {
-			          client_address  = "10.0.1.11:4222"
-			          cluster_address = "10.0.1.11:6222"
-			          monitor_address = "127.0.0.1:8222"
+			          client_port  = 4222
+			          cluster_port = 6222
+			        }
+			        standby {
+			          disabled = false
 			        }
 			      }
 			    }
@@ -335,15 +400,17 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 		mutate  func(*blueprint.Project)
 		errText string
 	}{
-		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, "platform.nats configuration is required"},
-		{"missing nats block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats = nil }, "platform.nats configuration is required"},
-		{"missing client_address", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientAddress = "" }, "platform.nats.client_address is required"},
-		{"invalid client_address", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientAddress = "bad" }, "must be host:port"},
-		{"missing cluster_address", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterAddress = "" }, "platform.nats.cluster_address is required"},
-		{"missing monitor_address", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.MonitorAddress = "" }, "platform.nats.monitor_address is required"},
-		{"duplicate nats address", func(p *blueprint.Project) {
-			p.Sites[0].Machines[0].Platform.Nats.ClusterAddress = p.Sites[0].Machines[0].Platform.Nats.ClientAddress
-		}, "is used more than once"},
+		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, `machine "sensor": platform block is required`},
+		{"missing nats block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats = nil }, `machine "sensor": platform.nats block is required`},
+		{"missing standby block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby = nil }, `machine "sensor": platform.standby block is required`},
+		{"zero client port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = 0 }, `platform.nats.client_port must be in range 1-65535, got 0`},
+		{"negative client port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = -1 }, `platform.nats.client_port must be in range 1-65535, got -1`},
+		{"client port above range", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = 65536 }, `platform.nats.client_port must be in range 1-65535, got 65536`},
+		{"zero cluster port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterPort = 0 }, `platform.nats.cluster_port must be in range 1-65535, got 0`},
+		{"cluster port above range", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterPort = 70000 }, `platform.nats.cluster_port must be in range 1-65535, got 70000`},
+		{"colliding ports", func(p *blueprint.Project) {
+			p.Sites[0].Machines[0].Platform.Nats.ClusterPort = p.Sites[0].Machines[0].Platform.Nats.ClientPort
+		}, `platform.nats.client_port and cluster_port must differ, both are 4222`},
 	}
 
 	for _, tc := range tests {

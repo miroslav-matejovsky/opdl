@@ -87,8 +87,12 @@ func loadFile(path string) (file, error) {
 		return file{}, fmt.Errorf("read configuration file %s: %w", path, err)
 	}
 	var f file
-	if err := toml.Unmarshal(data, &f); err != nil {
+	meta, err := toml.Decode(string(data), &f)
+	if err != nil {
 		return file{}, fmt.Errorf("invalid configuration file %s: %w", path, err)
+	}
+	if err := rejectUnknownKeys(path, meta); err != nil {
+		return file{}, err
 	}
 	f.Address = strings.TrimSpace(f.Address)
 	if f.Address == "" {
@@ -135,6 +139,32 @@ func loadFile(path string) (file, error) {
 	// configuration is validated at startup, before any listener opens.
 	nats.CredentialsFile = strings.TrimSpace(nats.CredentialsFile)
 	return f, nil
+}
+
+// rejectUnknownKeys fails a configuration file that sets a key this schema does
+// not define.
+//
+// The strictness is the point. A key the decoder does not recognise is silently
+// dropped by default, and a setting that is silently dropped looks exactly like
+// one that was applied: the platform starts, reports a healthy configuration,
+// and behaves as though the file had never mentioned it. That is how a NATS
+// socket override left over from an earlier schema turns into a machine
+// connecting to an address nobody wrote down. Deployment topology comes from the
+// descriptor, so an obsolete override here has no correct interpretation and
+// must not be treated as one.
+//
+// The error names every unknown key rather than only the first, so a stale file
+// is fixed in one pass.
+func rejectUnknownKeys(path string, meta toml.MetaData) error {
+	undecoded := meta.Undecoded()
+	if len(undecoded) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(undecoded))
+	for _, key := range undecoded {
+		keys = append(keys, key.String())
+	}
+	return fmt.Errorf("configuration file %s: unknown key(s): %s", path, strings.Join(keys, ", "))
 }
 
 // loadCredentials reads the site's NATS username and password from path. The

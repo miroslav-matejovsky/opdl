@@ -11,6 +11,25 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 )
 
+// descriptorFor builds a machine's descriptor the way the resolver would: the
+// machine's own addresses, the topology it resolved, and the peers that make up
+// its site.
+func descriptorFor(machine, ip string, nats deployment.EventFabricNats, peers ...deployment.EventFabricPeer) deployment.Descriptor {
+	return deployment.Descriptor{
+		Project: "customer-a", Environment: "production", Site: "north",
+		Machine: machine, IP: ip,
+		Slots: deployment.Slots{
+			Primary: deployment.Slot{Disabled: false},
+			Standby: deployment.Slot{Disabled: false},
+		},
+		EventFabric: deployment.EventFabric{Nats: nats, Peers: peers},
+	}
+}
+
+func peer(machine, ip string) deployment.EventFabricPeer {
+	return deployment.EventFabricPeer{Site: "north", Machine: machine, IP: ip}
+}
+
 func TestStorageNodesSelectsBySortedName(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -39,22 +58,12 @@ func TestReplicasMatchStorageNodeCount(t *testing.T) {
 }
 
 func TestDefaultConfigForASingleNodeSiteHostsStorageAlone(t *testing.T) {
-	cfg, err := DefaultConfig(deployment.Descriptor{
-		Project: "customer-a", Environment: "production", Site: "north",
-		Machine: "node-a", IP: "10.0.1.10",
-		Slots: deployment.Slots{
-			Primary: deployment.Slot{
-				EventFabric: deployment.SlotEventFabric{
-					Nats: deployment.EventFabricNats{
-						ClientAddress:  "10.0.1.10:4222",
-						ClusterAddress: "10.0.1.10:6222",
-						MonitorAddress: "127.0.0.1:8222",
-						Servers:        []string{"10.0.1.10:4222"},
-					},
-				},
-			},
-		},
-	}, true)
+	cfg, err := DefaultConfig(descriptorFor("node-a", "10.0.1.10", deployment.EventFabricNats{
+		ClientAddress:  "10.0.1.10:4222",
+		ClusterAddress: "10.0.1.10:6222",
+		Routes:         []string{},
+		Servers:        []string{"10.0.1.10:4222"},
+	}))
 	require.NoError(t, err)
 
 	require.True(t, cfg.HostsStorage, "the only machine hosts storage")
@@ -62,10 +71,34 @@ func TestDefaultConfigForASingleNodeSiteHostsStorageAlone(t *testing.T) {
 	require.Empty(t, cfg.Routes, "a single-node site has no other storage node to cluster with")
 	require.Equal(t, "10.0.1.10:4222", cfg.ClientAddress)
 	require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress)
-	require.Equal(t, "127.0.0.1:8222", cfg.MonitorAddress, "monitoring binds to loopback by default")
 	require.Equal(t, "node-a", cfg.ServerName)
 	require.NotEmpty(t, cfg.ClusterName)
 	require.Equal(t, []string{"10.0.1.10:4222"}, cfg.Servers, "a storage node reaches the journal on its own server")
+}
+
+// TestDefaultConfigTakesNoProcessRole checks every process on a machine composes
+// the same endpoints from the same descriptor.
+//
+// This is the regression for the warm standby failure. When the standby derived
+// its own NATS configuration it got an address the active process was not
+// serving on, so it retried forever against a port nothing was listening on.
+// There is one topology per machine now, and the only role-dependent step is
+// clientOnly, which removes ownership rather than choosing a different endpoint.
+func TestDefaultConfigTakesNoProcessRole(t *testing.T) {
+	descriptor := descriptorFor("node-a", "10.0.1.10", deployment.EventFabricNats{
+		ClientAddress:  "10.0.1.10:4222",
+		ClusterAddress: "10.0.1.10:6222",
+		Routes:         []string{},
+		Servers:        []string{"10.0.1.10:4222"},
+	})
+
+	first, err := DefaultConfig(descriptor)
+	require.NoError(t, err)
+	second, err := DefaultConfig(descriptor)
+	require.NoError(t, err)
+	require.Equal(t, first, second, "one machine, one topology, whatever the process role")
+	require.Equal(t, "10.0.1.10:4222", second.Servers[0],
+		"the server list points at the address the fence owner is serving on")
 }
 
 // TestDefaultConfigForATwoMachineSiteRunsOneServer pins the POC topology. Two
@@ -79,54 +112,32 @@ func TestDefaultConfigForASingleNodeSiteHostsStorageAlone(t *testing.T) {
 // and one client is what keeps a two-machine site working when the second
 // machine is down.
 func TestDefaultConfigForATwoMachineSiteRunsOneServer(t *testing.T) {
-	site := deployment.EventFabric{Peers: []deployment.EventFabricPeer{
-		{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
-	}}
-	storage, err := DefaultConfig(deployment.Descriptor{
-		Project: "customer-a", Environment: "production", Site: "north",
-		Machine: "node-a", IP: "10.0.1.10", EventFabric: site,
-		Slots: deployment.Slots{
-			Primary: deployment.Slot{
-				EventFabric: deployment.SlotEventFabric{
-					Nats: deployment.EventFabricNats{
-						ClientAddress:  "10.0.1.10:4222",
-						ClusterAddress: "10.0.1.10:6222",
-						MonitorAddress: "127.0.0.1:8222",
-						Servers:        []string{"10.0.1.10:4222"},
-					},
-				},
-			},
-		},
-	}, true)
+	storage, err := DefaultConfig(descriptorFor("node-a", "10.0.1.10", deployment.EventFabricNats{
+		ClientAddress:  "10.0.1.10:4222",
+		ClusterAddress: "10.0.1.10:6222",
+		Routes:         []string{},
+		Servers:        []string{"10.0.1.10:4222"},
+	}, peer("node-b", "10.0.1.11")))
 	require.NoError(t, err)
 	require.True(t, storage.HostsStorage, "node-a sorts first")
 	require.Empty(t, storage.Routes, "the site's only server has nobody to cluster with")
 	require.Equal(t, []string{"10.0.1.10:4222"}, storage.Servers)
 
-	client, err := DefaultConfig(deployment.Descriptor{
-		Project: "customer-a", Environment: "production", Site: "north",
-		Machine: "node-b", IP: "10.0.1.11",
-		EventFabric: deployment.EventFabric{Peers: []deployment.EventFabricPeer{
-			{Site: "north", Machine: "node-a", IP: "10.0.1.10"},
-		}},
-		Slots: deployment.Slots{
-			Primary: deployment.Slot{
-				EventFabric: deployment.SlotEventFabric{
-					Nats: deployment.EventFabricNats{
-						Servers: []string{"10.0.1.10:4222"},
-					},
-				},
-			},
-		},
-	}, true)
+	client, err := DefaultConfig(descriptorFor("node-b", "10.0.1.11", deployment.EventFabricNats{
+		ClientAddress:  "10.0.1.11:4222",
+		ClusterAddress: "10.0.1.11:6222",
+		Routes:         []string{},
+		Servers:        []string{"10.0.1.10:4222"},
+	}, peer("node-a", "10.0.1.10")))
 	require.NoError(t, err)
 	require.False(t, client.HostsStorage, "node-b does not store the journal")
 	require.Equal(t, []string{"10.0.1.10:4222"}, client.Servers,
 		"it reaches the journal on the storage node's server")
 	require.Empty(t, client.Routes, "it has no server, so it clusters with nobody")
+	// The descriptor resolves addresses for every machine, but a machine that
+	// stores nothing binds none of them.
 	require.Empty(t, client.ClientAddress, "it binds nothing")
 	require.Empty(t, client.ClusterAddress)
-	require.Empty(t, client.MonitorAddress)
 }
 
 // TestDefaultConfigForALargerSiteClustersTheStorageNodes checks the cluster is
@@ -134,28 +145,12 @@ func TestDefaultConfigForATwoMachineSiteRunsOneServer(t *testing.T) {
 // of the three routes to it: routing to a server that holds no journal would
 // only enlarge the metadata group's quorum without enlarging its storage.
 func TestDefaultConfigForALargerSiteClustersTheStorageNodes(t *testing.T) {
-	cfg, err := DefaultConfig(deployment.Descriptor{
-		Project: "customer-a", Environment: "production", Site: "north",
-		Machine: "node-c", IP: "10.0.1.12",
-		EventFabric: deployment.EventFabric{Peers: []deployment.EventFabricPeer{
-			{Site: "north", Machine: "node-a", IP: "10.0.1.10"},
-			{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
-			{Site: "north", Machine: "node-d", IP: "10.0.1.13"},
-		}},
-		Slots: deployment.Slots{
-			Primary: deployment.Slot{
-				EventFabric: deployment.SlotEventFabric{
-					Nats: deployment.EventFabricNats{
-						ClientAddress:  "10.0.1.12:4222",
-						ClusterAddress: "10.0.1.12:6222",
-						MonitorAddress: "127.0.0.1:8222",
-						Servers:        []string{"10.0.1.12:4222", "10.0.1.10:4222", "10.0.1.11:4222"},
-						Routes:         []string{"10.0.1.10:6222", "10.0.1.11:6222"},
-					},
-				},
-			},
-		},
-	}, true)
+	cfg, err := DefaultConfig(descriptorFor("node-c", "10.0.1.12", deployment.EventFabricNats{
+		ClientAddress:  "10.0.1.12:4222",
+		ClusterAddress: "10.0.1.12:6222",
+		Servers:        []string{"10.0.1.12:4222", "10.0.1.10:4222", "10.0.1.11:4222"},
+		Routes:         []string{"10.0.1.10:6222", "10.0.1.11:6222"},
+	}, peer("node-a", "10.0.1.10"), peer("node-b", "10.0.1.11"), peer("node-d", "10.0.1.13")))
 	require.NoError(t, err)
 
 	// Four machines: the first three by sorted name host storage. node-c is one of
@@ -169,28 +164,15 @@ func TestDefaultConfigForALargerSiteClustersTheStorageNodes(t *testing.T) {
 }
 
 func TestDefaultConfigLeavesOutStorageForALaterNode(t *testing.T) {
-	descriptor := deployment.Descriptor{
-		Project: "customer-a", Environment: "production", Site: "north",
-		Machine: "node-d", IP: "10.0.1.13",
-		EventFabric: deployment.EventFabric{Peers: []deployment.EventFabricPeer{
-			{Site: "north", Machine: "node-a", IP: "10.0.1.10"},
-			{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
-			{Site: "north", Machine: "node-c", IP: "10.0.1.12"},
-		}},
-		Slots: deployment.Slots{
-			Primary: deployment.Slot{
-				EventFabric: deployment.SlotEventFabric{
-					Nats: deployment.EventFabricNats{
-						Servers: []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
-					},
-				},
-			},
-		},
-	}
-
-	cfg, err := DefaultConfig(descriptor, true)
+	cfg, err := DefaultConfig(descriptorFor("node-d", "10.0.1.13", deployment.EventFabricNats{
+		ClientAddress:  "10.0.1.13:4222",
+		ClusterAddress: "10.0.1.13:6222",
+		Routes:         []string{},
+		Servers:        []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
+	}, peer("node-a", "10.0.1.10"), peer("node-b", "10.0.1.11"), peer("node-c", "10.0.1.12")))
 	require.NoError(t, err)
 	require.False(t, cfg.HostsStorage, "node-d is the fourth by name and runs no server")
+	require.Empty(t, cfg.Routes, "it runs no server, so it binds no cluster listener")
 	require.Equal(t, []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"}, cfg.Servers,
 		"it reaches the journal on any of the site's storage nodes")
 }
@@ -204,7 +186,6 @@ func loopbackStorageConfig(t *testing.T) Config {
 		ClusterName:     "site",
 		ClientAddress:   "127.0.0.1:4222",
 		ClusterAddress:  "127.0.0.1:6222",
-		MonitorAddress:  "127.0.0.1:8222",
 		Servers:         []string{"127.0.0.1:4222"},
 		HostsStorage:    true,
 		DataDir:         filepath.Join(t.TempDir(), "nats"),
@@ -231,6 +212,7 @@ func TestValidateRejectsIncompleteConfigs(t *testing.T) {
 	}{
 		{name: "no server to connect to", mutate: func(c *Config) { c.Servers = nil }, want: "the site has no storage node"},
 		{name: "blank client address", mutate: func(c *Config) { c.ClientAddress = "" }, want: "client address is required"},
+		{name: "blank cluster address", mutate: func(c *Config) { c.ClusterAddress = "" }, want: "cluster address is required"},
 		{name: "a storage node that does not use its own server", mutate: func(c *Config) {
 			c.Servers = []string{"10.0.1.11:4222"}
 		}, want: "must connect to its own server"},

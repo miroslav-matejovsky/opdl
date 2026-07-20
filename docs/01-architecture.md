@@ -102,11 +102,73 @@ view with a hole in it.
 
 ### Site topology
 
-Topology is derived, not discovered. The builder resolves each machine's site
-peers, and the adapter derives everything else from them on fixed ports: `4222`
-for clients, `6222` for cluster routes, `8222` for monitoring on loopback.
-Runtime overrides move sockets and storage for development and tests but never
-change machine identity.
+Topology is derived, not discovered. Each machine authors two NATS ports in its
+blueprint, and everything else is a consequence of the site:
+
+```hcl
+platform {
+  nats {
+    client_port  = 4222
+    cluster_port = 6222
+  }
+
+  standby {
+    disabled = false
+  }
+}
+```
+
+The builder joins each port with `machine.ip` and resolves the site's server and
+route lists into the deployment descriptor. Those lists are never authored. A
+blueprint that could state them directly could split a site, omit a storage node,
+or point a machine at another site's journal, and the resulting descriptor would
+look like a working one.
+
+Runtime configuration carries no socket topology at all, and a configuration file
+that sets one is rejected at load time rather than ignored. Addresses are
+deployment data; a site owns where its journal is stored, not where the site's
+journal is.
+
+#### One endpoint set per machine, shared by both processes
+
+A machine has one client port and at most one cluster port however many processes
+it runs. The primary and standby are mutually exclusive owners of them: the
+machine fence is released only after the active process has closed its embedded
+server, so the process that next acquires the fence binds the same addresses.
+
+This is why promotion does not change the address other machines were told to
+connect to, why a client-only standby reaches the journal on the address the
+active process is serving, and why the firewall inventory is one client port and
+at most one cluster port per storage machine.
+
+#### What actually listens
+
+The cluster listener is bound only when the site's topology resolves routes.
+Authoring a cluster port is not permission to bind it: with one storage node
+there is no peer server, and binding it would open a port nothing can connect to.
+
+| Site size | Storage machines | Cluster listeners | NATS monitor listeners |
+| ---: | ---: | ---: | ---: |
+| 1 | 1 | 0 | 0 |
+| 2 | 1 | 0 | 0 |
+| 4 | 3 | 3 | 0 |
+
+There is no NATS monitoring listener. `HTTPPort` and `HTTPSPort` are left at
+zero, which is what makes the embedded server start none. The runtime already
+reads connection state, journal high-water, projection progress, and lag through
+the Event Fabric client API and writes them to its per-process status files, so a
+second unauthenticated HTTP surface would add an open port without adding a
+signal. Those status files are the supported local monitoring surface. Any remote
+operational API is a separate contract that must be platform-owned,
+authenticated, and authorized, and must not proxy the NATS monitor.
+
+Port reduction is not by itself a security control. Bind only to the machine's
+exact `ip`, never a wildcard; restrict the client port to the OPDL machines that
+need Event Fabric access and the cluster port to the selected storage machines;
+keep credentials out of the blueprint and descriptor. The current
+username/password configuration does not encrypt client or route traffic, so TLS
+or mutual TLS is required before non-loopback NATS is suitable for an untrusted
+network.
 
 Storage nodes are selected deterministically by sorted machine name: one for a
 site smaller than three machines, the first three otherwise, with one and three
@@ -118,6 +180,20 @@ One- and two-machine sites are POC deployments with no journal-node failure
 tolerance. A deployment that must tolerate one journal node failure requires at
 least three machines with stable storage on the first three machines by sorted
 name. This protects event history, not service processes.
+
+`scenarios.TestFourMachineStorageTopologyAndFailure` is the evidence for the
+three-storage-node topology. It builds four machines from one blueprint, and
+proves that exactly the first three by sorted name store the journal and bind a
+cluster listener, that the fourth is client-only and binds nothing, that
+publication through one machine is replayed through another, that the site keeps
+accepting and projecting after one storage machine is stopped, and that the
+stopped machine rejoins its own storage and reconverges to the same state.
+
+Two properties around that topology are not yet proven and are tracked in
+`docs/backlog/event-fabric.md`: whether a client-only machine keeps projecting
+across the loss of the storage node it is connected to, and whether the platform
+should absorb the brief window after a storage machine is lost during which the
+journal's replica group is electing a leader and rejects writes.
 
 The site's NATS cluster is exactly its storage nodes. Every other machine of the
 site runs no server and reaches the journal as a client of the storage nodes.
@@ -173,8 +249,29 @@ otherwise be a lie:
 A warm standby opens only a client Event Fabric connection and a distinct
 projector. It catches up and follows the journal, writes its local process status,
 and owns no public listener, durable handler, lifecycle readiness publication,
-embedded NATS server, or JetStream storage. On a storage machine it prefers the
-co-located active server and retains peer storage addresses as fallbacks.
+embedded NATS server, or JetStream storage.
+
+It composes exactly the same adapter configuration as the active process from the
+same descriptor, and then drops what it must not own: server ownership, the local
+listener addresses, the routes, and the data directory. It keeps the resolved
+server list whole. That list is what it reaches the journal through, and on a
+storage machine its first entry is the address the active process is serving on
+right now. Deriving a separate standby endpoint is what previously left the
+standby retrying against an address nothing was listening on, so no process role
+selects a different server list or listener address.
+
+At startup each process prints the endpoints it actually composed, which is what
+distinguishes an active storage server from a client-only local standby, a
+client-only non-storage machine, and a storage node that has just been promoted:
+
+```text
+platform: event fabric configuration endpoint=10.0.1.10:4222 binds=true
+  cluster=none servers=10.0.1.10:4222 routes=none storage=true replicas=1
+```
+
+`endpoint` is the machine's own address from the descriptor and is printed
+whether or not this process binds it, so a standby and the active process it
+follows are visibly talking about the same endpoint.
 
 The primary and standby contend for one non-expiring OS file lock under the
 configured local instance directory. Only the lock holder may compose active
@@ -225,9 +322,15 @@ process fence protects one machine's active capabilities.
 ### Package and service-manager contract
 
 Each package manifest contains one required `primary` launch and, when the
-resolved machine policy enables warm standby, one optional `standby` launch.
-Both name the same binary and configuration. Their direct arguments are
+machine's blueprint sets `standby.disabled = false`, one optional `standby`
+launch. Both name the same binary and configuration. Their direct arguments are
 `-instance primary` and `-instance standby`.
+
+The standby decision is never inferred from an omitted field. Every blueprint
+machine states `platform.standby.disabled`, every descriptor carries explicit
+`slots.primary.disabled` and `slots.standby.disabled` records, and the platform
+refuses to decode a descriptor that omits either. A missing decision is a startup
+error rather than a default.
 
 Deployment starts the primary and waits for its local status to become `active`
 before starting the standby. A handover requires a fresh, live standby status
@@ -243,22 +346,33 @@ and the last error. Only the OS fence grants active ownership.
 
 ### Validation baseline
 
-The black-box warm-standby scenario builds a default-on package, launches both
-processes, kills and hands ownership over repeatedly, preserves registrations,
-checks storage ownership, reclaims the preferred primary, and completes full
-machine shutdown. It records measurements without enforcing an SLO.
+The black-box warm-standby scenario builds a standby-enabled package, launches
+both processes, kills and hands ownership over repeatedly, preserves
+registrations, checks storage ownership, reclaims the preferred primary, and
+completes full machine shutdown. It records measurements without enforcing an SLO.
 
-The 2026-07-18 Windows development baseline from one local run was:
+It also asserts the endpoint contract directly: that the standby binds nothing
+while the primary holds the fence, that it nonetheless composes the same machine
+endpoint and the same server list as the active process, and that the promoted
+process rebinds those same addresses rather than moving the site onto new ones.
 
-| Measurement | Observed |
-| --- | ---: |
-| Initial standby journal catch-up | 61.9 ms |
-| Forced-kill promotion | 29.90 s |
-| Listener unavailable | 29.91 s |
-| Planned handover | 287 ms |
-| Standby working set | 16,396,288 bytes |
+Three consecutive Windows development runs after the shared-endpoint change:
 
-These are development measurements, not production limits or percentiles. The
-forced-kill gap is close to the configured 30-second startup bound and is tracked
-as a performance investigation before any failover SLO is declared.
+| Measurement | Run 1 | Run 2 | Run 3 |
+| --- | ---: | ---: | ---: |
+| Initial standby journal catch-up | 110.8 ms | 108.3 ms | 91.9 ms |
+| Forced-kill promotion | 182.6 ms | 126.8 ms | 149.4 ms |
+| Listener unavailable | 192.9 ms | 133.5 ms | 155.2 ms |
+| Planned handover | 275.8 ms | 266.6 ms | 177.8 ms |
+
+The earlier 2026-07-18 baseline measured a forced-kill promotion of about 29.9
+seconds. That gap was a symptom rather than a performance property: the standby
+had been given its own NATS client address while the only running server was the
+active process's, so it never reached the journal and was never warm, and the
+promoted process had to complete a cold startup bounded by the same 30 second
+Event Fabric startup timeout.
+
+These remain development measurements, not production limits or percentiles.
+Three samples on one host are not an SLO, and none may be quoted as one until
+`docs/backlog/redundancy.md` records cross-platform CI percentiles.
 

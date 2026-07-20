@@ -3,7 +3,6 @@ package blueprint
 import (
 	"fmt"
 	"net"
-	"strconv"
 	"strings"
 )
 
@@ -60,26 +59,47 @@ type Machine struct {
 // machine, as opposed to what it deploys. It is authored as a platform {}
 // subsection of a machine so a blueprint reader sees these policies grouped and
 // explicit rather than mixed in with the machine's identity and services.
+//
+// Both subsections are mandatory. A machine that omits either one is rejected,
+// so redundancy and the Event Fabric's ports are always a stated decision rather
+// than an inherited default.
 type Platform struct {
-	// Nats is the primary slot's explicit Event Fabric NATS configuration.
+	// Nats is the machine's Event Fabric NATS port policy. It is machine-level:
+	// whichever process holds the machine fence binds these ports, so the primary
+	// and its standby never own separate endpoints.
 	Nats *Nats `hcl:"nats,block"`
-	// Standby is the optional standby slot policy. When provided, its Nats block must be filled.
+	// Standby is the machine's local redundancy policy.
 	Standby *Standby `hcl:"standby,block"`
 }
 
-// Standby holds the optional standby slot configuration subsection.
+// Standby is a machine's local redundancy policy.
 type Standby struct {
-	Nats *Nats `hcl:"nats,block"`
+	// Disabled opts the machine out of a second local process. It is required, so
+	// omitting the attribute cannot silently enable or disable redundancy.
+	//
+	// A false value deploys a second local process that waits on the machine
+	// fence. It does not add a second NATS endpoint: the two processes are
+	// mutually exclusive owners of the same machine-level ports.
+	Disabled bool `hcl:"disabled"`
 }
 
-// Nats is a machine's Event Fabric NATS configuration. It is authored inside
-// platform {} so the runtime addresses are explicit right in the blueprint.
+// Nats is a machine's Event Fabric NATS port policy. It is authored inside
+// platform {} so a blueprint reader sees which ports the machine needs open.
+//
+// Only ports are authored. The builder joins each port with the machine's ip to
+// derive the addresses that reach it, and derives the site's route and server
+// lists from the site topology. Authoring those lists directly could silently
+// split a site or point a machine at another site's journal.
 type Nats struct {
-	ClientAddress  string   `hcl:"client_address"`
-	ClusterAddress string   `hcl:"cluster_address"`
-	MonitorAddress string   `hcl:"monitor_address"`
-	Routes         []string `hcl:"routes,optional"`
-	Servers        []string `hcl:"servers,optional"`
+	// ClientPort is the port the machine's server serves the NATS client protocol
+	// on. The platform's active process, a local standby following the journal,
+	// and every machine of the site that does not store the journal all reach the
+	// Event Fabric through it.
+	ClientPort int `hcl:"client_port"`
+	// ClusterPort is the port the machine's server routes to the site's other
+	// storage nodes on. It carries the server-to-server route protocol only and
+	// is bound only when the site topology selects three storage nodes.
+	ClusterPort int `hcl:"cluster_port"`
 }
 
 // Validate checks a project against the model's structural rules. It fails
@@ -164,89 +184,42 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 		assigned[name] = true
 	}
 
-	if machine.Platform == nil || machine.Platform.Nats == nil {
-		return fmt.Errorf("machine %q: platform.nats configuration is required", machine.Name)
+	return validatePlatform(machine)
+}
+
+// validatePlatform checks a machine states both platform policies. Neither has a
+// default: an omitted nats block would leave the Event Fabric without ports, and
+// an omitted standby block would make local redundancy depend on what a reader
+// assumed rather than on what the blueprint says.
+func validatePlatform(machine Machine) error {
+	if machine.Platform == nil {
+		return fmt.Errorf("machine %q: platform block is required", machine.Name)
 	}
-	if err := validateNatsBlock(machine.Name, "platform.nats", machine.Platform.Nats); err != nil {
+	if machine.Platform.Standby == nil {
+		return fmt.Errorf("machine %q: platform.standby block is required", machine.Name)
+	}
+	if machine.Platform.Nats == nil {
+		return fmt.Errorf("machine %q: platform.nats block is required", machine.Name)
+	}
+	nats := machine.Platform.Nats
+	if err := validatePort(machine.Name, "client_port", nats.ClientPort); err != nil {
 		return err
 	}
-	var allAddrs []string
-	allAddrs = append(allAddrs, machine.Platform.Nats.ClientAddress, machine.Platform.Nats.ClusterAddress, machine.Platform.Nats.MonitorAddress)
-	if machine.Platform.Standby != nil {
-		if machine.Platform.Standby.Nats == nil {
-			return fmt.Errorf("machine %q: platform.standby requires nats block", machine.Name)
-		}
-		if err := validateNatsBlock(machine.Name, "platform.standby.nats", machine.Platform.Standby.Nats); err != nil {
-			return err
-		}
-		allAddrs = append(allAddrs, machine.Platform.Standby.Nats.ClientAddress, machine.Platform.Standby.Nats.ClusterAddress, machine.Platform.Standby.Nats.MonitorAddress)
+	if err := validatePort(machine.Name, "cluster_port", nats.ClusterPort); err != nil {
+		return err
 	}
-	if err := uniqueAddresses(allAddrs...); err != nil {
-		return fmt.Errorf("machine %q: platform.%w", machine.Name, err)
+	// One listener per port. The client and route protocols are different
+	// protocols on the same server, so a shared port would leave the server
+	// unable to bind the second of them.
+	if nats.ClientPort == nats.ClusterPort {
+		return fmt.Errorf("machine %q: platform.nats.client_port and cluster_port must differ, both are %d", machine.Name, nats.ClientPort)
 	}
 	return nil
 }
 
-func validateNatsBlock(machineName, prefix string, nats *Nats) error {
-	if strings.TrimSpace(nats.ClientAddress) == "" {
-		return fmt.Errorf("machine %q: %s.client_address is required", machineName, prefix)
-	}
-	if err := validateAddress("client_address", nats.ClientAddress); err != nil {
-		return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
-	}
-	if strings.TrimSpace(nats.ClusterAddress) == "" {
-		return fmt.Errorf("machine %q: %s.cluster_address is required", machineName, prefix)
-	}
-	if err := validateAddress("cluster_address", nats.ClusterAddress); err != nil {
-		return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
-	}
-	if strings.TrimSpace(nats.MonitorAddress) == "" {
-		return fmt.Errorf("machine %q: %s.monitor_address is required", machineName, prefix)
-	}
-	if err := validateAddress("monitor_address", nats.MonitorAddress); err != nil {
-		return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
-	}
-	if err := uniqueAddresses(nats.ClientAddress, nats.ClusterAddress, nats.MonitorAddress); err != nil {
-		return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
-	}
-	for _, route := range nats.Routes {
-		if err := validateAddress("routes", route); err != nil {
-			return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
-		}
-	}
-	for _, server := range nats.Servers {
-		if err := validateAddress("servers", server); err != nil {
-			return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
-		}
-	}
-	return nil
-}
-
-func validateAddress(what, addr string) error {
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("%s %q must be host:port: %w", what, addr, err)
-	}
-	if strings.TrimSpace(host) == "" {
-		return fmt.Errorf("%s %q has no host", what, addr)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return fmt.Errorf("%s %q: port is not a number", what, addr)
-	}
+func validatePort(machineName, what string, port int) error {
 	if port < 1 || port > 65535 {
-		return fmt.Errorf("%s %q: port %d out of range 1-65535", what, addr, port)
-	}
-	return nil
-}
-
-func uniqueAddresses(addrs ...string) error {
-	seen := make(map[string]bool, len(addrs))
-	for _, addr := range addrs {
-		if seen[addr] {
-			return fmt.Errorf("address %q is used more than once", addr)
-		}
-		seen[addr] = true
+		return fmt.Errorf("machine %q: platform.nats.%s must be in range 1-65535, got %d", machineName, what, port)
 	}
 	return nil
 }

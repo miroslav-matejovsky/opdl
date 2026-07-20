@@ -15,12 +15,16 @@ project "customer-a" {
       ip       = "10.0.1.10"
       services = ["sensor-services"]
 
-      # primary slot is defined by platform.nats; standby is omitted so only primary is deployed.
+      # Both platform blocks are mandatory. This machine opts out of a local
+      # standby process; the others below opt in.
       platform {
         nats {
-          client_address  = "10.0.1.10:4222"
-          cluster_address = "10.0.1.10:6222"
-          monitor_address = "127.0.0.1:8222"
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = true
         }
       }
     }
@@ -31,9 +35,12 @@ project "customer-a" {
       services = ["core-services"]
       platform {
         nats {
-          client_address  = "10.0.1.11:4222"
-          cluster_address = "10.0.1.11:6222"
-          monitor_address = "127.0.0.1:8222"
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = false
         }
       }
     }
@@ -46,9 +53,12 @@ project "customer-a" {
       services = ["core-services"]
       platform {
         nats {
-          client_address  = "10.0.2.10:4222"
-          cluster_address = "10.0.2.10:6222"
-          monitor_address = "127.0.0.1:8222"
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = false
         }
       }
     }
@@ -58,9 +68,12 @@ project "customer-a" {
       services = ["core-services"]
       platform {
         nats {
-          client_address  = "10.0.2.11:4222"
-          cluster_address = "10.0.2.11:6222"
-          monitor_address = "127.0.0.1:8222"
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = false
         }
       }
     }
@@ -70,9 +83,12 @@ project "customer-a" {
       services = ["integration-services"]
       platform {
         nats {
-          client_address  = "10.0.2.12:4222"
-          cluster_address = "10.0.2.12:6222"
-          monitor_address = "127.0.0.1:8222"
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = false
         }
       }
     }
