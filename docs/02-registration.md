@@ -22,11 +22,19 @@ machine and IP as the origin. A client cannot supply or override them.
 
 ## The asynchronous contract
 
-The POST is purely asynchronous. Invalid input returns `400` and publishes
-nothing. A durably published proposal returns `202` with its `proposal_id` and
-the journal sequence it was given. A journal that will not accept the write
-returns `503`: nothing was recorded, so the same request will succeed once the
-site can write again, which makes it the one failure a client can act on.
+The POST is purely asynchronous. A request that violates the schema (an
+out-of-range integer, an unknown field, a wrong type) is refused by huma with
+`422` before it reaches the domain. Input that satisfies the schema but the
+domain refuses (a blank advertised name, an unknown role) returns `400`. Neither
+publishes anything. A durably published proposal returns `202` with its
+`proposal_id` and the journal sequence it was given. A journal that will not
+accept the write returns `503`: nothing was recorded, so the same request will
+succeed once the site can write again, which makes it the one failure a client
+can act on.
+
+Errors are served as RFC 9457 problem+json (`application/problem+json`). The
+platform's stable machine code (`invalid_request`, `registration_not_found`,
+`journal_unavailable`, `internal_error`) is carried in the `detail` field.
 
 There is no immediate `409`. A conflict is a projected outcome, not a
 race-sensitive POST result: at the moment the journal accepts a proposal, nothing

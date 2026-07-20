@@ -16,6 +16,7 @@ excludeFiles:
 
 vendors:
   toml: { in: "github.com/BurntSushi/toml**" }
+  huma: { in: "github.com/danielgtaylor/huma/v2**" }
   nats-server: { in: "github.com/nats-io/nats-server/v2/**" }
   nats-client: { in: "github.com/nats-io/nats.go**" }
   sys: { in: "golang.org/x/sys/**" }
@@ -38,6 +39,8 @@ components:
   registration: { in: internal/registration }
 
 deps:
+  api:
+    canUse: [huma]
   cmd:
     mayDependOn: [app]
   embedded:
@@ -58,6 +61,7 @@ deps:
     canUse: [nats-server, nats-client]
     mayDependOn: [deployment, events, eventfabric]
   httpapi:
+    canUse: [huma]
     mayDependOn: [api, registration]
   registration:
     canUse: [stablehash]

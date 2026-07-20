@@ -39,7 +39,7 @@ namespace Opdl.Sdk.Client.Registrations.Conflicts
         /// <returns>A List&lt;global::Opdl.Sdk.Client.Models.RegistrationConflict&gt;</returns>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
-        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 500 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 500 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<List<global::Opdl.Sdk.Client.Models.RegistrationConflict>?> GetAsync(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -52,7 +52,7 @@ namespace Opdl.Sdk.Client.Registrations.Conflicts
             var requestInfo = ToGetRequestInformation(requestConfiguration);
             var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
             {
-                { "500", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
+                { "500", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
             };
             var collectionResult = await RequestAdapter.SendCollectionAsync<global::Opdl.Sdk.Client.Models.RegistrationConflict>(requestInfo, global::Opdl.Sdk.Client.Models.RegistrationConflict.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
             return collectionResult?.AsList();

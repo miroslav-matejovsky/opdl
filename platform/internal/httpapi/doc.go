@@ -1,12 +1,12 @@
-// Package httpapi is the platform's HTTP handler: the server-side implementation
-// of the API contract declared in platform/api. It builds the handler the runtime
-// serves on the configured port.
+// Package httpapi wires the platform's registration services into the public
+// HTTP API declared in platform/api.
 //
-// NewHandler wires the registration service into exact request, status, list,
-// and conflict routes. The package owns strict request decoding and response
-// encoding; the caller owns the server's lifecycle. Response body types come
-// from platform/api so the served JSON and the published contract stay
-// identical.
+// NewHandler binds the platform's huma operations (platform/api.Register) to a
+// standard-library ServeMux through the humago adapter, filling the api.Handlers
+// seam with closures backed by the command and query services. Operation
+// definitions, request decoding, validation, and response encoding all belong to
+// huma and platform/api; this package only builds the mux and supplies the domain
+// behavior, and never learns which transport carries it.
 //
 // It knows nothing about how registration is decided, and it must not: it does
 // not import the fabric or any backend, it holds no identity of its own, and the

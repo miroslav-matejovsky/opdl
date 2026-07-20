@@ -25,7 +25,7 @@ namespace Opdl.Sdk.Client.Registrations
             get => new global::Opdl.Sdk.Client.Registrations.Conflicts.ConflictsRequestBuilder(PathParameters, RequestAdapter);
         }
         /// <summary>Gets an item from the Opdl.Sdk.Client.registrations.item collection</summary>
-        /// <param name="position">Unique identifier of the item</param>
+        /// <param name="position">Opaque proposal identifier returned by registerUnit.</param>
         /// <returns>A <see cref="global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder"/></returns>
         public global::Opdl.Sdk.Client.Registrations.Item.WithProposal_ItemRequestBuilder this[string position]
         {
@@ -58,6 +58,7 @@ namespace Opdl.Sdk.Client.Registrations
         /// <returns>A List&lt;global::Opdl.Sdk.Client.Models.Registration&gt;</returns>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 4XX or 5XX status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<List<global::Opdl.Sdk.Client.Models.Registration>?> GetAsync(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -68,7 +69,11 @@ namespace Opdl.Sdk.Client.Registrations
         {
 #endif
             var requestInfo = ToGetRequestInformation(requestConfiguration);
-            var collectionResult = await RequestAdapter.SendCollectionAsync<global::Opdl.Sdk.Client.Models.Registration>(requestInfo, global::Opdl.Sdk.Client.Models.Registration.CreateFromDiscriminatorValue, default, cancellationToken).ConfigureAwait(false);
+            var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
+            {
+                { "XXX", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
+            };
+            var collectionResult = await RequestAdapter.SendCollectionAsync<global::Opdl.Sdk.Client.Models.Registration>(requestInfo, global::Opdl.Sdk.Client.Models.Registration.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
             return collectionResult?.AsList();
         }
         /// <summary>
@@ -78,8 +83,10 @@ namespace Opdl.Sdk.Client.Registrations
         /// <param name="body">The request body</param>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
-        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 400 status code</exception>
-        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 503 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 400 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 422 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 500 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 503 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<global::Opdl.Sdk.Client.Models.ProposalAccepted?> PostAsync(global::Opdl.Sdk.Client.Models.RegistrationRequest body, Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -93,8 +100,10 @@ namespace Opdl.Sdk.Client.Registrations
             var requestInfo = ToPostRequestInformation(body, requestConfiguration);
             var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
             {
-                { "400", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
-                { "503", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
+                { "400", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
+                { "422", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
+                { "500", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
+                { "503", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
             };
             return await RequestAdapter.SendAsync<global::Opdl.Sdk.Client.Models.ProposalAccepted>(requestInfo, global::Opdl.Sdk.Client.Models.ProposalAccepted.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
         }

@@ -115,8 +115,10 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 	addr := cfg.Address()
 	fmt.Printf("platform: %s active, listening on %s\n", role, addr)
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           httpapi.NewHandler(site.commands, site.queries),
+		Addr: addr,
+		// exposeSpec is false: the authoritative OpenAPI artifact is
+		// api-specifications/openapi.yaml in git, not an endpoint on the runtime.
+		Handler:           httpapi.NewHandler(site.commands, site.queries, false),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout(),
 	}
 	serveErr := serveListener(serveCtx, srv, listener, site, cfg.ShutdownTimeout(), func() error {

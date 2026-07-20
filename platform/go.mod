@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/danielgtaylor/huma/v2 v2.39.0
 	github.com/miroslav-matejovsky/opdl/utils v0.0.0
 	github.com/nats-io/nats-server/v2 v2.14.3
 	github.com/nats-io/nats.go v1.52.0

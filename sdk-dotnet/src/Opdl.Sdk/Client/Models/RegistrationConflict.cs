@@ -9,12 +9,10 @@ namespace Opdl.Sdk.Client.Models
 {
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     #pragma warning disable CS1591
-    public partial class RegistrationConflict : IAdditionalDataHolder, IParsable
+    public partial class RegistrationConflict : IParsable
     #pragma warning restore CS1591
     {
-        /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
-        public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The losers property</summary>
+        /// <summary>Competing proposals rejected with registration_key_conflict.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public List<global::Opdl.Sdk.Client.Models.Registration>? Losers { get; set; }
@@ -22,7 +20,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public List<global::Opdl.Sdk.Client.Models.Registration> Losers { get; set; }
 #endif
-        /// <summary>The resolution_status property</summary>
+        /// <summary>Resolution status of the conflict, resolved when the winner is the deterministic survivor.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? ResolutionStatus { get; set; }
@@ -30,9 +28,9 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string ResolutionStatus { get; set; }
 #endif
-        /// <summary>The unit_id property</summary>
+        /// <summary>Unit identifier shared by all competing proposals.</summary>
         public int? UnitId { get; set; }
-        /// <summary>The unit_type property</summary>
+        /// <summary>Unit type identifier shared by all competing proposals.</summary>
         public int? UnitType { get; set; }
         /// <summary>The winner property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
@@ -42,13 +40,6 @@ namespace Opdl.Sdk.Client.Models
 #else
         public global::Opdl.Sdk.Client.Models.Registration Winner { get; set; }
 #endif
-        /// <summary>
-        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Models.RegistrationConflict"/> and sets the default values.
-        /// </summary>
-        public RegistrationConflict()
-        {
-            AdditionalData = new Dictionary<string, object>();
-        }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
@@ -86,7 +77,6 @@ namespace Opdl.Sdk.Client.Models
             writer.WriteIntValue("unit_id", UnitId);
             writer.WriteIntValue("unit_type", UnitType);
             writer.WriteObjectValue<global::Opdl.Sdk.Client.Models.Registration>("winner", Winner);
-            writer.WriteAdditionalData(AdditionalData);
         }
     }
 }

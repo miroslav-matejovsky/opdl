@@ -9,12 +9,10 @@ namespace Opdl.Sdk.Client.Models
 {
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     #pragma warning disable CS1591
-    public partial class PlatformInstanceRegistrationStatus : IAdditionalDataHolder, IParsable
+    public partial class PlatformInstanceRegistrationStatus : IParsable
     #pragma warning restore CS1591
     {
-        /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
-        public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The ip property</summary>
+        /// <summary>Platform instance&apos;s descriptor IP, empty when the deployment no longer has the machine.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Ip { get; set; }
@@ -22,7 +20,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Ip { get; set; }
 #endif
-        /// <summary>The machine property</summary>
+        /// <summary>Platform instance&apos;s descriptor machine.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Machine { get; set; }
@@ -30,7 +28,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Machine { get; set; }
 #endif
-        /// <summary>The reason property</summary>
+        /// <summary>Optional machine-readable rejection code.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Reason { get; set; }
@@ -38,7 +36,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Reason { get; set; }
 #endif
-        /// <summary>The status property</summary>
+        /// <summary>Platform instance&apos;s registration status: pending, accepted, or rejected.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Status { get; set; }
@@ -46,13 +44,6 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Status { get; set; }
 #endif
-        /// <summary>
-        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Models.PlatformInstanceRegistrationStatus"/> and sets the default values.
-        /// </summary>
-        public PlatformInstanceRegistrationStatus()
-        {
-            AdditionalData = new Dictionary<string, object>();
-        }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
@@ -88,7 +79,6 @@ namespace Opdl.Sdk.Client.Models
             writer.WriteStringValue("machine", Machine);
             writer.WriteStringValue("reason", Reason);
             writer.WriteStringValue("status", Status);
-            writer.WriteAdditionalData(AdditionalData);
         }
     }
 }

@@ -56,8 +56,10 @@
     ]
   },
   "cSpell.words": [
+    "apispecifications",
     "atomicfile",
     "builderdeployment",
+    "danielgtaylor",
     "deadcode",
     "eventfabric",
     "eventmodel",
@@ -73,6 +75,8 @@
     "GOWORK",
     "hclparse",
     "httpapi",
+    "huma",
+    "humago",
     "idempotently",
     "jsonfields",
     "Kiota",
@@ -90,6 +94,7 @@
     "processtree",
     "slnx",
     "stablehash",
+    "stdlib",
     "stretchr",
     "taskfile",
     "testname",
