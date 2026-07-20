@@ -59,10 +59,6 @@ lag_bound = "30s"
 data_dir = " /var/lib/opdl/nats "
 startup_timeout = "30s"
 catch_up_timeout = "25s"
-client_address = "127.0.0.1:4001"
-cluster_address = "127.0.0.1:4002"
-monitor_address = "127.0.0.1:4003"
-routes = ["127.0.0.2:4002"]
 `))
 	require.NoError(t, err)
 
@@ -70,24 +66,6 @@ routes = ["127.0.0.2:4002"]
 	require.Equal(t, "/var/lib/opdl/nats", nats.DataDir, "surrounding space is trimmed")
 	require.Equal(t, "30s", nats.StartupTimeout)
 	require.Equal(t, "25s", nats.CatchUpTimeout)
-	require.Equal(t, "127.0.0.1:4001", nats.ClientAddress)
-	require.Equal(t, "127.0.0.1:4002", nats.ClusterAddress)
-	require.Equal(t, "127.0.0.1:4003", nats.MonitorAddress)
-	require.Equal(t, []string{"127.0.0.2:4002"}, nats.Routes)
-}
-
-// TestLoadDistinguishesAnAbsentRouteListFromAnEmptyOne pins what composition
-// depends on: an omitted list keeps the peers the descriptor derived, while an
-// explicit empty list is a deliberate "route to nobody".
-func TestLoadDistinguishesAnAbsentRouteListFromAnEmptyOne(t *testing.T) {
-	absent, err := config.Load(writeConfig(t, validBaseConfig))
-	require.NoError(t, err)
-	require.Nil(t, absent.EventFabric().Nats.Routes)
-
-	empty, err := config.Load(writeConfig(t, validBaseConfig+"routes = []\n"))
-	require.NoError(t, err)
-	require.NotNil(t, empty.EventFabric().Nats.Routes)
-	require.Empty(t, empty.EventFabric().Nats.Routes)
 }
 
 // TestLoadAcceptsUnusableDataDir documents that a configured path is not checked

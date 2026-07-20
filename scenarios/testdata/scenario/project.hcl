@@ -11,9 +11,13 @@ project "scenario" {
       ip       = "127.0.0.1"
       services = ["core-services"]
 
-      # This fixture covers the explicit single-process policy.
+      # This fixture covers the single-slot policy (`standby` block omitted).
       platform {
-        warm_standby = false
+        nats {
+          client_address  = "127.0.0.1:4222"
+          cluster_address = "127.0.0.1:6222"
+          monitor_address = "127.0.0.1:8222"
+        }
       }
     }
   }

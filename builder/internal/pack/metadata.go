@@ -46,9 +46,9 @@ const (
 	standbyInstance = "standby"
 )
 
-func launches(warmStandby bool) (primary Launch, standby *Launch) {
+func launches(hasStandby bool) (primary Launch, standby *Launch) {
 	primary = Launch{Args: []string{instanceFlag, primaryInstance}}
-	if !warmStandby {
+	if !hasStandby {
 		return primary, nil
 	}
 	standby = &Launch{Args: []string{instanceFlag, standbyInstance}}

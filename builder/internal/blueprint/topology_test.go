@@ -22,6 +22,13 @@ func validProject() *blueprint.Project {
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
+				Platform: &blueprint.Platform{
+					Nats: &blueprint.Nats{
+						ClientAddress:  "10.0.1.10:4222",
+						ClusterAddress: "10.0.1.10:6222",
+						MonitorAddress: "127.0.0.1:8222",
+					},
+				},
 			}},
 		}},
 	}
@@ -88,6 +95,13 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 			Role:     "sensor-node",
 			IP:       "10.0.1.12",
 			Services: []string{"sensor-services"},
+			Platform: &blueprint.Platform{
+				Nats: &blueprint.Nats{
+					ClientAddress:  "10.0.1.12:4222",
+					ClusterAddress: "10.0.1.12:6222",
+					MonitorAddress: "127.0.0.1:8222",
+				},
+			},
 		}},
 	})
 	require.ErrorContains(t, p.Validate(), "duplicate site")
@@ -104,6 +118,13 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 			Role:     "gateway-node",
 			IP:       "10.0.1.10",
 			Services: []string{"core-services"},
+			Platform: &blueprint.Platform{
+				Nats: &blueprint.Nats{
+					ClientAddress:  "10.0.1.10:4222",
+					ClusterAddress: "10.0.1.10:6222",
+					MonitorAddress: "127.0.0.1:8222",
+				},
+			},
 		})
 		require.ErrorContains(t, p.Validate(), `machines "sensor" and "gateway" share ip "10.0.1.10"`)
 	})
@@ -117,6 +138,13 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
+				Platform: &blueprint.Platform{
+					Nats: &blueprint.Nats{
+						ClientAddress:  "10.0.1.10:4222",
+						ClusterAddress: "10.0.1.10:6222",
+						MonitorAddress: "127.0.0.1:8222",
+					},
+				},
 			}},
 		})
 		require.ErrorContains(t, p.Validate(), `share ip "10.0.1.10"`)
@@ -128,11 +156,10 @@ func TestFeatures(t *testing.T) {
 	require.True(t, f.Chaos)
 }
 
-// TestMachinePlatformWarmStandby checks the platform subsection decodes as a
-// presence-aware value: absent block, absent attribute, and explicit true/false
-// are all distinguishable, which is what lets resolution default an omission to
-// enabled while honoring an explicit opt-out.
-func TestMachinePlatformWarmStandby(t *testing.T) {
+// TestMachinePlatformStandby checks the platform subsection decodes as a
+// presence-aware value: absent block, absent standby block, and explicit standby
+// subsections are all distinguishable.
+func TestMachinePlatformStandby(t *testing.T) {
 	machine := func(t *testing.T, body string) blueprint.Machine {
 		t.Helper()
 		p := decodeHCL(t, `project "p" {
@@ -153,22 +180,38 @@ func TestMachinePlatformWarmStandby(t *testing.T) {
 	t.Run("no platform block", func(t *testing.T) {
 		require.Nil(t, machine(t, "").Platform)
 	})
-	t.Run("platform block without warm_standby", func(t *testing.T) {
-		m := machine(t, "platform {}")
+	t.Run("platform block without standby", func(t *testing.T) {
+		m := machine(t, `platform {
+		  nats {
+		    client_address  = "10.0.1.10:4222"
+		    cluster_address = "10.0.1.10:6222"
+		    monitor_address = "127.0.0.1:8222"
+		  }
+		}`)
 		require.NotNil(t, m.Platform)
-		require.Nil(t, m.Platform.WarmStandby)
+		require.NotNil(t, m.Platform.Nats)
+		require.Nil(t, m.Platform.Standby)
 	})
-	t.Run("explicit false", func(t *testing.T) {
-		m := machine(t, "platform { warm_standby = false }")
+	t.Run("explicit standby", func(t *testing.T) {
+		m := machine(t, `platform {
+		  nats {
+		    client_address  = "10.0.1.10:4222"
+		    cluster_address = "10.0.1.10:6222"
+		    monitor_address = "127.0.0.1:8222"
+		  }
+		  standby {
+		    nats {
+		      client_address  = "10.0.1.10:4223"
+		      cluster_address = "10.0.1.10:6223"
+		      monitor_address = "127.0.0.1:8223"
+		    }
+		  }
+		}`)
 		require.NotNil(t, m.Platform)
-		require.NotNil(t, m.Platform.WarmStandby)
-		require.False(t, *m.Platform.WarmStandby)
-	})
-	t.Run("explicit true", func(t *testing.T) {
-		m := machine(t, "platform { warm_standby = true }")
-		require.NotNil(t, m.Platform)
-		require.NotNil(t, m.Platform.WarmStandby)
-		require.True(t, *m.Platform.WarmStandby)
+		require.NotNil(t, m.Platform.Nats)
+		require.NotNil(t, m.Platform.Standby)
+		require.NotNil(t, m.Platform.Standby.Nats)
+		require.Equal(t, "10.0.1.10:4223", m.Platform.Standby.Nats.ClientAddress)
 	})
 }
 
@@ -250,6 +293,13 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      role     = "node"
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
+			      platform {
+			        nats {
+			          client_address  = "10.0.1.10:4222"
+			          cluster_address = "10.0.1.10:6222"
+			          monitor_address = "127.0.0.1:8222"
+			        }
+			      }
 			    }
 			  }
 			  site "south" {
@@ -257,6 +307,13 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      role     = "node"
 			      ip       = "10.0.1.11"
 			      services = ["core-services"]
+			      platform {
+			        nats {
+			          client_address  = "10.0.1.11:4222"
+			          cluster_address = "10.0.1.11:6222"
+			          monitor_address = "127.0.0.1:8222"
+			        }
+			      }
 			    }
 			  }
 			}`,
@@ -267,6 +324,32 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := decodeHCL(t, tc.hcl)
+			require.ErrorContains(t, p.Validate(), tc.errText)
+		})
+	}
+}
+
+func TestProjectValidateNatsFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*blueprint.Project)
+		errText string
+	}{
+		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, "platform.nats configuration is required"},
+		{"missing nats block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats = nil }, "platform.nats configuration is required"},
+		{"missing client_address", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientAddress = "" }, "platform.nats.client_address is required"},
+		{"invalid client_address", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientAddress = "bad" }, "must be host:port"},
+		{"missing cluster_address", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterAddress = "" }, "platform.nats.cluster_address is required"},
+		{"missing monitor_address", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.MonitorAddress = "" }, "platform.nats.monitor_address is required"},
+		{"duplicate nats address", func(p *blueprint.Project) {
+			p.Sites[0].Machines[0].Platform.Nats.ClusterAddress = p.Sites[0].Machines[0].Platform.Nats.ClientAddress
+		}, "is used more than once"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validProject()
+			tc.mutate(p)
 			require.ErrorContains(t, p.Validate(), tc.errText)
 		})
 	}

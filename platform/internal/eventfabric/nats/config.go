@@ -20,14 +20,6 @@ const (
 	// lifecycle events.
 	Name = "nats"
 
-	// ClientPort is the fixed port the embedded server serves clients on.
-	ClientPort = 4222
-	// ClusterPort is the fixed port the embedded servers route to each other on.
-	ClusterPort = 6222
-	// MonitorPort is the fixed port the embedded server serves monitoring on. It
-	// binds to loopback by default so it is not exposed off the machine.
-	MonitorPort = 8222
-
 	// smallSiteMax is the largest site that runs one JetStream storage node. A
 	// site with three or more machines runs three.
 	smallSiteMax = 2
@@ -124,7 +116,7 @@ type Config struct {
 // whether this one runs a server at all, which peers it clusters with, and which
 // servers it connects to. It leaves DataDir and credentials for the composer,
 // which knows the runtime data path and reads secrets from files.
-func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
+func DefaultConfig(descriptor deployment.Descriptor, active bool) (Config, error) {
 	ips, err := siteIPs(descriptor)
 	if err != nil {
 		return Config{}, err
@@ -132,33 +124,15 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	storage := StorageNodes(slices.Sorted(maps.Keys(ips)))
 	hostsStorage := slices.Contains(storage, descriptor.Machine)
 
-	// Every machine can reach all storage nodes. A storage machine puts its own
-	// server first below, while retaining the peers for its client-only standby.
-	//
-	// The cluster is exactly the storage nodes: they are the only servers, and a
-	// server that is not one of them would only add a peer to the journal's
-	// metadata group without adding a replica to hold it.
-	servers := make([]string, 0, len(storage))
-	routes := make([]string, 0, len(storage))
-	for _, machine := range storage {
-		client, err := address(ips[machine], ClientPort)
-		if err != nil {
-			return Config{}, fmt.Errorf("nats: storage node %q: %w", machine, err)
-		}
-		servers = append(servers, client)
-		if machine == descriptor.Machine {
-			continue
-		}
-		route, err := address(ips[machine], ClusterPort)
-		if err != nil {
-			return Config{}, fmt.Errorf("nats: storage node %q: %w", machine, err)
-		}
-		routes = append(routes, route)
+	nats := descriptor.Slots.Primary.EventFabric.Nats
+	if !active && descriptor.Slots.Standby != nil {
+		nats = descriptor.Slots.Standby.EventFabric.Nats
 	}
 
 	cfg := Config{
 		ClusterName:     string(eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)),
-		Servers:         servers,
+		Servers:         append([]string(nil), nats.Servers...),
+		Routes:          append([]string(nil), nats.Routes...),
 		HostsStorage:    hostsStorage,
 		Replicas:        Replicas(len(ips)),
 		MaxBytes:        DefaultMaxBytes,
@@ -169,23 +143,11 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 		CatchUpTimeout:  DefaultCatchUpTimeout,
 		ShutdownTimeout: DefaultShutdownTimeout,
 	}
-	if !hostsStorage {
-		return cfg, nil
-	}
-
-	cfg.ServerName = descriptor.Machine
-	cfg.Routes = routes
-	if cfg.ClientAddress, err = address(descriptor.IP, ClientPort); err != nil {
-		return Config{}, fmt.Errorf("nats: client address: %w", err)
-	}
-	cfg.Servers = append([]string{cfg.ClientAddress}, slices.DeleteFunc(cfg.Servers, func(server string) bool {
-		return server == cfg.ClientAddress
-	})...)
-	if cfg.ClusterAddress, err = address(descriptor.IP, ClusterPort); err != nil {
-		return Config{}, fmt.Errorf("nats: cluster address: %w", err)
-	}
-	if cfg.MonitorAddress, err = address("127.0.0.1", MonitorPort); err != nil {
-		return Config{}, fmt.Errorf("nats: monitor address: %w", err)
+	if hostsStorage {
+		cfg.ServerName = descriptor.Machine
+		cfg.ClientAddress = nats.ClientAddress
+		cfg.ClusterAddress = nats.ClusterAddress
+		cfg.MonitorAddress = nats.MonitorAddress
 	}
 	return cfg, nil
 }
@@ -360,17 +322,6 @@ func (c Config) validateCredentials() error {
 		return fmt.Errorf("nats: username and password are required when any address is non-loopback")
 	}
 	return nil
-}
-
-// address renders a validated host:port from an IP and a port.
-func address(ip string, port int) (string, error) {
-	if strings.TrimSpace(ip) == "" {
-		return "", fmt.Errorf("host is required")
-	}
-	if port < 1 || port > 65535 {
-		return "", fmt.Errorf("port %d is out of range 1-65535", port)
-	}
-	return net.JoinHostPort(ip, strconv.Itoa(port)), nil
 }
 
 // validateAddress checks addr is a usable host:port.

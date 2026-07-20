@@ -65,13 +65,13 @@ func TestBinaryExtByTarget(t *testing.T) {
 }
 
 func TestLaunches(t *testing.T) {
-	t.Run("warm standby enabled", func(t *testing.T) {
+	t.Run("standby enabled", func(t *testing.T) {
 		primary, standby := launches(true)
 		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
 		require.Equal(t, &Launch{Args: []string{"-instance", "standby"}}, standby)
 	})
 
-	t.Run("warm standby disabled", func(t *testing.T) {
+	t.Run("standby disabled", func(t *testing.T) {
 		primary, standby := launches(false)
 		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
 		require.Nil(t, standby)

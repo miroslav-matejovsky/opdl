@@ -12,8 +12,20 @@
   "features": {
     "chaos": false
   },
-  "instances": {
-    "warm_standby": false
+  "slots": {
+    "primary": {
+      "event_fabric": {
+        "nats": {
+          "client_address": "127.0.0.1:4222",
+          "cluster_address": "127.0.0.1:6222",
+          "monitor_address": "127.0.0.1:8222",
+          "routes": null,
+          "servers": [
+            "127.0.0.1:4222"
+          ]
+        }
+      }
+    }
   },
   "event_fabric": {
     "peers": []

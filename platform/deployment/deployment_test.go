@@ -9,18 +9,17 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 )
 
-func TestDescriptorRequiresExplicitInstancePolicy(t *testing.T) {
+func TestDescriptorRequiresExplicitSlotsPolicy(t *testing.T) {
 	tests := map[string]struct {
 		json string
 		err  string
 	}{
-		"missing instances":       {json: `{}`, err: "instances is required"},
-		"null instances":          {json: `{"instances":null}`, err: "instances is required"},
-		"missing warm standby":    {json: `{"instances":{}}`, err: "instances.warm_standby is required"},
-		"null warm standby":       {json: `{"instances":{"warm_standby":null}}`, err: "instances.warm_standby is required"},
-		"invalid warm standby":    {json: `{"instances":{"warm_standby":"yes"}}`, err: "invalid instances.warm_standby"},
-		"explicit false accepted": {json: `{"instances":{"warm_standby":false}}`},
-		"explicit true accepted":  {json: `{"instances":{"warm_standby":true}}`},
+		"missing slots":                {json: `{}`, err: "slots is required"},
+		"null slots":                   {json: `{"slots":null}`, err: "slots is required"},
+		"missing primary slot":         {json: `{"slots":{}}`, err: "slots.primary is required"},
+		"null primary slot":            {json: `{"slots":{"primary":null}}`, err: "slots.primary is required"},
+		"explicit primary only":        {json: `{"slots":{"primary":{}}}`},
+		"explicit primary and standby": {json: `{"slots":{"primary":{},"standby":{}}}`},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -31,7 +30,7 @@ func TestDescriptorRequiresExplicitInstancePolicy(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, test.json == `{"instances":{"warm_standby":true}}`, descriptor.Instances.WarmStandby)
+			require.Equal(t, test.json == `{"slots":{"primary":{},"standby":{}}}`, descriptor.Slots.Standby != nil)
 		})
 	}
 }

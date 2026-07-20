@@ -3,6 +3,7 @@ package blueprint
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -60,12 +61,25 @@ type Machine struct {
 // subsection of a machine so a blueprint reader sees these policies grouped and
 // explicit rather than mixed in with the machine's identity and services.
 type Platform struct {
-	// WarmStandby opts the machine in or out of running a standby process: a
-	// second local process that stays caught up and can take over after the active
-	// process exits. It is presence-aware. An omitted attribute (or an omitted
-	// platform block) leaves it nil and resolves to the default of enabled; an
-	// explicit true or false overrides that default.
-	WarmStandby *bool `hcl:"warm_standby,optional"`
+	// Nats is the primary slot's explicit Event Fabric NATS configuration.
+	Nats *Nats `hcl:"nats,block"`
+	// Standby is the optional standby slot policy. When provided, its Nats block must be filled.
+	Standby *Standby `hcl:"standby,block"`
+}
+
+// Standby holds the optional standby slot configuration subsection.
+type Standby struct {
+	Nats *Nats `hcl:"nats,block"`
+}
+
+// Nats is a machine's Event Fabric NATS configuration. It is authored inside
+// platform {} so the runtime addresses are explicit right in the blueprint.
+type Nats struct {
+	ClientAddress  string   `hcl:"client_address"`
+	ClusterAddress string   `hcl:"cluster_address"`
+	MonitorAddress string   `hcl:"monitor_address"`
+	Routes         []string `hcl:"routes,optional"`
+	Servers        []string `hcl:"servers,optional"`
 }
 
 // Validate checks a project against the model's structural rules. It fails
@@ -148,6 +162,91 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 			return fmt.Errorf("machine %q: service %q assigned more than once", machine.Name, name)
 		}
 		assigned[name] = true
+	}
+
+	if machine.Platform == nil || machine.Platform.Nats == nil {
+		return fmt.Errorf("machine %q: platform.nats configuration is required", machine.Name)
+	}
+	if err := validateNatsBlock(machine.Name, "platform.nats", machine.Platform.Nats); err != nil {
+		return err
+	}
+	var allAddrs []string
+	allAddrs = append(allAddrs, machine.Platform.Nats.ClientAddress, machine.Platform.Nats.ClusterAddress, machine.Platform.Nats.MonitorAddress)
+	if machine.Platform.Standby != nil {
+		if machine.Platform.Standby.Nats == nil {
+			return fmt.Errorf("machine %q: platform.standby requires nats block", machine.Name)
+		}
+		if err := validateNatsBlock(machine.Name, "platform.standby.nats", machine.Platform.Standby.Nats); err != nil {
+			return err
+		}
+		allAddrs = append(allAddrs, machine.Platform.Standby.Nats.ClientAddress, machine.Platform.Standby.Nats.ClusterAddress, machine.Platform.Standby.Nats.MonitorAddress)
+	}
+	if err := uniqueAddresses(allAddrs...); err != nil {
+		return fmt.Errorf("machine %q: platform.%w", machine.Name, err)
+	}
+	return nil
+}
+
+func validateNatsBlock(machineName, prefix string, nats *Nats) error {
+	if strings.TrimSpace(nats.ClientAddress) == "" {
+		return fmt.Errorf("machine %q: %s.client_address is required", machineName, prefix)
+	}
+	if err := validateAddress("client_address", nats.ClientAddress); err != nil {
+		return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
+	}
+	if strings.TrimSpace(nats.ClusterAddress) == "" {
+		return fmt.Errorf("machine %q: %s.cluster_address is required", machineName, prefix)
+	}
+	if err := validateAddress("cluster_address", nats.ClusterAddress); err != nil {
+		return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
+	}
+	if strings.TrimSpace(nats.MonitorAddress) == "" {
+		return fmt.Errorf("machine %q: %s.monitor_address is required", machineName, prefix)
+	}
+	if err := validateAddress("monitor_address", nats.MonitorAddress); err != nil {
+		return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
+	}
+	if err := uniqueAddresses(nats.ClientAddress, nats.ClusterAddress, nats.MonitorAddress); err != nil {
+		return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
+	}
+	for _, route := range nats.Routes {
+		if err := validateAddress("routes", route); err != nil {
+			return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
+		}
+	}
+	for _, server := range nats.Servers {
+		if err := validateAddress("servers", server); err != nil {
+			return fmt.Errorf("machine %q: %s.%w", machineName, prefix, err)
+		}
+	}
+	return nil
+}
+
+func validateAddress(what, addr string) error {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%s %q must be host:port: %w", what, addr, err)
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("%s %q has no host", what, addr)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("%s %q: port is not a number", what, addr)
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("%s %q: port %d out of range 1-65535", what, addr, port)
+	}
+	return nil
+}
+
+func uniqueAddresses(addrs ...string) error {
+	seen := make(map[string]bool, len(addrs))
+	for _, addr := range addrs {
+		if seen[addr] {
+			return fmt.Errorf("address %q is used more than once", addr)
+		}
+		seen[addr] = true
 	}
 	return nil
 }

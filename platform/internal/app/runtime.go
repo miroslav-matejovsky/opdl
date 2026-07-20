@@ -37,7 +37,7 @@ const (
 //
 // Every packaged launch has an explicit role. A machine that opted out rejects
 // standby.
-func resolveRole(instance string, warmStandby bool) (redundancy.ProcessRole, error) {
+func resolveRole(instance string, hasStandby bool) (redundancy.ProcessRole, error) {
 	if instance == "" {
 		return "", fmt.Errorf("-instance primary|standby is required")
 	}
@@ -45,7 +45,7 @@ func resolveRole(instance string, warmStandby bool) (redundancy.ProcessRole, err
 	if err != nil {
 		return "", err
 	}
-	if !warmStandby && role == redundancy.RoleStandby {
+	if !hasStandby && role == redundancy.RoleStandby {
 		return "", fmt.Errorf("this machine does not run a warm standby: only -instance primary is valid")
 	}
 	return role, nil
@@ -72,8 +72,8 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.D
 	if acquired {
 		return runFencedActive(ctx, cfg, descriptor, role, statusPath, fence, activationInitial)
 	}
-	if !descriptor.Instances.WarmStandby {
-		return fmt.Errorf("another process already holds the active fence for machine %q and this machine does not run a warm standby", descriptor.Machine)
+	if descriptor.Slots.Standby == nil {
+		return fmt.Errorf("another process already holds the active fence for machine %q and this machine does not run a standby slot", descriptor.Machine)
 	}
 	return runStandby(ctx, cfg, descriptor, role, statusPath, fence)
 }

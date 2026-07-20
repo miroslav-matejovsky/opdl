@@ -223,6 +223,18 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		EventFabric: deployment.EventFabric{
 			Peers: []deployment.EventFabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
 		},
+		Slots: deployment.Slots{
+			Primary: deployment.Slot{
+				EventFabric: deployment.SlotEventFabric{
+					Nats: deployment.EventFabricNats{
+						ClientAddress:  "10.0.1.10:4222",
+						ClusterAddress: "10.0.1.10:6222",
+						MonitorAddress: "127.0.0.1:8222",
+						Servers:        []string{"10.0.1.10:4222"},
+					},
+				},
+			},
+		},
 	}
 	settings := func(t *testing.T, nats string) *config.Config {
 		t.Helper()
@@ -237,7 +249,7 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 	const required = "data_dir = \"/var/lib/opdl\"\nstartup_timeout = \"45s\"\ncatch_up_timeout = \"25s\"\n"
 
 	t.Run("no overrides uses the deployment", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t, required))
+		cfg, err := natsConfig(descriptor, settings(t, required), true)
 		require.NoError(t, err)
 		require.Equal(t, "10.0.1.10:4222", cfg.ClientAddress)
 		require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress)
@@ -249,38 +261,8 @@ func TestNatsConfigDerivesFromDescriptorAndAppliesOverrides(t *testing.T) {
 		require.Equal(t, 11*time.Second, cfg.ShutdownTimeout, "the fabric closes within the runtime's own bound")
 	})
 
-	t.Run("overrides move sockets", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t, required+`client_address = "127.0.0.1:4001"
-cluster_address = "127.0.0.1:4002"
-monitor_address = "127.0.0.1:4003"
-routes = ["127.0.0.1:4102"]
-servers = ["127.0.0.1:4001"]
-`))
-		require.NoError(t, err)
-		require.Equal(t, "127.0.0.1:4001", cfg.ClientAddress)
-		require.Equal(t, "127.0.0.1:4002", cfg.ClusterAddress)
-		require.Equal(t, "127.0.0.1:4003", cfg.MonitorAddress)
-		require.Equal(t, []string{"127.0.0.1:4102"}, cfg.Routes)
-		require.Equal(t, []string{"127.0.0.1:4001"}, cfg.Servers)
-	})
-
-	t.Run("a partial override keeps the rest of the deployment", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t, required+"client_address = \"127.0.0.1:4001\"\n"))
-		require.NoError(t, err)
-		require.Equal(t, "127.0.0.1:4001", cfg.ClientAddress)
-		require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress, "an absent override is not a blank")
-		require.Equal(t, "127.0.0.1:8222", cfg.MonitorAddress)
-	})
-
-	t.Run("a storage node prefers its own server and retains configured peers", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t,
-			required+"client_address = \"127.0.0.1:4001\"\nservers = [\"10.9.9.9:4222\"]\n"))
-		require.NoError(t, err)
-		require.Equal(t, []string{"127.0.0.1:4001", "10.9.9.9:4222"}, cfg.Servers)
-	})
-
 	t.Run("storage and replicas come from the site, not the file", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t, required))
+		cfg, err := natsConfig(descriptor, settings(t, required), true)
 		require.NoError(t, err)
 		require.True(t, cfg.HostsStorage, "node-a sorts first in a two-machine site")
 		require.Equal(t, 1, cfg.Replicas, "a site smaller than three machines runs one replica")
@@ -290,7 +272,7 @@ servers = ["127.0.0.1:4001"]
 		dir := t.TempDir()
 		secrets := filepath.Join(dir, "creds.toml")
 		require.NoError(t, os.WriteFile(secrets, []byte("username = \"opdl\"\npassword = \"s3cret\"\n"), 0o600))
-		cfg, err := natsConfig(descriptor, settings(t, required+fmt.Sprintf("credentials_file = %q\n", filepath.ToSlash(secrets))))
+		cfg, err := natsConfig(descriptor, settings(t, required+fmt.Sprintf("credentials_file = %q\n", filepath.ToSlash(secrets))), true)
 		require.NoError(t, err)
 		require.Equal(t, "opdl", cfg.Username)
 		require.Equal(t, "s3cret", cfg.Password)
@@ -468,7 +450,16 @@ func TestPromotionAndPrimaryReclamation(t *testing.T) {
 	cfg, err := config.Load(writeConfig(t, dir))
 	require.NoError(t, err)
 	descriptor := cfg.Descriptor()
-	descriptor.Instances.WarmStandby = true
+	descriptor.Slots.Standby = &deployment.Slot{
+		EventFabric: deployment.SlotEventFabric{
+			Nats: deployment.EventFabricNats{
+				ClientAddress:  "127.0.0.1:4223",
+				ClusterAddress: "127.0.0.1:6223",
+				MonitorAddress: "127.0.0.1:8223",
+				Servers:        []string{"127.0.0.1:4222"},
+			},
+		},
+	}
 
 	primaryCtx, stopPrimary := context.WithCancel(t.Context())
 	primaryDone := make(chan error, 1)

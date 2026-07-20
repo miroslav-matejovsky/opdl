@@ -43,11 +43,13 @@ func checkRoundTrip() error {
 	// These values are named so the descriptor and its peer topology stay easy to
 	// compare without scattering literals through the fixture.
 	const (
-		site        = "north"
-		machine     = "sensor"
-		machineIP   = "10.0.1.10"
-		peerMachine = "gateway"
-		peerIP      = "10.0.1.11"
+		site           = "north"
+		machine        = "sensor"
+		machineIP      = "10.0.1.10"
+		peerMachine    = "gateway"
+		peerIP         = "10.0.1.11"
+		clientAddr     = "10.0.1.10:4222"
+		peerClientAddr = "10.0.1.11:4222"
 	)
 
 	built := builderdeployment.Descriptor{
@@ -60,7 +62,28 @@ func checkRoundTrip() error {
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    builderdeployment.Features{Chaos: true},
-		Instances:   builderdeployment.InstancePolicy{WarmStandby: true},
+		Slots: builderdeployment.Slots{
+			Primary: builderdeployment.Slot{
+				EventFabric: builderdeployment.SlotEventFabric{
+					Nats: builderdeployment.EventFabricNats{
+						ClientAddress:  clientAddr,
+						ClusterAddress: "10.0.1.10:6222",
+						MonitorAddress: "127.0.0.1:8222",
+						Servers:        []string{clientAddr, peerClientAddr},
+					},
+				},
+			},
+			Standby: &builderdeployment.Slot{
+				EventFabric: builderdeployment.SlotEventFabric{
+					Nats: builderdeployment.EventFabricNats{
+						ClientAddress:  "10.0.1.10:4223",
+						ClusterAddress: "10.0.1.10:6223",
+						MonitorAddress: "127.0.0.1:8223",
+						Servers:        []string{clientAddr, peerClientAddr},
+					},
+				},
+			},
+		},
 		EventFabric: builderdeployment.EventFabric{
 			Peers: []builderdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
@@ -76,16 +99,19 @@ func checkRoundTrip() error {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	instances, ok := wire["instances"]
+	slots, ok := wire["slots"]
 	if !ok {
-		return fmt.Errorf("builder descriptor omitted instances")
+		return fmt.Errorf("builder descriptor omitted slots")
 	}
 	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(instances, &policy); err != nil {
+	if err := json.Unmarshal(slots, &policy); err != nil {
 		return err
 	}
-	if _, ok := policy["warm_standby"]; !ok {
-		return fmt.Errorf("builder descriptor omitted instances.warm_standby")
+	if _, ok := policy["primary"]; !ok {
+		return fmt.Errorf("builder descriptor omitted slots.primary")
+	}
+	if _, ok := policy["standby"]; !ok {
+		return fmt.Errorf("builder descriptor omitted slots.standby")
 	}
 
 	var got platformdeployment.Descriptor
@@ -103,7 +129,28 @@ func checkRoundTrip() error {
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    platformdeployment.Features{Chaos: true},
-		Instances:   platformdeployment.InstancePolicy{WarmStandby: true},
+		Slots: platformdeployment.Slots{
+			Primary: platformdeployment.Slot{
+				EventFabric: platformdeployment.SlotEventFabric{
+					Nats: platformdeployment.EventFabricNats{
+						ClientAddress:  clientAddr,
+						ClusterAddress: "10.0.1.10:6222",
+						MonitorAddress: "127.0.0.1:8222",
+						Servers:        []string{clientAddr, peerClientAddr},
+					},
+				},
+			},
+			Standby: &platformdeployment.Slot{
+				EventFabric: platformdeployment.SlotEventFabric{
+					Nats: platformdeployment.EventFabricNats{
+						ClientAddress:  "10.0.1.10:4223",
+						ClusterAddress: "10.0.1.10:6223",
+						MonitorAddress: "127.0.0.1:8223",
+						Servers:        []string{clientAddr, peerClientAddr},
+					},
+				},
+			},
+		},
 		EventFabric: platformdeployment.EventFabric{
 			Peers: []platformdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},

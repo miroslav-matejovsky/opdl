@@ -172,7 +172,7 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
-	fmt.Fprintf(&b, "    instances    warm_standby=%t\n", d.Instances.WarmStandby)
+	fmt.Fprintf(&b, "    slots        primary=true standby=%t\n", d.Slots.Standby != nil)
 	fmt.Fprintf(&b, "    event_fabric %s\n", eventFabricSummary(d.EventFabric))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    address             %s\n", c.address)
@@ -205,28 +205,12 @@ func eventFabricSummary(f deployment.EventFabric) string {
 // is copied into tickets and chat windows, so a secret must not be able to reach
 // it in the first place.
 func natsSummary(n EventFabricNats) string {
-	parts := []string{
+	return strings.Join([]string{
 		"data_dir=" + n.DataDir,
 		"startup_timeout=" + n.StartupTimeout,
 		"catch_up_timeout=" + n.CatchUpTimeout,
 		"credentials_file=" + credentialsSummary(n.CredentialsFile),
-	}
-	if n.ClientAddress != "" {
-		parts = append(parts, "client="+n.ClientAddress)
-	}
-	if n.ClusterAddress != "" {
-		parts = append(parts, "cluster="+n.ClusterAddress)
-	}
-	if n.MonitorAddress != "" {
-		parts = append(parts, "monitor="+n.MonitorAddress)
-	}
-	if n.Routes != nil {
-		parts = append(parts, "routes="+strings.Join(n.Routes, ","))
-	}
-	if n.Servers != nil {
-		parts = append(parts, "servers="+strings.Join(n.Servers, ","))
-	}
-	return strings.Join(parts, " ")
+	}, " ")
 }
 
 // lagBoundSummary renders the required projection lag bound.

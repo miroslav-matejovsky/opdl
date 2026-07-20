@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -88,7 +87,7 @@ type service struct {
 // follows the site's history without producing a decision or holding an
 // active-only capability.
 func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.ProcessRole) (*site, error) {
-	fabricCfg, err := natsConfig(descriptor, cfg)
+	fabricCfg, err := natsConfig(descriptor, cfg, active)
 	if err != nil {
 		return nil, err
 	}
@@ -406,17 +405,14 @@ func (r *runner) failure() error {
 	return fmt.Errorf("%s stopped", r.name)
 }
 
-// natsConfig composes the Event Fabric adapter's configuration: the descriptor's
-// derived topology first, then whatever the configuration file places or moves.
-// Deriving first means an absent override is the deployment's own value rather
-// than a blank.
-func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabric.Config, error) {
-	fabricCfg, err := natsfabric.DefaultConfig(descriptor)
+// natsConfig composes the Event Fabric adapter's configuration from the descriptor's
+// derived topology and runtime data paths/timeouts from the configuration file.
+func natsConfig(descriptor deployment.Descriptor, cfg *config.Config, active bool) (natsfabric.Config, error) {
+	fabricCfg, err := natsfabric.DefaultConfig(descriptor, active)
 	if err != nil {
 		return natsfabric.Config{}, err
 	}
 	settings := cfg.EventFabric().Nats
-	derivedClientAddress := fabricCfg.ClientAddress
 
 	fabricCfg.DataDir = nodeDataDir(settings.DataDir, descriptor)
 	fabricCfg.Username, fabricCfg.Password = cfg.Credentials()
@@ -433,36 +429,6 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 	}
 	fabricCfg.CatchUpTimeout = catchUpTimeout
 
-	if settings.ClientAddress != "" {
-		fabricCfg.ClientAddress = settings.ClientAddress
-	}
-	if settings.ClusterAddress != "" {
-		fabricCfg.ClusterAddress = settings.ClusterAddress
-	}
-	if settings.MonitorAddress != "" {
-		fabricCfg.MonitorAddress = settings.MonitorAddress
-	}
-	// A present but empty list is a deliberate "route to nobody"; an absent one
-	// keeps the peers the descriptor derived.
-	if settings.Routes != nil {
-		fabricCfg.Routes = settings.Routes
-	}
-	if settings.Servers != nil {
-		fabricCfg.Servers = settings.Servers
-	} else if fabricCfg.HostsStorage && fabricCfg.ClientAddress != derivedClientAddress {
-		for i, server := range fabricCfg.Servers {
-			if server == derivedClientAddress {
-				fabricCfg.Servers[i] = fabricCfg.ClientAddress
-				break
-			}
-		}
-	}
-	if fabricCfg.HostsStorage {
-		peers := slices.DeleteFunc(slices.Clone(fabricCfg.Servers), func(server string) bool {
-			return server == fabricCfg.ClientAddress
-		})
-		fabricCfg.Servers = append([]string{fabricCfg.ClientAddress}, peers...)
-	}
 	return fabricCfg, nil
 }
 

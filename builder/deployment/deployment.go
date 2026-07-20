@@ -3,6 +3,7 @@ package deployment
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -25,8 +26,8 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches carried onto the machine.
 	Features Features `json:"features"`
-	// Instances is the machine's warm-standby policy. It is always present.
-	Instances InstancePolicy `json:"instances"`
+	// Slots is the machine's primary and optional standby slot definition. It is always present.
+	Slots Slots `json:"slots"`
 	// EventFabric is the resolved Event Fabric topology for this machine.
 	EventFabric EventFabric `json:"event_fabric"`
 }
@@ -36,14 +37,22 @@ type Features struct {
 	Chaos bool `json:"chaos"`
 }
 
-// InstancePolicy is a machine's resolved warm-standby policy: whether the machine
-// runs an optional standby process alongside its primary process.
+// Slots is a machine's resolved slot topology: the primary slot and optional standby slot.
 // It is always present in a generated descriptor, so a reader never has to infer
 // the default.
-type InstancePolicy struct {
-	// WarmStandby enables the standby process. An omitted blueprint policy
-	// resolves to true; an explicit false runs only the primary.
-	WarmStandby bool `json:"warm_standby"`
+type Slots struct {
+	Primary Slot  `json:"primary"`
+	Standby *Slot `json:"standby,omitempty"`
+}
+
+// Slot represents a process slot on the machine.
+type Slot struct {
+	EventFabric SlotEventFabric `json:"event_fabric"`
+}
+
+// SlotEventFabric holds the slot-specific Event Fabric adapter configurations.
+type SlotEventFabric struct {
+	Nats EventFabricNats `json:"nats"`
 }
 
 // EventFabric is this machine's resolved view of the site's Event Fabric: the
@@ -64,6 +73,17 @@ type EventFabric struct {
 	//
 	// A single-machine site has no peers and forms a one-member fabric.
 	Peers []EventFabricPeer `json:"peers"`
+}
+
+// EventFabricNats is this machine's explicit NATS configuration resolved from
+// the blueprint. It carries the exact addresses where the machine serves NATS
+// and connects to its peers.
+type EventFabricNats struct {
+	ClientAddress  string   `json:"client_address"`
+	ClusterAddress string   `json:"cluster_address"`
+	MonitorAddress string   `json:"monitor_address"`
+	Routes         []string `json:"routes"`
+	Servers        []string `json:"servers"`
 }
 
 // EventFabricPeer is one other Event Fabric member this machine expects to meet.
@@ -138,6 +158,67 @@ func (d Descriptor) validateEventFabric() error {
 		machines[peer.Machine] = true
 		ips[peer.IP] = true
 		previous = peer.Machine
+	}
+	if err := validateSlotNats("slots.primary.event_fabric.nats", d.Slots.Primary.EventFabric.Nats); err != nil {
+		return err
+	}
+	if d.Slots.Standby != nil {
+		if err := validateSlotNats("slots.standby.event_fabric.nats", d.Slots.Standby.EventFabric.Nats); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSlotNats(prefix string, nats EventFabricNats) error {
+	if strings.TrimSpace(nats.ClientAddress) == "" {
+		return fmt.Errorf("%s.client_address is required", prefix)
+	}
+	if err := validateAddress(nats.ClientAddress); err != nil {
+		return fmt.Errorf("%s.client_address: %w", prefix, err)
+	}
+	if strings.TrimSpace(nats.ClusterAddress) == "" {
+		return fmt.Errorf("%s.cluster_address is required", prefix)
+	}
+	if err := validateAddress(nats.ClusterAddress); err != nil {
+		return fmt.Errorf("%s.cluster_address: %w", prefix, err)
+	}
+	if strings.TrimSpace(nats.MonitorAddress) == "" {
+		return fmt.Errorf("%s.monitor_address is required", prefix)
+	}
+	if err := validateAddress(nats.MonitorAddress); err != nil {
+		return fmt.Errorf("%s.monitor_address: %w", prefix, err)
+	}
+	if len(nats.Servers) == 0 {
+		return fmt.Errorf("%s.servers: at least one server is required", prefix)
+	}
+	for _, route := range nats.Routes {
+		if err := validateAddress(route); err != nil {
+			return fmt.Errorf("%s.routes: %w", prefix, err)
+		}
+	}
+	for _, server := range nats.Servers {
+		if err := validateAddress(server); err != nil {
+			return fmt.Errorf("%s.servers: %w", prefix, err)
+		}
+	}
+	return nil
+}
+
+func validateAddress(addr string) error {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%q must be host:port: %w", addr, err)
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("%q has no host", addr)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("%q: port is not a number", addr)
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("%q: port %d out of range 1-65535", addr, port)
 	}
 	return nil
 }

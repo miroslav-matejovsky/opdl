@@ -28,35 +28,31 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches enabled on the machine.
 	Features Features `json:"features"`
-	// Instances is the machine's warm-standby policy. It is always present.
-	Instances InstancePolicy `json:"instances"`
+	// Slots is the machine's primary and optional standby slot definition. It is always present.
+	Slots Slots `json:"slots"`
 	// EventFabric is the resolved Event Fabric topology for this machine.
 	EventFabric EventFabric `json:"event_fabric"`
 }
 
-// UnmarshalJSON decodes a descriptor and requires its resolved instance policy
+// UnmarshalJSON decodes a descriptor and requires its resolved slots policy
 // to be explicit. Without the presence checks, omitted JSON fields would decode
-// to false and silently turn an incomplete descriptor into a primary-only opt-out.
+// and silently turn an incomplete descriptor into a primary-only opt-out.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	instances, ok := fields["instances"]
-	if !ok || bytes.Equal(bytes.TrimSpace(instances), []byte("null")) {
-		return fmt.Errorf("deployment descriptor: instances is required")
+	slots, ok := fields["slots"]
+	if !ok || bytes.Equal(bytes.TrimSpace(slots), []byte("null")) {
+		return fmt.Errorf("deployment descriptor: slots is required")
 	}
 	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(instances, &policy); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid instances policy: %w", err)
+	if err := json.Unmarshal(slots, &policy); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid slots policy: %w", err)
 	}
-	warmStandby, ok := policy["warm_standby"]
-	if !ok || bytes.Equal(bytes.TrimSpace(warmStandby), []byte("null")) {
-		return fmt.Errorf("deployment descriptor: instances.warm_standby is required")
-	}
-	var value bool
-	if err := json.Unmarshal(warmStandby, &value); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid instances.warm_standby: %w", err)
+	primary, ok := policy["primary"]
+	if !ok || bytes.Equal(bytes.TrimSpace(primary), []byte("null")) {
+		return fmt.Errorf("deployment descriptor: slots.primary is required")
 	}
 
 	type plain Descriptor
@@ -73,14 +69,22 @@ type Features struct {
 	Chaos bool `json:"chaos"`
 }
 
-// InstancePolicy is a machine's resolved warm-standby policy: whether the machine
-// runs an optional standby process alongside its primary process.
+// Slots is a machine's resolved slot topology: the primary slot and optional standby slot.
 // It is always present in a generated descriptor, so a reader never has to infer
 // the default.
-type InstancePolicy struct {
-	// WarmStandby enables the standby process. An omitted blueprint policy
-	// resolves to true; an explicit false runs only the primary.
-	WarmStandby bool `json:"warm_standby"`
+type Slots struct {
+	Primary Slot  `json:"primary"`
+	Standby *Slot `json:"standby,omitempty"`
+}
+
+// Slot represents a process slot on the machine.
+type Slot struct {
+	EventFabric SlotEventFabric `json:"event_fabric"`
+}
+
+// SlotEventFabric holds the slot-specific Event Fabric adapter configurations.
+type SlotEventFabric struct {
+	Nats EventFabricNats `json:"nats"`
 }
 
 // EventFabric is this machine's resolved view of the site's Event Fabric: the
@@ -98,6 +102,17 @@ type EventFabric struct {
 	// machine name. A machine never lists itself, and the fabric spans exactly
 	// one site. A single-machine site has no peers and forms a one-member fabric.
 	Peers []EventFabricPeer `json:"peers"`
+}
+
+// EventFabricNats is this machine's explicit NATS configuration resolved from
+// the blueprint. It carries the exact addresses where the machine serves NATS
+// and connects to its peers.
+type EventFabricNats struct {
+	ClientAddress  string   `json:"client_address"`
+	ClusterAddress string   `json:"cluster_address"`
+	MonitorAddress string   `json:"monitor_address"`
+	Routes         []string `json:"routes"`
+	Servers        []string `json:"servers"`
 }
 
 // EventFabricPeer is one other Event Fabric member this machine expects to meet.

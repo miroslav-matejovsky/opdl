@@ -42,7 +42,19 @@ func TestDefaultConfigForASingleNodeSiteHostsStorageAlone(t *testing.T) {
 	cfg, err := DefaultConfig(deployment.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "north",
 		Machine: "node-a", IP: "10.0.1.10",
-	})
+		Slots: deployment.Slots{
+			Primary: deployment.Slot{
+				EventFabric: deployment.SlotEventFabric{
+					Nats: deployment.EventFabricNats{
+						ClientAddress:  "10.0.1.10:4222",
+						ClusterAddress: "10.0.1.10:6222",
+						MonitorAddress: "127.0.0.1:8222",
+						Servers:        []string{"10.0.1.10:4222"},
+					},
+				},
+			},
+		},
+	}, true)
 	require.NoError(t, err)
 
 	require.True(t, cfg.HostsStorage, "the only machine hosts storage")
@@ -73,7 +85,19 @@ func TestDefaultConfigForATwoMachineSiteRunsOneServer(t *testing.T) {
 	storage, err := DefaultConfig(deployment.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "north",
 		Machine: "node-a", IP: "10.0.1.10", EventFabric: site,
-	})
+		Slots: deployment.Slots{
+			Primary: deployment.Slot{
+				EventFabric: deployment.SlotEventFabric{
+					Nats: deployment.EventFabricNats{
+						ClientAddress:  "10.0.1.10:4222",
+						ClusterAddress: "10.0.1.10:6222",
+						MonitorAddress: "127.0.0.1:8222",
+						Servers:        []string{"10.0.1.10:4222"},
+					},
+				},
+			},
+		},
+	}, true)
 	require.NoError(t, err)
 	require.True(t, storage.HostsStorage, "node-a sorts first")
 	require.Empty(t, storage.Routes, "the site's only server has nobody to cluster with")
@@ -85,7 +109,16 @@ func TestDefaultConfigForATwoMachineSiteRunsOneServer(t *testing.T) {
 		EventFabric: deployment.EventFabric{Peers: []deployment.EventFabricPeer{
 			{Site: "north", Machine: "node-a", IP: "10.0.1.10"},
 		}},
-	})
+		Slots: deployment.Slots{
+			Primary: deployment.Slot{
+				EventFabric: deployment.SlotEventFabric{
+					Nats: deployment.EventFabricNats{
+						Servers: []string{"10.0.1.10:4222"},
+					},
+				},
+			},
+		},
+	}, true)
 	require.NoError(t, err)
 	require.False(t, client.HostsStorage, "node-b does not store the journal")
 	require.Equal(t, []string{"10.0.1.10:4222"}, client.Servers,
@@ -109,7 +142,20 @@ func TestDefaultConfigForALargerSiteClustersTheStorageNodes(t *testing.T) {
 			{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
 			{Site: "north", Machine: "node-d", IP: "10.0.1.13"},
 		}},
-	})
+		Slots: deployment.Slots{
+			Primary: deployment.Slot{
+				EventFabric: deployment.SlotEventFabric{
+					Nats: deployment.EventFabricNats{
+						ClientAddress:  "10.0.1.12:4222",
+						ClusterAddress: "10.0.1.12:6222",
+						MonitorAddress: "127.0.0.1:8222",
+						Servers:        []string{"10.0.1.12:4222", "10.0.1.10:4222", "10.0.1.11:4222"},
+						Routes:         []string{"10.0.1.10:6222", "10.0.1.11:6222"},
+					},
+				},
+			},
+		},
+	}, true)
 	require.NoError(t, err)
 
 	// Four machines: the first three by sorted name host storage. node-c is one of
@@ -131,9 +177,18 @@ func TestDefaultConfigLeavesOutStorageForALaterNode(t *testing.T) {
 			{Site: "north", Machine: "node-b", IP: "10.0.1.11"},
 			{Site: "north", Machine: "node-c", IP: "10.0.1.12"},
 		}},
+		Slots: deployment.Slots{
+			Primary: deployment.Slot{
+				EventFabric: deployment.SlotEventFabric{
+					Nats: deployment.EventFabricNats{
+						Servers: []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
+					},
+				},
+			},
+		},
 	}
 
-	cfg, err := DefaultConfig(descriptor)
+	cfg, err := DefaultConfig(descriptor, true)
 	require.NoError(t, err)
 	require.False(t, cfg.HostsStorage, "node-d is the fourth by name and runs no server")
 	require.Equal(t, []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"}, cfg.Servers,

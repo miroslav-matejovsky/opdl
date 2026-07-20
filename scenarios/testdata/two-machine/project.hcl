@@ -17,7 +17,11 @@ project "two-machine" {
       services = ["core-services"]
 
       platform {
-        warm_standby = false
+        nats {
+          client_address  = "127.0.0.1:4222"
+          cluster_address = "127.0.0.1:6222"
+          monitor_address = "127.0.0.1:8222"
+        }
       }
     }
 
@@ -27,7 +31,11 @@ project "two-machine" {
       services = ["core-services"]
 
       platform {
-        warm_standby = false
+        nats {
+          client_address  = "127.0.0.2:4222"
+          cluster_address = "127.0.0.2:6222"
+          monitor_address = "127.0.0.2:8222"
+        }
       }
     }
   }

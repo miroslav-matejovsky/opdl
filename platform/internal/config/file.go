@@ -65,25 +65,6 @@ type EventFabricNats struct {
 	// replay to the captured high-water mark, handler backlog, and the ready
 	// event, such as "30s".
 	CatchUpTimeout string `toml:"catch_up_timeout"`
-
-	// ClientAddress overrides the host:port this node's server serves clients on.
-	// It applies only on a machine that stores the site journal.
-	ClientAddress string `toml:"client_address"`
-	// ClusterAddress overrides the host:port this node's server routes to the
-	// site's other storage nodes on. It applies only on a machine that stores the
-	// site journal.
-	ClusterAddress string `toml:"cluster_address"`
-	// MonitorAddress overrides the host:port this node's server serves monitoring
-	// on. It applies only on a machine that stores the site journal.
-	MonitorAddress string `toml:"monitor_address"`
-	// Routes overrides the cluster addresses of the site's other storage nodes.
-	// An explicit empty list is not an override; omit the field to keep the
-	// routes the descriptor derived.
-	Routes []string `toml:"routes"`
-	// Servers overrides the client addresses of the site's storage nodes, which
-	// is where this node reaches the journal. An explicit empty list is not an
-	// override; omit the field to keep the servers the descriptor derived.
-	Servers []string `toml:"servers"`
 }
 
 // credentials is the schema of the file CredentialsFile points at. It is a
@@ -153,9 +134,6 @@ func loadFile(path string) (file, error) {
 	// address usable is the adapter's business, so the composed adapter
 	// configuration is validated at startup, before any listener opens.
 	nats.CredentialsFile = strings.TrimSpace(nats.CredentialsFile)
-	nats.ClientAddress = strings.TrimSpace(nats.ClientAddress)
-	nats.ClusterAddress = strings.TrimSpace(nats.ClusterAddress)
-	nats.MonitorAddress = strings.TrimSpace(nats.MonitorAddress)
 	return f, nil
 }
 

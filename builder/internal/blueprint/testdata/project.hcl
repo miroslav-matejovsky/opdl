@@ -15,10 +15,13 @@ project "customer-a" {
       ip       = "10.0.1.10"
       services = ["sensor-services"]
 
-      # warm standby is enabled by default; this machine opts out and runs only
-      # the preferred primary process.
+      # primary slot is defined by platform.nats; standby is omitted so only primary is deployed.
       platform {
-        warm_standby = false
+        nats {
+          client_address  = "10.0.1.10:4222"
+          cluster_address = "10.0.1.10:6222"
+          monitor_address = "127.0.0.1:8222"
+        }
       }
     }
 
@@ -26,6 +29,13 @@ project "customer-a" {
       role     = "local-server"
       ip       = "10.0.1.11"
       services = ["core-services"]
+      platform {
+        nats {
+          client_address  = "10.0.1.11:4222"
+          cluster_address = "10.0.1.11:6222"
+          monitor_address = "127.0.0.1:8222"
+        }
+      }
     }
   }
 
@@ -34,16 +44,37 @@ project "customer-a" {
       role     = "master-server"
       ip       = "10.0.2.10"
       services = ["core-services"]
+      platform {
+        nats {
+          client_address  = "10.0.2.10:4222"
+          cluster_address = "10.0.2.10:6222"
+          monitor_address = "127.0.0.1:8222"
+        }
+      }
     }
     machine "slave" {
       role     = "slave-server"
       ip       = "10.0.2.11"
       services = ["core-services"]
+      platform {
+        nats {
+          client_address  = "10.0.2.11:4222"
+          cluster_address = "10.0.2.11:6222"
+          monitor_address = "127.0.0.1:8222"
+        }
+      }
     }
     machine "integration" {
       role     = "integration-server"
       ip       = "10.0.2.12"
       services = ["integration-services"]
+      platform {
+        nats {
+          client_address  = "10.0.2.12:4222"
+          cluster_address = "10.0.2.12:6222"
+          monitor_address = "127.0.0.1:8222"
+        }
+      }
     }
   }
 }

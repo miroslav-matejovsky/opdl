@@ -15,7 +15,16 @@ import (
 // test can tell derived ordering from declaration order.
 func twoSiteProject() *blueprint.Project {
 	machine := func(name, ip string) blueprint.Machine {
-		return blueprint.Machine{Name: name, Role: "node", IP: ip, Services: []string{"core-services"}}
+		return blueprint.Machine{
+			Name: name, Role: "node", IP: ip, Services: []string{"core-services"},
+			Platform: &blueprint.Platform{
+				Nats: &blueprint.Nats{
+					ClientAddress:  ip + ":4222",
+					ClusterAddress: ip + ":6222",
+					MonitorAddress: "127.0.0.1:8222",
+				},
+			},
+		}
 	}
 	return &blueprint.Project{
 		Name:        "customer-a",
@@ -57,6 +66,13 @@ func project() *blueprint.Project {
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
+				Platform: &blueprint.Platform{
+					Nats: &blueprint.Nats{
+						ClientAddress:  "10.0.1.10:4222",
+						ClusterAddress: "10.0.1.10:6222",
+						MonitorAddress: "127.0.0.1:8222",
+					},
+				},
 			}},
 		}},
 	}
@@ -77,22 +93,37 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.Equal(t, "10.0.1.10", m.IP)
 	require.Equal(t, []string{"sensor-services"}, m.Services)
 	require.True(t, m.Features.Chaos)
-	// Warm standby is on by default: the sensor machine declares no platform block.
-	require.True(t, m.Instances.WarmStandby)
+	// Standby slot is not enabled when standby block is omitted from platform.
+	require.NotNil(t, m.Slots.Primary)
+	require.Nil(t, m.Slots.Standby)
 }
 
-// TestBuildWarmStandbyPolicy checks warm standby defaults on and honors an
-// explicit per-machine opt-out. An omitted platform block, an empty one, and an
-// explicit true all resolve to enabled; only an explicit false disables it.
-func TestBuildWarmStandbyPolicy(t *testing.T) {
+func natsFor(ip string) *blueprint.Nats {
+	return &blueprint.Nats{
+		ClientAddress:  ip + ":4222",
+		ClusterAddress: ip + ":6222",
+		MonitorAddress: "127.0.0.1:8222",
+	}
+}
+
+func standbyFor(ip string) *blueprint.Standby {
+	return &blueprint.Standby{
+		Nats: &blueprint.Nats{
+			ClientAddress:  ip + ":4223",
+			ClusterAddress: ip + ":6223",
+			MonitorAddress: "127.0.0.1:8223",
+		},
+	}
+}
+
+// TestBuildStandbyPolicy checks standby is enabled only when standby block is explicitly provided.
+func TestBuildStandbyPolicy(t *testing.T) {
 	cases := map[string]struct {
 		platform *blueprint.Platform
 		want     bool
 	}{
-		"omitted block":    {platform: nil, want: true},
-		"empty block":      {platform: &blueprint.Platform{}, want: true},
-		"explicit true":    {platform: &blueprint.Platform{WarmStandby: new(true)}, want: true},
-		"explicit opt-out": {platform: &blueprint.Platform{WarmStandby: new(false)}, want: false},
+		"omitted standby":  {platform: &blueprint.Platform{Nats: natsFor("10.0.1.10")}, want: false},
+		"explicit standby": {platform: &blueprint.Platform{Nats: natsFor("10.0.1.10"), Standby: standbyFor("10.0.1.10")}, want: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -100,14 +131,14 @@ func TestBuildWarmStandbyPolicy(t *testing.T) {
 			p.Sites[0].Machines[0].Platform = tc.platform
 			plan, err := resolve.Build(p, "acme-opdl")
 			require.NoError(t, err)
-			require.Equal(t, tc.want, plan.Machines[0].Instances.WarmStandby)
+			require.Equal(t, tc.want, plan.Machines[0].Slots.Standby != nil)
 		})
 	}
 }
 
-// TestBuildWarmStandbyIsPerMachine checks one machine opting out does not change
+// TestBuildStandbyIsPerMachine checks one machine opting into standby does not change
 // another's policy, and that the result is independent of declaration order.
-func TestBuildWarmStandbyIsPerMachine(t *testing.T) {
+func TestBuildStandbyIsPerMachine(t *testing.T) {
 	build := func(machines []blueprint.Machine) *resolve.Plan {
 		p := &blueprint.Project{
 			Name:        "customer-a",
@@ -119,22 +150,23 @@ func TestBuildWarmStandbyIsPerMachine(t *testing.T) {
 		return plan
 	}
 
-	optOut := blueprint.Machine{
+	withStandby := blueprint.Machine{
 		Name: "sensor", Role: "node", IP: "10.0.1.10", Services: []string{"core-services"},
-		Platform: &blueprint.Platform{WarmStandby: new(false)},
+		Platform: &blueprint.Platform{Nats: natsFor("10.0.1.10"), Standby: standbyFor("10.0.1.10")},
 	}
 	def := blueprint.Machine{
 		Name: "gateway", Role: "node", IP: "10.0.1.11", Services: []string{"core-services"},
+		Platform: &blueprint.Platform{Nats: natsFor("10.0.1.11")},
 	}
 
-	forward := build([]blueprint.Machine{optOut, def})
-	require.False(t, machineByName(t, forward, "sensor").Instances.WarmStandby)
-	require.True(t, machineByName(t, forward, "gateway").Instances.WarmStandby)
+	forward := build([]blueprint.Machine{withStandby, def})
+	require.NotNil(t, machineByName(t, forward, "sensor").Slots.Standby)
+	require.Nil(t, machineByName(t, forward, "gateway").Slots.Standby)
 
 	// Declaration order must not change the resolved policy of either machine.
-	reversed := build([]blueprint.Machine{def, optOut})
-	require.False(t, machineByName(t, reversed, "sensor").Instances.WarmStandby)
-	require.True(t, machineByName(t, reversed, "gateway").Instances.WarmStandby)
+	reversed := build([]blueprint.Machine{def, withStandby})
+	require.NotNil(t, machineByName(t, reversed, "sensor").Slots.Standby)
+	require.Nil(t, machineByName(t, reversed, "gateway").Slots.Standby)
 }
 
 // TestBuildDerivesOneMemberEventFabricForSingleMachineSite checks a standalone
@@ -145,6 +177,12 @@ func TestBuildDerivesOneMemberEventFabricForSingleMachineSite(t *testing.T) {
 	require.Equal(t, deployment.EventFabric{
 		Peers: []deployment.EventFabricPeer{},
 	}, plan.Machines[0].EventFabric)
+	require.Equal(t, deployment.EventFabricNats{
+		ClientAddress:  "10.0.1.10:4222",
+		ClusterAddress: "10.0.1.10:6222",
+		MonitorAddress: "127.0.0.1:8222",
+		Servers:        []string{"10.0.1.10:4222"},
+	}, plan.Machines[0].Slots.Primary.EventFabric.Nats)
 }
 
 // TestBuildDerivesEventFabricPeersFromTheSiteOnly checks the fabric spans exactly one
@@ -161,6 +199,13 @@ func TestBuildDerivesEventFabricPeersFromTheSiteOnly(t *testing.T) {
 			{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
 		},
 	}, sensor.EventFabric, "peers are the site's other machines, ordered by name")
+	require.Equal(t, deployment.EventFabricNats{
+		ClientAddress:  "10.0.1.10:4222",
+		ClusterAddress: "10.0.1.10:6222",
+		MonitorAddress: "127.0.0.1:8222",
+		Servers:        []string{"10.0.1.10:4222", "10.0.1.12:4222", "10.0.1.11:4222"},
+		Routes:         []string{"10.0.1.12:6222", "10.0.1.11:6222"},
+	}, sensor.Slots.Primary.EventFabric.Nats)
 
 	// The south machine is alone in its site, so it forms its own fabric and
 	// never meets the north machines.
@@ -195,4 +240,14 @@ func TestBuildValidatesDescriptors(t *testing.T) {
 func TestBuildRequiresPlatformName(t *testing.T) {
 	_, err := resolve.Build(project(), "")
 	require.ErrorContains(t, err, "platform is required")
+}
+
+func TestBuildHonorsExplicitNatsRoutesAndServers(t *testing.T) {
+	p := project()
+	p.Sites[0].Machines[0].Platform.Nats.Routes = []string{"10.0.1.99:6222"}
+	p.Sites[0].Machines[0].Platform.Nats.Servers = []string{"10.0.1.10:4222", "10.0.1.99:4222"}
+	plan, err := resolve.Build(p, "acme-opdl")
+	require.NoError(t, err)
+	require.Equal(t, []string{"10.0.1.99:6222"}, plan.Machines[0].Slots.Primary.EventFabric.Nats.Routes)
+	require.Equal(t, []string{"10.0.1.10:4222", "10.0.1.99:4222"}, plan.Machines[0].Slots.Primary.EventFabric.Nats.Servers)
 }
