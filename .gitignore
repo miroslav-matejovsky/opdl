@@ -1,5 +1,6 @@
 # GenAI
 .agents/
+.claude/
 
 # Windows-Native / .NET / C#
 [Bb]in/
