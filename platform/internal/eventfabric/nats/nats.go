@@ -493,17 +493,27 @@ func (f *Fabric) HandlerPending(ctx context.Context, handler eventfabric.Handler
 		return 0, fmt.Errorf("%w: %s", eventfabric.ErrHandlerNotAttached, handler.Name())
 	}
 	consumer, err := f.stream.Consumer(ctx, name)
-	if errors.Is(err, jetstream.ErrConsumerNotFound) {
-		return 0, fmt.Errorf("%w: %s", eventfabric.ErrHandlerNotAttached, handler.Name())
-	}
 	if err != nil {
-		return 0, fmt.Errorf("nats: handler consumer %s: %w", name, err)
+		return 0, handlerPendingError(handler.Name(), "lookup", err)
 	}
 	info, err := consumer.Info(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("nats: handler consumer %s info: %w", name, err)
+		return 0, handlerPendingError(handler.Name(), "info", err)
 	}
 	return info.NumPending + uint64(info.NumAckPending), nil
+}
+
+// handlerPendingError preserves a consumer lookup failure while translating a
+// missing consumer into the Event Fabric's startup-facing "not attached yet"
+// state. A replicated consumer can be locally usable by Messages before its
+// Info response has converged on the same server, so both operations can report
+// consumer-not-found during startup.
+func handlerPendingError(handler, operation string, err error) error {
+	if errors.Is(err, jetstream.ErrConsumerNotFound) {
+		return fmt.Errorf("%w: %s consumer %s: %w",
+			eventfabric.ErrHandlerNotAttached, handler, operation, err)
+	}
+	return fmt.Errorf("nats: handler %s consumer %s: %w", handler, operation, err)
 }
 
 // handle runs one delivery through handler and acknowledges it, leaves it
@@ -565,6 +575,15 @@ func (f *Fabric) consume(ctx context.Context, consumer jetstream.Consumer, apply
 			if ctx.Err() != nil {
 				return nil
 			}
+			if recoverableConsumerReadError(err) {
+				// Messages has already issued a new pull request when it reports a
+				// missed heartbeat. Keep this iterator alive and retain the signal
+				// for operations instead of stopping the platform's background loop.
+				f.observer.Emit("event_fabric.consumer_heartbeat_missed", operations.LevelWarn, "event_fabric.consumer", "consumer missed an idle heartbeat; continuing", map[string]any{
+					"stream": f.scope.StreamName(), operations.AttributeError: err.Error(),
+				})
+				continue
+			}
 			select {
 			case <-reconnecting:
 				return errConsumerReconnect
@@ -593,6 +612,12 @@ func (f *Fabric) consume(ctx context.Context, consumer jetstream.Consumer, apply
 			return err
 		}
 	}
+}
+
+// recoverableConsumerReadError reports iterator errors for which the NATS
+// client has already initiated recovery and Next may safely be called again.
+func recoverableConsumerReadError(err error) bool {
+	return errors.Is(err, jetstream.ErrNoHeartbeat)
 }
 
 func (f *Fabric) waitUntilConnected(ctx context.Context) error {

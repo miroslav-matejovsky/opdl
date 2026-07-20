@@ -63,6 +63,7 @@ Important event types:
 | `event_fabric.handler_started`, `handler_stopped` | Durable handler loop health |
 | `event_fabric.projector_reset`, `handler_reset` | Consumer recreation after connection or leadership change |
 | `event_fabric.projector_attach_retry`, `handler_attach_retry` | Transient or ambiguous consumer attachment |
+| `event_fabric.consumer_heartbeat_missed` | Pull delivery missed an idle heartbeat and automatically continued |
 | `platform.projection_caught_up` | Catch-up phase, high-water mark, applied sequence, duration |
 | `platform.site_ready`, `platform.standby_ready` | Composition readiness |
 | `platform.background_loop_stopped` | A projector or handler ended; error level means serving will stop |

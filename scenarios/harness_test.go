@@ -895,9 +895,12 @@ func (p *process) logs() string { return p.output.String() }
 func diagnose(machines []*machine) string {
 	var b strings.Builder
 	for _, m := range machines {
-		state := "running"
-		if !m.running() {
-			state = "not started"
+		state := "not started"
+		if m.cmd != nil {
+			state = "stopped"
+		}
+		if m.running() {
+			state = "running"
 		}
 		fmt.Fprintf(&b, "\n--- machine %s (%s, api %s, journal %s) ---\n%s",
 			m.name, state, m.url, m.sockets.dataDir, m.output.String())

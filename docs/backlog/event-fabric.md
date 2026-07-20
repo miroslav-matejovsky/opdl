@@ -25,4 +25,6 @@ makes single writes more reliable but hides back-pressure; leaving it means ever
 client needs retry logic. Either is defensible; the contract should state which
 one it is.
 
-Evidence is in `docs/plan/issues.md`, issue 2.
+The four-machine failure scenario preserves this behavior explicitly in
+`proposeEventually`; the harness fix does not change the production write
+contract.

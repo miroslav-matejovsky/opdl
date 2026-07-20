@@ -53,6 +53,12 @@ use the stable sorted storage list and reconnect every 250 ms. If connection
 returns but projection does not advance, retain all JSONL and journal data and
 escalate as a consumer-resume defect. Do not restart every storage node at once.
 
+`event_fabric.consumer_heartbeat_missed` is a degradation signal, not a stopped
+consumer. The NATS client has already issued another pull and the platform keeps
+the iterator alive. Investigate repeated events together with growing projection
+lag. A `handler_stopped` or `projector_stopped` event whose error is only `no
+heartbeat received` identifies an older platform binary without this recovery.
+
 ## Writes fail briefly after one storage node is killed
 
 A three-replica journal must elect a new leader. Writes submitted during that

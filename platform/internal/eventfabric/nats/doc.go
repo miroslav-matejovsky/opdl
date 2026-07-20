@@ -12,8 +12,8 @@
 // The adapter pins exact module versions so a build is reproducible and the
 // broker never floats:
 //
-//   - github.com/nats-io/nats-server/v2 v2.11.9 (embedded server, JetStream)
-//   - github.com/nats-io/nats.go v1.46.1 (client and the jetstream API)
+//   - github.com/nats-io/nats-server/v2 v2.14.3 (embedded server, JetStream)
+//   - github.com/nats-io/nats.go v1.52.0 (client and the jetstream API)
 //
 // # Topology
 //
@@ -107,7 +107,9 @@
 // pull consumer filtered by its routes with explicit acknowledgement and bounded
 // redelivery. A decode failure, an unsupported event, or exhausted delivery
 // stops the runner with an error so the node can be made unready rather than
-// dropping an event.
+// dropping an event. A missed pull-consumer heartbeat is recoverable: the NATS
+// client issues another pull, the adapter records the degradation, and delivery
+// continues on the same iterator.
 //
 // # What the adapter does not decide
 //
