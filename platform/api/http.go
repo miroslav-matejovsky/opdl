@@ -56,7 +56,7 @@ type proposalAcceptedOutput struct {
 }
 
 type getStatusInput struct {
-	ProposalID string `path:"proposal_id" doc:"Opaque proposal identifier returned by registerUnit."`
+	ProposalID string `path:"proposal_id" doc:"Opaque proposal identifier returned by registerUnit." example:"c1a2b3"`
 }
 
 type registrationOutput struct {

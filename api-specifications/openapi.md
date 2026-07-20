@@ -24,23 +24,23 @@ OK
 ```json
 [
    {
-      "ip": "eUD8gKko90",
-      "machine": "482c3F34Um",
+      "ip": "10.0.0.11",
+      "machine": "site-1",
       "platform_instances": [
          {
-            "ip": "FktHeN2RaQ",
-            "machine": "7gULxLiKZu",
-            "reason": "XJPQpTiMA2",
-            "status": "yIciUtpT0d"
+            "ip": "10.0.0.21",
+            "machine": "node-a",
+            "reason": "registration_key_conflict",
+            "status": "accepted"
          }
       ],
-      "proposal_id": "HVdzTs36ZI",
-      "reason": "fiW1BB2v2q",
-      "role": "VDSucew3vh",
-      "status": "20f9wdmTZC",
-      "unit_id": 53793,
-      "unit_type": 19,
-      "unit_type_name_advertised": "IxkCT1tdxT"
+      "proposal_id": "c1a2b3",
+      "reason": "registration_key_conflict",
+      "role": "Master",
+      "status": "accepted",
+      "unit_id": 42,
+      "unit_type": 7,
+      "unit_type_name_advertised": "Billing"
    }
 ]
 ```
@@ -118,39 +118,39 @@ OK
    {
       "losers": [
          {
-            "ip": "weCEnXS6kp",
-            "machine": "GW0Fb86PDr",
+            "ip": "10.0.0.11",
+            "machine": "site-1",
             "platform_instances": [],
-            "proposal_id": "SkYoaL6s7p",
-            "reason": "2uQnwvIya0",
-            "role": "VNykPeMfjO",
-            "status": "wnOA6qPDkh",
-            "unit_id": 29601,
-            "unit_type": 8,
-            "unit_type_name_advertised": "aHxHvVZliQ"
+            "proposal_id": "c1a2b3",
+            "reason": "registration_key_conflict",
+            "role": "Master",
+            "status": "accepted",
+            "unit_id": 42,
+            "unit_type": 7,
+            "unit_type_name_advertised": "Billing"
          }
       ],
-      "resolution_status": "Xbpg3uoeTC",
-      "unit_id": 15516,
-      "unit_type": 109,
+      "resolution_status": "resolved",
+      "unit_id": 42,
+      "unit_type": 7,
       "winner": {
-         "ip": "gO0brDrEOx",
-         "machine": "uQnQtxLeaT",
+         "ip": "10.0.0.11",
+         "machine": "site-1",
          "platform_instances": [
             {
-               "ip": "Vq9F6FVmub",
-               "machine": "jfAr37eclu",
-               "reason": "pXTukPhiIq",
-               "status": "PDnQEKeguG"
+               "ip": "10.0.0.21",
+               "machine": "node-a",
+               "reason": "registration_key_conflict",
+               "status": "accepted"
             }
          ],
-         "proposal_id": "gWIFHhEiFS",
-         "reason": "oNeyOUnnR5",
-         "role": "eeviXKliZq",
-         "status": "HHh0jJ9Md9",
-         "unit_id": 9252,
-         "unit_type": 233,
-         "unit_type_name_advertised": "z70wnPQpSk"
+         "proposal_id": "c1a2b3",
+         "reason": "registration_key_conflict",
+         "role": "Master",
+         "status": "accepted",
+         "unit_id": 42,
+         "unit_type": 7,
+         "unit_type_name_advertised": "Billing"
       }
    }
 ]
@@ -178,23 +178,23 @@ OK
 
 ```json
 {
-   "ip": "QsLiFD4MY7",
-   "machine": "O3gDk8Bg7W",
+   "ip": "10.0.0.11",
+   "machine": "site-1",
    "platform_instances": [
       {
-         "ip": "9LLxq2zGNO",
-         "machine": "6q1Xh3S7gY",
-         "reason": "ekwHUMGhWz",
-         "status": "Gpld7aFPfY"
+         "ip": "10.0.0.21",
+         "machine": "node-a",
+         "reason": "registration_key_conflict",
+         "status": "accepted"
       }
    ],
-   "proposal_id": "JK6SV75aze",
-   "reason": "oT0L8r30xv",
-   "role": "Tnj31WE1Wf",
-   "status": "9y7vf8sRN3",
-   "unit_id": 20008,
-   "unit_type": 67,
-   "unit_type_name_advertised": "cu3ujt5jSr"
+   "proposal_id": "c1a2b3",
+   "reason": "registration_key_conflict",
+   "role": "Master",
+   "status": "accepted",
+   "unit_id": 42,
+   "unit_type": 7,
+   "unit_type_name_advertised": "Billing"
 }
 ```
 

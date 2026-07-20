@@ -51,15 +51,19 @@ components:
       properties:
         ip:
           description: Platform instance's descriptor IP, empty when the deployment no longer has the machine.
+          example: 10.0.0.21
           type: string
         machine:
           description: Platform instance's descriptor machine.
+          example: node-a
           type: string
         reason:
           description: Optional machine-readable rejection code.
+          example: registration_key_conflict
           type: string
         status:
           description: "Platform instance's registration status: pending, accepted, or rejected."
+          example: accepted
           type: string
       required:
         - machine
@@ -88,9 +92,11 @@ components:
       properties:
         ip:
           description: Descriptor IP where the request originated.
+          example: 10.0.0.11
           type: string
         machine:
           description: Descriptor machine where the request originated.
+          example: site-1
           type: string
         platform_instances:
           description: Deterministic progress view for each platform instance.
@@ -100,30 +106,37 @@ components:
           type: array
         proposal_id:
           description: Stable proposal identity and status key.
+          example: c1a2b3
           type: string
         reason:
           description: Optional machine-readable rejection code.
+          example: registration_key_conflict
           type: string
         role:
           description: Optional Master or Slave role advertised by the unit.
+          example: Master
           type: string
         status:
           description: "Registration status: pending, accepted, or rejected."
+          example: accepted
           type: string
         unit_id:
           description: Registered unit identifier.
+          example: 42
           format: int32
           maximum: 65535
           minimum: 0
           type: integer
         unit_type:
           description: Registered unit type identifier.
+          example: 7
           format: int32
           maximum: 255
           minimum: 0
           type: integer
         unit_type_name_advertised:
           description: Advertised unit type name.
+          example: Billing
           type: string
       required:
         - proposal_id
@@ -146,15 +159,18 @@ components:
           type: array
         resolution_status:
           description: Resolution status of the conflict, resolved when the winner is the deterministic survivor.
+          example: resolved
           type: string
         unit_id:
           description: Unit identifier shared by all competing proposals.
+          example: 42
           format: int32
           maximum: 65535
           minimum: 0
           type: integer
         unit_type:
           description: Unit type identifier shared by all competing proposals.
+          example: 7
           format: int32
           maximum: 255
           minimum: 0
@@ -295,6 +311,7 @@ paths:
           required: true
           schema:
             description: Opaque proposal identifier returned by registerUnit.
+            example: c1a2b3
             type: string
       responses:
         "200":

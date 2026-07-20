@@ -53,23 +53,23 @@ type ProposalAccepted struct {
 // Registration is the platform's immutable view of one registration request.
 type Registration struct {
 	// ProposalID is the proposal's stable identity and its status key.
-	ProposalID string `json:"proposal_id" doc:"Stable proposal identity and status key."`
+	ProposalID string `json:"proposal_id" doc:"Stable proposal identity and status key." example:"c1a2b3"`
 	// UnitType is the registered unit type identifier.
-	UnitType uint8 `json:"unit_type" doc:"Registered unit type identifier." minimum:"0" maximum:"255"`
+	UnitType uint8 `json:"unit_type" doc:"Registered unit type identifier." minimum:"0" maximum:"255" example:"7"`
 	// UnitID is the registered unit identifier.
-	UnitID uint16 `json:"unit_id" doc:"Registered unit identifier." minimum:"0" maximum:"65535"`
+	UnitID uint16 `json:"unit_id" doc:"Registered unit identifier." minimum:"0" maximum:"65535" example:"42"`
 	// UnitTypeNameAdvertised is the unit's advertised type name.
-	UnitTypeNameAdvertised string `json:"unit_type_name_advertised" doc:"Advertised unit type name."`
+	UnitTypeNameAdvertised string `json:"unit_type_name_advertised" doc:"Advertised unit type name." example:"Billing"`
 	// Role is the optional Master or Slave role advertised by the unit.
-	Role *string `json:"role,omitempty" doc:"Optional Master or Slave role advertised by the unit."`
+	Role *string `json:"role,omitempty" doc:"Optional Master or Slave role advertised by the unit." example:"Master"`
 	// Machine is the descriptor machine where the request originated.
-	Machine string `json:"machine" doc:"Descriptor machine where the request originated."`
+	Machine string `json:"machine" doc:"Descriptor machine where the request originated." example:"site-1"`
 	// IP is the descriptor IP where the request originated.
-	IP string `json:"ip" doc:"Descriptor IP where the request originated."`
+	IP string `json:"ip" doc:"Descriptor IP where the request originated." example:"10.0.0.11"`
 	// Status is pending, accepted, or rejected.
-	Status string `json:"status" doc:"Registration status: pending, accepted, or rejected."`
+	Status string `json:"status" doc:"Registration status: pending, accepted, or rejected." example:"accepted"`
 	// Reason is an optional bounded machine-readable rejection code.
-	Reason *string `json:"reason,omitempty" doc:"Optional machine-readable rejection code."`
+	Reason *string `json:"reason,omitempty" doc:"Optional machine-readable rejection code." example:"registration_key_conflict"`
 	// PlatformInstances is the deterministic progress view for each platform instance.
 	PlatformInstances []PlatformInstanceRegistrationStatus `json:"platform_instances" doc:"Deterministic progress view for each platform instance."`
 }
@@ -79,11 +79,11 @@ type Registration struct {
 // and rejection reasons have the same meanings as the normal list response.
 type RegistrationConflict struct {
 	// UnitType is the unit type identifier shared by all competing proposals.
-	UnitType uint8 `json:"unit_type" doc:"Unit type identifier shared by all competing proposals." minimum:"0" maximum:"255"`
+	UnitType uint8 `json:"unit_type" doc:"Unit type identifier shared by all competing proposals." minimum:"0" maximum:"255" example:"7"`
 	// UnitID is the unit identifier shared by all competing proposals.
-	UnitID uint16 `json:"unit_id" doc:"Unit identifier shared by all competing proposals." minimum:"0" maximum:"65535"`
+	UnitID uint16 `json:"unit_id" doc:"Unit identifier shared by all competing proposals." minimum:"0" maximum:"65535" example:"42"`
 	// ResolutionStatus is resolved when Winner is the deterministic survivor.
-	ResolutionStatus string `json:"resolution_status" doc:"Resolution status of the conflict, resolved when the winner is the deterministic survivor."`
+	ResolutionStatus string `json:"resolution_status" doc:"Resolution status of the conflict, resolved when the winner is the deterministic survivor." example:"resolved"`
 	// Winner is the proposal that remains the registration for this unit key.
 	Winner Registration `json:"winner" doc:"Proposal that remains the registration for this unit key."`
 	// Losers are competing proposals rejected with registration_key_conflict.
@@ -95,14 +95,14 @@ type RegistrationConflict struct {
 type PlatformInstanceRegistrationStatus struct {
 	// Machine is the platform instance's descriptor machine. It is the identity
 	// the proposal itself names, so it is always present.
-	Machine string `json:"machine" doc:"Platform instance's descriptor machine."`
+	Machine string `json:"machine" doc:"Platform instance's descriptor machine." example:"node-a"`
 	// IP is the platform instance's descriptor IP. It is a display field looked
 	// up in the answering node's own topology rather than carried by the
 	// proposal, so it is empty for a historical proposal that names a machine the
 	// deployment no longer has.
-	IP string `json:"ip" doc:"Platform instance's descriptor IP, empty when the deployment no longer has the machine."`
+	IP string `json:"ip" doc:"Platform instance's descriptor IP, empty when the deployment no longer has the machine." example:"10.0.0.21"`
 	// Status is pending, accepted, or rejected.
-	Status string `json:"status" doc:"Platform instance's registration status: pending, accepted, or rejected."`
+	Status string `json:"status" doc:"Platform instance's registration status: pending, accepted, or rejected." example:"accepted"`
 	// Reason is an optional bounded machine-readable rejection code.
-	Reason *string `json:"reason,omitempty" doc:"Optional machine-readable rejection code."`
+	Reason *string `json:"reason,omitempty" doc:"Optional machine-readable rejection code." example:"registration_key_conflict"`
 }
