@@ -7,6 +7,11 @@ every item was reproduced.
 Status values: **Fixed** in this change, **Open** and needing a decision, or
 **Resolved as a side effect** with evidence.
 
+**Gate status.** `task all` does not pass. Issue 7 is the only failure; it is a
+pre-existing Event Fabric resilience gap surfaced by the new three-storage-node
+scenario, not a regression from the endpoint and standby contract. Issues 2, 3,
+7, and 8 are recorded for analysis and decision rather than fixed here.
+
 ---
 
 ## 1. Three-storage-node sites could not start at all
@@ -198,6 +203,97 @@ the single source of the machine's topology.
 
 ---
 
+## 7. A surviving storage machine can stop serving when another one is killed
+
+**Status:** Open, and currently failing the `task all` gate. Not investigated.
+
+**Observed.** Under the full `task all` gate,
+`TestFourMachineStorageTopologyAndFailure` failed with a different shape from
+issue 3. After `node-c` was stopped, `node-a` — a *surviving storage* machine —
+stopped answering its registration API entirely:
+
+```
+Get "http://127.0.0.1:54440/registrations/0d2f...":
+dial tcp 127.0.0.1:54440: connectex:
+No connection could be made because the target machine actively refused it.
+```
+
+The last projected view was empty in every field, meaning no `200` was ever
+received during the wait:
+
+```
+last view &{ProposalID: UnitType:0 UnitID:0 UnitTypeNameAdvertised:
+Role:<nil> Machine: IP: Status: PlatformInstances:[]}
+```
+
+**Why this is not a startup problem.** `node-a` had already been serving. The
+scenario only reaches this point after `startTogether` has waited for all four
+machines' APIs, and after a proposal published through `node-d` was replayed
+through `node-a`. So `node-a` came up, served, and then stopped serving once
+`node-c` was killed.
+
+**Consistent with a documented rule, not confirmed as its cause.**
+`docs/01-architecture.md` states that a projector or handler which stops on its
+own also ends serving, because the projection is what every query is answered
+from. A surviving machine whose Event Fabric consumer errors when the cluster
+loses a member would therefore stop serving rather than degrade. That matches
+the observation but has not been verified against `node-a`'s process output.
+
+**Load or timing dependent.** The scenario passed three consecutive isolated
+runs, and passed again in isolation after this failure. It failed inside the full
+gate, which runs the platform integration tests and the other scenarios first.
+Scenario tests declare no `t.Parallel`, so this is not intra-package
+parallelism; the difference is machine load and what ran before.
+
+**Severity.** This is more serious than issue 3. Issue 3 is a client-only machine
+failing to keep projecting; this is a machine that stores the journal and holds
+quorum ceasing to answer at all. If confirmed, losing one storage machine of
+three can take a second one out of service, which would defeat the point of the
+three-replica topology.
+
+**Not investigated further** on instruction. No fix attempted, and the scenario
+was not weakened to make the gate pass.
+
+**Consequence for this change.** `task all` does not currently pass. Every other
+part of the gate does: tidy, vet, format, dead-code, lint, architecture rules,
+unit tests, .NET SDK validation, blueprint validation, and every other scenario
+including the warm standby regression and the two-machine scenarios. The single
+failure is this scenario, and the behaviour it exposes is pre-existing rather
+than introduced by the endpoint and standby contract.
+
+**Recommended next step.** Capture `node-a`'s process output at the moment of
+failure — the scenario now passes `diagnose()` into the assertion message for
+exactly this — and determine whether its process exited, its projector stopped,
+or its HTTP listener closed. That decides whether this is the same root cause as
+issue 3 or a distinct one.
+
+---
+
+## 8. An interrupted build leaves the staged descriptor in the working tree
+
+**Status:** Open, low severity. Observed once.
+
+**Observed.** After a scenario run was interrupted mid-build,
+`platform/embedded/deployment.json` was left holding a scenario machine's
+descriptor (`project: four-machine`, `machine: node-c`) instead of the neutral
+mock.
+
+**Cause.** Packaging stages each machine's descriptor into the embedded file,
+compiles, and restores the snapshot afterwards. The restore does not run when the
+process is killed between staging and restoring.
+
+**Why it matters.** The repository is supposed to always compile without a
+customer descriptor present. A left-behind descriptor breaks that invariant
+silently: the next build starts from the wrong embedded file, and the working
+tree shows a modified generated artifact that looks like an intentional change.
+
+**Recommended next step.** Decide whether the invariant should be enforced rather
+than relied upon — for example a gate check that the embedded descriptor is the
+mock, or restoring from the snapshot on start as well as on finish. Restoring the
+file by hand is the immediate remedy.
+
+---
+
 ## Summary
 
 | # | Issue | Status |
@@ -208,3 +304,5 @@ the single source of the machine's topology.
 | 4 | Windows forced-kill promotion gap | Resolved as a side effect |
 | 5 | Silently ignored runtime configuration keys | Fixed |
 | 6 | App test encoded an unreachable topology | Fixed |
+| 7 | Surviving storage machine stops serving after another is killed | Open, fails `task all` |
+| 8 | Interrupted build leaves the staged descriptor behind | Open, low severity |
