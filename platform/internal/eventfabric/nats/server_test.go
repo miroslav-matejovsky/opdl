@@ -3,6 +3,7 @@ package nats
 import (
 	"testing"
 
+	gonats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,6 +17,7 @@ import (
 // port carrying signals the platform already owns.
 func TestServerOptionsConfigureNoMonitoringListener(t *testing.T) {
 	opts, err := serverOptions(Config{
+		ClientName:    "node",
 		ServerName:    "node",
 		ClusterName:   "site",
 		ClientAddress: "127.0.0.1:4222",
@@ -32,6 +34,7 @@ func TestServerOptionsConfigureNoMonitoringListener(t *testing.T) {
 // standby, and every non-storage machine of the site reach the journal.
 func TestServerOptionsBindTheClientListener(t *testing.T) {
 	opts, err := serverOptions(Config{
+		ClientName:    "node",
 		ServerName:    "node",
 		ClusterName:   "site",
 		ClientAddress: "10.0.1.10:4222",
@@ -51,6 +54,7 @@ func TestServerOptionsBindTheClientListener(t *testing.T) {
 // listener follows the resolved routes rather than the authored port.
 func TestServerOptionsBindTheClusterListenerOnlyWithRoutes(t *testing.T) {
 	base := Config{
+		ClientName:     "node",
 		ServerName:     "node",
 		ClusterName:    "site",
 		ClientAddress:  "10.0.1.10:4222",
@@ -76,4 +80,16 @@ func TestServerOptionsBindTheClusterListenerOnlyWithRoutes(t *testing.T) {
 		require.Len(t, opts.Routes, 2)
 		require.Equal(t, "nats://10.0.1.11:6222", opts.Routes[0].String())
 	})
+}
+
+func TestNatsOptionsPreserveResolvedServerOrderAndReconnect(t *testing.T) {
+	opts := gonats.GetDefaultOptions()
+	for _, option := range natsOptions(Config{ClientName: "node-a"}) {
+		require.NoError(t, option(&opts))
+	}
+
+	require.Equal(t, "node-a", opts.Name)
+	require.True(t, opts.NoRandomize, "the resolver's local-first server order must be preserved")
+	require.Equal(t, -1, opts.MaxReconnect, "the runtime lag bound decides when availability is no longer safe")
+	require.Equal(t, reconnectWait, opts.ReconnectWait)
 }

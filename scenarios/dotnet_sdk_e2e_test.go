@@ -61,7 +61,7 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	// The .NET test runs asynchronously: it blocks partway through waiting for
 	// node B, so this scenario has to still be running to start it.
 	e2eProject := filepath.Join(scenariosDir, "..", "sdk-dotnet", "tests", "Opdl.Sdk.E2E", "Opdl.Sdk.E2E.csproj")
-	command := exec.CommandContext(ctx, dotnet, "test", e2eProject, "--nologo", "--verbosity", "quiet")
+	command := exec.CommandContext(ctx, dotnet, "test", e2eProject, "--nologo", "--verbosity", "quiet", "--logger", "console;verbosity=normal")
 	command.Env = append(os.Environ(),
 		"OPDL_PLATFORM_BASEURL_A="+first.url,
 		"OPDL_PLATFORM_BASEURL_B="+second.url,
@@ -80,7 +80,7 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 		testOut, diagnose([]*machine{first, second}))
 	// The tests skip without their environment variables, so a run that skipped
 	// would otherwise pass while proving nothing.
-	require.Containsf(t, testOut, "Passed!",
+	require.Containsf(t, testOut, "Passed Opdl.Sdk.E2E.RegistrationTests.RegistrationIsAcceptedOnlyAfterEveryExpectedMachineConfirms",
 		"dotnet SDK end-to-end tests did not run to a pass (skipped or empty?):\n%s", testOut)
 
 	// The platform's public projection and the SDK's account agree about what

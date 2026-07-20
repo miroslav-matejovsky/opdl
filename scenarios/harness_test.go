@@ -268,6 +268,7 @@ type sockets struct {
 	api         string
 	dataDir     string
 	instanceDir string
+	eventDir    string
 
 	// client and cluster are the addresses the blueprint was rendered with, for
 	// diagnostics and assertions only. Nothing writes them to a config file.
@@ -317,6 +318,7 @@ func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 			api:         apiAddrs[i],
 			dataDir:     filepath.Join(workDir, "nats-"+fixture.name),
 			instanceDir: filepath.Join(workDir, "instance-"+fixture.name),
+			eventDir:    filepath.Join(workDir, "operations-"+fixture.name),
 			client:      ports[fixture.name].client,
 			cluster:     ports[fixture.name].cluster,
 		}))
@@ -602,6 +604,30 @@ func statusDiagnostics(m *machine, process *managedProcess, want string, last pr
 	fmt.Fprintf(&b, "expected event fabric endpoints: client=%s cluster=%s\n",
 		m.sockets.client, m.sockets.cluster)
 	fmt.Fprintf(&b, "logs:\n%s", output)
+	fmt.Fprintf(&b, "\noperational events:\n%s", operationEvents(m))
+	return b.String()
+}
+
+// operationEvents reads every retained JSONL stream for a machine. A restart or
+// warm standby creates another PID-specific file, so diagnostics include all of
+// them in filename order rather than guessing which process matters.
+func operationEvents(m *machine) string {
+	paths, err := filepath.Glob(filepath.Join(m.sockets.eventDir, "*.jsonl"))
+	if err != nil {
+		return fmt.Sprintf("glob %s: %v\n", m.sockets.eventDir, err)
+	}
+	if len(paths) == 0 {
+		return "(none)\n"
+	}
+	var b strings.Builder
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(&b, "--- %s: %v ---\n", path, err)
+			continue
+		}
+		fmt.Fprintf(&b, "--- %s ---\n%s", filepath.Base(path), data)
+	}
 	return b.String()
 }
 
@@ -648,11 +674,13 @@ read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = %q
 lag_bound = "30s"
+[operations]
+event_dir = %q
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
 catch_up_timeout = "30s"
-`, reserved.api, filepath.ToSlash(reserved.instanceDir), filepath.ToSlash(reserved.dataDir))
+`, reserved.api, filepath.ToSlash(reserved.instanceDir), filepath.ToSlash(reserved.eventDir), filepath.ToSlash(reserved.dataDir))
 }
 
 // start runs a prepared machine and registers its cleanup.
@@ -823,6 +851,7 @@ func diagnose(machines []*machine) string {
 		}
 		fmt.Fprintf(&b, "\n--- machine %s (%s, api %s, journal %s) ---\n%s",
 			m.name, state, m.url, m.sockets.dataDir, m.output.String())
+		fmt.Fprintf(&b, "\n--- machine %s operational events ---\n%s", m.name, operationEvents(m))
 	}
 	return b.String()
 }

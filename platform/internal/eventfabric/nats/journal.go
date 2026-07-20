@@ -10,6 +10,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 )
 
 // journalConfig is the site journal's required configuration. The journal is
@@ -55,15 +56,35 @@ func (f *Fabric) ensureJournal(ctx context.Context) (jetstream.Stream, error) {
 	deadline := time.Now().Add(f.cfg.StartupTimeout)
 
 	var last error
+	attempt := 0
+	started := time.Now()
 	for {
+		attempt++
 		stream, err := f.attemptJournal(ctx, want)
 		if err == nil {
-			return stream, nil
+			// Creation being acknowledged by the metadata leader does not mean the
+			// server this client is attached to can already read the stream. Verify
+			// that local view before readiness uses the returned handle.
+			_, infoErr := stream.Info(ctx)
+			if infoErr == nil {
+				if attempt > 1 {
+					f.observer.Emit("event_fabric.journal_recovered", operations.LevelInfo, "event_fabric.nats", "site journal became available", map[string]any{
+						attributeJournal: want.Name, "attempts": attempt, operations.AttributeDurationMS: time.Since(started).Milliseconds(),
+					})
+				}
+				return stream, nil
+			}
+			err = fmt.Errorf("nats: verify journal %s locally: %w", want.Name, infoErr)
 		}
 		if !retryableJournalError(ctx, err) {
 			return nil, err
 		}
 		last = err
+		if attempt == 1 || attempt%10 == 0 {
+			f.observer.Emit("event_fabric.journal_retry", operations.LevelWarn, "event_fabric.nats", "site journal is unavailable; retrying", map[string]any{
+				attributeJournal: want.Name, attributeAttempt: attempt, operations.AttributeError: err.Error(),
+			})
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("nats: wait for journal %s: %w", want.Name, ctxErr)
 		}
@@ -117,6 +138,10 @@ func (f *Fabric) attemptJournal(ctx context.Context, want jetstream.StreamConfig
 // a moment later.
 const errCodeClusterNoPeers jetstream.ErrorCode = 10005
 
+// errCodeStreamNotFound is returned briefly by a server whose local metadata
+// view has not caught up with a stream the cluster leader just created.
+const errCodeStreamNotFound jetstream.ErrorCode = 10059
+
 // retryableJournalError reports whether err is a site that has not finished
 // coming up rather than one this node cannot join.
 //
@@ -139,8 +164,8 @@ func retryableJournalError(ctx context.Context, err error) bool {
 		return false
 	}
 	var apiErr *jetstream.APIError
-	if errors.As(err, &apiErr) && apiErr.ErrorCode == errCodeClusterNoPeers {
-		return true
+	if errors.As(err, &apiErr) {
+		return apiErr.ErrorCode == errCodeClusterNoPeers || apiErr.ErrorCode == errCodeStreamNotFound
 	}
 	return errors.Is(err, jetstream.ErrStreamNotFound) ||
 		errors.Is(err, jetstream.ErrNoStreamResponse) ||

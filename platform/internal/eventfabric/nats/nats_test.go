@@ -56,6 +56,7 @@ func configForDir(t *testing.T, dir string) Config {
 	require.NoError(t, res.Release())
 	addrs := res.Addresses()
 	return Config{
+		ClientName:      "node-a",
 		ServerName:      "node",
 		ClusterName:     "test",
 		ClientAddress:   addrs[0],

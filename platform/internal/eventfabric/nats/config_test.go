@@ -72,6 +72,7 @@ func TestDefaultConfigForASingleNodeSiteHostsStorageAlone(t *testing.T) {
 	require.Equal(t, "10.0.1.10:4222", cfg.ClientAddress)
 	require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress)
 	require.Equal(t, "node-a", cfg.ServerName)
+	require.Equal(t, "node-a", cfg.ClientName)
 	require.NotEmpty(t, cfg.ClusterName)
 	require.Equal(t, []string{"10.0.1.10:4222"}, cfg.Servers, "a storage node reaches the journal on its own server")
 }
@@ -182,6 +183,7 @@ func TestDefaultConfigLeavesOutStorageForALaterNode(t *testing.T) {
 func loopbackStorageConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
+		ClientName:      "node-a",
 		ServerName:      "node-a",
 		ClusterName:     "site",
 		ClientAddress:   "127.0.0.1:4222",

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -388,10 +389,11 @@ func TestResolveRole(t *testing.T) {
 
 type fixedStatusFabric struct {
 	state eventfabric.State
+	err   error
 }
 
 func (f fixedStatusFabric) State(context.Context) (eventfabric.State, error) {
-	return f.state, nil
+	return f.state, f.err
 }
 
 // TestStartStatusFailsBeforeRuntimeStarts checks a process never serves while its
@@ -413,6 +415,39 @@ func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
 	)
 	require.ErrorContains(t, err, "write status")
 	require.Nil(t, done)
+}
+
+// TestStartStatusStopsServingAfterFabricStateFailures checks loss of the Event
+// Fabric cannot leave an active process serving an indefinitely stale view.
+func TestStartStatusStopsServingAfterFabricStateFailures(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	statusPath := filepath.Join(t.TempDir(), "primary.status")
+	lagExceeded := make(chan struct{}, 1)
+	done, err := startStatus(
+		ctx,
+		fixedStatusFabric{err: errors.New("event fabric disconnected")},
+		redundancy.RolePrimary,
+		redundancy.StateActive,
+		statusPath,
+		100*time.Millisecond,
+		func() { lagExceeded <- struct{}{} },
+		nil,
+	)
+	require.NoError(t, err)
+
+	select {
+	case <-lagExceeded:
+	case <-time.After(2 * statusInterval):
+		require.FailNow(t, "fabric state failure never exceeded the lag bound")
+	}
+	status, err := redundancy.ReadStatus(statusPath)
+	require.NoError(t, err)
+	require.False(t, status.Promotable)
+	require.NotEqual(t, unknownLag, status.Lag)
+	require.Contains(t, status.LastError, "event fabric disconnected")
+
+	cancel()
+	require.NoError(t, <-done)
 }
 
 // TestActiveAndStandbyRunTogether checks one all-in-one machine can run two

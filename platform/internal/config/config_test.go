@@ -68,6 +68,24 @@ catch_up_timeout = "25s"
 	require.Equal(t, "25s", nats.CatchUpTimeout)
 }
 
+func TestLoadReadsOptionalOperationsEventDirectory(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
+[operations]
+event_dir = " /var/log/opdl/events "
+[event_fabric.nats]
+data_dir = "/var/lib/opdl/nats"
+startup_timeout = "30s"
+catch_up_timeout = "25s"
+`))
+	require.NoError(t, err)
+	require.Equal(t, "/var/log/opdl/events", cfg.OperationsEventDir())
+	require.Contains(t, cfg.Summary(), "operations.event_dir /var/log/opdl/events")
+}
+
 // TestLoadAcceptsUnusableDataDir documents that a configured path is not checked
 // here. Only writing to it proves it is usable, so the Event Fabric adapter
 // validates it by probing at startup, before it binds a listener.

@@ -114,11 +114,6 @@ func cmdBuild(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if restoreErr := packer.Restore(); restoreErr != nil {
-			fmt.Fprintln(os.Stderr, "opdl:", restoreErr)
-		}
-	}()
 
 	ctx := context.Background()
 	for _, d := range plan.Machines {

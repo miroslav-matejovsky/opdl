@@ -2,7 +2,9 @@ package scenarios
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,6 +39,7 @@ func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 
 	deployment.startTogether(ctx, t, "node-a", "node-b", "node-c", "node-d")
 	nodeA := deployment.machine(t, "node-a")
+	nodeB := deployment.machine(t, "node-b")
 	nodeC := deployment.machine(t, "node-c")
 	nodeD := deployment.machine(t, "node-d")
 
@@ -66,34 +69,37 @@ func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 	// Every machine of the site folded the same journal, so they are one site
 	// rather than four that happen to be running.
 	require.Equal(t, journalOf(t, nodeA), journalOf(t, nodeD))
+	require.Equal(t, nodeA.sockets.client, strings.Split(clientOnly.servers, ",")[0],
+		"the client-only machine must initially connect to node-a so server loss is deterministic")
+	waitForConnectionEvent(t, nodeD, "event_fabric.client_connected", nodeA.sockets.client)
 
 	// Published through the client-only machine, replayed through a storage one.
 	fromD := propose(ctx, t, nodeD, `{"unit_type":5,"unit_id":81,"unit_type_name_advertised":"Client published"}`)
 	onA := waitForRegistrationStatus(ctx, t, nodeA, fromD.ProposalID, "accepted")
 	require.Equal(t, "node-d", onA.Machine)
 
-	// Losing one of the three storage machines leaves two, which is still a quorum
-	// of the metadata group. The site must keep accepting and projecting events,
-	// which is the entire claim the three-replica topology makes.
-	nodeC.stop()
+	// Losing node-a leaves two storage machines, which is still a quorum of the
+	// metadata group. Node-a is selected deliberately: it is the first server in
+	// node-d's preserved connection order, so this also proves a client-only
+	// machine reconnects and resumes its ordered projection after server loss.
+	nodeA.stop()
 
-	afterLoss := proposeEventually(ctx, t, nodeA,
+	afterLoss := proposeEventually(ctx, t, nodeB,
 		`{"unit_type":5,"unit_id":82,"unit_type_name_advertised":"After storage loss"}`)
+	waitForConnectionEvent(t, nodeD, "event_fabric.client_reconnected", nodeB.sockets.client, nodeC.sockets.client)
 
 	// The surviving storage machines write their own confirmations into the
 	// journal and project each other's. That is the proof the journal still
 	// accepts writes and still orders them with one storage machine gone, which
 	// is what the three-replica topology claims.
 	//
-	// Only the surviving storage machines are required here. Whether the
-	// client-only machine keeps projecting across the loss depends on which
-	// storage node its client happened to be connected to, and that is a separate
-	// unproven property recorded in docs/backlog/event-fabric.md rather than
-	// asserted as though it held.
-	for _, confirmer := range []string{"node-a", "node-b"} {
-		require.Truef(t, nodeA.running(), "node-a stopped serving after node-c was killed:%s",
+	// Both surviving storage machines and the reconnected client-only machine
+	// confirm. This proves writes, ordered projection, and durable handlers all
+	// continue after the selected server disappears.
+	for _, confirmer := range []string{"node-b", "node-c", "node-d"} {
+		require.Truef(t, nodeB.running(), "node-b stopped serving after node-a was killed:%s",
 			diagnose(deployment.machines))
-		waitForRegistration(ctx, t, nodeA, afterLoss.ProposalID, confirmedBy(confirmer),
+		waitForRegistration(ctx, t, nodeB, afterLoss.ProposalID, confirmedBy(confirmer),
 			"confirmation from "+confirmer+diagnose(deployment.machines))
 	}
 
@@ -101,7 +107,7 @@ func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 	// rather than a fabric failure: a registration needs every machine of the
 	// site's static membership to confirm, not merely the reachable ones. The
 	// absent machine is exactly what it is still waiting for.
-	pending, _ := getRegistration(ctx, t, nodeA, afterLoss.ProposalID)
+	pending, _ := getRegistration(ctx, t, nodeB, afterLoss.ProposalID)
 	require.Equal(t, "pending", pending.Status,
 		"a registration is not decided until every machine of the site has confirmed")
 
@@ -109,10 +115,10 @@ func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 	// returning rather than a new one joining. It must rejoin the cluster, catch
 	// up on everything published while it was gone, and then confirm, which is
 	// what finally decides the proposal.
-	nodeC.restart(ctx, t)
-	waitForAPI(ctx, t, nodeC)
+	nodeA.restart(ctx, t)
+	waitForAPI(ctx, t, nodeA)
 
-	decided := waitForRegistrationStatus(ctx, t, nodeA, afterLoss.ProposalID, "accepted")
+	decided := waitForRegistrationStatus(ctx, t, nodeB, afterLoss.ProposalID, "accepted")
 	require.Len(t, decided.PlatformInstances, 4,
 		"the site decided with all four machines confirming")
 
@@ -120,13 +126,33 @@ func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 	// the rejoin produced one view rather than a divergent one. Including the
 	// client-only machine here is what proves it reconverges once the site is
 	// whole, whatever it did during the outage.
-	expected := listRegistrations(ctx, t, nodeA)
+	expected := listRegistrations(ctx, t, nodeB)
 	require.Len(t, expected, 2)
-	for _, m := range []*machine{nodeC, nodeD} {
+	for _, m := range []*machine{nodeA, nodeC, nodeD} {
 		waitForRegistrationStatus(ctx, t, m, afterLoss.ProposalID, "accepted")
 		require.Equalf(t, expected, listRegistrations(ctx, t, m),
 			"%s did not return the site's projected state", m.name)
 	}
+}
+
+// waitForConnectionEvent proves connection behavior from the structured local
+// event stream rather than inferring it from later domain state.
+func waitForConnectionEvent(t *testing.T, m *machine, eventType string, addresses ...string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		for _, line := range strings.Split(m.output.String(), "\n") {
+			if !strings.Contains(line, fmt.Sprintf(`"type":%q`, eventType)) {
+				continue
+			}
+			for _, address := range addresses {
+				if strings.Contains(line, fmt.Sprintf(`"server":%q`, "nats://"+address)) {
+					return true
+				}
+			}
+		}
+		return false
+	}, apiWaitTimeout, apiPollInterval, "%s never emitted %s for servers %v:\n%s",
+		m.name, eventType, addresses, diagnose([]*machine{m}))
 }
 
 // proposeEventually submits a registration until the site takes it.

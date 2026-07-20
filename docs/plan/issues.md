@@ -7,10 +7,9 @@ every item was reproduced.
 Status values: **Fixed** in this change, **Open** and needing a decision, or
 **Resolved as a side effect** with evidence.
 
-**Gate status.** `task all` does not pass. Issue 7 is the only failure; it is a
-pre-existing Event Fabric resilience gap surfaced by the new three-storage-node
-scenario, not a regression from the endpoint and standby contract. Issues 2, 3,
-7, and 8 are recorded for analysis and decision rather than fixed here.
+**Gate status.** `task all` passes as of 2026-07-20, including all 11 scenarios.
+Issue 2 remains an explicit product decision. Issues 3, 7, and 8 were resolved
+by the resilience and observability follow-up recorded below.
 
 ---
 
@@ -86,49 +85,30 @@ initiative's scope.
 
 ## 3. A client-only machine may stop projecting when its storage node dies
 
-**Status:** Open. This is the one acceptance criterion of the three-storage-node
-backlog item that is not met.
+**Status:** Fixed and deterministically covered.
 
-**Observed.** In the four-machine scenario, after stopping storage machine
-`node-c`, the client-only machine `node-d` intermittently failed to confirm a new
-proposal within the 60 second scenario bound, while the surviving storage
-machines `node-a` and `node-b` confirmed promptly:
+**Observed.** The client-only `node-d` intermittently stopped confirming after a
+storage node was killed. The NATS client randomized its configured server list,
+so the scenario could not tell whether it had killed the connected server. The
+default reconnect cadence was also unrelated to the platform's projection-lag
+safety bound.
 
-```
-PlatformInstances:[
-  {Machine:node-a Status:accepted}
-  {Machine:node-b Status:accepted}
-  {Machine:node-c Status:pending}   <- deliberately stopped
-  {Machine:node-d Status:pending}   <- client-only, did not recover in time
-]
-```
+**Fix.** Client configuration now preserves the resolver's ordered server list,
+retries every 250 ms, and keeps reconnecting while the platform process remains
+live. The platform's lag bound, not a transport retry count, decides when serving
+is no longer safe. A `RECONNECTING` transition explicitly stops the projector and
+handler iterators. After connection recovery, the projector is recreated at the
+next unapplied sequence and the durable handler is reattached. Transient or
+ambiguous consumer-creation timeouts are retried. Structured operational events
+record every connection and consumer reset with the selected server and resume
+sequence.
 
-Intermittent, not constant: `node-d` recovered in other runs.
-
-**Likely cause, not yet confirmed.** A non-storage machine's server list is the
-three storage client addresses, and the NATS client randomises its server
-selection by default. When `node-d` happens to be connected to the storage node
-that is killed, it must reconnect and its ordered consumer must resume from its
-last applied sequence. The runs that failed are consistent with that resume being
-slower than the bound or not happening; the runs that passed are consistent with
-`node-d` having been connected to a machine that stayed up.
-
-**Not investigated further** because it is a pre-existing Event Fabric client
-resilience question rather than part of the endpoint or standby contract, and
-confirming it needs client-side connection instrumentation the runtime does not
-currently emit.
-
-**Current handling.** The scenario requires the surviving *storage* machines to
-keep accepting and projecting, and requires every machine including `node-d` to
-reconverge to the same state once the site is whole. It does not assert that a
-client-only machine keeps projecting across the loss of its own server. The
-backlog item is rewritten to name this as the remaining gap rather than claiming
-the topology is fully proven.
-
-**Recommended next step.** Log the connected server address and every reconnect
-in the Event Fabric client, then re-run the scenario pinning `node-d` to the
-machine that gets killed. That turns an intermittent scenario failure into a
-deterministic one.
+**Evidence.** `TestFourMachineStorageTopologyAndFailure` now proves the behavior
+rather than inferring it. It verifies that `node-d` initially connects to the
+first resolved storage server, `node-a`, kills `node-a`, waits for an
+`event_fabric.client_reconnected` event naming `node-b` or `node-c`, and requires
+`node-d` to project and confirm a new proposal while `node-a` remains offline.
+The isolated scenario and the full gate pass.
 
 ---
 
@@ -205,73 +185,30 @@ the single source of the machine's topology.
 
 ## 7. A surviving storage machine can stop serving when another one is killed
 
-**Status:** Open, and currently failing the `task all` gate. Not investigated.
+**Status:** Fixed.
 
-**Observed.** Under the full `task all` gate,
-`TestFourMachineStorageTopologyAndFailure` failed with a different shape from
-issue 3. After `node-c` was stopped, `node-a` — a *surviving storage* machine —
-stopped answering its registration API entirely:
+**Root cause.** The resolver deliberately places a storage machine's own server
+first, but the NATS client randomized the list by default. A storage process
+could therefore attach its projector and handlers through a remote peer. Killing
+that peer made a healthy local server unnecessarily dependent on the failed
+machine and exposed consumer interruption behavior.
 
-```
-Get "http://127.0.0.1:54440/registrations/0d2f...":
-dial tcp 127.0.0.1:54440: connectex:
-No connection could be made because the target machine actively refused it.
-```
+**Fix.** `nats.DontRandomize()` preserves local-first resolution. Storage
+machines connect to their own embedded server, while client-only machines use the
+stable sorted storage order. Unexpected iterator closure with a live context is
+now returned as an error instead of being reported as a clean stop. Fabric state
+read failures advance the same lag clock as a behind projection, so an active
+process cannot serve an indefinitely stale view during a transport outage.
 
-The last projected view was empty in every field, meaning no `200` was ever
-received during the wait:
-
-```
-last view &{ProposalID: UnitType:0 UnitID:0 UnitTypeNameAdvertised:
-Role:<nil> Machine: IP: Status: PlatformInstances:[]}
-```
-
-**Why this is not a startup problem.** `node-a` had already been serving. The
-scenario only reaches this point after `startTogether` has waited for all four
-machines' APIs, and after a proposal published through `node-d` was replayed
-through `node-a`. So `node-a` came up, served, and then stopped serving once
-`node-c` was killed.
-
-**Consistent with a documented rule, not confirmed as its cause.**
-`docs/01-architecture.md` states that a projector or handler which stops on its
-own also ends serving, because the projection is what every query is answered
-from. A surviving machine whose Event Fabric consumer errors when the cluster
-loses a member would therefore stop serving rather than degrade. That matches
-the observation but has not been verified against `node-a`'s process output.
-
-**Load or timing dependent.** The scenario passed three consecutive isolated
-runs, and passed again in isolation after this failure. It failed inside the full
-gate, which runs the platform integration tests and the other scenarios first.
-Scenario tests declare no `t.Parallel`, so this is not intra-package
-parallelism; the difference is machine load and what ran before.
-
-**Severity.** This is more serious than issue 3. Issue 3 is a client-only machine
-failing to keep projecting; this is a machine that stores the journal and holds
-quorum ceasing to answer at all. If confirmed, losing one storage machine of
-three can take a second one out of service, which would defeat the point of the
-three-replica topology.
-
-**Not investigated further** on instruction. No fix attempted, and the scenario
-was not weakened to make the gate pass.
-
-**Consequence for this change.** `task all` does not currently pass. Every other
-part of the gate does: tidy, vet, format, dead-code, lint, architecture rules,
-unit tests, .NET SDK validation, blueprint validation, and every other scenario
-including the warm standby regression and the two-machine scenarios. The single
-failure is this scenario, and the behaviour it exposes is pre-existing rather
-than introduced by the endpoint and standby contract.
-
-**Recommended next step.** Capture `node-a`'s process output at the moment of
-failure — the scenario now passes `diagnose()` into the assertion message for
-exactly this — and determine whether its process exited, its projector stopped,
-or its HTTP listener closed. That decides whether this is the same root cause as
-issue 3 or a distinct one.
+**Evidence.** The four-machine storage-loss scenario passes in isolation and as
+part of `task all`. It now exercises the stronger case of killing `node-a` while
+`node-b`, `node-c`, and client-only `node-d` continue processing.
 
 ---
 
 ## 8. An interrupted build leaves the staged descriptor in the working tree
 
-**Status:** Open, low severity. Observed once.
+**Status:** Fixed.
 
 **Observed.** After a scenario run was interrupted mid-build,
 `platform/embedded/deployment.json` was left holding a scenario machine's
@@ -287,10 +224,70 @@ customer descriptor present. A left-behind descriptor breaks that invariant
 silently: the next build starts from the wrong embedded file, and the working
 tree shows a modified generated artifact that looks like an intentional change.
 
-**Recommended next step.** Decide whether the invariant should be enforced rather
-than relied upon — for example a gate check that the embedded descriptor is the
-mock, or restoring from the snapshot on start as well as on finish. Restoring the
-file by hand is the immediate remedy.
+**Fix.** Packaging now writes the customer descriptor to a temporary staging
+directory and passes a Go build overlay that maps the neutral embedded file to
+that staged copy. The working tree is never modified, so process termination
+cannot leave customer deployment data behind. The committed embedded descriptor
+was restored to the neutral mock. Unit coverage verifies staging leaves it
+unchanged.
+
+---
+
+## 9. A newly created journal was not immediately visible on every server
+
+**Status:** Fixed during deterministic resilience testing.
+
+**Observed.** A storage node received a successful stream creation result, then
+failed its immediate readiness high-water read with NATS API error 10059,
+`stream not found`. Structured startup events showed journal creation had taken
+8.2 seconds and the failure occurred on the next operation, before HTTP opened.
+
+**Root cause.** The metadata leader had accepted stream creation, but the local
+server used by that machine had not yet converged on the new stream. A creation
+acknowledgement alone was therefore not sufficient evidence that the returned
+stream handle was locally usable.
+
+**Fix.** `ensureJournal` now calls `Stream.Info` before returning. Error 10059 is
+treated as a bounded startup retry, like the other cluster-formation states. A
+unit test covers its retry classification. The deterministic four-machine
+scenario then passed.
+
+---
+
+## 10. Consumer creation could succeed remotely and time out locally
+
+**Status:** Fixed during repeated resilience testing.
+
+**Observed.** NATS created a durable handler consumer, so startup observed it
+with zero pending messages and declared the site ready. The original create
+request then timed out and its runner stopped, which correctly caused the API to
+close. The event timeline showed `site_ready` followed by a handler create
+deadline error five seconds later.
+
+**Fix.** Consumer creation now retries transient and ambiguous responses. The
+Fabric also tracks whether the local handler iterator is active. `HandlerPending`
+reports `ErrHandlerNotAttached` until both the durable exists and the local loop
+is consuming it, so readiness cannot pass on server-side state alone. Projector
+creation uses the same bounded retry classification after reconnect.
+
+---
+
+## 11. One .NET end-to-end assertion failed without diagnostic detail
+
+**Status:** Not reproduced; test diagnostics fixed.
+
+**Observed.** One full-gate run reported the named .NET registration end-to-end
+test as failed after seven seconds. Both platform processes remained healthy and
+their event timelines contained no error-level transition. The test runner's
+quiet console output omitted the failed assertion, so the captured evidence could
+not distinguish a contract mismatch from a test-runner issue.
+
+**Follow-up.** Four isolated executions of the actual .NET test passed. The
+scenario now requests normal console logger detail and verifies that the named
+end-to-end test reports `Passed`, rather than matching a generic summary. A
+future recurrence will include the assertion, expected value, actual value, and
+stack location in the scenario failure. No platform behavior was changed based
+on an unreproduced failure.
 
 ---
 
@@ -300,9 +297,12 @@ file by hand is the immediate remedy.
 | --- | --- | --- |
 | 1 | Three-storage-node sites could not start | Fixed |
 | 2 | Write window after storage loss | Open, decision needed |
-| 3 | Client-only machine projection across server loss | Open, backlog item |
+| 3 | Client-only machine projection across server loss | Fixed and covered |
 | 4 | Windows forced-kill promotion gap | Resolved as a side effect |
 | 5 | Silently ignored runtime configuration keys | Fixed |
 | 6 | App test encoded an unreachable topology | Fixed |
-| 7 | Surviving storage machine stops serving after another is killed | Open, fails `task all` |
-| 8 | Interrupted build leaves the staged descriptor behind | Open, low severity |
+| 7 | Surviving storage machine stops serving after another is killed | Fixed |
+| 8 | Interrupted build leaves the staged descriptor behind | Fixed |
+| 9 | New journal briefly invisible on a local server | Fixed |
+| 10 | Consumer created remotely but create response timed out | Fixed |
+| 11 | .NET end-to-end assertion failed without detail | Not reproduced; diagnostics fixed |

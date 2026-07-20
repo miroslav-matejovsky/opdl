@@ -5,16 +5,19 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
+const reconnectWait = 250 * time.Millisecond
+
 // serverOptions translates the adapter's configuration into embedded server
 // options. It enables JetStream only on a storage node and configures the
 // cluster listener and routes only when the site has peers to route to. The
 // server's own logs are silenced; the platform reports Event Fabric lifecycle
-// through its own journal instead.
+// through local operational events that remain available when NATS does not.
 //
 // No monitoring listener is configured. HTTPPort and HTTPSPort are left at zero,
 // which is what makes the server start none: the runtime reads connection,
@@ -68,7 +71,17 @@ func serverOptions(cfg Config) (*server.Options, error) {
 // natsOptions builds the client connection options: site credentials when they
 // are set, and a name that identifies this node's own client.
 func natsOptions(cfg Config) []nats.Option {
-	opts := []nats.Option{nats.Name(cfg.ServerName)}
+	// The resolver deliberately puts a storage machine's own server first. NATS
+	// randomizes URL order by default, which defeats that topology and can make a
+	// healthy storage process depend on a peer it does not need. Preserve the
+	// resolved order and keep reconnecting while the runtime remains within its
+	// own projection-lag safety bound.
+	opts := []nats.Option{
+		nats.Name(cfg.ClientName),
+		nats.DontRandomize(),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(reconnectWait),
+	}
 	if cfg.Username != "" {
 		opts = append(opts, nats.UserInfo(cfg.Username, cfg.Password))
 	}

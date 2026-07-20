@@ -52,6 +52,9 @@ const (
 // machine. Nothing here is an identity: overriding an address changes where the
 // node listens or connects, never which machine it is.
 type Config struct {
+	// ClientName identifies this machine's connection in NATS diagnostics. It is
+	// always set, including on a machine that does not host a server.
+	ClientName string
 	// ServerName is this node's name within the site cluster. It is unique per
 	// site. It is only meaningful on a storage node.
 	ServerName string
@@ -132,6 +135,7 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	nats := descriptor.EventFabric.Nats
 
 	cfg := Config{
+		ClientName:      descriptor.Machine,
 		ClusterName:     string(eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)),
 		Servers:         append([]string(nil), nats.Servers...),
 		Routes:          append([]string(nil), nats.Routes...),
@@ -202,6 +206,9 @@ func Replicas(siteSize int) int {
 // bad address or an unwritable data directory fails at startup rather than half
 // way through binding sockets or creating a stream.
 func (c Config) Validate() error {
+	if strings.TrimSpace(c.ClientName) == "" {
+		return fmt.Errorf("nats: client name is required")
+	}
 	if len(c.Servers) == 0 {
 		return fmt.Errorf("nats: no server to connect to: the site has no storage node")
 	}

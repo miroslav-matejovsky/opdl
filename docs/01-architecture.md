@@ -56,6 +56,7 @@ The platform is composed around three boundaries:
 | `internal/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
 | `internal/eventfabric` | Publishes facts to the site's ordered journal, replays them, delivers them, and reports health. Runtime code does not depend on a transport. |
 | `internal/redundancy` | Owns process roles, lifecycle state, the machine fence, projection-lag state, and atomic status files. |
+| `internal/operations` | Writes local structured operational events to stderr and optional JSONL without depending on the Event Fabric. |
 
 The production adapter is `eventfabric/nats`. NATS is imported only by it.
 
@@ -154,13 +155,15 @@ there is no peer server, and binding it would open a port nothing can connect to
 | 4 | 3 | 3 | 0 |
 
 There is no NATS monitoring listener. `HTTPPort` and `HTTPSPort` are left at
-zero, which is what makes the embedded server start none. The runtime already
-reads connection state, journal high-water, projection progress, and lag through
-the Event Fabric client API and writes them to its per-process status files, so a
-second unauthenticated HTTP surface would add an open port without adding a
-signal. Those status files are the supported local monitoring surface. Any remote
-operational API is a separate contract that must be platform-owned,
-authenticated, and authorized, and must not proxy the NATS monitor.
+zero, which is what makes the embedded server start none. The runtime reads
+connection state, journal high-water, projection progress, and lag through the
+Event Fabric client API and writes them to per-process status files. It also
+writes structured local operational events to stderr and optional JSONL. Those
+events deliberately do not depend on NATS, so they remain available to explain a
+connection or journal outage. A second unauthenticated HTTP surface would add an
+open port without adding a signal. Any remote operational API is a separate
+contract that must be platform-owned, authenticated, and authorized, and must
+not proxy the NATS monitor.
 
 Port reduction is not by itself a security control. Bind only to the machine's
 exact `ip`, never a wildcard; restrict the client port to the OPDL machines that
@@ -189,11 +192,12 @@ publication through one machine is replayed through another, that the site keeps
 accepting and projecting after one storage machine is stopped, and that the
 stopped machine rejoins its own storage and reconverges to the same state.
 
-Two properties around that topology are not yet proven and are tracked in
-`docs/backlog/event-fabric.md`: whether a client-only machine keeps projecting
-across the loss of the storage node it is connected to, and whether the platform
-should absorb the brief window after a storage machine is lost during which the
-journal's replica group is electing a leader and rejects writes.
+A client-only machine's resolved server order is stable. The four-machine
+scenario proves it reconnects and resumes projection after the storage server it
+is connected to is killed. The remaining product decision is tracked in
+`docs/backlog/event-fabric.md`: whether the platform should absorb the brief
+window after a storage machine is lost during which the journal's replica group
+is electing a leader and rejects writes.
 
 The site's NATS cluster is exactly its storage nodes. Every other machine of the
 site runs no server and reaches the journal as a client of the storage nodes.

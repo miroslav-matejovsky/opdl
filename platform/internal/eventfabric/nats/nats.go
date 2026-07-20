@@ -17,6 +17,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 )
 
 // Fabric is an Event Fabric backed by an embedded NATS server and its JetStream
@@ -28,6 +29,7 @@ type Fabric struct {
 	scope        eventfabric.SiteScope
 	node         events.Node
 	machineToken string
+	observer     *operations.Recorder
 
 	srv    *server.Server
 	nc     *nats.Conn
@@ -39,6 +41,9 @@ type Fabric struct {
 
 	mu     sync.RWMutex
 	closed bool
+	// activeHandlers distinguishes a durable that exists on the server from a
+	// local loop that is actually consuming it. Startup readiness requires both.
+	activeHandlers map[string]bool
 }
 
 // Fabric satisfies the Event Fabric contract.
@@ -49,9 +54,17 @@ var _ eventfabric.Fabric = (*Fabric)(nil)
 // rejects.
 var serviceName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+const (
+	attributeAttempt = "attempt"
+	attributeHandler = "handler"
+	attributeJournal = "journal"
+)
+
 // connectRetryInterval is how often a node retries reaching the site's servers
 // while it starts.
 const connectRetryInterval = 200 * time.Millisecond
+
+var errConsumerReconnect = errors.New("nats: consumer reset for client reconnect")
 
 // Open starts a node's embedded NATS server, connects to it, and creates or
 // validates the site journal. It validates the configuration before opening any
@@ -72,7 +85,12 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 		return nil, fmt.Errorf("nats: open on %s: %w", cfg.ClientAddress, err)
 	}
 
-	f := &Fabric{cfg: cfg, scope: scope, node: node, machineToken: eventfabric.SafeToken(node.Machine)}
+	f := &Fabric{
+		cfg: cfg, scope: scope, node: node,
+		machineToken:   eventfabric.SafeToken(node.Machine),
+		observer:       operations.FromContext(ctx),
+		activeHandlers: make(map[string]bool),
+	}
 
 	fail := func(cause error) (*Fabric, error) {
 		return nil, fmt.Errorf("nats: open on %s: %w", strings.Join(cfg.Servers, ","), errors.Join(cause, f.abandon(ctx)))
@@ -83,6 +101,12 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 	// the journal's metadata group without adding anywhere to keep it, and that
 	// group's quorum is what decides whether the site can write at all.
 	if cfg.HostsStorage {
+		f.observer.Emit("event_fabric.server_starting", operations.LevelInfo, "event_fabric.nats", "embedded NATS server starting", map[string]any{
+			"client_address":  cfg.ClientAddress,
+			"cluster_address": cfg.ClusterAddress,
+			"routes":          cfg.Routes,
+			"data_dir":        cfg.DataDir,
+		})
 		opts, err := serverOptions(cfg)
 		if err != nil {
 			return nil, err
@@ -97,6 +121,9 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 		if !srv.ReadyForConnections(cfg.StartupTimeout) {
 			return fail(fmt.Errorf("server not ready within %s", cfg.StartupTimeout))
 		}
+		f.observer.Emit("event_fabric.server_ready", operations.LevelInfo, "event_fabric.nats", "embedded NATS server accepts connections", map[string]any{
+			"client_address": cfg.ClientAddress,
+		})
 	}
 
 	nc, err := f.connect(ctx)
@@ -116,6 +143,11 @@ func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*F
 		return fail(err)
 	}
 	f.stream = stream
+	f.observer.Emit("event_fabric.journal_ready", operations.LevelInfo, "event_fabric.nats", "site journal is ready", map[string]any{
+		attributeJournal: f.scope.StreamName(),
+		"hosts_storage":  cfg.HostsStorage,
+		"replicas":       cfg.Replicas,
+	})
 	return f, nil
 }
 
@@ -135,10 +167,26 @@ func (f *Fabric) connect(ctx context.Context) (*nats.Conn, error) {
 	target := strings.Join(urls, ",")
 
 	deadline := time.Now().Add(f.cfg.StartupTimeout)
+	started := time.Now()
+	attempt := 0
 	for {
+		attempt++
 		nc, err := nats.Connect(target, natsOptions(f.cfg)...)
 		if err == nil {
+			f.observeConnection(nc)
+			f.observer.Emit("event_fabric.client_connected", operations.LevelInfo, "event_fabric.nats", "NATS client connected", map[string]any{
+				"server":                       nc.ConnectedUrlRedacted(),
+				"attempts":                     attempt,
+				operations.AttributeDurationMS: time.Since(started).Milliseconds(),
+			})
 			return nc, nil
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			f.observer.Emit("event_fabric.client_connect_retry", operations.LevelWarn, "event_fabric.nats", "NATS client connection failed; retrying", map[string]any{
+				"servers":                 f.cfg.Servers,
+				attributeAttempt:          attempt,
+				operations.AttributeError: err.Error(),
+			})
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("connect to %s: %w", target, ctxErr)
@@ -148,6 +196,39 @@ func (f *Fabric) connect(ctx context.Context) (*nats.Conn, error) {
 		}
 		time.Sleep(connectRetryInterval)
 	}
+}
+
+func (f *Fabric) observeConnection(nc *nats.Conn) {
+	nc.SetDisconnectErrHandler(func(connection *nats.Conn, err error) {
+		attributes := map[string]any{"last_server": connection.ConnectedUrlRedacted()}
+		if err != nil {
+			attributes[operations.AttributeError] = err.Error()
+		}
+		if f.isClosed() {
+			f.observer.Emit("event_fabric.client_disconnected", operations.LevelInfo, "event_fabric.nats", "NATS client disconnected for shutdown", attributes)
+			return
+		}
+		f.observer.Emit("event_fabric.client_disconnected", operations.LevelWarn, "event_fabric.nats", "NATS client disconnected; reconnecting", attributes)
+	})
+	nc.SetReconnectHandler(func(connection *nats.Conn) {
+		f.observer.Emit("event_fabric.client_reconnected", operations.LevelInfo, "event_fabric.nats", "NATS client reconnected", map[string]any{
+			"server": connection.ConnectedUrlRedacted(),
+		})
+	})
+	nc.SetClosedHandler(func(connection *nats.Conn) {
+		attributes := map[string]any{}
+		if err := connection.LastError(); err != nil {
+			attributes[operations.AttributeError] = err.Error()
+		}
+		f.observer.Emit("event_fabric.client_closed", operations.LevelInfo, "event_fabric.nats", "NATS client connection closed", attributes)
+	})
+	nc.SetErrorHandler(func(_ *nats.Conn, subscription *nats.Subscription, err error) {
+		attributes := map[string]any{operations.AttributeError: err.Error()}
+		if subscription != nil {
+			attributes["subject"] = subscription.Subject
+		}
+		f.observer.Emit("event_fabric.client_async_error", operations.LevelError, "event_fabric.nats", "NATS client asynchronous error", attributes)
+	})
 }
 
 // Info returns the fabric's identity and storage disposition: which adapter and
@@ -230,20 +311,69 @@ func (f *Fabric) RunProjector(ctx context.Context, projector eventfabric.Project
 	if err := f.check(ctx); err != nil {
 		return err
 	}
-	consumer, err := f.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
-		DeliverPolicy:  jetstream.DeliverAllPolicy,
-		FilterSubjects: []string{f.scope.SubjectFilter()},
-	})
-	if err != nil {
-		return fmt.Errorf("nats: projector consumer on %s: %w", f.scope.StreamName(), err)
-	}
-	return f.consume(ctx, consumer, func(_ jetstream.Msg, delivery eventfabric.Delivery) error {
-		if err := projector.Apply(ctx, delivery); err != nil {
-			return fmt.Errorf("nats: apply %s at %d: %w", delivery.Record.Type, delivery.Sequence, err)
+	f.observer.Emit("event_fabric.projector_started", operations.LevelInfo, "event_fabric.projector", "journal projector started", nil)
+	for {
+		next := f.applied.Load() + 1
+		consumer, err := f.attachProjector(ctx, next)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("nats: projector consumer on %s: %w", f.scope.StreamName(), err)
 		}
-		f.applied.Store(delivery.Sequence)
-		return nil
-	})
+		err = f.consume(ctx, consumer, func(_ jetstream.Msg, delivery eventfabric.Delivery) error {
+			if err := projector.Apply(ctx, delivery); err != nil {
+				return fmt.Errorf("nats: apply %s at %d: %w", delivery.Record.Type, delivery.Sequence, err)
+			}
+			f.applied.Store(delivery.Sequence)
+			return nil
+		}, nil)
+		if errors.Is(err, errConsumerReconnect) {
+			if err := f.waitUntilConnected(ctx); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return fmt.Errorf("nats: projector wait for reconnect: %w", err)
+			}
+			f.observer.Emit("event_fabric.projector_reset", operations.LevelInfo, "event_fabric.projector", "journal projector resetting after reconnect", map[string]any{"next_sequence": f.applied.Load() + 1})
+			continue
+		}
+		f.observeConsumerStop("event_fabric.projector_stopped", "event_fabric.projector", "journal projector", err)
+		return err
+	}
+}
+
+func (f *Fabric) attachProjector(ctx context.Context, next uint64) (jetstream.Consumer, error) {
+	cfg := orderedConsumerConfig(f.scope.SubjectFilter(), next)
+	attempt := 0
+	for {
+		attempt++
+		consumer, err := f.stream.OrderedConsumer(ctx, cfg)
+		if err == nil {
+			return consumer, nil
+		}
+		if !retryableConsumerError(ctx, err) {
+			return nil, err
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			f.observer.Emit("event_fabric.projector_attach_retry", operations.LevelWarn, "event_fabric.projector", "journal projector attachment is unavailable; retrying", map[string]any{
+				"next_sequence": next, attributeAttempt: attempt, operations.AttributeError: err.Error(),
+			})
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(connectRetryInterval):
+		}
+	}
+}
+
+func orderedConsumerConfig(subject string, next uint64) jetstream.OrderedConsumerConfig {
+	return jetstream.OrderedConsumerConfig{
+		DeliverPolicy:  jetstream.DeliverByStartSequencePolicy,
+		OptStartSeq:    next,
+		FilterSubjects: []string{subject},
+	}
 }
 
 // RunHandler runs handler as a durable per-service, per-node reaction to its
@@ -263,7 +393,36 @@ func (f *Fabric) RunHandler(ctx context.Context, handler eventfabric.Handler) er
 	if err != nil {
 		return err
 	}
-	consumer, err := f.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+	f.observer.Emit("event_fabric.handler_started", operations.LevelInfo, "event_fabric.handler", "durable event handler started", map[string]any{attributeHandler: handler.Name()})
+	for {
+		consumer, err := f.attachHandler(ctx, name, subjects)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("nats: handler consumer %s: %w", name, err)
+		}
+		err = f.consume(ctx, consumer, func(message jetstream.Msg, delivery eventfabric.Delivery) error {
+			return f.handle(ctx, handler, message, delivery)
+		}, func() { f.setHandlerActive(name, true) })
+		f.setHandlerActive(name, false)
+		if errors.Is(err, errConsumerReconnect) {
+			if err := f.waitUntilConnected(ctx); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return fmt.Errorf("nats: handler %s wait for reconnect: %w", name, err)
+			}
+			f.observer.Emit("event_fabric.handler_reset", operations.LevelInfo, "event_fabric.handler", "durable event handler resetting after reconnect", map[string]any{attributeHandler: handler.Name()})
+			continue
+		}
+		f.observeConsumerStop("event_fabric.handler_stopped", "event_fabric.handler", "durable event handler", err)
+		return err
+	}
+}
+
+func (f *Fabric) attachHandler(ctx context.Context, name string, subjects []string) (jetstream.Consumer, error) {
+	cfg := jetstream.ConsumerConfig{
 		Name:           name,
 		Durable:        name,
 		FilterSubjects: subjects,
@@ -271,13 +430,47 @@ func (f *Fabric) RunHandler(ctx context.Context, handler eventfabric.Handler) er
 		AckPolicy:      jetstream.AckExplicitPolicy,
 		AckWait:        f.cfg.AckWait,
 		MaxDeliver:     f.cfg.MaxDeliver,
-	})
-	if err != nil {
-		return fmt.Errorf("nats: handler consumer %s: %w", name, err)
 	}
-	return f.consume(ctx, consumer, func(message jetstream.Msg, delivery eventfabric.Delivery) error {
-		return f.handle(ctx, handler, message, delivery)
-	})
+	attempt := 0
+	for {
+		attempt++
+		consumer, err := f.stream.CreateOrUpdateConsumer(ctx, cfg)
+		if err == nil {
+			return consumer, nil
+		}
+		if !retryableConsumerError(ctx, err) {
+			return nil, err
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			f.observer.Emit("event_fabric.handler_attach_retry", operations.LevelWarn, "event_fabric.handler", "durable event handler attachment is unavailable; retrying", map[string]any{
+				attributeHandler: name, attributeAttempt: attempt, operations.AttributeError: err.Error(),
+			})
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(connectRetryInterval):
+		}
+	}
+}
+
+func retryableConsumerError(ctx context.Context, err error) bool {
+	return retryableJournalError(ctx, err) ||
+		errors.Is(err, nats.ErrTimeout) ||
+		errors.Is(err, jetstream.ErrConsumerCreationResponseEmpty) ||
+		errors.Is(err, jetstream.ErrConsumerResetResponseEmpty) ||
+		errors.Is(err, jetstream.ErrConsumerLeadershipChanged) ||
+		errors.Is(err, jetstream.ErrServerShutdown)
+}
+
+func (f *Fabric) observeConsumerStop(eventType, component, message string, err error) {
+	level := operations.LevelInfo
+	attributes := map[string]any{}
+	if err != nil {
+		level = operations.LevelError
+		attributes[operations.AttributeError] = err.Error()
+	}
+	f.observer.Emit(eventType, level, component, message+" stopped", attributes)
 }
 
 // HandlerPending returns how many journal events handler's durable consumer has
@@ -295,6 +488,9 @@ func (f *Fabric) HandlerPending(ctx context.Context, handler eventfabric.Handler
 	name, err := f.consumerName(handler.Name())
 	if err != nil {
 		return 0, err
+	}
+	if !f.handlerActive(name) {
+		return 0, fmt.Errorf("%w: %s", eventfabric.ErrHandlerNotAttached, handler.Name())
 	}
 	consumer, err := f.stream.Consumer(ctx, name)
 	if errors.Is(err, jetstream.ErrConsumerNotFound) {
@@ -333,21 +529,31 @@ func (f *Fabric) handle(ctx context.Context, handler eventfabric.Handler, messag
 	return nil
 }
 
-// consume reads messages in order and hands each to apply, until ctx is canceled
-// or apply fails. It stops the iterator when ctx is done, so a canceled context
-// unblocks a waiting read and returns without error.
-func (f *Fabric) consume(ctx context.Context, consumer jetstream.Consumer, apply func(jetstream.Msg, eventfabric.Delivery) error) error {
+// consume reads messages in order and hands each to apply until ctx is canceled,
+// apply fails, or a client reconnect requires the consumer to be recreated. The
+// connection status listener explicitly stops the iterator so it cannot remain
+// silently attached to the server that disappeared.
+func (f *Fabric) consume(ctx context.Context, consumer jetstream.Consumer, apply func(jetstream.Msg, eventfabric.Delivery) error, onStarted func()) error {
 	iterator, err := consumer.Messages()
 	if err != nil {
 		return fmt.Errorf("nats: consume %s: %w", f.scope.StreamName(), err)
 	}
 	defer iterator.Stop()
+	if onStarted != nil {
+		onStarted()
+	}
 
+	statuses := f.nc.StatusChanged(nats.RECONNECTING)
+	defer f.nc.RemoveStatusListener(statuses)
+	reconnecting := make(chan struct{}, 1)
 	stopped := make(chan struct{})
 	defer close(stopped)
 	go func() {
 		select {
 		case <-ctx.Done():
+			iterator.Stop()
+		case <-statuses:
+			reconnecting <- struct{}{}
 			iterator.Stop()
 		case <-stopped:
 		}
@@ -359,8 +565,16 @@ func (f *Fabric) consume(ctx context.Context, consumer jetstream.Consumer, apply
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, jetstream.ErrMsgIteratorClosed) {
-				return nil
+			select {
+			case <-reconnecting:
+				return errConsumerReconnect
+			default:
+			}
+			if errors.Is(err, jetstream.ErrConsumerLeadershipChanged) ||
+				errors.Is(err, jetstream.ErrConsumerDeleted) ||
+				errors.Is(err, jetstream.ErrOrderedConsumerReset) ||
+				errors.Is(err, jetstream.ErrServerShutdown) {
+				return errConsumerReconnect
 			}
 			return fmt.Errorf("nats: read %s: %w", f.scope.StreamName(), err)
 		}
@@ -377,6 +591,24 @@ func (f *Fabric) consume(ctx context.Context, consumer jetstream.Consumer, apply
 				return nil
 			}
 			return err
+		}
+	}
+}
+
+func (f *Fabric) waitUntilConnected(ctx context.Context) error {
+	ticker := time.NewTicker(reconnectWait)
+	defer ticker.Stop()
+	for {
+		switch {
+		case f.nc.IsConnected():
+			return nil
+		case f.nc.IsClosed():
+			return nats.ErrConnectionClosed
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
 		}
 	}
 }
@@ -429,7 +661,16 @@ func (f *Fabric) Close(ctx context.Context) error {
 
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), f.cfg.ShutdownTimeout)
 	defer cancel()
-	return f.shutdown(stopCtx)
+	f.observer.Emit("event_fabric.stopping", operations.LevelInfo, "event_fabric.nats", "Event Fabric stopping", nil)
+	err := f.shutdown(stopCtx)
+	level := operations.LevelInfo
+	attributes := map[string]any{}
+	if err != nil {
+		level = operations.LevelError
+		attributes[operations.AttributeError] = err.Error()
+	}
+	f.observer.Emit("event_fabric.stopped", level, "event_fabric.nats", "Event Fabric stopped", attributes)
+	return err
 }
 
 // abandon tears down a server that never became a working fabric. It runs on the
@@ -476,6 +717,24 @@ func (f *Fabric) check(ctx context.Context) error {
 		return eventfabric.ErrClosed
 	}
 	return nil
+}
+
+func (f *Fabric) isClosed() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.closed
+}
+
+func (f *Fabric) setHandlerActive(name string, active bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.activeHandlers[name] = active
+}
+
+func (f *Fabric) handlerActive(name string) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.activeHandlers[name]
 }
 
 // consumerName builds a durable consumer name for one service on this node:

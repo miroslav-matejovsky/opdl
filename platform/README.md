@@ -23,4 +23,8 @@ instead of moving the site onto a second one.
 There is no NATS monitoring listener. The per-process status files are the
 supported local monitoring surface: they report lifecycle state, projection
 progress against the journal's high-water sequence, lag, promotability, and the
-last error.
+last error. Structured operational events are always written as JSON lines to
+stderr and can optionally be retained under `operations.event_dir`. They cover
+process, fence, activation, server, connection, journal, projector, handler,
+readiness, API, and shutdown transitions even when the Event Fabric is
+unavailable. See the [operations guide](../docs/plan/operations/README.md).
