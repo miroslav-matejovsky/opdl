@@ -61,6 +61,7 @@ deps:
     canUse: [nats-server, nats-client]
     mayDependOn: [deployment, events, eventfabric]
   httpapi:
+    canUse: [huma]
     mayDependOn: [api, registration]
   registration:
     canUse: [stablehash]

@@ -134,21 +134,6 @@ func Register(hapi huma.API, h Handlers) {
 	})
 }
 
-// NewServeMux builds the served http.Handler. When exposeSpec is true, huma's
-// generated /openapi, /docs, and /schemas endpoints are served too; otherwise
-// only the registration operations are.
-func NewServeMux(h Handlers, exposeSpec bool) http.Handler {
-	mux := http.NewServeMux()
-	cfg := Config()
-	if !exposeSpec {
-		cfg.OpenAPIPath = ""
-		cfg.DocsPath = ""
-		cfg.SchemasPath = ""
-	}
-	Register(humago.New(mux, cfg), h)
-	return mux
-}
-
 // OpenAPIYAML returns the platform's OpenAPI 3.0.3 document as YAML. It builds
 // the API with zero Handlers, since generation never calls the handlers, and
 // downgrades from huma's native 3.1 for tools such as Kiota.

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
@@ -63,7 +64,11 @@ func (s *stubHandlers) handlers() api.Handlers {
 
 func serve(t *testing.T, h api.Handlers) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(api.NewServeMux(h, false))
+	mux := http.NewServeMux()
+	cfg := api.Config()
+	cfg.OpenAPIPath, cfg.DocsPath, cfg.SchemasPath = "", "", ""
+	api.Register(humago.New(mux, cfg), h)
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }

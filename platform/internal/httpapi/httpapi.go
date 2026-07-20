@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
+
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
@@ -19,9 +21,18 @@ import (
 // registration, which is why nothing here can answer a conflict immediately.
 //
 // When exposeSpec is true, huma's generated /openapi, /docs, and /schemas
-// endpoints are served alongside the operations.
+// endpoints are served alongside the operations; otherwise only the operations
+// are, and the authoritative specification is the checked-in
+// api-specifications/openapi.yaml.
 func NewHandler(commands *registration.CommandService, queries *registration.QueryService, exposeSpec bool) http.Handler {
-	return api.NewServeMux(api.Handlers{
+	mux := http.NewServeMux()
+	cfg := api.Config()
+	if !exposeSpec {
+		cfg.OpenAPIPath = ""
+		cfg.DocsPath = ""
+		cfg.SchemasPath = ""
+	}
+	api.Register(humago.New(mux, cfg), api.Handlers{
 		Create: func(ctx context.Context, req api.RegistrationRequest) (api.ProposalAccepted, error) {
 			receipt, err := commands.Create(ctx, req)
 			if err != nil {
@@ -32,5 +43,6 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 		List:      queries.List,
 		Get:       queries.Get,
 		Conflicts: queries.Conflicts,
-	}, exposeSpec)
+	})
+	return mux
 }
