@@ -2,9 +2,9 @@
 
 ## Goal
 
-Serve the huma API from the platform runtime, replacing the old
-`httpapi.NewHandler` call, and decide whether to expose `/openapi.yaml` and
-`/docs` on the running server.
+Serve the huma API from the platform runtime, updating the `httpapi.NewHandler`
+call for its new signature, and decide whether to expose `/openapi` and `/docs`
+on the running server.
 
 ## Current call site (what this replaces)
 
@@ -23,72 +23,40 @@ not change. Only the `Handler` construction changes.
 
 ## Changes
 
-Build a `http.ServeMux`, bind a huma API to it, register the operations, and hand
-the mux to the server:
+`httpapi.NewHandler` now takes an `exposeSpec` bool (stage 3) and returns the huma
+`ServeMux` built in `platform/api`. The runtime keeps calling `httpapi`, so
+`app` does not import huma or `api` directly:
 
 ```go
-mux := http.NewServeMux()
-hcfg := httpapi.Config()
-// Optional spec exposure, see the decision below. Off by default:
-hcfg.OpenAPIPath = ""
-hcfg.DocsPath = ""
-hcfg.SchemasPath = ""
-hapi := humago.New(mux, hcfg)
-httpapi.Register(hapi, site.commands, site.queries)
-
 srv := &http.Server{
 	Addr:              addr,
-	Handler:           mux,
+	Handler:           httpapi.NewHandler(site.commands, site.queries, false),
 	ReadHeaderTimeout: cfg.ReadHeaderTimeout(),
 }
 ```
 
-Keep this construction in `app`, or move it behind a small
-`httpapi.NewServeMux(commands, queries, exposeSpec bool) http.Handler` so `app`
-does not import `humago`. Prefer the helper: it keeps the huma adapter import
-inside `httpapi` and leaves `runtime.go` calling one platform function, close to
-how `NewHandler` is called today.
-
-```go
-// platform/internal/httpapi/httpapi.go
-func NewServeMux(commands *registration.CommandService, queries *registration.QueryService, exposeSpec bool) http.Handler {
-	mux := http.NewServeMux()
-	cfg := Config()
-	if !exposeSpec {
-		cfg.OpenAPIPath = ""
-		cfg.DocsPath = ""
-		cfg.SchemasPath = ""
-	}
-	Register(humago.New(mux, cfg), commands, queries)
-	return mux
-}
-```
-
-Then `runtime.go` becomes:
-
-```go
-Handler: httpapi.NewServeMux(site.commands, site.queries, false),
-```
-
-If a helper is used, arch-lint stays as in stage 1 (`httpapi canUse: [huma]`);
-`app` still only `mayDependOn: [httpapi]` and never imports huma.
+That is the whole runtime change. All the huma construction lives in
+`api.NewServeMux` (called by `httpapi.NewHandler`), so arch-lint stays as in
+stage 1: `api canUse: [huma]`, `httpapi mayDependOn: [api, registration]`, and
+`app mayDependOn: [..., httpapi]` unchanged.
 
 ## Decision: expose the spec over HTTP
 
 The user marked HTTP exposure optional. The authoritative artifact is
 `api-specifications/openapi.yaml` in git, produced in stage 4.
 
-- **Recommended:** keep exposure off (`exposeSpec=false`). The runtime serves
-  only the four registration operations, identical surface to today. Turning it
-  on later is a one-line flag.
+- **Recommended:** pass `false`. The runtime serves only the four registration
+  operations, the same surface as today. huma's `/openapi`, `/openapi.json`,
+  `/docs`, and `/schemas` routes are disabled by the empty paths in
+  `api.NewServeMux`. Turning it on later is a one-line change.
 - Alternative: pass `true` to serve huma's built-in `/openapi.yaml`,
-  `/openapi.json`, and the `/docs` UI. Useful for local exploration; adds routes
-  the platform did not serve before. If enabled, consider gating it behind config
-  so it is off in production.
+  `/openapi.json`, and the `/docs` UI, useful for local exploration. It adds
+  routes the platform did not serve before; if enabled, consider gating it so it
+  is off in production.
 
 If exposure should be configurable rather than hard-coded, thread a bool from
-`config` (`internal/config`) into `NewServeMux`. That is a small addition to the
-config struct and its TOML; defer it unless wanted for the POC.
+`internal/config` into `NewHandler`. That is a small addition to the config
+struct and its TOML; defer it unless wanted for the POC.
 
 ## Verify
 
@@ -102,5 +70,5 @@ config struct and its TOML; defer it unless wanted for the POC.
 
 ## Exit criteria
 
-The runtime serves the huma API, the old `NewHandler` call site is gone, and spec
-exposure is set to the chosen default.
+The runtime serves the huma API through the updated `httpapi.NewHandler`, and
+spec exposure is set to the chosen default.

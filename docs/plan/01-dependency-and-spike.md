@@ -29,7 +29,7 @@ time of writing: v2.39.0 or newer. Run `task tidy` so `platform/go.mod` and
 ### 2. Register the vendor in arch-lint
 
 `platform/.go-arch-lint.yml` uses `depOnAnyVendor: false`, so an unlisted
-dependency fails `task arch`. Add huma as a vendor and let `httpapi` use it:
+dependency fails `task arch`. Add huma as a vendor and let `api` use it:
 
 ```yaml
 vendors:
@@ -37,17 +37,24 @@ vendors:
   huma: { in: "github.com/danielgtaylor/huma/v2**" }
 
 deps:
-  httpapi:
+  api:
     canUse: [huma]
-    mayDependOn: [api, registration]
+  # httpapi is unchanged: mayDependOn: [api, registration]; it does not import huma.
 ```
 
-Only `httpapi` imports huma. `api` stays dependency-free (it uses tags only, see
-stage 2), so it gets no huma entry.
+The `api` component has no `deps` entry today (it is a leaf); add the one above.
+The `**` glob covers the `adapters/humago` subpackage too. `internal/httpapi`
+does not import huma, so it needs no huma entry.
+
+If `conformance-tests` has its own arch-lint that enforces vendors
+(`conformance-tests/.go-arch-lint.yml` or the `conformance-tests/architecture`
+setup), add the same huma vendor there, since stage 4 makes conformance import
+`platform/api` which pulls huma in transitively.
 
 ### 3. Spike (throwaway)
 
-Write a scratch `main` or a `_test.go` under `platform/internal/httpapi` that:
+Write a scratch `main` or a `_test.go` under `platform/api` (its new home, see
+stage 3) that:
 
 - builds a config, disables the generated endpoints, and creates an API over a
   `http.ServeMux`;
@@ -56,7 +63,7 @@ Write a scratch `main` or a `_test.go` under `platform/internal/httpapi` that:
   YAML.
 
 ```go
-package httpapi
+package api
 
 import (
 	"context"
@@ -72,14 +79,14 @@ func spike() ([]byte, error) {
 	cfg.OpenAPIPath = ""
 	cfg.DocsPath = ""
 	cfg.SchemasPath = ""
-	api := humago.New(mux, cfg)
+	hapi := humago.New(mux, cfg)
 
 	type pingOutput struct {
 		Body struct {
 			Message string `json:"message" example:"pong"`
 		}
 	}
-	huma.Register(api, huma.Operation{
+	huma.Register(hapi, huma.Operation{
 		OperationID: "ping",
 		Method:      http.MethodGet,
 		Path:        "/ping",
@@ -90,15 +97,15 @@ func spike() ([]byte, error) {
 		return out, nil
 	})
 
-	return api.OpenAPI().DowngradeYAML()
+	return hapi.OpenAPI().DowngradeYAML()
 }
 ```
 
-Confirm exact field names against the v2.39.0 reference
-(`pkg.go.dev/github.com/danielgtaylor/huma/v2`): `Config.OpenAPIPath`,
-`Config.DocsPath`, `Config.SchemasPath`, and `Config.OpenAPI.Info` for the
-description. If the description field path differs, note it here for later
-stages.
+Field paths confirmed against v2.39.0: `Config.OpenAPIPath`, `Config.DocsPath`,
+`Config.SchemasPath` are on `Config`; the description is
+`cfg.OpenAPI.Info.Description` (`Config` has a named `OpenAPI *huma.OpenAPI`
+field). `DefaultConfig` defaults the three paths to `/openapi`, `/docs`,
+`/schemas`.
 
 ## Verify
 

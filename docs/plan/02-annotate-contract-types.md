@@ -2,19 +2,18 @@
 
 ## Goal
 
-Teach the `platform/api` DTOs to describe themselves to huma, using struct tags
-only, so the generated spec keeps the field docs, examples, integer bounds, and
-closed value sets the current hand-rolled generator produces (and adds the ones
-it cannot). `platform/api` stays dependency-free.
+Teach the `platform/api` DTOs to describe themselves to huma, so the generated
+spec keeps the field docs, examples, integer bounds, and closed value sets the
+current hand-rolled generator produces (and adds the ones it cannot).
 
-## Why tags, not imports
+## How huma reads the DTOs
 
 huma derives its JSON schema from struct tags: `json`, `doc`, `example`,
 `minimum`, `maximum`, `enum`, `format`, and required-ness (a non-pointer field
-without `omitempty` is required). Tags are plain strings, so the contract package
-carries them without importing huma. This preserves the property stated in
-`platform/api/doc.go`: one exported, dependency-free source that SDKs and the
-conformance module build against.
+without `omitempty` is required). These are the only additions to the DTO fields
+in this stage; the operations, config, and huma import land in stage 3. The DTOs
+stay in `platform/api`, which becomes the package that also owns the huma
+operations, so annotating them here and registering them there keeps one source.
 
 ## Changes
 
@@ -69,8 +68,8 @@ Two options:
 - **Stronger:** introduce named types (`type RegistrationStatus string`,
   `type Role string`) carrying their constants, and give them an `enum` tag or a
   `huma.SchemaProvider` implementation. This types the fields in Go too, not just
-  in the spec. `SchemaProvider` would require importing huma into `api`; if that
-  is unwanted, stay with the string-plus-`enum-tag` form.
+  in the spec. Since `api` imports huma from stage 3 on, `SchemaProvider` is now
+  available without any new constraint.
 
 Note the caution already recorded in the backlog: Kiota turns enums into C#
 enums that reject unknown values, so adding a status or role later becomes a
@@ -85,7 +84,6 @@ are not lost when `Describe()` is deleted.
 
 ## Verify
 
-- `platform/api` still imports nothing new (`go list -deps` shows no huma).
 - `task vet && task fmt && task test` pass. Existing `api` tests still hold; add
   a small test asserting a couple of tags exist if useful, though the real
   assertion is the generated spec diff in stage 4.

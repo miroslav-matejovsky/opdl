@@ -20,35 +20,63 @@ and markdown renderer. huma replaces the whole "describe the API, then reflect
 it into OpenAPI" pipeline with one source: the operation handlers themselves.
 The spec is derived from the Go request and response types huma serves.
 
+## Design choice: huma lives in `platform/api`
+
+huma is an explicit dependency of the public `platform/api` package. That package
+owns the DTOs, the huma operations, the huma config, and the spec export. The
+`conformance-tests` module imports `platform/api` and calls its export function
+directly to write `openapi.yaml`. This is deliberate and pragmatic:
+
+- No separate wrapper package, no "keep `api` dependency-free" rule to work
+  around, and no import-cycle gymnastics.
+- One source of truth: the same `api.Register` call that serves requests is what
+  the spec is generated from.
+- Leaking huma into `conformance-tests` is fine: it is an internal build/verify
+  module, not a shipped artifact.
+
+An import cycle is still avoided cleanly. `platform/api` must not import
+`internal/registration` (registration already imports `api`). So `api` does not
+reference the service types directly. Instead it declares a small `Handlers`
+struct of function fields that the runtime fills from the registration services.
+`api` depends on huma; it does not depend on registration.
+
 ## Current state (what this plan replaces)
 
 | Concern | Today | After huma |
 | --- | --- | --- |
 | Contract DTOs | `platform/api` structs with `json` tags | Same structs, plus huma validation/doc tags |
-| Operation description | `platform/api.Describe()` returns `Contract`/`Operation`/`Response` | `huma.Register` calls in `platform/internal/httpapi` |
-| HTTP handlers | `net/http` `ServeMux` in `internal/httpapi` | huma operations over `humago` (`http.ServeMux`) |
-| OpenAPI generation | `conformance-tests/api-specifications/openapi.go` (reflection) | `api.OpenAPI().DowngradeYAML()` from the huma API |
+| Operation description | `platform/api.Describe()` returns `Contract`/`Operation`/`Response` | `huma.Register` calls in `platform/api` |
+| HTTP handlers | `net/http` `ServeMux` in `internal/httpapi` | huma operations over `humago`, built in `platform/api` |
+| Service wiring | `httpapi.NewHandler(commands, queries)` | `httpapi.NewHandler` fills `api.Handlers` from the services |
+| OpenAPI generation | `conformance-tests/api-specifications/openapi.go` (reflection) | `api.OpenAPIYAML()`, called by conformance |
 | `openapi.yaml` | OpenAPI 3.0.3, checked in | OpenAPI 3.0.3 (downgraded from huma 3.1), checked in |
 | `openapi.md` | custom markdown renderer | decided in stage 4 (keep, adapt, or drop) |
 | `.NET` SDK | Kiota from `openapi.yaml` | unchanged: Kiota from `openapi.yaml` |
 
 ## Target architecture
 
-- `platform/api` stays the dependency-free contract package. huma reads struct
-  tags, which are plain strings, so the DTOs gain `doc`/`example`/`enum` tags
-  without importing huma. The structural `Describe`/`Contract`/`Operation` types
-  are removed.
-- `platform/internal/httpapi` owns the huma operations. A single `Register`
-  function attaches every operation to a `huma.API`. Both the runtime server and
-  the spec generator call it, so the served contract and the generated spec can
-  never drift.
-- The huma dependency lives only inside `platform` (in `httpapi`, plus the
-  `humago` adapter). The `conformance-tests` module calls a platform helper that
-  returns the OpenAPI bytes, so huma does not leak into the conformance module.
-- Exposing `/openapi.yaml` and `/docs` on the running server is a one-line config
-  toggle. The spec is still written to `api-specifications/openapi.yaml` in git,
-  which is the authoritative artifact. HTTP exposure is optional and off by
-  default unless we choose otherwise in stage 5.
+- `platform/api` (public) owns:
+  - the DTOs, annotated with huma tags (`doc`, `example`, `enum`, bounds);
+  - `Handlers`, a struct of function fields the runtime supplies;
+  - `Register(hapi, Handlers)` registering every operation;
+  - `Config()` for the huma config (title, version, description);
+  - `NewServeMux(Handlers, exposeSpec)` returning the served `http.Handler`;
+  - `OpenAPIYAML()` returning the OpenAPI 3.0.3 document as bytes;
+  - `ErrJournalUnavailable`, the sentinel that maps to 503 (moved here from
+    `registration`, since the status mapping is part of the contract).
+  - Imports: `net/http`, `github.com/danielgtaylor/huma/v2`, and
+    `.../huma/v2/adapters/humago`.
+- `platform/internal/httpapi` becomes a thin wiring layer: `NewHandler(commands,
+  queries, exposeSpec)` builds `api.Handlers` closures from the registration
+  services and calls `api.NewServeMux`. It imports `api` and `registration`, not
+  huma.
+- `platform/internal/app/runtime.go` still calls `httpapi.NewHandler`; only the
+  signature (an `exposeSpec` bool) changes.
+- `conformance-tests` calls `api.OpenAPIYAML()` and writes the file. huma comes
+  in transitively; that is acceptable for this internal module.
+- Exposing `/openapi` and `/docs` on the running server is a bool passed to
+  `NewServeMux`. The authoritative artifact is `api-specifications/openapi.yaml`
+  in git; HTTP exposure is optional and off by default unless chosen in stage 5.
 
 ## Key facts about huma (verified against v2.39.0, 2026-07-15)
 
@@ -57,17 +85,20 @@ The spec is derived from the Go request and response types huma serves.
 - Standard-library adapter: `github.com/danielgtaylor/huma/v2/adapters/humago`.
   `humago.New(mux, config)` binds a huma API to a Go 1.22+ `http.ServeMux`.
 - `huma.Register[I, O](api, huma.Operation{...}, handler)` registers one
-  operation. Input/output are structs; request body is an `I.Body` field, path
-  params use a `path:"name"` tag, response body is an `O.Body` field.
-- Success status: `huma.Operation.DefaultStatus` (for example 202).
+  operation. Request body is an `I.Body` field, path params use a `path:"name"`
+  tag, response body is an `O.Body` field. Success status is
+  `huma.Operation.DefaultStatus`; documented error codes go in
+  `huma.Operation.Errors []int`.
 - Errors: `huma.Error400BadRequest(...)`, `huma.Error404NotFound(...)`,
-  `huma.Error503ServiceUnavailable(...)`, `huma.NewError(status, msg)`. Default
-  error body is RFC 9457 problem+json. The global error model can be overridden
+  `huma.Error500InternalServerError(...)`, `huma.Error503ServiceUnavailable(...)`.
+  Default error body is RFC 9457 problem+json; the global model can be overridden
   by replacing `huma.NewError`.
 - Spec export: `api.OpenAPI().YAML()` (3.1) and `api.OpenAPI().DowngradeYAML()`
   (3.0.3). Both return `([]byte, error)`.
-- Generated endpoints are controlled by `Config.OpenAPIPath`, `Config.DocsPath`,
-  `Config.SchemasPath`. Setting a path to `""` disables that endpoint.
+- `huma.DefaultConfig(title, version)` sets `Config.OpenAPI.Info.Title/Version`
+  and defaults `Config.OpenAPIPath="/openapi"`, `DocsPath="/docs"`,
+  `SchemasPath="/schemas"`. Set a path to `""` to disable that endpoint. Set the
+  description via `cfg.OpenAPI.Info.Description`.
 
 ## Decisions to make (flagged in the stages)
 
@@ -82,8 +113,8 @@ The spec is derived from the Go request and response types huma serves.
    `YAML()`. Recommended: stay on 3.0.3 for the POC. Decided in stage 4.
 3. **`openapi.md` companion.** Keep the human-readable markdown (adapt the
    renderer to huma's `*huma.OpenAPI` model), or drop it. Decided in stage 4.
-4. **HTTP exposure of the spec.** Keep `/openapi.yaml` and `/docs` off, or turn
-   them on. Recommended: off by default; trivially reversible. Decided in stage 5.
+4. **HTTP exposure of the spec.** Keep `/openapi` and `/docs` off, or turn them
+   on. Recommended: off by default; trivially reversible. Decided in stage 5.
 
 ## Stages
 
@@ -93,11 +124,12 @@ each stage that touches code (per `AGENTS.md`).
 1. [Dependency and spike](01-dependency-and-spike.md) - add huma, prove the
    generation and serving paths compile and run.
 2. [Annotate contract types](02-annotate-contract-types.md) - add huma tags to
-   `platform/api` DTOs; keep the package dependency-free.
-3. [Register operations in httpapi](03-register-operations-httpapi.md) - replace
-   the `ServeMux` handler with huma operations behind one `Register` function.
-4. [Spec generation](04-spec-generation.md) - generate `openapi.yaml` from the
-   huma API; retire the reflection generator; keep Kiota.
+   `platform/api` DTOs.
+3. [Register operations](03-register-operations.md) - add the huma operations,
+   `Handlers`, `Register`, `Config`, `NewServeMux`, and `OpenAPIYAML` to
+   `platform/api`; reduce `internal/httpapi` to wiring.
+4. [Spec generation](04-spec-generation.md) - generate `openapi.yaml` from
+   `api.OpenAPIYAML()`; retire the reflection generator; keep Kiota.
 5. [Runtime wiring](05-runtime-wiring.md) - serve the huma API from the runtime;
    decide optional `/openapi` and `/docs` exposure.
 6. [Cleanup and verification](06-cleanup-and-verification.md) - delete dead

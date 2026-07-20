@@ -73,6 +73,7 @@
     "GOWORK",
     "hclparse",
     "httpapi",
+    "huma",
     "idempotently",
     "jsonfields",
     "Kiota",
