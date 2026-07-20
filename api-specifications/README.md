@@ -16,9 +16,12 @@ Compliance is verified by the `conformance-tests` module during the build proces
   `conformance-tests` module, not edited by hand, and the .NET SDK (`sdk-dotnet`)
   is generated from it in turn. huma emits OpenAPI 3.1 natively; the artifact is
   the 3.0.3 downgrade the SDK toolchain (Kiota) consumes.
+- `openapi.md` - Compact Markdown companion document generated from `openapi.yaml`
+  by `conformance-tests` using `github.com/duh-rpc/openapi-markdown.go` for human
+  review.
 
-  The conformance check always regenerates it from the current source rather than
-  checking it for staleness, so a change that was not propagated here shows up as
+  The conformance check always regenerates both from the current source rather than
+  checking them for staleness, so a change that was not propagated here shows up as
   an unexpected diff after running:
 
   ```
