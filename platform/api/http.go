@@ -42,7 +42,7 @@ type Handlers struct {
 // "$schema" property into every model, which pollutes the generated spec and SDK.
 func Config() huma.Config {
 	cfg := huma.DefaultConfig(apiTitle, apiVersion)
-	cfg.OpenAPI.Info.Description = apiDescription
+	cfg.Info.Description = apiDescription
 	cfg.CreateHooks = nil
 	return cfg
 }
