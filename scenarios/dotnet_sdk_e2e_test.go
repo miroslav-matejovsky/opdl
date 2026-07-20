@@ -76,8 +76,8 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	second.start(ctx, t)
 
 	testOut, err := sdkTest.wait()
-	require.NoErrorf(t, err, "dotnet SDK end-to-end tests failed:\n%s\n%s",
-		testOut, diagnose([]*machine{first, second}))
+	require.NoErrorf(t, err, "dotnet SDK end-to-end tests failed:\n%s%s",
+		testOut, diagnostics(first, second))
 	// The tests skip without their environment variables, so a run that skipped
 	// would otherwise pass while proving nothing.
 	require.Containsf(t, testOut, "Passed Opdl.Sdk.E2E.RegistrationTests.RegistrationIsAcceptedOnlyAfterEveryExpectedMachineConfirms",

@@ -1,7 +1,6 @@
 package scenarios
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,7 +28,7 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 	for _, process := range launches {
 		t.Run(process.name, func(t *testing.T) {
 			node.launchArgs = process.launch.Args
-			node.output = &bytes.Buffer{}
+			node.output = &syncBuffer{}
 			node.cmd = nil
 			node.start(ctx, t)
 			waitForAPI(ctx, t, node)

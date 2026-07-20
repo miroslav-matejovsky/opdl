@@ -27,7 +27,6 @@ import (
 // requires the site to keep accepting and projecting events, then brings it back
 // onto its own journal storage and requires it to rejoin with the same state.
 func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
-	t.Skip("todo: flaky test, needs investigation")
 	ctx := t.Context()
 	outDir := t.TempDir()
 	deployment := deploySite(ctx, t, outDir, t.TempDir(), "four-machine")
@@ -99,9 +98,9 @@ func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 	// continue after the selected server disappears.
 	for _, confirmer := range []string{"node-b", "node-c", "node-d"} {
 		require.Truef(t, nodeB.running(), "node-b stopped serving after node-a was killed:%s",
-			diagnose(deployment.machines))
+			diagnostics(deployment.machines...))
 		waitForRegistration(ctx, t, nodeB, afterLoss.ProposalID, confirmedBy(confirmer),
-			"confirmation from "+confirmer+diagnose(deployment.machines))
+			"confirmation from "+confirmer, diagnostics(deployment.machines...))
 	}
 
 	// The proposal itself stays pending, and that is the registration contract
@@ -152,8 +151,8 @@ func waitForConnectionEvent(t *testing.T, m *machine, eventType string, addresse
 			}
 		}
 		return false
-	}, apiWaitTimeout, apiPollInterval, "%s never emitted %s for servers %v:\n%s",
-		m.name, eventType, addresses, diagnose([]*machine{m}))
+	}, apiWaitTimeout, apiPollInterval, "%s never emitted %s for servers %v:%s",
+		m.name, eventType, addresses, diagnostics(m))
 }
 
 // proposeEventually submits a registration until the site takes it.
@@ -172,18 +171,18 @@ func waitForConnectionEvent(t *testing.T, m *machine, eventType string, addresse
 func proposeEventually(ctx context.Context, t *testing.T, m *machine, body string) proposalAccepted {
 	t.Helper()
 	var accepted proposalAccepted
-	var lastCode int
+	var poll lastPoll
 	require.Eventually(t, func() bool {
-		result, code := postRegistration(ctx, t, m, body)
-		lastCode = code
-		if code != http.StatusAccepted {
+		result, code, err := submitRegistration(ctx, m, body)
+		poll.record(registration{}, code, err)
+		if err != nil || code != http.StatusAccepted {
 			return false
 		}
 		accepted = result
 		return true
 	}, apiWaitTimeout, apiPollInterval,
-		"%s never took the proposal after a storage machine was lost; last code %d:\n%s",
-		m.name, &lastCode, m.output)
+		"%s never took the proposal after a storage machine was lost; %s%s",
+		m.name, &poll, diagnostics(m))
 	require.NotEmpty(t, accepted.ProposalID)
 	return accepted
 }

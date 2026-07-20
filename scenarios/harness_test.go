@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"text/template"
 	"time"
@@ -402,6 +403,30 @@ func (s *site) startTogether(ctx context.Context, t *testing.T, names ...string)
 	}
 }
 
+// syncBuffer is a process output buffer that is safe to read while the process
+// is still writing to it.
+//
+// exec copies a child's stdout and stderr on goroutines of its own, so every
+// diagnostic that reads a running machine's output races that copier. A plain
+// bytes.Buffer makes that a genuine data race, which under -race fails the
+// scenario for a reason that has nothing to do with the platform.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // machine is one platform process under a scenario's control: prepared, and
 // running once started.
 type machine struct {
@@ -419,10 +444,15 @@ type machine struct {
 	binaryPath string
 	configPath string
 	launchArgs []string
-	output     *bytes.Buffer
+	output     *syncBuffer
 	cmd        *exec.Cmd
 	tree       *processtree.Owner
-	stopped    bool
+	// done closes once the process has exited and err is set. It is what lets
+	// running report what the process is doing rather than only what the scenario
+	// last asked it to do.
+	done    chan struct{}
+	err     error
+	stopped bool
 }
 
 // processStatus is the local operational contract deployment tooling reads.
@@ -444,21 +474,37 @@ type processStatus struct {
 // other process of the same machine.
 type managedProcess struct {
 	role   string
-	output *bytes.Buffer
+	output *syncBuffer
 	cmd    *exec.Cmd
 	tree   *processtree.Owner
 	done   chan struct{}
 	err    error
 }
 
-// running reports whether the machine has been started.
-func (m *machine) running() bool { return m.cmd != nil && !m.stopped }
+// running reports whether the machine's process is still alive.
+//
+// It observes the process rather than the scenario's own bookkeeping. A machine
+// that shut itself down is exactly what this has to be able to report: the
+// platform stops serving when its event fabric stops carrying events, and a
+// machine that had exited on its own still looked started here, so an assertion
+// that it kept serving could never fail.
+func (m *machine) running() bool {
+	if m.cmd == nil || m.stopped {
+		return false
+	}
+	select {
+	case <-m.done:
+		return false
+	default:
+		return true
+	}
+}
 
 func (m *machine) startManaged(ctx context.Context, t *testing.T, role string, args []string) *managedProcess {
 	t.Helper()
 	p := &managedProcess{
 		role:   role,
-		output: &bytes.Buffer{},
+		output: &syncBuffer{},
 		done:   make(chan struct{}),
 	}
 	commandArgs := append([]string{"-config", m.configPath}, args...)
@@ -655,7 +701,7 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 		binaryPath: binaryPath,
 		configPath: configPath,
 		launchArgs: readManifest(t, binaryPath).Primary.Args,
-		output:     &bytes.Buffer{},
+		output:     &syncBuffer{},
 	}
 }
 
@@ -695,6 +741,11 @@ func (m *machine) start(ctx context.Context, t *testing.T) {
 	m.tree, err = processtree.Start(m.cmd)
 	require.NoError(t, err)
 	m.stopped = false
+	m.done = make(chan struct{})
+	go func() {
+		m.err = errors.Join(m.cmd.Wait(), m.tree.Close())
+		close(m.done)
+	}()
 	t.Cleanup(m.stop)
 }
 
@@ -705,7 +756,7 @@ func (m *machine) restart(ctx context.Context, t *testing.T) {
 	t.Helper()
 	m.stop()
 	m.cmd = nil
-	m.output = &bytes.Buffer{}
+	m.output = &syncBuffer{}
 	m.start(ctx, t)
 }
 
@@ -720,7 +771,7 @@ func (m *machine) stop() {
 	}
 	m.stopped = true
 	_ = m.tree.Kill()
-	_ = m.cmd.Wait()
+	<-m.done
 }
 
 // logs returns the machine's captured output. It force-stops the process first:
@@ -737,8 +788,7 @@ func (m *machine) logs() string {
 func (m *machine) wait(t *testing.T) string {
 	t.Helper()
 	require.NotNil(t, m.cmd, "%s was never started", m.name)
-	_ = m.cmd.Wait()
-	_ = m.tree.Close()
+	<-m.done
 	m.stopped = true
 	return m.output.String()
 }
@@ -777,7 +827,7 @@ func waitForMarker(t *testing.T, dir, name string, signaller *process, describe 
 
 // process is an external command a scenario runs and later collects.
 type process struct {
-	output *bytes.Buffer
+	output *syncBuffer
 	tree   *processtree.Owner
 	// finished closes once the command has exited and err is set, which is what
 	// publishes err to every other goroutine.
@@ -793,7 +843,7 @@ type process struct {
 // harness that waited for the test to exit first would deadlock.
 func startProcess(t *testing.T, cmd *exec.Cmd) *process {
 	t.Helper()
-	p := &process{output: &bytes.Buffer{}, finished: make(chan struct{})}
+	p := &process{output: &syncBuffer{}, finished: make(chan struct{})}
 	cmd.Stdout = p.output
 	cmd.Stderr = p.output
 	var err error
@@ -854,4 +904,34 @@ func diagnose(machines []*machine) string {
 		fmt.Fprintf(&b, "\n--- machine %s operational events ---\n%s", m.name, operationEvents(m))
 	}
 	return b.String()
+}
+
+// lazily defers rendering part of a failure message until an assertion actually
+// fails.
+//
+// A message argument is evaluated where it is written, not where it is
+// formatted, so passing diagnose(...) straight into a wait captured every
+// machine's output before the wait had had a chance to fail. The logs that
+// explained the failure were then precisely the ones missing from it, because
+// they had not been written yet. testify formats a message only on failure, so a
+// Stringer is rendered at the moment worth describing.
+type lazily func() string
+
+func (l lazily) String() string { return l() }
+
+// diagnostics renders diagnose for these machines, at failure time.
+func diagnostics(machines ...*machine) fmt.Stringer {
+	return lazily(func() string { return diagnose(machines) })
+}
+
+// appended renders trailing failure context, and nothing at all when a caller
+// passed none.
+func appended(parts []fmt.Stringer) fmt.Stringer {
+	return lazily(func() string {
+		var b strings.Builder
+		for _, part := range parts {
+			b.WriteString(part.String())
+		}
+		return b.String()
+	})
 }
