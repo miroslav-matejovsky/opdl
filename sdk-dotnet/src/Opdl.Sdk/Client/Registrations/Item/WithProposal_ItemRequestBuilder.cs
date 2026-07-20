@@ -39,7 +39,9 @@ namespace Opdl.Sdk.Client.Registrations.Item
         /// <returns>A <see cref="global::Opdl.Sdk.Client.Models.Registration"/></returns>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
-        /// <exception cref="global::Opdl.Sdk.Client.Models.Error">When receiving a 404 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 404 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 422 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 500 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<global::Opdl.Sdk.Client.Models.Registration?> GetAsync(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -52,7 +54,9 @@ namespace Opdl.Sdk.Client.Registrations.Item
             var requestInfo = ToGetRequestInformation(requestConfiguration);
             var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
             {
-                { "404", global::Opdl.Sdk.Client.Models.Error.CreateFromDiscriminatorValue },
+                { "404", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
+                { "422", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
+                { "500", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
             };
             return await RequestAdapter.SendAsync<global::Opdl.Sdk.Client.Models.Registration>(requestInfo, global::Opdl.Sdk.Client.Models.Registration.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
         }

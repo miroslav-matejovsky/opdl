@@ -12,18 +12,14 @@ Compliance is verified by the `conformance-tests` module during the build proces
 ## Artifacts
 
 - `openapi.yaml` - OpenAPI 3.0.3 specification of the platform's HTTP API. It is
-  generated from the platform's API description (`platform/api`) by the
-  `conformance-tests` module, not edited by hand, and the .NET SDK (`sdk-dotnet`) is
-  generated from it in turn.
-- `openapi.md` - a compact, human-readable companion to `openapi.yaml`: one
-  section per operation, its request body and response payload field tables
-  inlined directly beneath it, meant to be skimmed in a PR diff when reviewing
-  an API change. Array payloads include their item schema and field table.
-  Generated from the same source alongside `openapi.yaml`, not edited by hand.
+  rendered from the platform's huma API (`platform/api.OpenAPIYAML`) by the
+  `conformance-tests` module, not edited by hand, and the .NET SDK (`sdk-dotnet`)
+  is generated from it in turn. huma emits OpenAPI 3.1 natively; the artifact is
+  the 3.0.3 downgrade the SDK toolchain (Kiota) consumes.
 
-  The conformance check always regenerates both from the current source rather
-  than checking them for staleness, so a change that was not propagated here shows
-  up as an unexpected diff after running:
+  The conformance check always regenerates it from the current source rather than
+  checking it for staleness, so a change that was not propagated here shows up as
+  an unexpected diff after running:
 
   ```
   go test ./conformance-tests/cmd

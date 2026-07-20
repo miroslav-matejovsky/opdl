@@ -164,12 +164,14 @@ public class RegistrationTests
             token);
         AssertSameRegistration(accepted, fromNodeB);
 
-        // A proposal nobody made is not found, on any machine.
-        var notFound = await Assert.ThrowsAsync<Error>(
+        // A proposal nobody made is not found, on any machine. huma reports errors
+        // as RFC 9457 problem+json; Kiota surfaces that as the ErrorModel exception,
+        // and the platform's stable machine code is carried in detail.
+        var notFound = await Assert.ThrowsAsync<ErrorModel>(
             () => nodeB.Registrations["0000000000000000000000000000000000000000000000000000000000000000"]
                 .GetAsync(cancellationToken: token));
         Assert.Equal(404, notFound.ResponseStatusCode);
-        Assert.Equal("registration_not_found", notFound.Code);
+        Assert.Equal("registration_not_found", notFound.Detail);
 
         // -- Claiming the key again. ---------------------------------------------------
 

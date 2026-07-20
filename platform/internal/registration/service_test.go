@@ -74,7 +74,7 @@ func TestCommandServiceClassifiesPublishFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = commands.Create(t.Context(), api.RegistrationRequest{UnitTypeNameAdvertised: "Worker"})
-	require.ErrorIs(t, err, ErrJournalUnavailable)
+	require.ErrorIs(t, err, api.ErrJournalUnavailable)
 	require.ErrorContains(t, err, "connection lost")
 }
 

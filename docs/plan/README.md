@@ -100,21 +100,38 @@ struct of function fields that the runtime fills from the registration services.
   `SchemasPath="/schemas"`. Set a path to `""` to disable that endpoint. Set the
   description via `cfg.OpenAPI.Info.Description`.
 
-## Decisions to make (flagged in the stages)
+## Decisions (resolved during implementation)
 
-1. **Error model.** huma defaults to RFC 9457 problem+json
-   (`{status,title,detail,errors}`); today the API returns `{"code": "..."}` with
-   stable codes (`invalid_request`, `registration_not_found`,
-   `journal_unavailable`, `internal_error`). Recommended for the POC: adopt
-   huma's RFC 9457 default and carry the stable code in `detail`. Alternative:
-   override `huma.NewError` to keep the `{code}` shape. Decided in stage 3.
-2. **OpenAPI version.** Emit 3.0.3 via `DowngradeYAML()` to keep the checked-in
-   spec on the same version Kiota already consumes, or move to 3.1 with
-   `YAML()`. Recommended: stay on 3.0.3 for the POC. Decided in stage 4.
-3. **`openapi.md` companion.** Keep the human-readable markdown (adapt the
-   renderer to huma's `*huma.OpenAPI` model), or drop it. Decided in stage 4.
-4. **HTTP exposure of the spec.** Keep `/openapi` and `/docs` off, or turn them
-   on. Recommended: off by default; trivially reversible. Decided in stage 5.
+1. **Error model: RFC 9457 problem+json (huma default).** The stable machine
+   codes (`invalid_request`, `registration_not_found`, `journal_unavailable`,
+   `internal_error`) are carried in `detail`. Kiota generates `ErrorModel`
+   (extends `ApiException`); the one `sdk-dotnet` E2E error assertion was updated
+   from the old `Error.Code` to `ErrorModel.Detail`.
+2. **OpenAPI version: 3.0.3 via `DowngradeYAML()`.** Matches what Kiota already
+   consumes.
+3. **`openapi.md` companion: dropped.** The renderer read the deleted
+   `Contract` model; the YAML is the reviewable artifact. Can return later.
+4. **HTTP exposure of the spec: off by default.** `httpapi.NewHandler(..., false)`.
+   Flip the bool to serve huma's `/openapi`, `/docs`, `/schemas`.
+5. **Closed value sets (enums): deferred, kept as free strings.** Adding `enum`
+   tags works (verified: Kiota emits C# enums), but it retypes the SDK surface
+   and the E2E string comparisons, which is unrelated to introducing huma. Left
+   in `docs/backlog/api-contract.md`.
+6. **`$schema` injection: removed** via `cfg.CreateHooks = nil` in `api.Config`,
+   so models and the SDK stay clean.
+
+## Implementation notes
+
+- huma marshals OpenAPI keys alphabetically, so the regenerated
+  `api-specifications/openapi.yaml` reorders (components, info, openapi, paths)
+  and is otherwise a full contract refresh. It is deterministic, so the
+  regenerate-and-diff conformance gate still holds.
+- huma adds `422` (validation) and, for GET operations without declared errors, a
+  `default` error response. Schema violations (out-of-range int, unknown field,
+  wrong type) are `422`; domain rejections (blank name, unknown role) stay `400`.
+- `ErrJournalUnavailable` moved from `internal/registration` to `platform/api`.
+- `platform/api` now depends on huma (arch-lint vendor `huma`, `api canUse`).
+  `internal/httpapi` is thin wiring and imports no huma.
 
 ## Stages
 

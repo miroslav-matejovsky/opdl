@@ -12,10 +12,6 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 )
 
-// ErrJournalUnavailable reports that a valid command could not be durably
-// appended to the site journal.
-var ErrJournalUnavailable = errors.New("registration: site journal unavailable")
-
 // Location is one trusted platform machine identity from the deployment
 // descriptor. Clients never supply it.
 type Location struct {
@@ -82,7 +78,7 @@ func (s *CommandService) Create(ctx context.Context, request api.RegistrationReq
 	})
 	receipt, err := s.publisher.Publish(ctx, proposed)
 	if err != nil {
-		return ProposalReceipt{}, fmt.Errorf("%w: publish proposal %s: %w", ErrJournalUnavailable, proposed.ProposalID, err)
+		return ProposalReceipt{}, fmt.Errorf("%w: publish proposal %s: %w", api.ErrJournalUnavailable, proposed.ProposalID, err)
 	}
 	return ProposalReceipt{ProposalID: proposed.ProposalID, Sequence: receipt.Sequence}, nil
 }

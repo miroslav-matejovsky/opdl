@@ -58,6 +58,7 @@
   "cSpell.words": [
     "atomicfile",
     "builderdeployment",
+    "danielgtaylor",
     "deadcode",
     "eventfabric",
     "eventmodel",
@@ -74,6 +75,7 @@
     "hclparse",
     "httpapi",
     "huma",
+    "humago",
     "idempotently",
     "jsonfields",
     "Kiota",
@@ -91,6 +93,7 @@
     "processtree",
     "slnx",
     "stablehash",
+    "stdlib",
     "stretchr",
     "taskfile",
     "testname",

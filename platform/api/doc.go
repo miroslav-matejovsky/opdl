@@ -1,11 +1,15 @@
-// Package api is the platform's public HTTP API contract: registration request
-// and response types the runtime serves and a structural description of the
-// operations it exposes.
+// Package api is the platform's public HTTP API: the registration request and
+// response types the runtime serves, and the huma operations that serve them.
 //
-// It holds no server code. The internal HTTP handler
-// (platform/internal/httpapi) implements the contract described here, and the
-// conformance-tests module renders Describe into the OpenAPI specification checked into
-// api-specifications/. Keeping the contract in one exported package gives SDKs and the
-// conformance-tests module a single, dependency-free source to build against without
-// reaching into the platform's internals.
+// It owns the contract end to end. Register attaches every operation to a huma
+// API; NewServeMux builds the http.Handler the runtime serves; OpenAPIYAML
+// renders the OpenAPI 3.0.3 document the conformance-tests module writes to
+// api-specifications/ and the .NET SDK is generated from. The same Register call
+// serves requests and generates the specification, so the served contract and
+// the published document cannot drift.
+//
+// The package depends on huma but not on the platform's internals. Operations
+// reach the domain through Handlers, a struct of function fields the runtime
+// fills from the registration services, so this package never imports
+// registration (which imports this one) and stays free of the event transport.
 package api

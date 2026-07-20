@@ -9,12 +9,10 @@ namespace Opdl.Sdk.Client.Models
 {
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     #pragma warning disable CS1591
-    public partial class ProposalAccepted : IAdditionalDataHolder, IParsable
+    public partial class ProposalAccepted : IParsable
     #pragma warning restore CS1591
     {
-        /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
-        public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The proposal_id property</summary>
+        /// <summary>Stable proposal identity and status key.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? ProposalId { get; set; }
@@ -22,15 +20,8 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string ProposalId { get; set; }
 #endif
-        /// <summary>The sequence property</summary>
+        /// <summary>Proposal position in the site journal.</summary>
         public long? Sequence { get; set; }
-        /// <summary>
-        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Models.ProposalAccepted"/> and sets the default values.
-        /// </summary>
-        public ProposalAccepted()
-        {
-            AdditionalData = new Dictionary<string, object>();
-        }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
@@ -62,7 +53,6 @@ namespace Opdl.Sdk.Client.Models
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteStringValue("proposal_id", ProposalId);
             writer.WriteLongValue("sequence", Sequence);
-            writer.WriteAdditionalData(AdditionalData);
         }
     }
 }

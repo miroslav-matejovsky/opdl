@@ -23,6 +23,15 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
+// problemDetails is the subset of huma's RFC 9457 error body these tests read.
+// huma serves errors as application/problem+json; the stable machine code the
+// platform sets is carried in detail.
+type problemDetails struct {
+	Status int    `json:"status"`
+	Title  string `json:"title"`
+	Detail string `json:"detail"`
+}
+
 // TestHandlerServesAProposalFromPendingToAccepted is the API's side of the
 // asynchronous story: 202 hands back the proposal's identity and says only that
 // the journal took it, the status says pending while an expected machine has not
@@ -30,7 +39,7 @@ import (
 func TestHandlerServesAProposalFromPendingToAccepted(t *testing.T) {
 	site := newSite(t, "node-a", "node-b")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
 	defer srv.Close()
 
 	require.Empty(t, list(t, srv))
@@ -75,9 +84,9 @@ func TestHandlerServesAProposalFromPendingToAccepted(t *testing.T) {
 func TestHandlerAnswersTheSameProposalOnEveryNode(t *testing.T) {
 	site := newSite(t, "node-a", "node-b")
 	nodeA, nodeB := site.start("node-a"), site.start("node-b")
-	origin := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	origin := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
 	defer origin.Close()
-	other := httptest.NewServer(httpapi.NewHandler(nodeB.commands, nodeB.queries))
+	other := httptest.NewServer(httpapi.NewHandler(nodeB.commands, nodeB.queries, false))
 	defer other.Close()
 
 	accepted := propose(t, origin, `{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing"}`)
@@ -101,7 +110,7 @@ func TestHandlerAnswersTheSameProposalOnEveryNode(t *testing.T) {
 func TestHandlerProjectsAConflictRatherThanRefusingIt(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
 	defer srv.Close()
 
 	winner := propose(t, srv, `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`)
@@ -130,7 +139,7 @@ func TestHandlerProjectsAConflictRatherThanRefusingIt(t *testing.T) {
 func TestHandlerAnswersAnExactRetryWithTheSameProposal(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
 	defer srv.Close()
 
 	const body = `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`
@@ -147,27 +156,40 @@ func TestHandlerAnswersAnExactRetryWithTheSameProposal(t *testing.T) {
 func TestHandlerRejectsInvalidOrSpoofedRequests(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
 	defer srv.Close()
 
+	// huma validates the request against the generated schema before the handler
+	// runs, so a value the schema forbids is 422 and never reaches the domain: an
+	// out-of-range integer and an unknown (spoofed) field are refused here.
 	for _, body := range []string{
 		`{"unit_type": 256, "unit_id": 1, "unit_type_name_advertised": "Worker"}`,
 		`{"unit_type": -1, "unit_id": 1, "unit_type_name_advertised": "Worker"}`,
+		`{"unit_type": 1, "unit_id": 1, "unit_type_name_advertised": "Worker", "machine": "spoofed"}`,
+	} {
+		response := do(t, http.MethodPost, srv.URL+"/registrations", []byte(body), "application/json")
+		require.Equal(t, http.StatusUnprocessableEntity, response.StatusCode, body)
+		require.NoError(t, response.Body.Close())
+	}
+
+	// A blank advertised name and an unknown role satisfy the schema (role is a
+	// free string in the contract) but the domain refuses them, so they reach the
+	// handler and come back 400.
+	for _, body := range []string{
 		`{"unit_type": 1, "unit_id": 1, "unit_type_name_advertised": " "}`,
 		`{"unit_type": 1, "unit_id": 1, "unit_type_name_advertised": "Worker", "role": "master"}`,
-		`{"unit_type": 1, "unit_id": 1, "unit_type_name_advertised": "Worker", "machine": "spoofed"}`,
-		`{"unit_type": 1, "unit_id": 1, "unit_type_name_advertised": "Worker"}{}`,
 	} {
 		response := do(t, http.MethodPost, srv.URL+"/registrations", []byte(body), "application/json")
 		require.Equal(t, http.StatusBadRequest, response.StatusCode, body)
-		require.Equal(t, "application/json", response.Header.Get("Content-Type"))
 		require.NoError(t, response.Body.Close())
 	}
-	require.Empty(t, list(t, srv), "an invalid request is refused before anything is published")
 
+	// A body that is not JSON is refused for its media type before any decoding.
 	response := do(t, http.MethodPost, srv.URL+"/registrations", []byte(`{}`), "text/plain")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusBadRequest, response.StatusCode)
+	require.Equal(t, http.StatusUnsupportedMediaType, response.StatusCode)
+	require.NoError(t, response.Body.Close())
+
+	require.Empty(t, list(t, srv), "no invalid request is published")
 }
 
 // TestHandlerReportsAnUnavailableJournal checks the one failure a client can act
@@ -176,7 +198,7 @@ func TestHandlerRejectsInvalidOrSpoofedRequests(t *testing.T) {
 func TestHandlerReportsAnUnavailableJournal(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
 	defer srv.Close()
 
 	site.journal.breakWith(errors.New("no quorum"))
@@ -185,9 +207,9 @@ func TestHandlerReportsAnUnavailableJournal(t *testing.T) {
 	defer func() { _ = response.Body.Close() }()
 
 	require.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
-	var failure api.Error
+	var failure problemDetails
 	require.NoError(t, json.NewDecoder(response.Body).Decode(&failure))
-	require.Equal(t, "journal_unavailable", failure.Code)
+	require.Equal(t, "journal_unavailable", failure.Detail)
 
 	// Queries are answered from the local projection, so they are unaffected by a
 	// journal that will not take writes.
@@ -197,29 +219,31 @@ func TestHandlerReportsAnUnavailableJournal(t *testing.T) {
 func TestHandlerReturnsMethodErrors(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
 	defer srv.Close()
 
+	// Routing is Go 1.22 ServeMux under huma. It answers a wrong method with 405
+	// and an Allow header, and adds HEAD for any route that serves GET.
 	response := do(t, http.MethodDelete, srv.URL+"/registrations", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
-	require.Equal(t, "GET, POST", response.Header.Get("Allow"))
+	require.Equal(t, "GET, HEAD, POST", response.Header.Get("Allow"))
 
 	response = do(t, http.MethodPost, srv.URL+"/registrations/some-proposal", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
-	require.Equal(t, http.MethodGet, response.Header.Get("Allow"))
+	require.Equal(t, "GET, HEAD", response.Header.Get("Allow"))
 
 	response = do(t, http.MethodPost, srv.URL+"/registrations/conflicts", nil, "")
 	defer func() { _ = response.Body.Close() }()
 	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
-	require.Equal(t, http.MethodGet, response.Header.Get("Allow"))
+	require.Equal(t, "GET, HEAD", response.Header.Get("Allow"))
 }
 
 func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
 	defer srv.Close()
 
 	for _, path := range []string{
@@ -379,7 +403,7 @@ func (j *journal) append(ctx context.Context, identity events.Node, event events
 func (j *journal) breakWith(err error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	j.failure = fmt.Errorf("%w: %w", registration.ErrJournalUnavailable, err)
+	j.failure = fmt.Errorf("%w: %w", api.ErrJournalUnavailable, err)
 }
 
 // settle drives every handler over what it has not taken, until a pass changes

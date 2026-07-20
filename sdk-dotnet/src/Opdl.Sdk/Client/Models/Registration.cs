@@ -9,12 +9,10 @@ namespace Opdl.Sdk.Client.Models
 {
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     #pragma warning disable CS1591
-    public partial class Registration : IAdditionalDataHolder, IParsable
+    public partial class Registration : IParsable
     #pragma warning restore CS1591
     {
-        /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
-        public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The ip property</summary>
+        /// <summary>Descriptor IP where the request originated.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Ip { get; set; }
@@ -22,7 +20,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Ip { get; set; }
 #endif
-        /// <summary>The machine property</summary>
+        /// <summary>Descriptor machine where the request originated.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Machine { get; set; }
@@ -30,7 +28,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Machine { get; set; }
 #endif
-        /// <summary>The platform_instances property</summary>
+        /// <summary>Deterministic progress view for each platform instance.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public List<global::Opdl.Sdk.Client.Models.PlatformInstanceRegistrationStatus>? PlatformInstances { get; set; }
@@ -38,7 +36,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public List<global::Opdl.Sdk.Client.Models.PlatformInstanceRegistrationStatus> PlatformInstances { get; set; }
 #endif
-        /// <summary>The proposal_id property</summary>
+        /// <summary>Stable proposal identity and status key.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? ProposalId { get; set; }
@@ -46,7 +44,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string ProposalId { get; set; }
 #endif
-        /// <summary>The reason property</summary>
+        /// <summary>Optional machine-readable rejection code.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Reason { get; set; }
@@ -54,7 +52,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Reason { get; set; }
 #endif
-        /// <summary>The role property</summary>
+        /// <summary>Optional Master or Slave role advertised by the unit.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Role { get; set; }
@@ -62,7 +60,7 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Role { get; set; }
 #endif
-        /// <summary>The status property</summary>
+        /// <summary>Registration status: pending, accepted, or rejected.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Status { get; set; }
@@ -70,11 +68,11 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Status { get; set; }
 #endif
-        /// <summary>The unit_id property</summary>
+        /// <summary>Registered unit identifier.</summary>
         public int? UnitId { get; set; }
-        /// <summary>The unit_type property</summary>
+        /// <summary>Registered unit type identifier.</summary>
         public int? UnitType { get; set; }
-        /// <summary>The unit_type_name_advertised property</summary>
+        /// <summary>Advertised unit type name.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? UnitTypeNameAdvertised { get; set; }
@@ -82,13 +80,6 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string UnitTypeNameAdvertised { get; set; }
 #endif
-        /// <summary>
-        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Models.Registration"/> and sets the default values.
-        /// </summary>
-        public Registration()
-        {
-            AdditionalData = new Dictionary<string, object>();
-        }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
@@ -136,7 +127,6 @@ namespace Opdl.Sdk.Client.Models
             writer.WriteIntValue("unit_id", UnitId);
             writer.WriteIntValue("unit_type", UnitType);
             writer.WriteStringValue("unit_type_name_advertised", UnitTypeNameAdvertised);
-            writer.WriteAdditionalData(AdditionalData);
         }
     }
 }

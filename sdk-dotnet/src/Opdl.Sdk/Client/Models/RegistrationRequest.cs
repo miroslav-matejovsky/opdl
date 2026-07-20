@@ -9,12 +9,10 @@ namespace Opdl.Sdk.Client.Models
 {
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     #pragma warning disable CS1591
-    public partial class RegistrationRequest : IAdditionalDataHolder, IParsable
+    public partial class RegistrationRequest : IParsable
     #pragma warning restore CS1591
     {
-        /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
-        public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The role property</summary>
+        /// <summary>Optional Master or Slave role advertised by the unit.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? Role { get; set; }
@@ -22,11 +20,11 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string Role { get; set; }
 #endif
-        /// <summary>The unit_id property</summary>
+        /// <summary>Unit identifier, 0 through 65535.</summary>
         public int? UnitId { get; set; }
-        /// <summary>The unit_type property</summary>
+        /// <summary>Unit type identifier, 0 through 255.</summary>
         public int? UnitType { get; set; }
-        /// <summary>The unit_type_name_advertised property</summary>
+        /// <summary>Advertised unit type name. Required and non-blank.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public string? UnitTypeNameAdvertised { get; set; }
@@ -34,13 +32,6 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string UnitTypeNameAdvertised { get; set; }
 #endif
-        /// <summary>
-        /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Models.RegistrationRequest"/> and sets the default values.
-        /// </summary>
-        public RegistrationRequest()
-        {
-            AdditionalData = new Dictionary<string, object>();
-        }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
@@ -76,7 +67,6 @@ namespace Opdl.Sdk.Client.Models
             writer.WriteIntValue("unit_id", UnitId);
             writer.WriteIntValue("unit_type", UnitType);
             writer.WriteStringValue("unit_type_name_advertised", UnitTypeNameAdvertised);
-            writer.WriteAdditionalData(AdditionalData);
         }
     }
 }

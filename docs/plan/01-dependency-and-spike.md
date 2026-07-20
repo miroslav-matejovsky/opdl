@@ -124,3 +124,42 @@ field). `DefaultConfig` defaults the three paths to `/openapi`, `/docs`,
 
 huma builds in the module, arch-lint accepts it, and both the generation call and
 Kiota round-trip are proven on throwaway input.
+
+## Spike results (executed 2026-07-20, huma v2.39.0)
+
+Done. All exit criteria met. The spike lived in `platform/api/spike_test.go` and
+was deleted when stage 3 landed the real code.
+
+Proven:
+
+- huma v2.39.0 builds on Go 1.26.5; `humago.New` binds to a stdlib
+  `http.ServeMux`; `hapi.OpenAPI().DowngradeYAML()` returns valid OpenAPI 3.0.3.
+- `kiota generate --language CSharp` consumed the downgraded YAML and generated a
+  client with no errors. The closed `role` set became a C# enum
+  (`SpikeRequest_role.cs`), which auto-closes the enum item in
+  `docs/backlog/api-contract.md`.
+
+Findings that shape the later stages (decisions now settled):
+
+1. **`$schema` injection.** `DefaultConfig` registers a schema-link create hook
+   that adds a `$schema` property to every model. Kiota warns and generates a
+   spurious `$schema` field. Setting `cfg.CreateHooks = nil` removes it cleanly
+   (3 occurrences to 0). `Config()` in stage 3 clears `CreateHooks`.
+2. **Integer bounds.** huma emits `minimum: 0` for unsigned ints but no maximum.
+   To keep the current `maximum: 255` / `65535`, stage 2 adds explicit
+   `maximum:"..."` tags. `uint8`/`uint16` get `format: int32`, `uint64` gets
+   `format: int64, minimum: 0`.
+3. **Key ordering.** huma marshals YAML keys alphabetically (`components`,
+   `info`, `openapi`, `paths`), unlike the current file's `openapi`-first order.
+   It is deterministic, so the regenerate-and-diff conformance gate still holds;
+   the stage 4 diff is large but stable.
+4. **Error responses.** Every operation gets `422` (validation) and `500` added
+   automatically, and errors use `application/problem+json` with the RFC 9457
+   `ErrorModel`. This settles the stage 3 error-model decision toward the huma
+   default: it is what the framework produces and Kiota handles it.
+5. **Strictness.** Every object schema gets `additionalProperties: false`. This
+   is stricter than today and is kept.
+
+Not blocking, informational: Kiota warns `format: uri` is unsupported and falls
+back to string, and that no `servers` entry is present (the current spec has none
+either, so this matches today).
