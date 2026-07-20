@@ -1,4 +1,6 @@
-# Requirements
+# Requirements Draft
+
+This document is only a draft and must be considered as a work in progress. It is not yet a formal specification and is subject to change.
 
 ## Orchestration Layer
 
