@@ -277,14 +277,44 @@ platform: event fabric configuration endpoint=10.0.1.10:4222 binds=true
 whether or not this process binds it, so a standby and the active process it
 follows are visibly talking about the same endpoint.
 
-The primary and standby contend for one non-expiring OS file lock under the
-configured local instance directory. Only the lock holder may compose active
-capabilities. The lock is released after active resources close, or
-automatically when the holding process exits. A standby waits for the fence
-independently of its projector. After acquisition it marks itself activating,
-closes the client-only composition, opens the active Event Fabric, catches up
-again, drains retained handler work, publishes readiness, binds HTTP, and marks
-itself active.
+The primary and standby contend for one non-expiring Windows named mutex in the
+machine-wide `Global\` namespace. Only its holder may compose active
+capabilities. It is released after active resources close, or abandoned by the
+kernel when the holding process exits. A standby waits for the fence
+independently of its projector, in a kernel wait rather than a poll, so it is
+woken the moment the holder releases or dies. After acquisition it marks itself
+activating, closes the client-only composition, opens the active Event Fabric,
+catches up again, drains retained handler work, publishes readiness, binds HTTP,
+and marks itself active.
+
+The object's name is derived, not authored. The builder joins a namespace with a
+digest of the machine's project, environment, site, and machine, and records the
+result in the descriptor as `fence.object`. Ownership is therefore a property of
+the machine's compiled identity rather than of a configuration value the two
+processes must agree on. A blueprint may set `platform.fence.namespace` to keep
+two deployments of the same identity on one host apart, and states nothing else:
+a blueprint that could name the object directly could give two machines the same
+one, and the resulting descriptor would look like a working one.
+
+This replaced an OS file lock under the local instance directory, whose scope was
+a path. Two processes excluded each other only if they had been configured with
+the same directory, so pointing them at different ones, installing the same
+package twice under different paths, or placing the directory on a network
+filesystem each produced two simultaneous actives, and nothing detected any of
+them. None of the three is expressible now, and `instance_dir` no longer takes
+part in ownership at all.
+
+A process that takes the fence also learns how it became free. The kernel reports
+a mutex whose owner died without releasing it as abandoned, so a promotion caused
+by a crash is distinguishable from a planned handover in
+`platform.fence_acquired`. The file lock reported both identically.
+
+The mutex provides mutual exclusion, not a fencing token. What makes exclusion
+sufficient is two invariants around it: active resources close before ownership is
+released, and ownership lives on one pinned OS thread for the life of the process.
+Windows ties mutex ownership to a thread rather than a process, so without the
+second one a thread exiting would abandon the fence while the process still held
+its listener, handlers, and embedded server.
 
 The whole readiness sequence is bounded by `catch_up_timeout`. A node that cannot
 finish it does not serve, and reports how far its projector got and what each
@@ -360,14 +390,22 @@ while the primary holds the fence, that it nonetheless composes the same machine
 endpoint and the same server list as the active process, and that the promoted
 process rebinds those same addresses rather than moving the site onto new ones.
 
-Three consecutive Windows development runs after the shared-endpoint change:
+Three consecutive Windows development runs with the file-lock fence, followed by
+one run after it was replaced with the named mutex:
 
-| Measurement | Run 1 | Run 2 | Run 3 |
-| --- | ---: | ---: | ---: |
-| Initial standby journal catch-up | 110.8 ms | 108.3 ms | 91.9 ms |
-| Forced-kill promotion | 182.6 ms | 126.8 ms | 149.4 ms |
-| Listener unavailable | 192.9 ms | 133.5 ms | 155.2 ms |
-| Planned handover | 275.8 ms | 266.6 ms | 177.8 ms |
+| Measurement | Lock 1 | Lock 2 | Lock 3 | Mutex |
+| --- | ---: | ---: | ---: | ---: |
+| Initial standby journal catch-up | 110.8 ms | 108.3 ms | 91.9 ms | 144.1 ms |
+| Forced-kill promotion | 182.6 ms | 126.8 ms | 149.4 ms | 86.6 ms |
+| Listener unavailable | 192.9 ms | 133.5 ms | 155.2 ms | 91.8 ms |
+| Planned handover | 275.8 ms | 266.6 ms | 177.8 ms | 164.0 ms |
+
+The three ownership-transfer rows improved by roughly the amount the removed poll
+predicts. The file lock woke a waiter on its next 100 ms tick, so it added up to
+that and about 50 ms on average to every promotion and handover; the mutex wakes
+the waiter in the kernel when the holder releases or dies. Catch-up is not an
+ownership measurement and its one mutex sample is within the noise of a single
+run.
 
 The earlier 2026-07-18 baseline measured a forced-kill promotion of about 29.9
 seconds. That gap was a symptom rather than a performance property: the standby
@@ -376,7 +414,7 @@ active process's, so it never reached the journal and was never warm, and the
 promoted process had to complete a cold startup bounded by the same 30 second
 Event Fabric startup timeout.
 
-These remain development measurements, not production limits or percentiles.
-Three samples on one host are not an SLO, and none may be quoted as one until
-`docs/backlog/redundancy.md` records cross-platform CI percentiles.
+These remain development measurements, not production limits or percentiles. One
+sample on one host is not an SLO, and none may be quoted as one until
+`docs/backlog/redundancy.md` records percentiles from more than one host.
 

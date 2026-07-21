@@ -70,6 +70,54 @@ type Platform struct {
 	Nats *Nats `hcl:"nats,block"`
 	// Standby is the machine's local redundancy policy.
 	Standby *Standby `hcl:"standby,block"`
+	// Fence is the machine's optional local ownership policy. An omitted block
+	// leaves the namespace at its default.
+	Fence *Fence `hcl:"fence,block"`
+}
+
+// DefaultFenceNamespace qualifies a machine's ownership object when a blueprint
+// does not author one.
+const DefaultFenceNamespace = "opdl"
+
+// maxFenceNamespace bounds the authored namespace. The derived object name adds a
+// namespace prefix and a fixed-width digest, and the whole name must stay inside
+// the Windows kernel object name limit.
+const maxFenceNamespace = 64
+
+// Fence is a machine's local ownership policy.
+//
+// The machine's two processes contend for one Windows named mutex, and namespace
+// is the only part of its name a blueprint authors. The object name itself is
+// derived by the builder from the namespace and the machine's full identity, and
+// is never authored.
+//
+// That split is deliberate, and it is the same rule the nats block follows. A
+// blueprint that could state the object name directly could give two machines the
+// same one, which would make them contend for each other's ownership, and the
+// resulting descriptor would look like a working one. Authoring a namespace
+// cannot cause that: the machine identity is always hashed in.
+//
+// The namespace exists for deployments that must not share ownership objects with
+// another deployment of the same identity on the same host, such as a test rig
+// running two copies side by side. Ordinary deployments omit it.
+type Fence struct {
+	// Namespace qualifies this machine's ownership object. It defaults to
+	// DefaultFenceNamespace.
+	//
+	// Unlike the standby decision, a default here is safe and therefore allowed:
+	// omitting it cannot make two machines share a fence, because their identities
+	// still differ. Omitting a standby decision could silently deploy redundancy
+	// nobody asked for, which is why that one is mandatory and this one is not.
+	Namespace string `hcl:"namespace,optional"`
+}
+
+// FenceNamespace returns the machine's authored ownership namespace, or the
+// default when the blueprint does not state one.
+func (m Machine) FenceNamespace() string {
+	if m.Platform == nil || m.Platform.Fence == nil || strings.TrimSpace(m.Platform.Fence.Namespace) == "" {
+		return DefaultFenceNamespace
+	}
+	return strings.TrimSpace(m.Platform.Fence.Namespace)
 }
 
 // Standby is a machine's local redundancy policy.
@@ -213,6 +261,32 @@ func validatePlatform(machine Machine) error {
 	// unable to bind the second of them.
 	if nats.ClientPort == nats.ClusterPort {
 		return fmt.Errorf("machine %q: platform.nats.client_port and cluster_port must differ, both are %d", machine.Name, nats.ClientPort)
+	}
+	return validateFence(machine)
+}
+
+// validateFence checks an authored ownership namespace is usable in a Windows
+// kernel object name. A blank block is rejected rather than silently defaulted:
+// authoring fence {} with an empty namespace states a decision that cannot be
+// honored, and treating it as "use the default" would hide the mistake.
+func validateFence(machine Machine) error {
+	if machine.Platform.Fence == nil {
+		return nil
+	}
+	namespace := machine.Platform.Fence.Namespace
+	if strings.TrimSpace(namespace) == "" {
+		return fmt.Errorf("machine %q: platform.fence.namespace must not be blank; omit the fence block to use %q", machine.Name, DefaultFenceNamespace)
+	}
+	if namespace != strings.TrimSpace(namespace) {
+		return fmt.Errorf("machine %q: platform.fence.namespace %q must not have leading or trailing whitespace", machine.Name, namespace)
+	}
+	if len(namespace) > maxFenceNamespace {
+		return fmt.Errorf("machine %q: platform.fence.namespace %q is longer than %d characters", machine.Name, namespace, maxFenceNamespace)
+	}
+	// A backslash would escape the kernel namespace the platform places the object
+	// in, which is how a machine could reach outside Global\ or collide by design.
+	if strings.ContainsAny(namespace, `\/`) {
+		return fmt.Errorf("machine %q: platform.fence.namespace %q must not contain a slash or backslash", machine.Name, namespace)
 	}
 	return nil
 }

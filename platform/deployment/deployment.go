@@ -32,17 +32,38 @@ type Descriptor struct {
 	// Slots is the machine's resolved primary and standby slot decision. Both
 	// records are always present.
 	Slots Slots `json:"slots"`
+	// Fence is the machine's resolved local ownership object.
+	Fence Fence `json:"fence"`
 	// EventFabric is the resolved Event Fabric topology for this machine.
 	EventFabric EventFabric `json:"event_fabric"`
+}
+
+// Fence is the machine's resolved local ownership object: the Windows named mutex
+// its primary and standby processes contend for, and which exactly one of them
+// holds at a time.
+//
+// Object is fully derived by the builder from an authored namespace and a digest
+// of the machine's whole identity. The runtime trusts it as identity, exactly as
+// it trusts the rest of the descriptor, and never composes one of its own.
+//
+// It is carried in the descriptor rather than derived at runtime because a named
+// kernel object is not visible to ordinary tools the way a lock file is. An
+// operator reading deployment.json can see which object a machine contends for.
+type Fence struct {
+	// Object is the ownership object's name, without a kernel namespace prefix.
+	// The platform places it in Global\ itself.
+	Object string `json:"object"`
 }
 
 // UnmarshalJSON decodes a descriptor and requires every resolved decision it
 // depends on to be present in the JSON.
 //
-// The checks exist because the fields they guard are a bool and a struct, and
-// both have a usable zero value. An omitted slots.standby.disabled would decode
-// as false and silently deploy redundancy nobody asked for; an omitted
-// event_fabric.nats would decode as a machine with no journal to reach. Failing
+// The checks exist because the fields they guard are a bool, a string, and a
+// struct, and all have a usable zero value. An omitted slots.standby.disabled
+// would decode as false and silently deploy redundancy nobody asked for; an
+// omitted event_fabric.nats would decode as a machine with no journal to reach;
+// an omitted fence.object would decode as an empty ownership object name, and a
+// machine whose two processes contend for nothing has no fence at all. Failing
 // here turns a truncated or stale descriptor into a startup error instead of a
 // running machine with the wrong topology.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
@@ -70,6 +91,18 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 		if _, err := requiredField(disabled, "slots."+slot+".disabled"); err != nil {
 			return err
 		}
+	}
+
+	fenceField, err := requiredField(fields, "fence")
+	if err != nil {
+		return err
+	}
+	var fenceFields map[string]json.RawMessage
+	if err := json.Unmarshal(fenceField, &fenceFields); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid fence: %w", err)
+	}
+	if _, err := requiredField(fenceFields, "fence.object"); err != nil {
+		return err
 	}
 
 	fabric, err := requiredField(fields, "event_fabric")

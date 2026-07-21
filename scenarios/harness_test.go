@@ -3,6 +3,8 @@ package scenarios
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -154,9 +156,31 @@ type renderedMachine struct {
 
 // renderedProject is the blueprint template's data.
 type renderedProject struct {
-	Name     string
-	Site     string
-	Machines []renderedMachine
+	Name string
+	Site string
+	// FenceNamespace isolates this run's machine fences from every other run's.
+	// See fenceNamespace.
+	FenceNamespace string
+	Machines       []renderedMachine
+}
+
+// fenceNamespace returns an ownership namespace no other build shares.
+//
+// A machine fence is a kernel object in a machine-wide namespace, derived from
+// project, environment, site, and machine. Several scenarios deliberately build
+// the same project and machine names, and they run in parallel, so without this
+// they would contend for one another's ownership and a standby in one test would
+// wait on a primary in another. The lock file this replaced was isolated for free
+// by each test's temporary directory; a kernel object has no such scope.
+//
+// The namespace is random rather than derived from the test name so that two
+// concurrent runs of the whole suite on one host also stay isolated.
+func fenceNamespace(t *testing.T) string {
+	t.Helper()
+	token := make([]byte, 8)
+	_, err := rand.Read(token)
+	require.NoError(t, err)
+	return "opdl-scenario-" + hex.EncodeToString(token)
 }
 
 // natsPorts is one machine's reserved NATS ports, kept so a scenario can assert
@@ -220,7 +244,7 @@ func stageBlueprint(t *testing.T, project string) (root string, ports map[string
 	fixtures, ok := projectFixtures[project]
 	require.Truef(t, ok, "no blueprint fixture for project %q", project)
 
-	data := renderedProject{Name: project, Site: scenarioSite}
+	data := renderedProject{Name: project, Site: scenarioSite, FenceNamespace: fenceNamespace(t)}
 	ports = make(map[string]natsPorts, len(fixtures))
 
 	for _, fixture := range fixtures {

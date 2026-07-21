@@ -12,7 +12,9 @@ Read in this order:
    security controls.
 2. [Monitoring](monitoring.md) for status files, operational JSONL, event-derived
    metrics, and alert recommendations.
-3. [Troubleshooting](troubleshooting.md) for symptom-driven investigation and
+3. [Switchover and upgrade](upgrade.md) for moving active ownership on purpose
+   and for rolling a machine's binary with bounded interruption.
+4. [Troubleshooting](troubleshooting.md) for symptom-driven investigation and
    recovery procedures.
 
 ## Operational surfaces
@@ -23,6 +25,7 @@ Read in this order:
 | `operations.event_dir` JSONL | Append-only copy of structured events for local analysis and tests | Optional |
 | Per-role status file | Current lifecycle, PID, projection sequence, lag, promotability, and last error | Written once startup reaches status composition, then every second |
 | Public HTTP API | Service availability and registration behavior | Active fence owner only |
+| Machine fence | Which local process owns active capabilities | A `Global\` named mutex; observe through `platform.fence_opened` and `fence_acquired`, not the filesystem |
 | Site event journal | Durable platform and registration facts | Internal Event Fabric contract |
 
 Operational events are local because they must describe loss of the Event

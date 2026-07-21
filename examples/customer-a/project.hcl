@@ -50,6 +50,18 @@ project "customer-a" {
         standby {
           disabled = false
         }
+
+        # fence is optional and almost always omitted. The machine's two processes
+        # contend for one Windows named mutex, and this is the only part of its
+        # name a blueprint states: the builder derives the rest from the machine's
+        # full identity, so two machines can never be given the same object.
+        #
+        # Author it only when two deployments of the same project, environment,
+        # site, and machine must run on one host without sharing ownership, such as
+        # a test rig running two copies side by side. Omitting it uses "opdl".
+        fence {
+          namespace = "opdl"
+        }
       }
     }
   }

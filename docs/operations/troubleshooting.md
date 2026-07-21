@@ -94,16 +94,30 @@ The standby should emit `platform.standby_ready` and
 - Confirm primary and standby use the same executable and TOML file.
 - Confirm the standby binds no API, NATS listener, or journal storage.
 - Inspect connection and projection catch-up events.
-- Confirm both processes use the same local `instance_dir`.
+- Confirm both processes were built from the same machine package, so they carry
+  the same `fence.object`.
 
 Never start a standby with a separate client port. Both roles share one
 machine-level Event Fabric endpoint and the fence controls who binds it.
 
 ## Two processes appear active
 
-Status files are not ownership evidence. Inspect the shared `active.lock` and the
-live PIDs. Both processes must share a local `instance_dir`. A network filesystem
-can violate the locking assumptions and is unsupported.
+Status files are not ownership evidence. Start from the operational events, not
+from the filesystem: the fence is a kernel object and has no path.
+
+- `platform.fence_opened` reports the object each process opened. Both processes
+  of a machine must report the same one. Two different objects means they were
+  built from different packages, or from blueprints with different
+  `platform.fence.namespace` values.
+- `platform.fence_acquired` reports which process took it, and whether it was
+  `abandoned`. An abandoned acquisition means the previous holder died rather than
+  handed over.
+- The startup summary prints `fence` alongside the rest of the descriptor.
+
+To confirm from outside the platform, list handles to the object with Process
+Explorer or `handle.exe` filtered on the object name. Neither ships with Windows,
+so prefer the events above. Note that a machine whose processes are all stopped
+leaves no object behind: it exists only while a process holds it open.
 
 Stop both services, correct the directory placement and service configuration,
 then start the preferred primary before the standby. Preserve status and event

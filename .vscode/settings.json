@@ -59,6 +59,7 @@
     "apispecifications",
     "atomicfile",
     "builderdeployment",
+    "DACL",
     "danielgtaylor",
     "deadcode",
     "eventfabric",
@@ -102,6 +103,7 @@
     "taskfile",
     "testname",
     "unioned",
+    "winmutex",
     "Xunit"
   ]
 }

@@ -30,8 +30,27 @@ type Descriptor struct {
 	// Slots is the machine's resolved primary and standby slot decision. Both
 	// records are always present.
 	Slots Slots `json:"slots"`
+	// Fence is the machine's resolved local ownership object.
+	Fence Fence `json:"fence"`
 	// EventFabric is the resolved Event Fabric topology for this machine.
 	EventFabric EventFabric `json:"event_fabric"`
+}
+
+// Fence is the machine's resolved local ownership object: the Windows named mutex
+// its primary and standby processes contend for, and which exactly one of them
+// holds at a time.
+//
+// Object is fully derived. The blueprint authors only a namespace; the builder
+// joins it with a digest of the machine's whole identity, so two machines can
+// never be given the same object and a deployment cannot state one directly.
+//
+// It is recorded here rather than derived at runtime because a named kernel object
+// is not visible to ordinary tools the way a lock file is. An operator reading
+// deployment.json can see exactly which object a machine will contend for.
+type Fence struct {
+	// Object is the ownership object's name, without a kernel namespace prefix.
+	// The platform places it in Global\ itself.
+	Object string `json:"object"`
 }
 
 // Features are the capability switches carried from the project onto a machine.
@@ -143,6 +162,9 @@ func (d Descriptor) Validate() error {
 	}
 	if len(d.Services) == 0 {
 		return fmt.Errorf("at least one service is required")
+	}
+	if strings.TrimSpace(d.Fence.Object) == "" {
+		return fmt.Errorf("fence object is required")
 	}
 	return d.validateEventFabric()
 }

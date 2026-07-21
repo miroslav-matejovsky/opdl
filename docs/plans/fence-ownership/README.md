@@ -1,9 +1,61 @@
 # Machine fence ownership plan
 
-Evaluate and plan replacing the platform's filesystem-based machine fence with a
-Windows Named Mutex as the authoritative ownership primitive.
+Replace the platform's filesystem-based machine fence with a Windows named mutex
+as the authoritative ownership primitive.
 
-Nothing here is implemented. Phase 1 is analysis of what exists today.
+## Status: implemented
+
+The fence is a `Global\` named mutex. `utils/filelock` is deleted. `task all`
+passes, including every scenario.
+
+The dual-primitive transition (original phases 3 and 7) was **not** built. It
+existed only to stop an old file-lock process and a new mutex process from both
+becoming active during a rolling upgrade, and there is no deployed fleet: no
+release tags, no version metadata, and `AGENTS.md` puts the project in an
+experimentation phase favoring clean code over backwards compatibility. The
+primitive was replaced outright in one change, so no shim, no fleet gate, and no
+mixed-version scenario were needed.
+
+| Phase | State |
+| --- | --- |
+| 1 Architecture preparation | done, folded into 2 |
+| 2 Mutex infrastructure | done, `utils/winmutex` |
+| 3 Startup acquisition | done as a clean cutover, not dual-primitive |
+| 4 Failover integration | done, the poll is gone |
+| 5 Controlled switchover | done, `docs/operations/upgrade.md` |
+| 6 Upgrade workflow | done, same document |
+| 7 Lock-file retirement | done, `utils/filelock` deleted |
+| 8 Validation and hardening | partial, see below |
+
+Remaining, tracked in `.todo`: Windows Service (SCM) integration, the full
+kill-at-every-state failover matrix, squat and privilege scenarios, and failover
+percentiles across more than one host.
+
+### What the implementation taught that the plan got wrong
+
+Three things, all worth reading before touching this code.
+
+**`Held` must not share `Acquire`'s lock.** A kernel wait parks for as long as
+another process holds the mutex, so a `Held` guarded by the same mutex blocks
+until the wait it is being asked about has already finished. The standby does
+exactly this: one goroutine waits for the fence while another polls `Held`. The
+file lock never showed it because its poll loop released the lock between
+attempts. `held` is now atomic, with a regression test.
+
+**Abandonment is only reported to a process that already had the object open.** A
+named object exists only while a handle to it is open, so a process that opens the
+name after every previous holder is gone creates a fresh object and acquires it
+cleanly. That is the right boundary rather than a gap, and it holds on the real
+failover path, where the standby is already waiting when the primary dies.
+
+**`CreateMutex` gives exact create-or-open attribution.** The plan assumed the Go
+wrapper swallowed `ERROR_ALREADY_EXISTS` and proposed a separate `OpenMutex`
+probe. It does not: it returns a valid handle alongside that error. The probe was
+removed as both redundant and racy.
+
+A fourth, smaller one: the file lock had been creating the status directory as a
+side effect of taking the lock. Ownership no longer touches the filesystem, so
+that directory is now created explicitly.
 
 ## Scope
 

@@ -58,30 +58,63 @@ func resolveRole(instance string, hasStandby bool) (redundancy.ProcessRole, erro
 // The fence makes the primary and standby exclusive. Its holder owns every
 // active-only capability; the other process follows the journal. A machine that
 // opted out of warm standby rejects the standby role.
-func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole) error {
+func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole) (runErr error) {
 	observer := operations.FromContext(ctx)
-	fencePath := redundancy.FencePath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine)
 	statusPath := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
-
-	fence, err := redundancy.OpenFence(fencePath, role)
-	if err != nil {
-		observer.Emit("platform.fence_open_failed", operations.LevelError, "platform.redundancy", "machine fence failed to open", map[string]any{operations.AttributeError: err.Error(), operations.AttributePath: fencePath})
+	if err := redundancy.PrepareStatusDir(statusPath); err != nil {
+		observer.Emit("platform.status_dir_failed", operations.LevelError, "platform.status", "status directory could not be created", map[string]any{operations.AttributeError: err.Error(), operations.AttributePath: statusPath})
 		return err
 	}
+
+	fence, err := redundancy.OpenFence(descriptor.Fence.Object, role)
+	if err != nil {
+		observer.Emit("platform.fence_open_failed", operations.LevelError, "platform.redundancy", "machine fence failed to open", map[string]any{operations.AttributeError: err.Error(), operations.AttributeObject: descriptor.Fence.Object})
+		return err
+	}
+	// The fence owns kernel handles and a pinned OS thread. Closing it releases
+	// ownership if this process still holds it, so a process that leaves without a
+	// clean release still hands over rather than looking like it crashed.
+	defer func() { runErr = errors.Join(runErr, fence.Close()) }()
+
+	observer.Emit("platform.fence_opened", operations.LevelInfo, "platform.redundancy", "machine fence ownership object opened", map[string]any{
+		operations.AttributeObject: fence.Name(),
+		// Whether a peer process on this machine already had the object open. Both
+		// processes must report the same object; a machine whose two processes
+		// report different ones was built from mismatched packages.
+		operations.AttributeExisted: fence.Existed(),
+	})
 
 	acquired, err := fence.TryAcquire()
 	if err != nil {
 		return err
 	}
-	if acquired {
-		observer.Emit("platform.fence_acquired", operations.LevelInfo, "platform.redundancy", "active machine fence acquired", map[string]any{operations.AttributePath: fencePath})
+	if acquired.Held {
+		emitAcquired(observer, fence, acquired)
 		return runFencedActive(ctx, cfg, descriptor, role, statusPath, fence, activationInitial)
 	}
-	observer.Emit("platform.fence_waiting", operations.LevelInfo, "platform.redundancy", "active machine fence is held by another process", map[string]any{operations.AttributePath: fencePath})
+	observer.Emit("platform.fence_waiting", operations.LevelInfo, "platform.redundancy", "active machine fence is held by another process", map[string]any{operations.AttributeObject: fence.Name()})
 	if descriptor.Slots.Standby.Disabled {
 		return fmt.Errorf("another process already holds the active fence for machine %q and this machine does not run a standby slot", descriptor.Machine)
 	}
 	return runStandby(ctx, cfg, descriptor, role, statusPath, fence)
+}
+
+// emitAcquired reports ownership and, crucially, how it was obtained.
+//
+// An abandoned fence means the previous owner died rather than handed over. The
+// file-lock fence this replaced could not tell the two apart, so an operator had
+// to correlate logs to answer whether a failover was planned.
+func emitAcquired(observer *operations.Recorder, fence *redundancy.Fence, acquired redundancy.Acquisition) {
+	attributes := map[string]any{
+		operations.AttributeObject:    fence.Name(),
+		operations.AttributeAbandoned: acquired.Abandoned,
+	}
+	if acquired.Abandoned {
+		observer.Emit("platform.fence_acquired", operations.LevelWarn, "platform.redundancy",
+			"active machine fence acquired from a process that died without releasing it", attributes)
+		return
+	}
+	observer.Emit("platform.fence_acquired", operations.LevelInfo, "platform.redundancy", "active machine fence acquired", attributes)
 }
 
 // runActive brings this node's Event Fabric up to readiness and serves the public
@@ -167,13 +200,15 @@ func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.D
 	standbyCtx, stopStandby := context.WithCancel(waitCtx)
 	defer stopStandby()
 
-	fenceDone := make(chan error, 1)
+	// The wait is a kernel wait inside the fence, so this goroutine is parked until
+	// the holder releases or dies rather than polling for it.
+	fenceDone := make(chan fenceResult, 1)
 	go func() {
-		err := fence.Acquire(waitCtx)
+		acquired, err := fence.Acquire(waitCtx)
 		if err == nil {
 			stopStandby()
 		}
-		fenceDone <- err
+		fenceDone <- fenceResult{acquired: acquired, err: err}
 	}()
 
 	opened, err := openWaitingStandby(ctx, standbyCtx, cfg, descriptor, role, statusPath, fence)
@@ -183,9 +218,11 @@ func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.D
 		return err
 	}
 	standby := opened.site
-	if err := awaitFence(ctx, waitCtx, cfg, role, statusPath, standby, fence, fenceDone, stopWaiting); err != nil {
+	acquired, err := awaitFence(ctx, waitCtx, cfg, role, statusPath, standby, fence, fenceDone, stopWaiting)
+	if err != nil {
 		return err
 	}
+	emitAcquired(operations.FromContext(ctx), fence, acquired)
 
 	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
 		var closeErr error
@@ -238,7 +275,14 @@ func openWaitingStandby(ctx, standbyCtx context.Context, cfg *config.Config, des
 	return standbyOpenResult{}, nil
 }
 
-func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundancy.ProcessRole, statusPath string, standby *site, fence *redundancy.Fence, fenceDone <-chan error, stopWaiting context.CancelFunc) error {
+// fenceResult is one fence acquisition attempt's outcome, carried from the
+// waiting goroutine back to the standby that started it.
+type fenceResult struct {
+	acquired redundancy.Acquisition
+	err      error
+}
+
+func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundancy.ProcessRole, statusPath string, standby *site, fence *redundancy.Fence, fenceDone <-chan fenceResult, stopWaiting context.CancelFunc) (redundancy.Acquisition, error) {
 	var statusDone <-chan error
 	var stopStatus context.CancelFunc
 	if standby != nil && !fence.Held() {
@@ -250,13 +294,13 @@ func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundanc
 			stopStatus()
 			stopWaiting()
 			<-fenceDone
-			return errors.Join(err, standby.close(ctx), writeFailedStatus(statusPath, role, err))
+			return redundancy.Acquisition{}, errors.Join(err, standby.close(ctx), writeFailedStatus(statusPath, role, err))
 		}
 		fmt.Printf("platform: %s caught up and waiting for the active fence\n", role)
 		operations.FromContext(ctx).Emit("platform.standby_waiting", operations.LevelInfo, "platform.redundancy", "standby projection caught up and is waiting for active fence", nil)
 	}
 
-	acquireErr := <-fenceDone
+	result := <-fenceDone
 	if stopStatus != nil {
 		stopStatus()
 	}
@@ -264,18 +308,17 @@ func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundanc
 	if statusDone != nil {
 		statusErr = <-statusDone
 	}
-	if acquireErr == nil {
-		operations.FromContext(ctx).Emit("platform.fence_acquired", operations.LevelInfo, "platform.redundancy", "standby process acquired active machine fence", nil)
-		return statusErr
+	if result.err == nil {
+		return result.acquired, statusErr
 	}
 	var closeErr error
 	if standby != nil {
 		closeErr = standby.close(ctx)
 	}
 	if ctx.Err() != nil && statusErr == nil {
-		return errors.Join(writeTransitionStatus(statusPath, role, redundancy.StateStopping), closeErr)
+		return redundancy.Acquisition{}, errors.Join(writeTransitionStatus(statusPath, role, redundancy.StateStopping), closeErr)
 	}
-	return errors.Join(acquireErr, statusErr, closeErr)
+	return redundancy.Acquisition{}, errors.Join(result.err, statusErr, closeErr)
 }
 
 func runFencedActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string, fence *redundancy.Fence, kind activationKind) error {

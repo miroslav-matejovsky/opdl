@@ -20,6 +20,9 @@
       "disabled": true
     }
   },
+  "fence": {
+    "object": "opdl.fence.6d6f636b6d6f636b6d6f636b6d6f636b"
+  },
   "event_fabric": {
     "nats": {
       "client_address": "127.0.0.1:4222",

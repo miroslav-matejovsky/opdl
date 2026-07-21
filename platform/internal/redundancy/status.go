@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/utils/atomicfile"
@@ -40,6 +41,19 @@ type Status struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	// LastError is the last error this process recorded, empty when none.
 	LastError string `json:"last_error,omitempty"`
+}
+
+// PrepareStatusDir creates the directory a machine's status files live in.
+//
+// It exists because ownership no longer touches the filesystem. The file-lock
+// fence this replaced created this directory as a side effect of taking the lock,
+// so status writes silently depended on the fence having run first. Creating it
+// explicitly keeps that dependency from being reintroduced by accident.
+func PrepareStatusDir(statusPath string) error {
+	if err := os.MkdirAll(filepath.Dir(statusPath), 0o755); err != nil {
+		return fmt.Errorf("redundancy: create status directory: %w", err)
+	}
+	return nil
 }
 
 // Write writes s to path atomically: it encodes to a sibling temporary file and

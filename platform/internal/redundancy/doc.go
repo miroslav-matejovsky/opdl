@@ -44,10 +44,33 @@
 // with the bind error. It never falls back to an alternate or random port: the
 // endpoint is the machine's identity on the site's network, not a preference.
 //
-// The fence is a non-expiring OS file lock on a local filesystem. It is released
-// after active resources close or automatically when the process exits. Status
-// files report each process role, lifecycle state, PID, projection progress,
-// lag, and errors. They support operations but never grant active ownership.
+// # The fence
+//
+// The fence is a non-expiring Windows named mutex, created in the machine-wide
+// Global namespace under a name the builder derives from the machine's compiled
+// deployment identity. It is released after active resources close, or abandoned
+// by the kernel when the process exits.
+//
+// Ownership is therefore a machine fact rather than a configuration agreement.
+// The file lock this replaced was scoped by a runtime directory path, so two
+// processes excluded each other only if they had been configured with the same
+// one; pointing them at different directories, installing the same package twice
+// under different paths, or placing the directory on a network filesystem each
+// produced two simultaneous actives, and nothing detected any of them.
+//
+// Waiting is a kernel wait, so a standby is woken when the holder releases rather
+// than on its next polling interval.
+//
+// The mutex provides mutual exclusion, not a fencing token. Two invariants are
+// what make exclusion sufficient: active resources close before ownership is
+// released, and ownership lives on one pinned OS thread for the life of the
+// process so it cannot be abandoned while resources are still held. See
+// utils/winmutex for why the second one is a correctness requirement rather than
+// an implementation detail.
+//
+// Status files report each process role, lifecycle state, PID, projection
+// progress, lag, and errors. They support operations but never grant active
+// ownership, and the directory holding them is not part of the fence.
 //
 // Domain event and durable-handler identities remain machine-scoped. Process
 // roles appear only in logs, lifecycle payloads, and local status.

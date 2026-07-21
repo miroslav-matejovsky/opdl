@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -117,7 +119,23 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) deployment.Descript
 	descriptor.EventFabric.Nats.ClusterAddress = cluster
 	descriptor.EventFabric.Nats.Servers = []string{client}
 	descriptor.EventFabric.Nats.Routes = []string{}
+	descriptor.Fence.Object = uniqueFenceObject(t)
 	return descriptor
+}
+
+// uniqueFenceObject returns an ownership object no other test or run shares.
+//
+// The embedded mock descriptor names one fence object, and the machine fence is a
+// kernel object in a machine-wide namespace, so every test in this binary would
+// otherwise contend for the same ownership. The ports above are moved for the same
+// reason; the fence needs it more, because a lock file was isolated for free by
+// each test's temporary directory and a kernel object is not.
+func uniqueFenceObject(t *testing.T) string {
+	t.Helper()
+	token := make([]byte, 8)
+	_, err := rand.Read(token)
+	require.NoError(t, err)
+	return "opdl-app-test." + hex.EncodeToString(token)
 }
 
 // embeddedDescriptor is the identity this test binary was compiled with. A

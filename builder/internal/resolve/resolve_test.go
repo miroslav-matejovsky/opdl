@@ -3,6 +3,7 @@ package resolve_test
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -305,4 +306,77 @@ func TestBuildValidatesDescriptors(t *testing.T) {
 func TestBuildRequiresPlatformName(t *testing.T) {
 	_, err := resolve.Build(project(), "")
 	require.ErrorContains(t, err, "platform is required")
+}
+
+// TestBuildDerivesFenceObject checks the ownership object name is derived rather
+// than authored, and that it is stable: the same machine must resolve the same
+// object on every build or a rebuilt package would stop excluding its peer.
+func TestBuildDerivesFenceObject(t *testing.T) {
+	plan, err := resolve.Build(project(), "acme-opdl")
+	require.NoError(t, err)
+	object := plan.Machines[0].Fence.Object
+
+	require.True(t, strings.HasPrefix(object, blueprint.DefaultFenceNamespace+".fence."), "object %q", object)
+	require.NotContains(t, object, `\`, "the kernel namespace is applied by the platform, not the builder")
+
+	again, err := resolve.Build(project(), "acme-opdl")
+	require.NoError(t, err)
+	require.Equal(t, object, again.Machines[0].Fence.Object, "the same machine must derive the same object")
+}
+
+// TestBuildFenceObjectIsUniquePerMachineIdentity is the property that makes the
+// fence safe to derive. Two machines sharing an object would contend for each
+// other's ownership, and the descriptor would look correct.
+func TestBuildFenceObjectIsUniquePerMachineIdentity(t *testing.T) {
+	base := project()
+	basePlan, err := resolve.Build(base, "acme-opdl")
+	require.NoError(t, err)
+	object := basePlan.Machines[0].Fence.Object
+
+	for name, mutate := range map[string]func(*blueprint.Project){
+		"machine":     func(p *blueprint.Project) { p.Sites[0].Machines[0].Name = "other" },
+		"site":        func(p *blueprint.Project) { p.Sites[0].Name = "south" },
+		"project":     func(p *blueprint.Project) { p.Name = "customer-b" },
+		"environment": func(p *blueprint.Project) { p.Environment = "staging" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := project()
+			mutate(p)
+			plan, err := resolve.Build(p, "acme-opdl")
+			require.NoError(t, err)
+			require.NotEqual(t, object, plan.Machines[0].Fence.Object)
+		})
+	}
+}
+
+// TestBuildFenceObjectIgnoresNonIdentityChanges checks the object does not move
+// when a machine is re-addressed. An ownership object that changed with the IP
+// would let a machine's old and new processes both become active.
+func TestBuildFenceObjectIgnoresNonIdentityChanges(t *testing.T) {
+	basePlan, err := resolve.Build(project(), "acme-opdl")
+	require.NoError(t, err)
+
+	p := project()
+	p.Sites[0].Machines[0].IP = "10.9.9.9"
+	p.Sites[0].Machines[0].Role = "another-role"
+	plan, err := resolve.Build(p, "acme-opdl")
+	require.NoError(t, err)
+
+	require.Equal(t, basePlan.Machines[0].Fence.Object, plan.Machines[0].Fence.Object)
+}
+
+// TestBuildFenceNamespaceIsAuthored checks the one part a blueprint controls
+// reaches the derived name, so two deployments of the same identity on one host
+// can be told apart deliberately.
+func TestBuildFenceNamespaceIsAuthored(t *testing.T) {
+	defaultPlan, err := resolve.Build(project(), "acme-opdl")
+	require.NoError(t, err)
+
+	p := project()
+	p.Sites[0].Machines[0].Platform.Fence = &blueprint.Fence{Namespace: "rig-b"}
+	plan, err := resolve.Build(p, "acme-opdl")
+	require.NoError(t, err)
+
+	require.True(t, strings.HasPrefix(plan.Machines[0].Fence.Object, "rig-b.fence."))
+	require.NotEqual(t, defaultPlan.Machines[0].Fence.Object, plan.Machines[0].Fence.Object)
 }

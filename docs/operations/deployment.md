@@ -51,13 +51,22 @@ be reassigned with runtime configuration.
 
 Use separate local paths for:
 
-- `instance_dir`: fence and process status files;
+- `instance_dir`: process status files;
 - `event_fabric.nats.data_dir`: durable JetStream journal data;
 - `operations.event_dir`: optional operational JSONL retention.
 
-The primary and standby must share `instance_dir` and the same configuration.
-`instance_dir` must be on a local filesystem because active ownership uses an OS
-file lock. Do not place it on NFS, SMB, or another network filesystem.
+The primary and standby must use the same configuration and the same machine
+package. `instance_dir` holds operational evidence only and is no longer part of
+the ownership decision: the machine fence is a kernel object named by the
+machine's compiled identity, so the two processes exclude each other even if their
+directories differ. Give them the same one anyway, so an operator reads one
+machine's status in one place.
+
+The fence itself needs no provisioning. The account the platform runs as must be
+able to create objects in the `Global\` kernel namespace, which requires
+`SeCreateGlobalPrivilege`. Windows services, administrators, and interactive
+logons hold it by default; a process that lacks it fails at startup with a
+specific error rather than falling back to a weaker scope.
 
 The journal path must be persistent, capacity-monitored storage. The runtime
 creates a deployment-identity subdirectory and never deletes it. Never copy one

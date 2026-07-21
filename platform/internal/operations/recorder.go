@@ -37,6 +37,17 @@ const (
 	AttributeActivationKind = "activation_kind"
 	// AttributeAppliedSequence contains the last journal sequence projected locally.
 	AttributeAppliedSequence = "applied_sequence"
+	// AttributeObject contains the kernel object name involved in an operation,
+	// such as the machine fence's ownership mutex. A named kernel object has no
+	// path, so this is what identifies it to an operator.
+	AttributeObject = "object"
+	// AttributeAbandoned reports that ownership was taken over from a process that
+	// died without releasing it, rather than from one that handed it over. It is
+	// what distinguishes a crash failover from a planned handover.
+	AttributeAbandoned = "abandoned"
+	// AttributeExisted reports that a kernel object already existed when this
+	// process opened it, meaning a peer process on this machine is running.
+	AttributeExisted = "existed"
 )
 
 // Event is one self-contained operational JSONL record.

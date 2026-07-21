@@ -179,6 +179,9 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
 	fmt.Fprintf(&b, "    slots        primary=true standby=%t\n", !d.Slots.Standby.Disabled)
+	// A named kernel object has no path, so printing it at startup is how an
+	// operator finds which object a machine's processes contend for.
+	fmt.Fprintf(&b, "    fence        %s\n", d.Fence.Object)
 	fmt.Fprintf(&b, "    event_fabric %s\n", eventFabricSummary(d.EventFabric))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    address             %s\n", c.address)

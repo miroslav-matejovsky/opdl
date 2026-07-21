@@ -21,7 +21,7 @@ vendors:
   nats-client: { in: "github.com/nats-io/nats.go**" }
   sys: { in: "golang.org/x/sys/**" }
   atomicfile: { in: "github.com/miroslav-matejovsky/opdl/utils/atomicfile" }
-  filelock: { in: "github.com/miroslav-matejovsky/opdl/utils/filelock" }
+  winmutex: { in: "github.com/miroslav-matejovsky/opdl/utils/winmutex" }
   stablehash: { in: "github.com/miroslav-matejovsky/opdl/utils/stablehash" }
 
 components:
@@ -49,7 +49,7 @@ deps:
   app:
     mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, operations, redundancy, registration]
   redundancy:
-    canUse: [sys, atomicfile, filelock]
+    canUse: [sys, atomicfile, winmutex]
   config:
     canUse: [toml]
     mayDependOn: [deployment, embedded]

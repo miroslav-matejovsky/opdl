@@ -33,6 +33,16 @@ project "{{ .Name }}" {
         standby {
           disabled = {{ .StandbyDisabled }}
         }
+
+        # The machine fence is a machine-wide kernel object, so unlike the lock
+        # file it replaced it is not isolated by a per-test temporary directory.
+        # Scenarios run in parallel and several of them build the same project and
+        # machine names, which would otherwise make them contend for each other's
+        # ownership. The harness renders a fresh namespace per run so each one gets
+        # its own fence. A real deployment omits this block.
+        fence {
+          namespace = "{{ $.FenceNamespace }}"
+        }
       }
     }
 {{ end }}  }

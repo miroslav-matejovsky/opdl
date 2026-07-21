@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
 	"slices"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/builder/deployment"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
+	"github.com/miroslav-matejovsky/opdl/utils/stablehash"
 )
 
 // Plan is the full set of per-machine deployment descriptors derived from a
@@ -59,7 +61,28 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 			Chaos: p.Features.Chaos,
 		},
 		Slots:       slots(machine),
+		Fence:       fence(p, site, machine),
 		EventFabric: eventFabric(site, machine),
+	}
+}
+
+// fence derives a machine's ownership object name.
+//
+// The name is the authored namespace joined with a digest of the machine's whole
+// identity. Hashing rather than concatenating the identity keeps the name inside
+// the Windows kernel object name limit whatever a project, site, or machine is
+// called, and keeps it free of characters a kernel namespace would reject.
+//
+// The digest covers project, environment, site, and machine, so no two machines
+// derive the same object, and the same machine derives the same object on every
+// build. It deliberately does not cover the machine's IP, role, or services: those
+// can change without the machine becoming a different deployment identity, and an
+// ownership object that moved when a machine was re-addressed would let an old
+// process and a new one both be active.
+func fence(p *blueprint.Project, site blueprint.Site, machine blueprint.Machine) deployment.Fence {
+	digest := stablehash.Sum256(p.Name, p.Environment, site.Name, machine.Name)
+	return deployment.Fence{
+		Object: fmt.Sprintf("%s.fence.%s", machine.FenceNamespace(), hex.EncodeToString(digest[:16])),
 	}
 }
 

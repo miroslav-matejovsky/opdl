@@ -421,3 +421,44 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 		})
 	}
 }
+
+// TestMachineFenceNamespaceDefaults checks a machine that authors no fence block
+// still resolves a namespace. Unlike the standby decision, defaulting here is safe:
+// the machine's identity is hashed into the object name regardless, so a default
+// cannot make two machines share a fence.
+func TestMachineFenceNamespaceDefaults(t *testing.T) {
+	p := validProject()
+	machine := p.Sites[0].Machines[0]
+	require.Nil(t, machine.Platform.Fence)
+	require.Equal(t, blueprint.DefaultFenceNamespace, machine.FenceNamespace())
+	require.NoError(t, p.Validate())
+}
+
+func TestMachineFenceNamespaceIsAuthored(t *testing.T) {
+	p := validProject()
+	p.Sites[0].Machines[0].Platform.Fence = &blueprint.Fence{Namespace: "rig-b"}
+	require.NoError(t, p.Validate())
+	require.Equal(t, "rig-b", p.Sites[0].Machines[0].FenceNamespace())
+}
+
+// TestProjectValidateFenceFailures checks an authored namespace that cannot be
+// used in a kernel object name is refused at build time rather than at startup.
+func TestProjectValidateFenceFailures(t *testing.T) {
+	tests := map[string]struct {
+		namespace string
+		errText   string
+	}{
+		"blank":             {namespace: "   ", errText: "must not be blank"},
+		"padded":            {namespace: " rig ", errText: "leading or trailing whitespace"},
+		"backslash":         {namespace: `rig\b`, errText: "slash or backslash"},
+		"forward slash":     {namespace: "rig/b", errText: "slash or backslash"},
+		"longer than limit": {namespace: string(make([]byte, 65)), errText: "longer than"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			p := validProject()
+			p.Sites[0].Machines[0].Platform.Fence = &blueprint.Fence{Namespace: test.namespace}
+			require.ErrorContains(t, p.Validate(), test.errText)
+		})
+	}
+}

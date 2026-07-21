@@ -14,6 +14,7 @@ import (
 // rather than building a valid descriptor from scratch each time.
 const completeDescriptor = `{
   "slots": {"primary": {"disabled": false}, "standby": {"disabled": true}},
+  "fence": {"object": "opdl.fence.0123456789abcdef0123456789abcdef"},
   "event_fabric": {
     "nats": {
       "client_address": "127.0.0.1:4222",
@@ -60,12 +61,24 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			json: `{"slots":{"primary":{"disabled":false},"standby":{}}}`,
 			err:  "slots.standby.disabled is required",
 		},
-		"missing event_fabric": {
+		"missing fence": {
 			json: `{"slots":{"primary":{"disabled":false},"standby":{"disabled":true}}}`,
+			err:  "fence is required",
+		},
+		"null fence": {
+			json: `{"slots":{"primary":{"disabled":false},"standby":{"disabled":true}},"fence":null}`,
+			err:  "fence is required",
+		},
+		"missing fence object": {
+			json: `{"slots":{"primary":{"disabled":false},"standby":{"disabled":true}},"fence":{}}`,
+			err:  "fence.object is required",
+		},
+		"missing event_fabric": {
+			json: `{"slots":{"primary":{"disabled":false},"standby":{"disabled":true}},"fence":{"object":"opdl.fence.abc"}}`,
 			err:  "event_fabric is required",
 		},
 		"missing event_fabric nats": {
-			json: `{"slots":{"primary":{"disabled":false},"standby":{"disabled":true}},"event_fabric":{"peers":[]}}`,
+			json: `{"slots":{"primary":{"disabled":false},"standby":{"disabled":true}},"fence":{"object":"opdl.fence.abc"},"event_fabric":{"peers":[]}}`,
 			err:  "event_fabric.nats is required",
 		},
 		"complete": {json: completeDescriptor},
@@ -104,6 +117,7 @@ func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
 	var descriptor deployment.Descriptor
 	enabled := `{
 	  "slots": {"primary": {"disabled": false}, "standby": {"disabled": false}},
+	  "fence": {"object": "opdl.fence.0123456789abcdef0123456789abcdef"},
 	  "event_fabric": {"nats": {"client_address": "127.0.0.1:4222", "cluster_address": "127.0.0.1:6222", "routes": [], "servers": ["127.0.0.1:4222"]}, "peers": []}
 	}`
 	require.NoError(t, json.Unmarshal([]byte(enabled), &descriptor))

@@ -23,6 +23,7 @@ func validDescriptor() deployment.Descriptor {
 			Primary: deployment.Slot{Disabled: false},
 			Standby: deployment.Slot{Disabled: false},
 		},
+		Fence: deployment.Fence{Object: "opdl.fence.0123456789abcdef0123456789abcdef"},
 		EventFabric: deployment.EventFabric{
 			Nats: deployment.EventFabricNats{
 				ClientAddress:  "10.0.1.10:4222",
@@ -52,6 +53,11 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"missing platform",
 			func(d *deployment.Descriptor) { d.Platform = "" },
 			"platform is required",
+		},
+		{
+			"missing fence object",
+			func(d *deployment.Descriptor) { d.Fence.Object = "" },
+			"fence object is required",
 		},
 		{
 			"missing project",
