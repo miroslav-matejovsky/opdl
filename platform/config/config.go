@@ -4,20 +4,17 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
-	"github.com/miroslav-matejovsky/opdl/platform/embedded"
 )
 
-// Config is the platform's resolved runtime configuration: a composition of the
-// deployment descriptor (see package embedded, which the builder stages before
-// compiling) and the platform's TOML configuration file, which supplies settings
-// a user must explicitly specify without rebuilding the binary.
+// Config is the platform's effective runtime configuration: a composition of the
+// deployment descriptor the builder stages before compiling (see Deployment) and
+// the platform's TOML configuration file, which supplies the settings a site may
+// specify without rebuilding the binary.
 // Everything an instance binds or writes on its own is read from the descriptor
 // by role, not held here: the configuration file is what a site decides for the
 // machine, and a machine's two instances read the same copy of it.
 type Config struct {
-	descriptor        deployment.Descriptor
+	descriptor        Descriptor
 	readHeaderTimeout time.Duration
 	shutdownTimeout   time.Duration
 	lagBound          time.Duration
@@ -31,7 +28,7 @@ type Config struct {
 // the TOML configuration file at configPath. No defaults are allowed: the
 // configuration file must exist and carry valid settings for all required options.
 func Load(configPath string) (*Config, error) {
-	d, err := embedded.Deployment()
+	d, err := Deployment()
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -106,7 +103,7 @@ func validateLagBound(s string) (time.Duration, error) {
 }
 
 // Descriptor returns the deployment descriptor the platform booted with.
-func (c *Config) Descriptor() deployment.Descriptor { return c.descriptor }
+func (c *Config) Descriptor() Descriptor { return c.descriptor }
 
 // Nothing here answers for a single instance. The API address and the runtime
 // directory are resolved onto each instance's record in the descriptor, and the
@@ -162,7 +159,7 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
-	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, deployment.Role(standby)))
+	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
 	// A machine's primary and standby processes contend for one Windows named
 	// mutex, so printing it at startup is how an operator finds which object they
 	// contend for.
@@ -183,9 +180,9 @@ func (c *Config) Summary(standby bool) string {
 // Both endpoints are stated whichever instance printed it, because an operator
 // looking at one instance's log is usually trying to find the other. The marker
 // on self is what keeps the two logs of one machine from being identical.
-func instancesSummary(instances deployment.Instances, self deployment.PlatformInstanceRole) string {
+func instancesSummary(instances Instances, self PlatformInstanceRole) string {
 	parts := make([]string, 0, 2)
-	for _, role := range []deployment.PlatformInstanceRole{deployment.RolePrimary, deployment.RoleStandby} {
+	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
 		instance := instances.Get(role)
 		if instance.Disabled {
 			parts = append(parts, fmt.Sprintf("%s=(not deployed)", role))
@@ -201,7 +198,7 @@ func instancesSummary(instances deployment.Instances, self deployment.PlatformIn
 }
 
 // lockSummary renders the Windows named mutex when a standby is deployed.
-func lockSummary(lock *deployment.Lock) string {
+func lockSummary(lock *Lock) string {
 	if lock == nil {
 		return "(not deployed)"
 	}
@@ -210,7 +207,7 @@ func lockSummary(lock *deployment.Lock) string {
 
 // peersSummary renders the site's membership: the platform instances this
 // machine expects to meet on the site's journal, its own included.
-func peersSummary(peers []deployment.Peer) string {
+func peersSummary(peers []Peer) string {
 	if len(peers) == 0 {
 		return "(none resolved)"
 	}

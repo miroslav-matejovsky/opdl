@@ -34,7 +34,7 @@ const targetOS = "windows"
 const binaryExt = ".exe"
 
 // Packer builds deployment packages by staging a machine's deployment
-// descriptor into the platform's embedded folder and driving the platform's own
+// descriptor into the platform's config package and driving the platform's own
 // go build.
 type Packer struct {
 	platformDir string
@@ -53,7 +53,7 @@ func New(platformDir, outputDir, goarch string) (*Packer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve platform directory: %w", err)
 	}
-	embedFile := filepath.Join(absolutePlatformDir, "embedded", deploymentFile)
+	embedFile := filepath.Join(absolutePlatformDir, "config", deploymentFile)
 	if _, err := os.Stat(embedFile); err != nil {
 		return nil, fmt.Errorf("find embedded deployment descriptor: %w", err)
 	}
@@ -77,7 +77,7 @@ type Result struct {
 }
 
 // BuildMachine stages the machine's deployment descriptor into the platform's
-// embedded folder, compiles the platform, and assembles the deployment
+// config package, compiles the platform, and assembles the deployment
 // package: the binary, a copy of the descriptor, a manifest, release metadata,
 // and a checksums file.
 func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (result *Result, resultErr error) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 )
 
 // TagWarning marks an event that states a rejected or conflicting operation. It
@@ -43,7 +43,7 @@ type Node struct {
 // NodeFromDescriptor derives the node identity from the deployment descriptor
 // the platform booted with. The descriptor is the platform's own compiled-in
 // identity, so an event's node is never something a caller can claim to be.
-func NodeFromDescriptor(d deployment.Descriptor) Node {
+func NodeFromDescriptor(d config.Descriptor) Node {
 	return Node{
 		Project:        d.Project,
 		Environment:    d.Environment,

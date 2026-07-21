@@ -24,10 +24,20 @@ than once at the root.
   their workspace-local tool caches.
 - `validate.ps1`: runs `opdl validate` for all project blueprints in
   `examples/` (or specific blueprints when names are passed as arguments).
-- `scenarios.ps1`: runs platform integration tests and the black-box scenario
-  suite. The scenario suite runs concurrently under a bounded load budget; when
-  debugging, you can serialize scenario execution by running `go test -parallel 1 ./...`
-  directly inside `scenarios/`.
+- `integration-tests.ps1`: runs the platform's own tests without `-short`, so the ones
+  that bind sockets and start real fabric members execute. This is the in-process
+  half of the resilience gate.
+- `scenarios.ps1`: runs the black-box scenario suite, which builds a deployment
+  package and drives the built binary from outside. This is the out-of-process
+  half. It runs concurrently under a bounded load budget; when debugging, you can
+  serialize it by running `go test -parallel 1 ./...` directly inside
+  `scenarios/`.
+
+  The two halves are separate scripts and separate tasks because they fail for
+  different reasons and take very different times. A scenario failure means a
+  packaged binary does not boot or does not recover, which no platform test can
+  tell you; keeping them apart means one being unavailable does not take the
+  other out of `task all` with it.
 
 Run everything with `task all` from the repository root.
 

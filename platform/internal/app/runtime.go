@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
@@ -34,14 +33,14 @@ const unknownLag = "unknown"
 // resolved onto that instance's record at build time. A machine's two instances
 // share one descriptor and one configuration file, so anything read from either
 // without a role is a value they would both take.
-func instanceOf(descriptor deployment.Descriptor, role redundancy.InstanceRole) deployment.Instance {
-	return descriptor.Instances.Get(deployment.Role(role == redundancy.RoleStandby))
+func instanceOf(descriptor config.Descriptor, role redundancy.InstanceRole) config.Instance {
+	return descriptor.Instances.Get(config.Role(role == redundancy.RoleStandby))
 }
 
 // peerOf returns the machine's other instance's record. It is empty on a machine
 // that deploys only a Primary Instance.
-func peerOf(descriptor deployment.Descriptor, role redundancy.InstanceRole) deployment.Instance {
-	return descriptor.Instances.Get(deployment.Role(role != redundancy.RoleStandby))
+func peerOf(descriptor config.Descriptor, role redundancy.InstanceRole) config.Instance {
+	return descriptor.Instances.Get(config.Role(role != redundancy.RoleStandby))
 }
 
 // resolveRole validates the requested process role against the deployment policy.
@@ -67,7 +66,7 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 // Nothing here comes from the journal, so it is answerable from the moment the
 // process starts: before the projection has caught up, and while it never does.
 // That is what makes a Passive instance worth asking.
-func instanceIdentity(descriptor deployment.Descriptor, role redundancy.InstanceRole, state string) api.Instance {
+func instanceIdentity(descriptor config.Descriptor, role redundancy.InstanceRole, state string) api.Instance {
 	return api.Instance{
 		Machine:     descriptor.Machine,
 		Role:        string(role),
@@ -83,7 +82,7 @@ func instanceIdentity(descriptor deployment.Descriptor, role redundancy.Instance
 // The order is deliberate. The listener opens first and stays open for the whole
 // process, so an instance is reachable in every state and a bind failure stops it
 // at startup rather than at a failover. Ownership decides only what it answers.
-func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole) (runErr error) {
+func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole) (runErr error) {
 	observer := operations.FromContext(ctx)
 	statusPath := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
 	if err := redundancy.PrepareStatusDir(statusPath); err != nil {
@@ -146,7 +145,7 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.D
 // A projection that will not open is not fatal here. An instance that cannot
 // follow the journal must still be able to take ownership when the other one
 // stops, so this retries until its context ends rather than giving up.
-func runPassive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string) error {
+func runPassive(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string) error {
 	observer := operations.FromContext(ctx)
 	site, err := openPassiveSite(ctx, cfg, descriptor, role, statusPath)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -188,7 +187,7 @@ func runPassive(ctx context.Context, cfg *config.Config, descriptor deployment.D
 //
 // It returns ctx.Err() when the context ended first, which the caller reads as
 // "won ownership, or stopping" rather than as a failure.
-func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string) (*site, error) {
+func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string) (*site, error) {
 	observer := operations.FromContext(ctx)
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -222,7 +221,7 @@ func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor deploym
 // It does not open a listener. One is already bound and answering the Passive
 // surface, so activation swaps the handler rather than moving the endpoint, and
 // the address a caller uses never changes.
-func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, server *instanceServer, kind redundancy.ActivationKind) error {
+func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string, server *instanceServer, kind redundancy.ActivationKind) error {
 	observer := operations.FromContext(ctx)
 	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
 		return err

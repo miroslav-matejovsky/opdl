@@ -9,8 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
@@ -88,7 +87,7 @@ type service struct {
 // opens no durable handler, publishes no readiness, and binds no listener, so it
 // follows the site's history without producing a decision or holding an
 // active-only capability.
-func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
+func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
 	observer := operations.FromContext(ctx)
 	openedAt := time.Now()
 	observer.Emit("platform.site_opening", operations.LevelInfo, "platform.site", "site runtime opening", map[string]any{"active": active})
@@ -452,7 +451,7 @@ func (r *runner) failure() error {
 // the same descriptor topology; only clientOnly distinguishes an instance that
 // does not hold ownership, and it removes capabilities rather than selecting a
 // different endpoint.
-func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabric.Config, error) {
+func natsConfig(descriptor config.Descriptor, cfg *config.Config) (natsfabric.Config, error) {
 	fabricCfg, err := natsfabric.DefaultConfig(descriptor)
 	if err != nil {
 		return natsfabric.Config{}, err
@@ -523,7 +522,7 @@ func clientOnly(cfg natsfabric.Config) natsfabric.Config {
 //
 // Every value is a single token so the line can be parsed. No credential is
 // printed, and there is no monitor endpoint to print.
-func logEffectiveFabric(descriptor deployment.Descriptor, cfg natsfabric.Config) {
+func logEffectiveFabric(descriptor config.Descriptor, cfg natsfabric.Config) {
 	cluster := "none"
 	if len(cfg.Routes) > 0 {
 		cluster = cfg.ClusterAddress
@@ -550,7 +549,7 @@ func logEffectiveFabric(descriptor deployment.Descriptor, cfg natsfabric.Config)
 // copy of facts nothing else holds. The subdirectory is what lets one host run
 // several machines, and what stops two machines from ever adopting each other's
 // store.
-func nodeDataDir(dataDir string, descriptor deployment.Descriptor) string {
+func nodeDataDir(dataDir string, descriptor config.Descriptor) string {
 	node := strings.Join([]string{
 		descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine,
 	}, "-")
@@ -567,7 +566,7 @@ func nodeDataDir(dataDir string, descriptor deployment.Descriptor) string {
 // wants one confirmation per machine: exactly one of a machine's instances is
 // Active, and it answers for the machine. Expecting one per instance would wait
 // forever on a Standby Instance that is not serving.
-func topology(descriptor deployment.Descriptor) (self registration.Location, expected []registration.Location) {
+func topology(descriptor config.Descriptor) (self registration.Location, expected []registration.Location) {
 	self = registration.Location{Machine: descriptor.Machine, IP: descriptor.IP}
 	expected = append(expected, self)
 	seen := map[string]bool{descriptor.Machine: true}

@@ -92,6 +92,7 @@ tasks:
       - task lint
       - task arch
       - task test
+      - task integration-tests
       - task sdk-dotnet
       - task validate
       # - task scenarios
@@ -133,8 +134,14 @@ tasks:
     cmds:
       - pwsh -NoProfile -NonInteractive -File taskfile/validate.ps1 {{.CLI_ARGS}}
 
+  integration-tests:
+    desc: Run the platform's integration tests, the ones the unit gate skips with -short
+    silent: true
+    cmds:
+      - pwsh -NoProfile -NonInteractive -File taskfile/integration-tests.ps1
+
   scenarios:
-    desc: Run build-tagged platform integration tests and the black-box scenario suite (pre-merge resilience gate)
+    desc: Run the black-box scenario suite against a built deployment package
     silent: true
     cmds:
       - pwsh -NoProfile -NonInteractive -File taskfile/scenarios.ps1

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	builderdeployment "github.com/miroslav-matejovsky/opdl/builder/deployment"
-	platformdeployment "github.com/miroslav-matejovsky/opdl/platform/deployment"
+	platformconfig "github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/utils/jsonfields"
 )
 
@@ -30,7 +30,7 @@ func Run() error {
 // one side without matching the other and it fails.
 func checkContractsMatch() error {
 	builderSig := signature(reflect.TypeFor[builderdeployment.Descriptor]())
-	platformSig := signature(reflect.TypeFor[platformdeployment.Descriptor]())
+	platformSig := signature(reflect.TypeFor[platformconfig.Descriptor]())
 	if builderSig != platformSig {
 		return fmt.Errorf("builder and platform deployment descriptors have diverged:\n  builder:  %s\n  platform: %s", builderSig, platformSig)
 	}
@@ -92,9 +92,9 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	servers := []string{peerClientAddr, peerStandbyClient}
 
 	builtStandby := builderdeployment.Instance{Disabled: true}
-	wantStandby := platformdeployment.Instance{Disabled: true}
+	wantStandby := platformconfig.Instance{Disabled: true}
 	var builtLock *builderdeployment.Lock
-	var wantLock *platformdeployment.Lock
+	var wantLock *platformconfig.Lock
 	if !standbyDisabled {
 		builtStandby = builderdeployment.Instance{
 			Disabled:   false,
@@ -107,11 +107,11 @@ func checkRoundTripFor(standbyDisabled bool) error {
 				Servers:        servers,
 			},
 		}
-		wantStandby = platformdeployment.Instance{
+		wantStandby = platformconfig.Instance{
 			Disabled:   false,
 			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
-			Nats: &platformdeployment.Nats{
+			Nats: &platformconfig.Nats{
 				ClientAddress:  standbyClient,
 				ClusterAddress: standbyCluster,
 				Routes:         []string{},
@@ -119,7 +119,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			},
 		}
 		builtLock = &builderdeployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
-		wantLock = &platformdeployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
+		wantLock = &platformconfig.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
 	}
 
 	// Peers are ordered by machine name, then Primary before Standby, and include
@@ -132,22 +132,22 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP,
 			Nats: builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
 	}
-	wantPeers := []platformdeployment.Peer{
-		{Site: site, Machine: peerMachine, Role: platformdeployment.RolePrimary, IP: peerIP,
-			Nats: platformdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
-		{Site: site, Machine: peerMachine, Role: platformdeployment.RoleStandby, IP: peerIP,
-			Nats: platformdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
-		{Site: site, Machine: machine, Role: platformdeployment.RolePrimary, IP: machineIP,
-			Nats: platformdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+	wantPeers := []platformconfig.Peer{
+		{Site: site, Machine: peerMachine, Role: platformconfig.RolePrimary, IP: peerIP,
+			Nats: platformconfig.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
+		{Site: site, Machine: peerMachine, Role: platformconfig.RoleStandby, IP: peerIP,
+			Nats: platformconfig.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
+		{Site: site, Machine: machine, Role: platformconfig.RolePrimary, IP: machineIP,
+			Nats: platformconfig.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
 	}
 	if !standbyDisabled {
 		builtPeers = append(builtPeers, builderdeployment.Peer{
 			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP,
 			Nats: builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
-		wantPeers = append(wantPeers, platformdeployment.Peer{
-			Site: site, Machine: machine, Role: platformdeployment.RoleStandby, IP: machineIP,
-			Nats: platformdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
+		wantPeers = append(wantPeers, platformconfig.Peer{
+			Site: site, Machine: machine, Role: platformconfig.RoleStandby, IP: machineIP,
+			Nats: platformconfig.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 	}
 
@@ -187,12 +187,12 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		return err
 	}
 
-	var got platformdeployment.Descriptor
+	var got platformconfig.Descriptor
 	if err := json.Unmarshal(data, &got); err != nil {
 		return err
 	}
 
-	want := platformdeployment.Descriptor{
+	want := platformconfig.Descriptor{
 		Platform:       "opdl",
 		Project:        "customer-a",
 		Environment:    "production",
@@ -201,13 +201,13 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		MachineProfile: "sensor-node",
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
-		Features:       platformdeployment.Features{Chaos: true},
-		Instances: platformdeployment.Instances{
-			Primary: platformdeployment.Instance{
+		Features:       platformconfig.Features{Chaos: true},
+		Instances: platformconfig.Instances{
+			Primary: platformconfig.Instance{
 				Disabled:   false,
 				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
-				Nats: &platformdeployment.Nats{
+				Nats: &platformconfig.Nats{
 					ClientAddress:  clientAddr,
 					ClusterAddress: clusterAddr,
 					Routes:         []string{},

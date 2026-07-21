@@ -1,4 +1,4 @@
-package deployment_test
+package config_test
 
 import (
 	"encoding/json"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 )
 
 // completeDescriptor is the minimal JSON that decodes: every field the platform
@@ -112,7 +112,7 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			var descriptor deployment.Descriptor
+			var descriptor config.Descriptor
 			err := json.Unmarshal([]byte(test.json), &descriptor)
 			if test.err != "" {
 				require.ErrorContains(t, err, test.err)
@@ -127,7 +127,7 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 // values the runtime composes from: both instance decisions, the endpoints the
 // deployed instance binds, and the site's membership.
 func TestDescriptorDecodesTopology(t *testing.T) {
-	var descriptor deployment.Descriptor
+	var descriptor config.Descriptor
 	require.NoError(t, json.Unmarshal([]byte(completeDescriptor), &descriptor))
 
 	require.False(t, descriptor.Instances.Primary.Disabled)
@@ -147,7 +147,7 @@ func TestDescriptorDecodesTopology(t *testing.T) {
 	require.Nil(t, descriptor.Instances.Standby.Nats)
 
 	require.Len(t, descriptor.Peers, 1)
-	require.Equal(t, deployment.RolePrimary, descriptor.Peers[0].Role)
+	require.Equal(t, config.RolePrimary, descriptor.Peers[0].Role)
 	require.Equal(t, "node", descriptor.Peers[0].Machine)
 }
 
@@ -156,7 +156,7 @@ func TestDescriptorDecodesTopology(t *testing.T) {
 // the field is a bool, so a decoder that dropped it would still satisfy one of
 // the two cases.
 func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
-	var descriptor deployment.Descriptor
+	var descriptor config.Descriptor
 	enabled := `{
 	  "instances": {
 	    "primary": {
@@ -190,11 +190,11 @@ func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
 // TestInstancesGetSelectsByRole checks the accessor the runtime uses to find its
 // own record.
 func TestInstancesGetSelectsByRole(t *testing.T) {
-	var descriptor deployment.Descriptor
+	var descriptor config.Descriptor
 	require.NoError(t, json.Unmarshal([]byte(completeDescriptor), &descriptor))
 
-	require.False(t, descriptor.Instances.Get(deployment.RolePrimary).Disabled)
-	require.True(t, descriptor.Instances.Get(deployment.RoleStandby).Disabled)
-	require.Equal(t, deployment.RolePrimary, deployment.Role(false))
-	require.Equal(t, deployment.RoleStandby, deployment.Role(true))
+	require.False(t, descriptor.Instances.Get(config.RolePrimary).Disabled)
+	require.True(t, descriptor.Instances.Get(config.RoleStandby).Disabled)
+	require.Equal(t, config.RolePrimary, config.Role(false))
+	require.Equal(t, config.RoleStandby, config.Role(true))
 }

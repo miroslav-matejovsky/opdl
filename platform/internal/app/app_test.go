@@ -18,9 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
-	"github.com/miroslav-matejovsky/opdl/platform/embedded"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
@@ -36,7 +34,7 @@ import (
 // tests and stay out of the fast gate. Everything derivable without a socket is
 // tested without one.
 
-var testDescriptor = deployment.Descriptor{
+var testDescriptor = config.Descriptor{
 	Platform:    "opdl",
 	Project:     "scenario",
 	Environment: "development",
@@ -109,21 +107,21 @@ catch_up_timeout = "30s"
 // Both instances are filled in, whether or not a test deploys the standby. A test
 // that enables it then flips one bool rather than composing a second endpoint set
 // by hand, which is how a standby ends up on the primary's address.
-func descriptorOnFreePorts(t *testing.T, cfg *config.Config) deployment.Descriptor {
+func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
 	runtimeRoot := t.TempDir()
 	for _, standby := range []bool{false, true} {
-		instance := descriptor.Instances.Get(deployment.Role(standby))
+		instance := descriptor.Instances.Get(config.Role(standby))
 		client, cluster := freeAddress(t), freeAddress(t)
-		instance.Nats = &deployment.Nats{
+		instance.Nats = &config.Nats{
 			ClientAddress:  client,
 			ClusterAddress: cluster,
 			Servers:        []string{client},
 			Routes:         []string{},
 		}
 		instance.APIAddress = freeAddress(t)
-		instance.RuntimeDir = filepath.Join(runtimeRoot, string(deployment.Role(standby)))
+		instance.RuntimeDir = filepath.Join(runtimeRoot, string(config.Role(standby)))
 		if standby {
 			descriptor.Instances.Standby = instance
 			continue
@@ -131,7 +129,7 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) deployment.Descript
 		descriptor.Instances.Primary = instance
 	}
 	if descriptor.Lock == nil {
-		descriptor.Lock = &deployment.Lock{}
+		descriptor.Lock = &config.Lock{}
 	}
 	descriptor.Lock.WindowsMutex = uniqueLockMutex(t)
 	return descriptor
@@ -155,9 +153,9 @@ func uniqueLockMutex(t *testing.T) string {
 // embeddedDescriptor is the identity this test binary was compiled with. A
 // platform's identity is not configurable, so a composition test reads it rather
 // than choosing it.
-func embeddedDescriptor(t *testing.T) deployment.Descriptor {
+func embeddedDescriptor(t *testing.T) config.Descriptor {
 	t.Helper()
-	d, err := embedded.Deployment()
+	d, err := config.Deployment()
 	require.NoError(t, err)
 	return d
 }
@@ -307,21 +305,21 @@ func TestCloseIsIdempotent(t *testing.T) {
 // The file cannot move a socket. Doing so could point a machine at a journal
 // that is not its own, and nothing downstream would be able to tell.
 func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
-	descriptor := deployment.Descriptor{
+	descriptor := config.Descriptor{
 		Project: "customer-a", Environment: "production",
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
-		Instances: deployment.Instances{
-			Primary: deployment.Instance{Disabled: false, Nats: &deployment.Nats{
+		Instances: config.Instances{
+			Primary: config.Instance{Disabled: false, Nats: &config.Nats{
 				ClientAddress:  "10.0.1.10:4222",
 				ClusterAddress: "10.0.1.10:6222",
 				Routes:         []string{},
 				Servers:        []string{"10.0.1.10:4222"},
 			}},
-			Standby: deployment.Instance{Disabled: true},
+			Standby: config.Instance{Disabled: true},
 		},
-		Peers: []deployment.Peer{
-			{Site: "north", Machine: "node-a", Role: deployment.RolePrimary, IP: "10.0.1.10"},
-			{Site: "north", Machine: "node-b", Role: deployment.RolePrimary, IP: "10.0.1.11"},
+		Peers: []config.Peer{
+			{Site: "north", Machine: "node-a", Role: config.RolePrimary, IP: "10.0.1.10"},
+			{Site: "north", Machine: "node-b", Role: config.RolePrimary, IP: "10.0.1.11"},
 		},
 	}
 	settings := func(t *testing.T, nats string) *config.Config {
@@ -387,16 +385,16 @@ func TestClientOnlyRetainsEveryStorageServer(t *testing.T) {
 // journal.
 func TestNodeDataDirIsNamedAfterTheMachine(t *testing.T) {
 	dataDir := t.TempDir()
-	nodeA := nodeDataDir(dataDir, deployment.Descriptor{
+	nodeA := nodeDataDir(dataDir, config.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "north", Machine: "node-a",
 	})
-	nodeB := nodeDataDir(dataDir, deployment.Descriptor{
+	nodeB := nodeDataDir(dataDir, config.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "north", Machine: "node-b",
 	})
 	require.Equal(t, filepath.Join(dataDir, "customer-a-production-north-node-a"), nodeA)
 	require.NotEqual(t, nodeA, nodeB, "two machines of one site never share a store")
 
-	otherSite := nodeDataDir(dataDir, deployment.Descriptor{
+	otherSite := nodeDataDir(dataDir, config.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "south", Machine: "node-a",
 	})
 	require.NotEqual(t, nodeA, otherSite, "the same machine name in another site is another node")
@@ -406,15 +404,15 @@ func TestNodeDataDirIsNamedAfterTheMachine(t *testing.T) {
 // registration topology is the descriptor's static membership. Acceptance needs
 // every expected machine, so the set must never be "who is reachable".
 func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
-	self, expected := topology(deployment.Descriptor{
+	self, expected := topology(config.Descriptor{
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
-		Peers: []deployment.Peer{
-			{Site: "north", Machine: "node-a", Role: deployment.RolePrimary, IP: "10.0.1.10"},
-			{Site: "north", Machine: "node-b", Role: deployment.RolePrimary, IP: "10.0.1.11"},
+		Peers: []config.Peer{
+			{Site: "north", Machine: "node-a", Role: config.RolePrimary, IP: "10.0.1.10"},
+			{Site: "north", Machine: "node-b", Role: config.RolePrimary, IP: "10.0.1.11"},
 			// node-b deploys a standby as well. It is a second member of the
 			// fabric but not a second confirmation: exactly one of a machine's
 			// instances is Active, and it answers for the machine.
-			{Site: "north", Machine: "node-b", Role: deployment.RoleStandby, IP: "10.0.1.11"},
+			{Site: "north", Machine: "node-b", Role: config.RoleStandby, IP: "10.0.1.11"},
 		},
 	})
 	require.Equal(t, registration.Location{Machine: "node-a", IP: "10.0.1.10"}, self)
@@ -637,7 +635,7 @@ func TestFailoverAndFailback(t *testing.T) {
 	require.NoError(t, waitProcess(t, failbackDone), "the Primary Instance did not stop cleanly")
 }
 
-func waitForProcessState(t *testing.T, descriptor deployment.Descriptor, role redundancy.InstanceRole, state redundancy.State, done <-chan error) {
+func waitForProcessState(t *testing.T, descriptor config.Descriptor, role redundancy.InstanceRole, state redundancy.State, done <-chan error) {
 	t.Helper()
 	path := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
 	var processErr error
@@ -655,7 +653,7 @@ func waitForProcessState(t *testing.T, descriptor deployment.Descriptor, role re
 	require.Falsef(t, exited, "%s exited before reaching %s: %v", role, state, processErr)
 }
 
-func waitForFailoverReadyStandby(t *testing.T, descriptor deployment.Descriptor, role redundancy.InstanceRole, done <-chan error) {
+func waitForFailoverReadyStandby(t *testing.T, descriptor config.Descriptor, role redundancy.InstanceRole, done <-chan error) {
 	t.Helper()
 	path := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
 	var processErr error

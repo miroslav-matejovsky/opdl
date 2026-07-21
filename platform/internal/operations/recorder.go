@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 )
 
 // Level is the operational severity of an event.
@@ -92,7 +92,7 @@ var discard = &Recorder{stderr: io.Discard, now: time.Now}
 
 // Open creates a recorder. eventDir may be empty to disable JSONL retention;
 // structured events are still written to stderr for the service manager.
-func Open(eventDir string, descriptor deployment.Descriptor, role string) (*Recorder, error) {
+func Open(eventDir string, descriptor config.Descriptor, role string) (*Recorder, error) {
 	r := &Recorder{
 		identity: Event{
 			Project:     descriptor.Project,

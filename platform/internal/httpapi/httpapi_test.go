@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
@@ -291,7 +291,7 @@ func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 type site struct {
 	t        *testing.T
 	journal  *journal
-	machines []deployment.Peer
+	machines []config.Peer
 }
 
 // journal is an ordered, in-process site journal. It stamps each published event
@@ -343,8 +343,8 @@ func newSite(t *testing.T, machines ...string) *site {
 		journal: &journal{t: t, scope: eventfabric.NewSiteScope("test", "development", "local")},
 	}
 	for i, machine := range machines {
-		s.machines = append(s.machines, deployment.Peer{
-			Site: "local", Machine: machine, Role: deployment.RolePrimary,
+		s.machines = append(s.machines, config.Peer{
+			Site: "local", Machine: machine, Role: config.RolePrimary,
 			IP: fmt.Sprintf("127.0.0.%d", i+1),
 		})
 	}

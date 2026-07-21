@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 )
 
 // This package owns the event mechanism and declares no events of its own, so
@@ -51,7 +51,7 @@ var testNode = Node{
 }
 
 func TestNodeFromDescriptorTakesDeploymentIdentity(t *testing.T) {
-	node := NodeFromDescriptor(deployment.Descriptor{
+	node := NodeFromDescriptor(config.Descriptor{
 		Platform:       "opdl",
 		Project:        "scenario",
 		Environment:    "development",

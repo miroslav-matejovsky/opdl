@@ -14,7 +14,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
@@ -72,7 +72,7 @@ var errConsumerReconnect = errors.New("nats: consumer reset for client reconnect
 //
 // An open fabric is usable, not ready: readiness is a conclusion about the
 // node's projections and handlers, which is composition's to reach and to state.
-func Open(ctx context.Context, descriptor deployment.Descriptor, cfg Config) (*Fabric, error) {
+func Open(ctx context.Context, descriptor config.Descriptor, cfg Config) (*Fabric, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

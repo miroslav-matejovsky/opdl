@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 )
 
@@ -132,7 +132,7 @@ type Config struct {
 //
 // Take the per-instance topology only together with the runtime change that
 // starts the standby's server.
-func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
+func DefaultConfig(descriptor config.Descriptor) (Config, error) {
 	ips, err := siteIPs(descriptor)
 	if err != nil {
 		return Config{}, err
@@ -174,7 +174,7 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 // so the map collapses them back to machines. Storage selection and the replica
 // count are both per machine: a machine is the failure domain, and two copies of
 // the journal on one host is one copy as far as losing that host is concerned.
-func siteIPs(descriptor deployment.Descriptor) (map[string]string, error) {
+func siteIPs(descriptor config.Descriptor) (map[string]string, error) {
 	if strings.TrimSpace(descriptor.Machine) == "" {
 		return nil, fmt.Errorf("nats: descriptor has no machine")
 	}

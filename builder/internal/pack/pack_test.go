@@ -15,7 +15,7 @@ import (
 func fakePlatform(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	embed := filepath.Join(root, "embedded")
+	embed := filepath.Join(root, "config")
 	require.NoError(t, os.MkdirAll(embed, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(embed, deploymentFile), []byte(`{"project":"mock"}`), 0o644))
 	return root
@@ -28,7 +28,7 @@ func TestNewFailsWithoutEmbeddedDescriptor(t *testing.T) {
 
 func TestStageOverlayLeavesPlaceholderUnchanged(t *testing.T) {
 	platformDir := fakePlatform(t)
-	embedFile := filepath.Join(platformDir, "embedded", deploymentFile)
+	embedFile := filepath.Join(platformDir, "config", deploymentFile)
 
 	p, err := New(platformDir, t.TempDir(), "")
 	require.NoError(t, err)
