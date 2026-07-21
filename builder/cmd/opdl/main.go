@@ -96,7 +96,6 @@ func cmdBuild(args []string) error {
 	platform := fs.String("platform", "opdl", "product-line identity stamped on descriptors")
 	platformDir := fs.String("platform-dir", "../platform", "platform module root to compile")
 	out := fs.String("out", "../dist", "directory to write packages to")
-	goos := fs.String("goos", "", "target OS (empty means host)")
 	goarch := fs.String("goarch", "", "target architecture (empty means host)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -110,7 +109,7 @@ func cmdBuild(args []string) error {
 		return err
 	}
 
-	packer, err := pack.New(*platformDir, *out, *goos, *goarch)
+	packer, err := pack.New(*platformDir, *out, *goarch)
 	if err != nil {
 		return err
 	}

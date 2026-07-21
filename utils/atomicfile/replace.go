@@ -1,5 +1,3 @@
-//go:build windows
-
 package atomicfile
 
 import (
@@ -15,9 +13,9 @@ const (
 	replaceTimeout       = time.Second
 )
 
-// replaceFile atomically replaces target with source using os.Rename. On Windows,
-// it tolerates a reader's short-lived sharing lock or access denial by retrying
-// for up to one second. Other errors or timeouts return immediately.
+// replaceFile atomically replaces target with source using os.Rename. It
+// tolerates a reader's short-lived sharing lock or access denial by retrying for
+// up to one second. Other errors or timeouts return immediately.
 func replaceFile(source, target string) error {
 	deadline := time.Now().Add(replaceTimeout)
 	for {

@@ -72,9 +72,6 @@ func runMain(m *testing.M) int {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	builderBinary = filepath.Join(tmpDir, "opdl.exe")
-	if runtime.GOOS != "windows" {
-		builderBinary = filepath.Join(tmpDir, "opdl")
-	}
 
 	builderDir, err := filepath.Abs(filepath.Join("..", "builder"))
 	if err != nil {
@@ -275,11 +272,7 @@ func buildProject(ctx context.Context, t *testing.T, blueprintsDir, outDir, proj
 // machineBinary returns the path of one built machine's binary. The builder
 // names each package after the machine it is for.
 func machineBinary(outDir, project, machine string) string {
-	name := machine
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	return filepath.Join(outDir, project, scenarioSite, machine, name)
+	return filepath.Join(outDir, project, scenarioSite, machine, machine+".exe")
 }
 
 type launch struct {

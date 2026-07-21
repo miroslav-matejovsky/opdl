@@ -40,8 +40,8 @@
 //
 // A scenario builds from a rendered blueprint, not from checked-in HCL. The
 // harness allocates free client and cluster ports from the fixed 20000 to 32767
-// band, below both operating systems' ephemeral ranges (Linux starts at 32768,
-// Windows at 49152), and never reuses a port within a single test process run.
+// band, below the Windows ephemeral range that starts at 49152, and never reuses
+// a port within a single test process run.
 // Those ports are rendered into a temporary project.hcl through
 // testdata/project.hcl.tmpl, and built into the deployment packages.
 //

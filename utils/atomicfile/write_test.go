@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -42,11 +41,7 @@ func TestWriteFileRoundTrip(t *testing.T) {
 
 			info, err := os.Stat(path)
 			require.NoError(t, err)
-			if runtime.GOOS != "windows" {
-				require.NotZero(t, info.Mode().Perm()&0o400, "file should at least be readable")
-			} else {
-				require.Equal(t, tc.perm&0o222 == 0, info.Mode()&0o222 == 0)
-			}
+			require.Equal(t, tc.perm&0o222 == 0, info.Mode()&0o222 == 0)
 			checkNoTempFiles(t, dir)
 		})
 	}

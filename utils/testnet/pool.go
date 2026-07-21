@@ -14,16 +14,15 @@ const (
 	// bandStart and bandEnd define the process-wide pool of port numbers.
 	//
 	// Why this band:
-	// Port 0 draws from the operating system ephemeral range. Windows uses 49152
-	// to 65535, Linux uses 32768 to 60999. That range is shared with outbound
-	// connections (NATS clients, HTTP clients, dotnet test). Between release and
-	// bind in a reserve-then-release lifecycle, an ephemeral port can be taken by
-	// an unrelated outbound socket.
+	// Port 0 draws from the Windows ephemeral range, 49152 to 65535. That range is
+	// shared with outbound connections (NATS clients, HTTP clients, dotnet test).
+	// Between release and bind in a reserve-then-release lifecycle, an ephemeral
+	// port can be taken by an unrelated outbound socket.
 	//
-	// Choosing ports in 20000 to 32767 stays below the Linux ephemeral start of
-	// 32768 and well below the Windows start of 49152, so the operating system
-	// never assigns these on its own. 12768 ports provides ample headroom against
-	// test suites that need roughly 40 ports per run.
+	// Choosing ports in 20000 to 32767 stays well below the ephemeral start of
+	// 49152, so the operating system never assigns these on its own. 12768 ports
+	// provides ample headroom against test suites that need roughly 40 ports per
+	// run.
 	bandStart = 20000
 	bandEnd   = 32767
 	bandSize  = bandEnd - bandStart + 1

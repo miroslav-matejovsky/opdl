@@ -1,7 +1,6 @@
-// Package processinfo queries operating-system process information across platforms.
+// Package processinfo queries Windows process information.
 //
-// ResidentBytes reports resident memory usage in bytes for a given process ID.
-// Where native operating-system APIs are not directly available, portable command
-// fallbacks (such as powershell on Windows or ps on Unix platforms without /proc)
-// are invoked while preserving process ID context and cancellation behavior.
+// ResidentBytes reports the working set in bytes for a given process ID. It
+// shells out to powershell Get-Process rather than calling a native API, and
+// preserves process ID context and cancellation behavior while doing so.
 package processinfo

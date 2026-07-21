@@ -26,8 +26,8 @@ after the change:
 
 What remains is evidence collection, not investigation:
 
-- repeated runs on Linux CI as well as Windows;
-- percentiles rather than three samples from one developer machine;
+- repeated runs on more than one Windows host, not just a developer machine;
+- percentiles rather than three samples;
 - a stated SLO only once those exist.
 
 Do not quote the numbers above as a failover SLO. They are three samples on one

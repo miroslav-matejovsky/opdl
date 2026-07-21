@@ -3,6 +3,7 @@
 ## Core Rules
 
 - Never commit changes. NEVER!
+- This repo is windows-only. Do not consider linux, mac, unix, or other platforms.
 - Communicate clearly and directly. Short sentences. Simple language. No filler. No fluff.
 - Be concise in output. Be thorough in reasoning.
 - No praise. No filler. No motivational text.

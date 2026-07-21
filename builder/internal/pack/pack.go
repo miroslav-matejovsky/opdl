@@ -26,6 +26,13 @@ const platformCmd = "./cmd"
 // platform binary and shipped alongside it in a package.
 const deploymentFile = "deployment.json"
 
+// targetOS is the only operating system the platform is built for. It is pinned
+// rather than taken from the host so a package is identical wherever it is built.
+const targetOS = "windows"
+
+// binaryExt is the executable extension for targetOS.
+const binaryExt = ".exe"
+
 // Packer builds deployment packages by staging a machine's deployment
 // descriptor into the platform's embedded folder and driving the platform's own
 // go build.
@@ -33,15 +40,15 @@ type Packer struct {
 	platformDir string
 	embedFile   string
 	outputDir   string
-	goos        string
 	goarch      string
 }
 
 // New builds a Packer. platformDir is the platform module root; outputDir is
-// where packages are written; goos/goarch cross-compile (empty means host). It
-// validates the platform's neutral embedded descriptor exists. Machine builds
-// replace it through a Go build overlay and never modify the working tree.
-func New(platformDir, outputDir, goos, goarch string) (*Packer, error) {
+// where packages are written; goarch cross-compiles (empty means host). The
+// target OS is always windows. It validates the platform's neutral embedded
+// descriptor exists. Machine builds replace it through a Go build overlay and
+// never modify the working tree.
+func New(platformDir, outputDir, goarch string) (*Packer, error) {
 	absolutePlatformDir, err := filepath.Abs(platformDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve platform directory: %w", err)
@@ -58,7 +65,6 @@ func New(platformDir, outputDir, goos, goarch string) (*Packer, error) {
 		platformDir: absolutePlatformDir,
 		embedFile:   embedFile,
 		outputDir:   absoluteOutputDir,
-		goos:        goos,
 		goarch:      goarch,
 	}, nil
 }
@@ -95,7 +101,7 @@ func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (res
 		return nil, fmt.Errorf("create package dir %s: %w", pkgDir, err)
 	}
 
-	binaryName := d.Machine + p.binaryExt()
+	binaryName := d.Machine + binaryExt
 	binaryPath := filepath.Join(pkgDir, binaryName)
 	if err := p.compile(ctx, binaryPath, overlayPath); err != nil {
 		return nil, err
@@ -164,7 +170,7 @@ func (p *Packer) writeMetadata(pkgDir string, d deployment.Descriptor, binary, s
 	rel := Release{
 		Builder:      builderName,
 		BuiltAt:      now,
-		OS:           p.effectiveGOOS(),
+		OS:           targetOS,
 		Arch:         p.effectiveGOARCH(),
 		BinarySHA256: sum,
 	}
@@ -192,21 +198,11 @@ func (p *Packer) writeChecksums(pkgDir, binary, binarySum string) error {
 }
 
 func (p *Packer) buildEnv() []string {
-	env := os.Environ()
-	if p.goos != "" {
-		env = append(env, "GOOS="+p.goos)
-	}
+	env := append(os.Environ(), "GOOS="+targetOS)
 	if p.goarch != "" {
 		env = append(env, "GOARCH="+p.goarch)
 	}
 	return env
-}
-
-func (p *Packer) effectiveGOOS() string {
-	if p.goos != "" {
-		return p.goos
-	}
-	return runtime.GOOS
 }
 
 func (p *Packer) effectiveGOARCH() string {
@@ -214,12 +210,4 @@ func (p *Packer) effectiveGOARCH() string {
 		return p.goarch
 	}
 	return runtime.GOARCH
-}
-
-// binaryExt returns the executable extension for the target OS.
-func (p *Packer) binaryExt() string {
-	if p.effectiveGOOS() == "windows" {
-		return ".exe"
-	}
-	return ""
 }

@@ -2,11 +2,14 @@ package filelock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 const pollInterval = 100 * time.Millisecond
@@ -114,3 +117,26 @@ func (l *Lock) Held() bool {
 
 // Path returns the path of the lock file.
 func (l *Lock) Path() string { return l.path }
+
+// tryLock takes an exclusive LockFileEx lock on file without blocking. It reports
+// false, and no error, when another handle legitimately holds the lock.
+func tryLock(file *os.File) (bool, error) {
+	var overlapped windows.Overlapped
+	err := windows.LockFileEx(
+		windows.Handle(file.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+		0, 1, 0, &overlapped,
+	)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+		return false, nil
+	}
+	return false, err
+}
+
+func unlock(file *os.File) error {
+	var overlapped windows.Overlapped
+	return windows.UnlockFileEx(windows.Handle(file.Fd()), 0, 1, 0, &overlapped)
+}
