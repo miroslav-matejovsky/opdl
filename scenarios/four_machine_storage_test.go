@@ -27,6 +27,24 @@ import (
 // The scenario asserts the resolved topology, then removes a storage machine and
 // requires the site to keep accepting and projecting events, then brings it back
 // onto its own journal storage and requires it to rejoin with the same state.
+// KNOWN FLAKE. This scenario fails intermittently at the step below where a
+// surviving storage machine must confirm after node-a is stopped. Measured in
+// isolation, with no parallel load: 1 failure in 6 runs before the parallel
+// work, 3 in 7 after. That difference is not distinguishable from noise at
+// those sample sizes, and the flake reproduces with the suite fully serial, so
+// it is not caused by concurrency.
+//
+// The observed shape: node-d loses its NATS connection, reconnects to a
+// surviving server, resets its projector and durable handler, and recovers.
+// node-c is connected to its own embedded server, so it never sees a
+// disconnect, never takes that reset path, and its event stream goes silent
+// after startup. It then does not confirm inside the 60s harness timeout.
+//
+// That points at durable consumer recovery after a peer loss rather than at
+// anything in the harness. Diagnosing it means reading platform code, which is
+// outside what has been done here. Do not raise apiWaitTimeout to hide it:
+// that bound is shared by every scenario and is what makes the others fail
+// fast.
 func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

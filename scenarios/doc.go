@@ -152,6 +152,11 @@
 // budget rather than blocking on a limit it can never satisfy, so a four-machine
 // scenario still runs on a two-core host. It simply runs alone.
 //
+// TestFourMachineStorageTopologyAndFailure is a known intermittent failure. It
+// predates this concurrency work and reproduces with the suite fully serial, so
+// it is not a parallelism defect. Its own comment records what was measured and
+// what the evidence points at.
+//
 // # Supporting utilities
 //
 // The harness sits on generic primitives in the utils/ tree to keep scenario code
