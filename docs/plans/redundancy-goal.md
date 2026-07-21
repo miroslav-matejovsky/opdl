@@ -5,7 +5,7 @@ The platform uses a Fixed-Role Primary/Standby availability architecture.
 Two predefined platform processes run on every machine:
 
 - Primary Instance
-- Standby Instance
+- Standby Instance or Hot Standby Instance
 
 These roles are static, intentional, and operationally well-known. This is not a leader-election architecture, distributed consensus system, quorum-based system, or peer-to-peer ownership model. The instances are not equal participants competing for ownership.
 
@@ -15,7 +15,7 @@ Roles and runtime state are treated as separate concepts.
 
 Roles:
 - Primary Instance
-- Standby Instance
+- Standby or Hot Standby Instance
 
 Runtime States:
 - Active
