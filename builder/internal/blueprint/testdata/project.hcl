@@ -18,10 +18,6 @@ project "customer-a" {
       # Both platform blocks are mandatory. This machine opts out of a local
       # standby process; the others below opt in.
       platform {
-        winservice {
-          name = "sensor-node"
-          ....
-        }
         nats {
           client_port  = 4222
           cluster_port = 6222
@@ -29,10 +25,6 @@ project "customer-a" {
 
         standby {
           disabled = true
-          winservice {
-          name = "sensor-node"
-          ....
-        }
         }
       }
     }
