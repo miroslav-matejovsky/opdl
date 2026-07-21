@@ -41,7 +41,7 @@ type site struct {
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
-	role       redundancy.ProcessRole
+	role       redundancy.InstanceRole
 	observer   *operations.Recorder
 
 	// projector is the node-wide ordered consumer: one loop, from the first
@@ -88,7 +88,7 @@ type service struct {
 // opens no durable handler, publishes no readiness, and binds no listener, so it
 // follows the site's history without producing a decision or holding an
 // active-only capability.
-func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.ProcessRole) (*site, error) {
+func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
 	observer := operations.FromContext(ctx)
 	openedAt := time.Now()
 	observer.Emit("platform.site_opening", operations.LevelInfo, "platform.site", "site runtime opening", map[string]any{"active": active})

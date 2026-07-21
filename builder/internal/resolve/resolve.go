@@ -92,8 +92,30 @@ func fence(p *blueprint.Project, site blueprint.Site, machine blueprint.Machine)
 // descriptor states it rather than implying it.
 func slots(machine blueprint.Machine) deployment.Slots {
 	return deployment.Slots{
-		Primary: deployment.Slot{Disabled: false},
-		Standby: deployment.Slot{Disabled: machine.Platform.Standby.Disabled},
+		Primary: deployment.Slot{
+			Disabled: false,
+			Service:  winService(machine, false),
+		},
+		Standby: deployment.Slot{
+			Disabled: machine.Platform.Standby.Disabled,
+			Service:  winService(machine, true),
+		},
+	}
+}
+
+// winService resolves one instance's Windows Service identity, or nil when that
+// instance is not deployed. The blueprint authors the name; the builder fills the
+// display name default so the descriptor states a complete identity rather than
+// leaving a consumer to guess one.
+func winService(machine blueprint.Machine, standby bool) *deployment.WinService {
+	authored := machine.WinServiceIdentity(standby)
+	if authored == nil {
+		return nil
+	}
+	return &deployment.WinService{
+		Name:        authored.Name,
+		DisplayName: authored.DisplayName,
+		Description: authored.Description,
 	}
 }
 

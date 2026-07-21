@@ -39,7 +39,7 @@ const (
 //
 // Every packaged launch has an explicit role. A machine that opted out rejects
 // standby.
-func resolveRole(instance string, hasStandby bool) (redundancy.ProcessRole, error) {
+func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, error) {
 	if instance == "" {
 		return "", fmt.Errorf("-instance primary|standby is required")
 	}
@@ -58,7 +58,7 @@ func resolveRole(instance string, hasStandby bool) (redundancy.ProcessRole, erro
 // The fence makes the primary and standby exclusive. Its holder owns every
 // active-only capability; the other process follows the journal. A machine that
 // opted out of warm standby rejects the standby role.
-func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole) (runErr error) {
+func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole) (runErr error) {
 	observer := operations.FromContext(ctx)
 	statusPath := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
 	if err := redundancy.PrepareStatusDir(statusPath); err != nil {
@@ -119,7 +119,7 @@ func emitAcquired(observer *operations.Recorder, fence *redundancy.Fence, acquir
 
 // runActive brings this node's Event Fabric up to readiness and serves the public
 // API until signaled or until its projection falls too far behind the journal.
-func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string) error {
+func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string) error {
 	observer := operations.FromContext(ctx)
 	site, err := open(ctx, descriptor, cfg, true, role)
 	if err != nil {
@@ -194,7 +194,7 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 
 // runStandby keeps a client-only projection while independently waiting for the
 // fence. Fence acquisition cancels the client composition and starts activation.
-func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string, fence *redundancy.Fence) error {
+func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, fence *redundancy.Fence) error {
 	waitCtx, stopWaiting := context.WithCancel(ctx)
 	defer stopWaiting()
 	standbyCtx, stopStandby := context.WithCancel(waitCtx)
@@ -248,7 +248,7 @@ type standbyOpenResult struct {
 	site *site
 }
 
-func openWaitingStandby(ctx, standbyCtx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string, fence *redundancy.Fence) (standbyOpenResult, error) {
+func openWaitingStandby(ctx, standbyCtx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, fence *redundancy.Fence) (standbyOpenResult, error) {
 	observer := operations.FromContext(ctx)
 	attempt := 0
 	for !fence.Held() {
@@ -282,7 +282,7 @@ type fenceResult struct {
 	err      error
 }
 
-func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundancy.ProcessRole, statusPath string, standby *site, fence *redundancy.Fence, fenceDone <-chan fenceResult, stopWaiting context.CancelFunc) (redundancy.Acquisition, error) {
+func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundancy.InstanceRole, statusPath string, standby *site, fence *redundancy.Fence, fenceDone <-chan fenceResult, stopWaiting context.CancelFunc) (redundancy.Acquisition, error) {
 	var statusDone <-chan error
 	var stopStatus context.CancelFunc
 	if standby != nil && !fence.Held() {
@@ -321,7 +321,7 @@ func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundanc
 	return redundancy.Acquisition{}, errors.Join(result.err, statusErr, closeErr)
 }
 
-func runFencedActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, statusPath string, fence *redundancy.Fence, kind activationKind) error {
+func runFencedActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, fence *redundancy.Fence, kind activationKind) error {
 	observer := operations.FromContext(ctx)
 	started := time.Now()
 	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
@@ -347,7 +347,7 @@ type statusFabric interface {
 // startStatus writes the initial status synchronously, then periodically writes
 // live state until ctx ends. A write failure stops the runtime because deployment
 // tooling must not act on a stale file during handover or machine shutdown.
-func startStatus(ctx context.Context, fabric statusFabric, role redundancy.ProcessRole, state redundancy.State, statusPath string, lagBound time.Duration, onLagExceeded, onFailure func()) (<-chan error, error) {
+func startStatus(ctx context.Context, fabric statusFabric, role redundancy.InstanceRole, state redundancy.State, statusPath string, lagBound time.Duration, onLagExceeded, onFailure func()) (<-chan error, error) {
 	var lag redundancy.LagState
 	write := func() error {
 		now := time.Now()
@@ -397,7 +397,7 @@ func startStatus(ctx context.Context, fabric statusFabric, role redundancy.Proce
 }
 
 // writeFailedStatus records why a process stopped.
-func writeFailedStatus(statusPath string, role redundancy.ProcessRole, cause error) error {
+func writeFailedStatus(statusPath string, role redundancy.InstanceRole, cause error) error {
 	return redundancy.Status{
 		Role:      role,
 		State:     redundancy.StateFailed,
@@ -407,7 +407,7 @@ func writeFailedStatus(statusPath string, role redundancy.ProcessRole, cause err
 	}.Write(statusPath)
 }
 
-func writeTransitionStatus(statusPath string, role redundancy.ProcessRole, state redundancy.State) error {
+func writeTransitionStatus(statusPath string, role redundancy.InstanceRole, state redundancy.State) error {
 	return redundancy.Status{
 		Role:      role,
 		State:     state,
@@ -417,7 +417,7 @@ func writeTransitionStatus(statusPath string, role redundancy.ProcessRole, state
 	}.Write(statusPath)
 }
 
-func writeUnavailableStatus(statusPath string, role redundancy.ProcessRole, cause error) error {
+func writeUnavailableStatus(statusPath string, role redundancy.InstanceRole, cause error) error {
 	return redundancy.Status{
 		Role:      role,
 		State:     redundancy.StateStandby,

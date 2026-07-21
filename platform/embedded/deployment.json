@@ -14,7 +14,11 @@
   },
   "slots": {
     "primary": {
-      "disabled": false
+      "disabled": false,
+      "service": {
+        "name": "opdl-mock-local-mock-primary",
+        "display_name": "OPDL mock local mock (Primary Instance)"
+      }
     },
     "standby": {
       "disabled": true

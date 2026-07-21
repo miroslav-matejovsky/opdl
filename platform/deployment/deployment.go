@@ -158,11 +158,39 @@ type Slots struct {
 	Standby Slot `json:"standby"`
 }
 
-// Slot is one process slot's resolved decision.
+// Service returns one instance's Windows Service identity, or nil when that
+// instance is not deployed.
+func (s Slots) Service(standby bool) *WinService {
+	if standby {
+		return s.Standby.Service
+	}
+	return s.Primary.Service
+}
+
+// WinService is one instance's resolved Windows Service identity.
+//
+// It is a declaration carried for whoever installs the services, not a
+// capability. The platform has no Service Control Manager integration and
+// installs, starts, and stops nothing. The runtime reads it only to print which
+// service should be running this instance, so an operator can match a process to
+// an entry in the services list.
+type WinService struct {
+	// Name is the Windows Service name.
+	Name string `json:"name"`
+	// DisplayName is the name shown in the services list.
+	DisplayName string `json:"display_name"`
+	// Description is the optional description shown in the services list.
+	Description string `json:"description,omitempty"`
+}
+
+// Slot is one instance's resolved decision.
 type Slot struct {
 	// Disabled reports that the slot's process is not deployed. It is always
 	// false for the primary.
 	Disabled bool `json:"disabled"`
+	// Service is the instance's Windows Service identity, present exactly when the
+	// instance is deployed.
+	Service *WinService `json:"service,omitempty"`
 }
 
 // EventFabric is this machine's resolved view of the site's Event Fabric: the

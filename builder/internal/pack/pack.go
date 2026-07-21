@@ -153,12 +153,12 @@ func (p *Packer) compile(ctx context.Context, out, overlayPath string) error {
 // writeMetadata writes the manifest, release metadata, and checksums file.
 func (p *Packer) writeMetadata(pkgDir string, d deployment.Descriptor, binary, sum string) error {
 	now := time.Now().UTC()
-	primary, standby := launches(!d.Slots.Standby.Disabled)
+	primary, standby := launches(d.Slots)
 	man := Manifest{
 		Project:     d.Project,
 		Site:        d.Site,
 		Machine:     d.Machine,
-		Role:        d.Role,
+		MachineRole: d.Role,
 		Platform:    d.Platform,
 		Binary:      binary,
 		Services:    d.Services,

@@ -20,8 +20,14 @@ func validDescriptor() deployment.Descriptor {
 		Services:    []string{"sensor-services"},
 		Features:    deployment.Features{Chaos: true},
 		Slots: deployment.Slots{
-			Primary: deployment.Slot{Disabled: false},
-			Standby: deployment.Slot{Disabled: false},
+			Primary: deployment.Slot{
+				Disabled: false,
+				Service:  &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
+			},
+			Standby: deployment.Slot{
+				Disabled: false,
+				Service:  &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
+			},
 		},
 		Fence: deployment.Fence{Object: "opdl.fence.0123456789abcdef0123456789abcdef"},
 		EventFabric: deployment.EventFabric{
@@ -58,6 +64,26 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"missing fence object",
 			func(d *deployment.Descriptor) { d.Fence.Object = "" },
 			"fence object is required",
+		},
+		{
+			"missing primary service",
+			func(d *deployment.Descriptor) { d.Slots.Primary.Service = nil },
+			"slots.primary.service is required",
+		},
+		{
+			"missing standby service while deployed",
+			func(d *deployment.Descriptor) { d.Slots.Standby.Service = nil },
+			"slots.standby.service is required",
+		},
+		{
+			"standby service while disabled",
+			func(d *deployment.Descriptor) { d.Slots.Standby.Disabled = true },
+			"standby is disabled",
+		},
+		{
+			"instances share a service name",
+			func(d *deployment.Descriptor) { d.Slots.Standby.Service.Name = d.Slots.Primary.Service.Name },
+			"share service name",
 		},
 		{
 			"missing project",

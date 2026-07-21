@@ -381,7 +381,7 @@ func TestResolveRole(t *testing.T) {
 	cases := map[string]struct {
 		instance    string
 		warmStandby bool
-		want        redundancy.ProcessRole
+		want        redundancy.InstanceRole
 		wantErr     string
 	}{
 		"opt-out requires a role":      {instance: "", warmStandby: false, wantErr: "-instance primary|standby is required"},
@@ -390,7 +390,7 @@ func TestResolveRole(t *testing.T) {
 		"warm standby requires a role": {instance: "", warmStandby: true, wantErr: "-instance primary|standby is required"},
 		"warm standby accepts primary": {instance: "primary", warmStandby: true, want: redundancy.RolePrimary},
 		"warm standby accepts standby": {instance: "standby", warmStandby: true, want: redundancy.RoleStandby},
-		"invalid role":                 {instance: "other", warmStandby: true, wantErr: "invalid process role"},
+		"invalid role":                 {instance: "other", warmStandby: true, wantErr: "invalid instance role"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -563,7 +563,7 @@ func TestPromotionAndPrimaryReclamation(t *testing.T) {
 	require.NoError(t, waitProcess(t, reclaimDone), "the reclaimed primary did not stop cleanly")
 }
 
-func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, state redundancy.State, done <-chan error) {
+func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, state redundancy.State, done <-chan error) {
 	t.Helper()
 	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
 	var processErr error
@@ -581,7 +581,7 @@ func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment
 	require.Falsef(t, exited, "%s exited before reaching %s: %v", role, state, processErr)
 }
 
-func waitForPromotableStandby(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.ProcessRole, done <-chan error) {
+func waitForPromotableStandby(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, done <-chan error) {
 	t.Helper()
 	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
 	var processErr error

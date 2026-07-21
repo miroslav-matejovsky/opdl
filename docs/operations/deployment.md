@@ -40,7 +40,8 @@ Each machine package contains:
 
 - the machine-specific executable;
 - `deployment.json`, the resolved identity and Event Fabric topology;
-- `manifest.json`, including the executable and primary or standby arguments;
+- `manifest.json`, including the executable, the machine role, and each
+  instance's Windows Service name and launch arguments;
 - `release.json` and `checksums.txt` for provenance and integrity.
 
 Verify `checksums.txt` before installation. Install only the package for the
@@ -124,10 +125,31 @@ does not bind its authored cluster port because it has no route peer.
 
 ## 6. Configure services
 
-Read launch arguments from `manifest.json`:
+A machine runs two fixed instances: a **Primary Instance**, always deployed, and a
+**Standby Instance**, deployed when the machine's blueprint enables one. The roles
+are decided at build time and do not change.
 
-- primary: executable plus `-config <path> -instance primary`;
-- standby, when present: executable plus `-config <path> -instance standby`.
+`manifest.json` names both the service and the arguments for each:
+
+| Instance | Service | Arguments |
+| --- | --- | --- |
+| Primary | `primary.service.name`, `primary.service.display_name` | executable plus `-config <path> -instance primary` |
+| Standby, when present | `standby.service.name`, `standby.service.display_name` | executable plus `-config <path> -instance standby` |
+
+Use the stated service names. They come from the machine's blueprint, so the same
+two roles are named identically on every machine, and an operator reading a
+services list can tell which instance is which without decoding arguments. The
+builder refuses a blueprint whose two instances name the same service, because
+they share a host.
+
+The platform installs, starts, and stops no services and has no Service Control
+Manager integration. The names are a declaration for whoever installs them, and a
+stated intention that the platform will run under the Service Control Manager in
+future. Each instance prints its own service name in its startup summary, so a
+running process can be matched to the service that started it.
+
+`manifest.json` also carries `machine_role`, the machine's purpose such as
+`sensor-node`. It is a different axis from the instance role above.
 
 Capture stdout and stderr in the service manager. Preserve stderr as structured
 JSON-capable text. Do not discard it when JSONL retention is enabled; stderr is

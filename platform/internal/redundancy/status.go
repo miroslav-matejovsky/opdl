@@ -21,7 +21,7 @@ import (
 // status after a crash is only historical diagnostics.
 type Status struct {
 	// Role identifies the primary or standby process.
-	Role ProcessRole `json:"role"`
+	Role InstanceRole `json:"role"`
 	// State is the process lifecycle state.
 	State State `json:"state"`
 	// PID is the operating-system process id, so a stale file can be told from a

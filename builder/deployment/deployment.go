@@ -69,12 +69,33 @@ type Slots struct {
 	Standby Slot `json:"standby"`
 }
 
-// Slot is one process slot's resolved decision.
+// Slot is one instance's resolved decision.
 type Slot struct {
 	// Disabled reports that the slot's process is not deployed. It is always
 	// false for the primary: a machine with no primary process would deploy
 	// nothing that can serve.
 	Disabled bool `json:"disabled"`
+	// Service is the instance's Windows Service identity, present exactly when
+	// the instance is deployed. It is carried for whoever installs the services;
+	// the runtime does not read it and the platform manages no services.
+	Service *WinService `json:"service,omitempty"`
+}
+
+// WinService is one instance's resolved Windows Service identity.
+//
+// It is a declaration, not a capability. The platform has no Service Control
+// Manager integration and installs, starts, and stops nothing. These names exist
+// so the two fixed instance roles are recognizable in a services list and named
+// identically on every machine, and so the intent to run under the Service
+// Control Manager is visible in the package rather than only in a plan.
+type WinService struct {
+	// Name is the Windows Service name.
+	Name string `json:"name"`
+	// DisplayName is the name shown in the services list. The builder fills it
+	// from Name when a blueprint does not author one.
+	DisplayName string `json:"display_name"`
+	// Description is the optional description shown in the services list.
+	Description string `json:"description,omitempty"`
 }
 
 // EventFabric is this machine's resolved view of the site's Event Fabric: the
@@ -166,7 +187,40 @@ func (d Descriptor) Validate() error {
 	if strings.TrimSpace(d.Fence.Object) == "" {
 		return fmt.Errorf("fence object is required")
 	}
+	if err := d.validateSlotServices(); err != nil {
+		return err
+	}
 	return d.validateEventFabric()
+}
+
+// validateSlotServices checks each instance's Windows Service identity is
+// present exactly when that instance is deployed, and that the two differ.
+//
+// The two instances run on one host, so identical names are the one service
+// collision Windows cannot refuse at install time for us.
+func (d Descriptor) validateSlotServices() error {
+	if d.Slots.Primary.Service == nil {
+		return fmt.Errorf("slots.primary.service is required")
+	}
+	if strings.TrimSpace(d.Slots.Primary.Service.Name) == "" {
+		return fmt.Errorf("slots.primary.service.name is required")
+	}
+	if d.Slots.Standby.Disabled {
+		if d.Slots.Standby.Service != nil {
+			return fmt.Errorf("slots.standby.service is set but the standby is disabled")
+		}
+		return nil
+	}
+	if d.Slots.Standby.Service == nil {
+		return fmt.Errorf("slots.standby.service is required when the standby is deployed")
+	}
+	if strings.TrimSpace(d.Slots.Standby.Service.Name) == "" {
+		return fmt.Errorf("slots.standby.service.name is required")
+	}
+	if d.Slots.Primary.Service.Name == d.Slots.Standby.Service.Name {
+		return fmt.Errorf("the primary and standby instances share service name %q", d.Slots.Primary.Service.Name)
+	}
+	return nil
 }
 
 // validateEventFabric checks the resolved Event Fabric topology is one this

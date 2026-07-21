@@ -299,13 +299,20 @@ func machineBinary(outDir, project, machine string) string {
 	return filepath.Join(outDir, project, scenarioSite, machine, machine+".exe")
 }
 
+type winService struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
 type launch struct {
-	Args []string `json:"args"`
+	Service winService `json:"service"`
+	Args    []string   `json:"args"`
 }
 
 type packageManifest struct {
-	Primary launch  `json:"primary"`
-	Standby *launch `json:"standby"`
+	MachineRole string  `json:"machine_role"`
+	Primary     launch  `json:"primary"`
+	Standby     *launch `json:"standby"`
 }
 
 func readManifest(t *testing.T, binaryPath string) packageManifest {

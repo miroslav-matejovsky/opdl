@@ -24,11 +24,16 @@ const (
 
 // machine builds a valid machine with the mandatory platform policy filled in.
 func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
+	standby := &blueprint.Standby{Disabled: standbyDisabled}
+	if !standbyDisabled {
+		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
+	}
 	return blueprint.Machine{
 		Name: name, Role: "node", IP: ip, Services: []string{"core-services"},
 		Platform: &blueprint.Platform{
-			Nats:    &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
-			Standby: &blueprint.Standby{Disabled: standbyDisabled},
+			WinService: &blueprint.WinService{Name: name + "-primary"},
+			Nats:       &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
+			Standby:    standby,
 		},
 	}
 }
@@ -63,8 +68,9 @@ func project() *blueprint.Project {
 			IP:       "10.0.1.10",
 			Services: []string{"sensor-services"},
 			Platform: &blueprint.Platform{
-				Nats:    &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
-				Standby: &blueprint.Standby{Disabled: true},
+				WinService: &blueprint.WinService{Name: "sensor-primary"},
+				Nats:       &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
+				Standby:    &blueprint.Standby{Disabled: true},
 			},
 		}},
 	})
@@ -124,6 +130,10 @@ func TestBuildCopiesStandbyDecision(t *testing.T) {
 		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
 			p := project()
 			p.Sites[0].Machines[0].Platform.Standby.Disabled = disabled
+			if !disabled {
+				// A deployed standby must name its own service.
+				p.Sites[0].Machines[0].Platform.Standby.WinService = &blueprint.WinService{Name: "sensor-standby"}
+			}
 			plan, err := resolve.Build(p, "acme-opdl")
 			require.NoError(t, err)
 			require.Equal(t, disabled, plan.Machines[0].Slots.Standby.Disabled)
@@ -379,4 +389,32 @@ func TestBuildFenceNamespaceIsAuthored(t *testing.T) {
 
 	require.True(t, strings.HasPrefix(plan.Machines[0].Fence.Object, "rig-b.fence."))
 	require.NotEqual(t, defaultPlan.Machines[0].Fence.Object, plan.Machines[0].Fence.Object)
+}
+
+// TestBuildCarriesWinServiceIdentities checks the authored service names reach
+// the descriptor, with the display name default filled in, and that an undeployed
+// instance carries none.
+func TestBuildCarriesWinServiceIdentities(t *testing.T) {
+	t.Run("standby deployed", func(t *testing.T) {
+		p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", false)}})
+		plan, err := resolve.Build(p, "acme-opdl")
+		require.NoError(t, err)
+
+		slots := plan.Machines[0].Slots
+		require.NotNil(t, slots.Primary.Service)
+		require.Equal(t, "node-a-primary", slots.Primary.Service.Name)
+		require.Equal(t, "node-a-primary", slots.Primary.Service.DisplayName, "display name defaults to the name")
+		require.NotNil(t, slots.Standby.Service)
+		require.Equal(t, "node-a-standby", slots.Standby.Service.Name)
+	})
+
+	t.Run("standby not deployed", func(t *testing.T) {
+		p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", true)}})
+		plan, err := resolve.Build(p, "acme-opdl")
+		require.NoError(t, err)
+
+		slots := plan.Machines[0].Slots
+		require.NotNil(t, slots.Primary.Service, "a machine always deploys a Primary Instance")
+		require.Nil(t, slots.Standby.Service, "an undeployed instance names no service")
+	})
 }

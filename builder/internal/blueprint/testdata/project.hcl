@@ -18,6 +18,10 @@ project "customer-a" {
       # Both platform blocks are mandatory. This machine opts out of a local
       # standby process; the others below opt in.
       platform {
+        winservice {
+          name = "opdl-customer-a-north-sensor-primary"
+        }
+
         nats {
           client_port  = 4222
           cluster_port = 6222
@@ -34,6 +38,10 @@ project "customer-a" {
       ip       = "10.0.1.11"
       services = ["core-services"]
       platform {
+        winservice {
+          name = "opdl-customer-a-north-local-server-primary"
+        }
+
         nats {
           client_port  = 4222
           cluster_port = 6222
@@ -41,6 +49,10 @@ project "customer-a" {
 
         standby {
           disabled = false
+
+          winservice {
+            name = "opdl-customer-a-north-sensor-standby"
+          }
         }
       }
     }
@@ -52,6 +64,10 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
+        winservice {
+          name = "opdl-customer-a-control-room-master-primary"
+        }
+
         nats {
           client_port  = 4222
           cluster_port = 6222
@@ -59,6 +75,10 @@ project "customer-a" {
 
         standby {
           disabled = false
+
+          winservice {
+            name = "opdl-customer-a-north-local-server-standby"
+          }
         }
       }
     }
@@ -67,6 +87,10 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
+        winservice {
+          name = "opdl-customer-a-control-room-slave-primary"
+        }
+
         nats {
           client_port  = 4222
           cluster_port = 6222
@@ -74,6 +98,10 @@ project "customer-a" {
 
         standby {
           disabled = false
+
+          winservice {
+            name = "opdl-customer-a-control-room-master-standby"
+          }
         }
       }
     }
@@ -82,6 +110,10 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
+        winservice {
+          name = "opdl-customer-a-control-room-integration-primary"
+        }
+
         nats {
           client_port  = 4222
           cluster_port = 6222
@@ -89,6 +121,10 @@ project "customer-a" {
 
         standby {
           disabled = false
+
+          winservice {
+            name = "opdl-customer-a-control-room-slave-standby"
+          }
         }
       }
     }

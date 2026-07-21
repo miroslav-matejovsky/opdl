@@ -13,6 +13,7 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
 
 // Run starts the platform runtime with the given command-line arguments. It
@@ -44,7 +45,14 @@ func Run(args []string) (runErr error) {
 	}
 	defer func() { runErr = errors.Join(runErr, recorder.Close()) }()
 	fmt.Println(cfg.Summary())
-	fmt.Printf("    instance     role=%s standby=%t\n", role, !descriptor.Slots.Standby.Disabled)
+	// The service name lets an operator match this process to an entry in the
+	// services list. The platform manages no services; it only reports which one
+	// the package says should be running this instance.
+	serviceName := "(none stated)"
+	if service := descriptor.Slots.Service(role == redundancy.RoleStandby); service != nil {
+		serviceName = service.Name
+	}
+	fmt.Printf("    instance     role=%s standby=%t service=%s\n", role, !descriptor.Slots.Standby.Disabled, serviceName)
 	recorder.Emit("platform.process_started", operations.LevelInfo, "platform", "platform process started", map[string]any{
 		"operations_file": recorder.Path(),
 		"standby_enabled": !descriptor.Slots.Standby.Disabled,

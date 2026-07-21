@@ -12,7 +12,7 @@ func TestParseRole(t *testing.T) {
 
 	cases := map[string]struct {
 		in      string
-		want    redundancy.ProcessRole
+		want    redundancy.InstanceRole
 		wantErr bool
 	}{
 		"primary":   {in: "primary", want: redundancy.RolePrimary},
@@ -42,8 +42,8 @@ func TestRoleStringAndValid(t *testing.T) {
 	require.Equal(t, "standby", redundancy.RoleStandby.String())
 	require.True(t, redundancy.RolePrimary.Valid())
 	require.True(t, redundancy.RoleStandby.Valid())
-	require.False(t, redundancy.ProcessRole("other").Valid())
-	require.False(t, redundancy.ProcessRole("").Valid())
+	require.False(t, redundancy.InstanceRole("other").Valid())
+	require.False(t, redundancy.InstanceRole("").Valid())
 }
 
 func TestOperationalName(t *testing.T) {

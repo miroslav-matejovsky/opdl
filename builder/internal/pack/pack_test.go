@@ -67,15 +67,35 @@ func TestWriteJSONRoundTrip(t *testing.T) {
 }
 
 func TestLaunches(t *testing.T) {
+	primaryService := &deployment.WinService{Name: "node-primary", DisplayName: "node primary"}
+	standbyService := &deployment.WinService{Name: "node-standby", DisplayName: "node standby"}
+
 	t.Run("standby enabled", func(t *testing.T) {
-		primary, standby := launches(true)
-		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
-		require.Equal(t, &Launch{Args: []string{"-instance", "standby"}}, standby)
+		primary, standby := launches(deployment.Slots{
+			Primary: deployment.Slot{Service: primaryService},
+			Standby: deployment.Slot{Disabled: false, Service: standbyService},
+		})
+		require.Equal(t, Launch{
+			Service: WinService{Name: "node-primary", DisplayName: "node primary"},
+			Args:    []string{"-instance", "primary"},
+		}, primary)
+		require.Equal(t, &Launch{
+			Service: WinService{Name: "node-standby", DisplayName: "node standby"},
+			Args:    []string{"-instance", "standby"},
+		}, standby)
 	})
 
+	// A machine that deploys no Standby Instance ships no standby launch, so
+	// nothing names a service for an instance that will never run.
 	t.Run("standby disabled", func(t *testing.T) {
-		primary, standby := launches(false)
-		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
+		primary, standby := launches(deployment.Slots{
+			Primary: deployment.Slot{Service: primaryService},
+			Standby: deployment.Slot{Disabled: true},
+		})
+		require.Equal(t, Launch{
+			Service: WinService{Name: "node-primary", DisplayName: "node primary"},
+			Args:    []string{"-instance", "primary"},
+		}, primary)
 		require.Nil(t, standby)
 	})
 }

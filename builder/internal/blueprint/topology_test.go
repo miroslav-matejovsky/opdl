@@ -23,8 +23,12 @@ func validProject() *blueprint.Project {
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
 				Platform: &blueprint.Platform{
-					Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
-					Standby: &blueprint.Standby{Disabled: false},
+					WinService: &blueprint.WinService{Name: "primary"},
+					Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+					Standby: &blueprint.Standby{
+						Disabled:   false,
+						WinService: &blueprint.WinService{Name: "standby"},
+					},
 				},
 			}},
 		}},
@@ -93,8 +97,12 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 			IP:       "10.0.1.12",
 			Services: []string{"sensor-services"},
 			Platform: &blueprint.Platform{
-				Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
-				Standby: &blueprint.Standby{Disabled: false},
+				WinService: &blueprint.WinService{Name: "primary"},
+				Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+				Standby: &blueprint.Standby{
+					Disabled:   false,
+					WinService: &blueprint.WinService{Name: "standby"},
+				},
 			},
 		}},
 	})
@@ -113,8 +121,12 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 			IP:       "10.0.1.10",
 			Services: []string{"core-services"},
 			Platform: &blueprint.Platform{
-				Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
-				Standby: &blueprint.Standby{Disabled: false},
+				WinService: &blueprint.WinService{Name: "primary"},
+				Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+				Standby: &blueprint.Standby{
+					Disabled:   false,
+					WinService: &blueprint.WinService{Name: "standby"},
+				},
 			},
 		})
 		require.ErrorContains(t, p.Validate(), `machines "sensor" and "gateway" share ip "10.0.1.10"`)
@@ -130,8 +142,12 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
 				Platform: &blueprint.Platform{
-					Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
-					Standby: &blueprint.Standby{Disabled: false},
+					WinService: &blueprint.WinService{Name: "primary"},
+					Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+					Standby: &blueprint.Standby{
+						Disabled:   false,
+						WinService: &blueprint.WinService{Name: "standby"},
+					},
 				},
 			}},
 		})
@@ -355,12 +371,18 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			      platform {
+			        winservice {
+			          name = "primary"
+			        }
 			        nats {
 			          client_port  = 4222
 			          cluster_port = 6222
 			        }
 			        standby {
 			          disabled = false
+			          winservice {
+			            name = "standby"
+			          }
 			        }
 			      }
 			    }
@@ -371,12 +393,18 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.11"
 			      services = ["core-services"]
 			      platform {
+			        winservice {
+			          name = "primary"
+			        }
 			        nats {
 			          client_port  = 4222
 			          cluster_port = 6222
 			        }
 			        standby {
 			          disabled = false
+			          winservice {
+			            name = "standby"
+			          }
 			        }
 			      }
 			    }
@@ -461,4 +489,79 @@ func TestProjectValidateFenceFailures(t *testing.T) {
 			require.ErrorContains(t, p.Validate(), test.errText)
 		})
 	}
+}
+
+// TestMachineWinServiceIsRequiredForEveryDeployedInstance checks each deployed
+// instance names its Windows Service, and only a deployed instance does.
+func TestMachineWinServiceIsRequiredForEveryDeployedInstance(t *testing.T) {
+	t.Run("primary block is required", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].Machines[0].Platform.WinService = nil
+		require.ErrorContains(t, p.Validate(), "platform.winservice block is required")
+	})
+
+	t.Run("standby block is required when deployed", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].Machines[0].Platform.Standby.WinService = nil
+		require.ErrorContains(t, p.Validate(), "platform.standby.winservice block is required")
+	})
+
+	// Naming a service for an instance the machine does not run states a decision
+	// that can never take effect, and a reader could not tell it from one that does.
+	t.Run("standby block is rejected when not deployed", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].Machines[0].Platform.Standby.Disabled = true
+		require.ErrorContains(t, p.Validate(), "standby is disabled")
+	})
+
+	t.Run("disabled standby needs no service", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].Machines[0].Platform.Standby.Disabled = true
+		p.Sites[0].Machines[0].Platform.Standby.WinService = nil
+		require.NoError(t, p.Validate())
+	})
+}
+
+// TestMachineWinServiceNamesMustDiffer is the one service-name collision Windows
+// cannot refuse for us: the two instances share a host.
+func TestMachineWinServiceNamesMustDiffer(t *testing.T) {
+	p := validProject()
+	shared := p.Sites[0].Machines[0].Platform.WinService.Name
+	p.Sites[0].Machines[0].Platform.Standby.WinService.Name = shared
+	require.ErrorContains(t, p.Validate(), "must differ")
+}
+
+func TestProjectValidateWinServiceFailures(t *testing.T) {
+	tests := map[string]struct {
+		name    string
+		errText string
+	}{
+		"blank":     {name: "   ", errText: "name is required"},
+		"padded":    {name: " svc ", errText: "leading or trailing whitespace"},
+		"backslash": {name: `svc\a`, errText: "slash or backslash"},
+		"slash":     {name: "svc/a", errText: "slash or backslash"},
+		"too long":  {name: string(make([]byte, 257)), errText: "longer than"},
+	}
+	for label, test := range tests {
+		t.Run(label, func(t *testing.T) {
+			p := validProject()
+			p.Sites[0].Machines[0].Platform.WinService.Name = test.name
+			require.ErrorContains(t, p.Validate(), test.errText)
+		})
+	}
+}
+
+// TestWinServiceIdentityFillsDisplayNameDefault checks the builder resolves a
+// complete identity rather than leaving a consumer to invent a display name.
+func TestWinServiceIdentityFillsDisplayNameDefault(t *testing.T) {
+	p := validProject()
+	machine := p.Sites[0].Machines[0]
+	machine.Platform.WinService.DisplayName = ""
+
+	primary := machine.WinServiceIdentity(false)
+	require.NotNil(t, primary)
+	require.Equal(t, primary.Name, primary.DisplayName)
+
+	machine.Platform.Standby.Disabled = true
+	require.Nil(t, machine.WinServiceIdentity(true), "an undeployed instance has no service")
 }

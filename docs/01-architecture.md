@@ -108,6 +108,11 @@ blueprint, and everything else is a consequence of the site:
 
 ```hcl
 platform {
+  winservice {
+    name         = "opdl-customer-a-north-local-server-primary"
+    display_name = "OPDL customer-a north local-server (Primary Instance)"
+  }
+
   nats {
     client_port  = 4222
     cluster_port = 6222
@@ -115,9 +120,17 @@ platform {
 
   standby {
     disabled = false
+
+    winservice {
+      name         = "opdl-customer-a-north-local-server-standby"
+      display_name = "OPDL customer-a north local-server (Standby Instance)"
+    }
   }
 }
 ```
+
+The `winservice` blocks name the Windows Service that runs each of the machine's
+two fixed instances. See the fixed-role model below.
 
 The builder joins each port with `machine.ip` and resolves the site's server and
 route lists into the deployment descriptor. Those lists are never authored. A
@@ -339,6 +352,29 @@ answers. Local projections are memory-only and are not snapshotted; replay cost
 has not yet justified it.
 
 ## Local warm standby
+
+### Fixed instance roles
+
+A machine runs two instances with fixed roles: a **Primary Instance**, always
+deployed, and a **Standby Instance**, deployed when the machine's blueprint
+enables one. The role is decided at build time from the blueprint, carried in the
+package, and named in the Windows Service that runs the process. It is not
+assigned at runtime, negotiated, or exchanged.
+
+A role is not a state. A Standby Instance that takes over does not become the
+Primary Instance: it runs active capabilities until ownership returns. The status
+file carries both axes, `role` and `state`, and the combinations that differ are
+the interesting ones, `standby`/`active` most of all.
+
+Each instance's Windows Service name is authored in the blueprint's `winservice`
+blocks and carried into `manifest.json`, so the same two roles are named
+identically on every machine. The builder rejects a machine whose two instances
+name the same service, since they share a host. The platform installs and manages
+no services and has no Service Control Manager integration; the names are a
+declaration for whoever installs them, and each instance prints its own at
+startup.
+
+### Ownership
 
 OPDL can run a preferred primary and an optional standby for one machine. The
 fence owner runs active capabilities; the other process maintains a warm local

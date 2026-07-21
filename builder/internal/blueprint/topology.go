@@ -64,6 +64,11 @@ type Machine struct {
 // so redundancy and the Event Fabric's ports are always a stated decision rather
 // than an inherited default.
 type Platform struct {
+	// WinService is the Primary Instance's Windows Service identity. It is
+	// authored at platform level rather than inside a primary block because a
+	// machine always deploys a Primary Instance; the Standby Instance is the
+	// optional one, so its service is authored inside standby.
+	WinService *WinService `hcl:"winservice,block"`
 	// Nats is the machine's Event Fabric NATS port policy. It is machine-level:
 	// whichever process holds the machine fence binds these ports, so the primary
 	// and its standby never own separate endpoints.
@@ -73,6 +78,46 @@ type Platform struct {
 	// Fence is the machine's optional local ownership policy. An omitted block
 	// leaves the namespace at its default.
 	Fence *Fence `hcl:"fence,block"`
+}
+
+// maxWinServiceName bounds a Windows Service name. The Service Control Manager
+// limit is 256 characters.
+const maxWinServiceName = 256
+
+// WinService is one instance's Windows Service identity.
+//
+// It states what the service running an instance is called, so the two fixed
+// roles are recognizable in a services list and named the same way on every
+// machine. This is the operator-facing half of the Fixed-Role Primary/Standby
+// model: the role is fixed, and so is the service that runs it.
+//
+// # Declaration only
+//
+// The platform does not install, start, stop, or otherwise manage Windows
+// Services, and it has no Service Control Manager integration. These fields are
+// carried through to the deployment manifest for whoever installs the services,
+// and they are a stated intention that the platform will run under the Service
+// Control Manager in future. Nothing in the runtime reads them.
+//
+// # Why authored rather than derived
+//
+// The machine's ownership object is derived precisely so a blueprint cannot give
+// two machines the same one, because that failure is a silent split brain. A
+// service name is different: names only have to be unique on one host, two
+// machines are two hosts, and a genuine collision is an installation that
+// Windows refuses. The failure is loud, so readability wins and the name is
+// authored.
+//
+// The one collision that is not loud is a machine naming its Primary and Standby
+// Instances the same, since those really do share a host. The builder rejects it.
+type WinService struct {
+	// Name is the Windows Service name, as sc.exe and the Service Control Manager
+	// use it. Required.
+	Name string `hcl:"name"`
+	// DisplayName is the name shown in the services list. It defaults to Name.
+	DisplayName string `hcl:"display_name,optional"`
+	// Description is the optional description shown in the services list.
+	Description string `hcl:"description,optional"`
 }
 
 // DefaultFenceNamespace qualifies a machine's ownership object when a blueprint
@@ -129,6 +174,13 @@ type Standby struct {
 	// fence. It does not add a second NATS endpoint: the two processes are
 	// mutually exclusive owners of the same machine-level ports.
 	Disabled bool `hcl:"disabled"`
+	// WinService is the Standby Instance's Windows Service identity.
+	//
+	// It is required when the standby is deployed and rejected when it is not:
+	// naming a service for an instance the machine does not run states a decision
+	// that can never take effect, and a reader could not tell it from one that
+	// does.
+	WinService *WinService `hcl:"winservice,block"`
 }
 
 // Nats is a machine's Event Fabric NATS port policy. It is authored inside
@@ -262,7 +314,87 @@ func validatePlatform(machine Machine) error {
 	if nats.ClientPort == nats.ClusterPort {
 		return fmt.Errorf("machine %q: platform.nats.client_port and cluster_port must differ, both are %d", machine.Name, nats.ClientPort)
 	}
+	if err := validateWinServices(machine); err != nil {
+		return err
+	}
 	return validateFence(machine)
+}
+
+// validateWinServices checks each deployed instance states a usable Windows
+// Service identity, and only a deployed instance states one.
+func validateWinServices(machine Machine) error {
+	primary := machine.Platform.WinService
+	if primary == nil {
+		return fmt.Errorf("machine %q: platform.winservice block is required; every machine deploys a Primary Instance", machine.Name)
+	}
+	if err := validateWinService(machine.Name, "platform.winservice", primary); err != nil {
+		return err
+	}
+
+	standby := machine.Platform.Standby.WinService
+	if machine.Platform.Standby.Disabled {
+		if standby != nil {
+			return fmt.Errorf("machine %q: platform.standby.winservice is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+		}
+		return nil
+	}
+	if standby == nil {
+		return fmt.Errorf("machine %q: platform.standby.winservice block is required when the standby is deployed", machine.Name)
+	}
+	if err := validateWinService(machine.Name, "platform.standby.winservice", standby); err != nil {
+		return err
+	}
+	// The two instances share one host, so this is the one service-name collision
+	// that cannot be caught at install time by Windows refusing a duplicate.
+	if primary.Name == standby.Name {
+		return fmt.Errorf("machine %q: the Primary and Standby Instances both name their service %q; they run on one host and must differ", machine.Name, primary.Name)
+	}
+	return nil
+}
+
+// validateWinService checks one authored service identity. The rules are the
+// Service Control Manager's, checked at build time so a package cannot ship a
+// name that installation would reject.
+func validateWinService(machineName, block string, service *WinService) error {
+	name := service.Name
+	switch {
+	case strings.TrimSpace(name) == "":
+		return fmt.Errorf("machine %q: %s.name is required", machineName, block)
+	case name != strings.TrimSpace(name):
+		return fmt.Errorf("machine %q: %s.name %q must not have leading or trailing whitespace", machineName, block, name)
+	case len(name) > maxWinServiceName:
+		return fmt.Errorf("machine %q: %s.name %q is longer than %d characters", machineName, block, name, maxWinServiceName)
+	// The Service Control Manager rejects both slashes in a service name.
+	case strings.ContainsAny(name, `/\`):
+		return fmt.Errorf("machine %q: %s.name %q must not contain a slash or backslash", machineName, block, name)
+	}
+	if len(service.DisplayName) > maxWinServiceName {
+		return fmt.Errorf("machine %q: %s.display_name is longer than %d characters", machineName, block, maxWinServiceName)
+	}
+	return nil
+}
+
+// WinServiceIdentity resolves one instance's service identity, filling the
+// display name default. It returns nil when the instance is not deployed.
+func (m Machine) WinServiceIdentity(standby bool) *WinService {
+	if m.Platform == nil {
+		return nil
+	}
+	authored := m.Platform.WinService
+	if standby {
+		if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
+			return nil
+		}
+		authored = m.Platform.Standby.WinService
+	}
+	if authored == nil {
+		return nil
+	}
+	resolved := *authored
+	if strings.TrimSpace(resolved.DisplayName) == "" {
+		resolved.DisplayName = resolved.Name
+	}
+	return &resolved
 }
 
 // validateFence checks an authored ownership namespace is usable in a Windows

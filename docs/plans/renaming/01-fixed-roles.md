@@ -4,6 +4,45 @@
 
 The foundation. Every later stage assumes the role model this stage settles.
 
+## Status: done
+
+`task all` passes. What shipped:
+
+- `redundancy.ProcessRole` is `redundancy.InstanceRole`, in `role.go`. Values
+  `primary` and `standby` are unchanged, as are the `-instance` flag, the status
+  file names, and the `role` on every operational event.
+- `manifest.role` is `manifest.machine_role`, removing the collision with the
+  instance role.
+- A `winservice` block per deployed instance in the blueprint, carried through the
+  descriptor's slots into `manifest.json`.
+- Each instance prints its own service name in its startup summary.
+- `docs/operations/deployment.md` section 6 names the services rather than only
+  their arguments; `docs/01-architecture.md` gains a fixed-instance-roles section.
+
+### Deviation from D1: names are authored, not derived
+
+The plan recommended deriving service names as the ownership object is derived.
+They are authored instead, in `platform.winservice` and
+`platform.standby.winservice`.
+
+The reasoning that makes derivation right for the ownership object does not carry
+over. A duplicate ownership object is a silent split brain, so a blueprint must not
+be able to state one. A duplicate service name is different: names need only be
+unique on one host, two machines are two hosts, and a real collision is an
+installation Windows refuses. The failure is loud, so readability wins.
+
+The one collision that is not loud is a machine naming its own two instances the
+same, because those really do share a host. Both the builder's blueprint
+validation and the descriptor's `Validate` reject it.
+
+### Not implemented, deliberately
+
+No Service Control Manager integration, no installation, no start or stop. The
+blueprint blocks and the manifest fields are a declaration for whoever installs
+the services, and a visible statement that the platform is intended to run under
+the Service Control Manager. Nothing in the runtime acts on them; it only prints
+the name so a process can be matched to a service. D3 answered as recommended.
+
 ## Intent
 
 Each local process has a fixed role. There are exactly two: **Primary Instance**

@@ -18,7 +18,7 @@ func machineDir(runtimeDir, project, environment, site, machine string) string {
 // Status files are operational evidence only. Active ownership comes from the
 // machine fence and from nothing else, so runtimeDir is not part of the ownership
 // decision and may be moved without affecting it.
-func StatusPath(runtimeDir, project, environment, site, machine string, role ProcessRole) string {
+func StatusPath(runtimeDir, project, environment, site, machine string, role InstanceRole) string {
 	return filepath.Join(machineDir(runtimeDir, project, environment, site, machine), "process-"+string(role)+".status")
 }
 
@@ -79,7 +79,7 @@ type Acquisition struct {
 // A Fence is safe for concurrent use.
 type Fence struct {
 	mutex *winmutex.Mutex
-	role  ProcessRole
+	role  InstanceRole
 }
 
 // OpenFence prepares a process contender for the machine fence named by object,
@@ -88,7 +88,7 @@ type Fence struct {
 //
 // object is the same for both processes of a machine, so role is carried only for
 // diagnostics.
-func OpenFence(object string, role ProcessRole) (*Fence, error) {
+func OpenFence(object string, role InstanceRole) (*Fence, error) {
 	if !role.Valid() {
 		return nil, fmt.Errorf("redundancy: open fence: invalid process role %q", role)
 	}
@@ -178,4 +178,4 @@ func (f *Fence) Name() string { return f.mutex.Name() }
 func (f *Fence) Existed() bool { return f.mutex.Existed() }
 
 // Role returns the process role this fence contends for.
-func (f *Fence) Role() ProcessRole { return f.role }
+func (f *Fence) Role() InstanceRole { return f.role }

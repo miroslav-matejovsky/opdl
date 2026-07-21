@@ -25,7 +25,7 @@ func fenceObject(t *testing.T) string {
 	return "opdl-fence-test." + hex.EncodeToString(suffix)
 }
 
-func openFence(t *testing.T, object string, role redundancy.ProcessRole) *redundancy.Fence {
+func openFence(t *testing.T, object string, role redundancy.InstanceRole) *redundancy.Fence {
 	t.Helper()
 	f, err := redundancy.OpenFence(object, role)
 	require.NoError(t, err)
@@ -49,7 +49,7 @@ func TestStatusPathIsPerRole(t *testing.T) {
 func TestOpenFenceRejectsInvalidRole(t *testing.T) {
 	t.Parallel()
 
-	_, err := redundancy.OpenFence(fenceObject(t), redundancy.ProcessRole("other"))
+	_, err := redundancy.OpenFence(fenceObject(t), redundancy.InstanceRole("other"))
 	require.Error(t, err)
 }
 
