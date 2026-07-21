@@ -39,11 +39,11 @@
 // # Where the NATS ports come from
 //
 // A scenario builds from a rendered blueprint, not from checked-in HCL. The
-// harness reserves free client and cluster ports on each machine's own loopback
-// address, renders them into a temporary project.hcl through
-// testdata/project.hcl.tmpl, and builds that. The reservations are held through
-// rendering and building and released immediately before the first process that
-// needs to bind them.
+// harness allocates free client and cluster ports from the fixed 20000 to 32767
+// band, below both operating systems' ephemeral ranges (Linux starts at 32768,
+// Windows at 49152), and never reuses a port within a single test process run.
+// Those ports are rendered into a temporary project.hcl through
+// testdata/project.hcl.tmpl, and built into the deployment packages.
 //
 // This matters because it is the same contract a customer build uses. NATS
 // endpoints are deployment topology: they are authored as ports in the blueprint
@@ -53,9 +53,9 @@
 // standby defect to survive a passing suite.
 //
 // Fixed ports in checked-in HCL would not do either: several machines share one
-// host and a developer's machine may already hold 4222. The machine names,
-// addresses, and standby policies live in the harness's fixture model, which is
-// their single source; only the ports are decided per run.
+// host and a developer's machine may already hold 4222. Allocating from a band
+// below the ephemeral range ensures no collisions with outgoing connections or
+// transient sockets while avoiding reuse across concurrent tests.
 //
 // # Proving what does not listen
 //
@@ -88,13 +88,11 @@
 //
 // # Ports, storage, and who stores what
 //
-// A deployment derives every address from a machine's own IP on fixed ports, and
-// places the journal's storage where site operations decide. A scenario cannot:
-// several machines share one host, and those ports and paths are not the
-// scenario's to take. So the harness allocates distinct ports and a stable repo-local
-// scratch directory per machine and passes them as runtime overrides, which move sockets
-// and storage and nothing else. Which machine a process is stays what it was
-// built with.
+// A deployment places the journal's storage where site operations decide. A scenario
+// cannot: several machines share one host, and those paths are not the scenario's
+// to take. So the harness allocates a stable repo-local scratch directory per
+// machine, which isolates storage and logs and nothing else. Which machine a
+// process is stays what it was built with.
 //
 // This forces the harness to know which machines store the site journal, because
 // only those run a server and the rest are configured as clients of them. It
@@ -127,8 +125,45 @@
 // they test. Warm-standby scenarios additionally use the operating system's
 // process-control signal for planned handover and full shutdown. No runtime
 // promotion endpoint exists. On Windows every launched command is placed in a
-// processes inside the scenario lifecycle even when the test process itself is
-// terminated by a hard timeout.
+// job object that terminates its members when the last handle closes, which keeps
+// child processes inside the scenario lifecycle even when the test process itself
+// is terminated by a hard timeout.
+//
+// # Concurrency and resource budgeting
+//
+// Scenarios run concurrently under a bounded load budget. Each scenario is not a
+// single unit of work: it compiles Go code, then runs between one and four
+// platform processes, each embedding NATS JetStream and writing a journal to disk.
+//
+// Unbounded, running every scenario at once would launch over a dozen platform
+// processes plus concurrent builds, causing contention and timeouts. Instead,
+// the harness enforces two independent limits using the utils/semaphore package:
+//   - Build concurrency: bounded to 2 concurrent builder compilations. Furthermore,
+//     TestMain compiles the builder CLI once into a temporary binary, replacing
+//     repeated go run invocations with fast, contention-free binary executions.
+//   - Machine budget: bounded to max(2, GOMAXPROCS/2) concurrent platform processes.
+//     Each scenario acquires weight equal to the number of machines it deploys
+//     before deploySite runs, and releases it in t.Cleanup. Because deploySite
+//     acquires the weight automatically based on the fixture topology, a scenario
+//     author never needs to manage the budget manually: adding a new scenario only
+//     requires calling t.Parallel().
+//
+// A scenario asking for more machines than the budget has is clamped to the whole
+// budget rather than blocking on a limit it can never satisfy, so a four-machine
+// scenario still runs on a two-core host. It simply runs alone.
+//
+// # Supporting utilities
+//
+// The harness sits on generic primitives in the utils/ tree to keep scenario code
+// focused on domain behavior:
+//   - utils/procrun encapsulates child process execution, graceful shutdown, and
+//     thread-safe output capture without manual exec.Cmd handling.
+//   - utils/semaphore provides weighted concurrency bounding for builds and machines.
+//   - utils/waitfor handles synchronous polling with abort detection, failing fast
+//     if a platform process exits mid-wait.
+//   - utils/logscan parses structured log fields and tokens from process output.
+//   - utils/testnet allocates unique TCP ports from a band the operating system
+//     never assigns on its own, so a port can be published before it is bound.
 //
 // # Where scenario artifacts live
 //

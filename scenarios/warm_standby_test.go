@@ -2,12 +2,13 @@ package scenarios
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/miroslav-matejovsky/opdl/utils/logscan"
 	"github.com/miroslav-matejovsky/opdl/utils/processinfo"
 	"github.com/stretchr/testify/require"
 )
@@ -16,6 +17,7 @@ import (
 // process lifecycle from a built package. Status files are operational evidence;
 // registration assertions stay on the public API.
 func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "manifest-contract")
@@ -35,7 +37,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	standby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
 	standbyStatus := node.waitStatus(t, standby, "standby", true)
 	catchUpTime := standbyStatus.UpdatedAt.Sub(standbyStarted)
-	standbyMemory, err := processinfo.ResidentBytes(ctx, standby.pid())
+	standbyMemory, err := processinfo.ResidentBytes(ctx, standby.PID())
 	require.NoError(t, err)
 
 	aroundFailover := propose(ctx, t, node,
@@ -47,7 +49,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 		t.Fatal("listener observer did not see the active API")
 	}
 	failoverStarted := time.Now()
-	primary.kill()
+	_ = primary.Kill()
 	promotedStatus := node.waitStatus(t, standby, "active", false)
 	promotionTime := promotedStatus.UpdatedAt.Sub(failoverStarted)
 	waitForManagedAPI(ctx, t, node, standby)
@@ -83,7 +85,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	// storage ownership left behind by the first transfer.
 	standbySecond := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
 	node.waitStatus(t, standbySecond, "standby", true)
-	primaryReturned.kill()
+	_ = primaryReturned.Kill()
 	node.waitStatus(t, standbySecond, "active", false)
 	waitForManagedAPI(ctx, t, node, standbySecond)
 
@@ -97,8 +99,8 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	// cancellation of Fence.Acquire is covered by the platform contract tests.
 	cancelledStandby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
 	node.waitStatus(t, cancelledStandby, "standby", true)
-	cancelledStandby.kill()
-	require.True(t, primarySecond.running())
+	_ = cancelledStandby.Kill()
+	require.True(t, primarySecond.Running())
 	waitForManagedAPI(ctx, t, node, primarySecond)
 
 	// Full machine shutdown is primary-service stop followed by standby-service
@@ -108,8 +110,8 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	primarySecond.stopGracefully(t)
 	node.waitStatus(t, shutdownStandby, "active", false)
 	shutdownStandby.stopGracefully(t)
-	require.False(t, primarySecond.running())
-	require.False(t, shutdownStandby.running())
+	require.False(t, primarySecond.Running())
+	require.False(t, shutdownStandby.Running())
 
 	// Every process of this machine has now exited, so its output is complete and
 	// safe to read.
@@ -132,23 +134,23 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 func assertSharedEndpoints(t *testing.T, primary, standby *managedProcess) {
 	t.Helper()
 
-	primaryFabrics := parseFabricConfigs(t, primary.role, primary.logs())
-	standbyFabrics := parseFabricConfigs(t, standby.role, standby.logs())
+	primaryFabrics := parseFabricConfigs(t, primary.role, primary.Logs())
+	standbyFabrics := parseFabricConfigs(t, standby.role, standby.Logs())
 	require.NotEmpty(t, primaryFabrics)
 	require.GreaterOrEqual(t, len(standbyFabrics), 2,
 		"the standby should report a client-only composition and then an active one after promotion:\n%s",
-		standby.logs())
+		standby.Logs())
 
 	active := primaryFabrics[0]
-	require.True(t, active.storage, "the primary owns the machine's storage:\n%s", primary.logs())
-	require.True(t, active.binds, "the primary binds the machine's NATS listener:\n%s", primary.logs())
+	require.True(t, active.storage, "the primary owns the machine's storage:\n%s", primary.Logs())
+	require.True(t, active.binds, "the primary binds the machine's NATS listener:\n%s", primary.Logs())
 	require.NotEmpty(t, active.endpoint)
 
 	// The standby binds nothing while the primary holds the fence.
 	warm := standbyFabrics[0]
-	require.False(t, warm.storage, "the standby must not open the journal store:\n%s", standby.logs())
-	require.False(t, warm.binds, "the standby must bind no NATS listener:\n%s", standby.logs())
-	require.Equal(t, "none", warm.cluster, "the standby must bind no cluster listener:\n%s", standby.logs())
+	require.False(t, warm.storage, "the standby must not open the journal store:\n%s", standby.Logs())
+	require.False(t, warm.binds, "the standby must bind no NATS listener:\n%s", standby.Logs())
+	require.Equal(t, "none", warm.cluster, "the standby must bind no cluster listener:\n%s", standby.Logs())
 
 	// It is nonetheless talking about the same machine endpoint, and reaches the
 	// journal through exactly the server list the active process is serving. This
@@ -164,8 +166,8 @@ func assertSharedEndpoints(t *testing.T, primary, standby *managedProcess) {
 	// After promotion it owns the same endpoints the primary had, so nothing the
 	// rest of the site was told about this machine has changed.
 	promoted := standbyFabrics[len(standbyFabrics)-1]
-	require.True(t, promoted.storage, "the promoted process must own storage:\n%s", standby.logs())
-	require.True(t, promoted.binds, "the promoted process must bind the listener:\n%s", standby.logs())
+	require.True(t, promoted.storage, "the promoted process must own storage:\n%s", standby.Logs())
+	require.True(t, promoted.binds, "the promoted process must bind the listener:\n%s", standby.Logs())
 	require.Equal(t, active.endpoint, promoted.endpoint,
 		"promotion moved the machine's client endpoint")
 	require.Equal(t, active.cluster, promoted.cluster,
@@ -202,18 +204,7 @@ const fabricConfigPrefix = "platform: event fabric configuration "
 func parseFabricConfigs(t *testing.T, role, logs string) []fabricConfig {
 	t.Helper()
 	var configs []fabricConfig
-	for _, line := range strings.Split(logs, "\n") {
-		line = strings.TrimSpace(line)
-		rest, found := strings.CutPrefix(line, fabricConfigPrefix)
-		if !found {
-			continue
-		}
-		fields := map[string]string{}
-		for _, field := range strings.Fields(rest) {
-			key, value, ok := strings.Cut(field, "=")
-			require.Truef(t, ok, "%s printed an unparsable configuration field %q", role, field)
-			fields[key] = value
-		}
+	for _, fields := range logscan.Fields(logs, fabricConfigPrefix) {
 		configs = append(configs, fabricConfig{
 			endpoint: fields["endpoint"],
 			binds:    fields["binds"] == "true",
@@ -230,7 +221,7 @@ func parseFabricConfigs(t *testing.T, role, logs string) []fabricConfig {
 func waitForManagedAPI(ctx context.Context, t *testing.T, machine *machine, process *managedProcess) {
 	t.Helper()
 	client := &http.Client{Timeout: time.Second}
-	require.Eventually(t, func() bool {
+	cond := func() bool {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, machine.url+"/registrations", http.NoBody)
 		if err != nil {
 			return false
@@ -241,7 +232,18 @@ func waitForManagedAPI(ctx context.Context, t *testing.T, machine *machine, proc
 		}
 		_ = response.Body.Close()
 		return response.StatusCode == http.StatusOK
-	}, apiWaitTimeout, apiPollInterval, "%s process did not restore the API:\n%s", process.role, process.logs())
+	}
+	abort := func() (bool, string) {
+		if !process.Running() {
+			out, _ := process.Wait()
+			return true, fmt.Sprintf("%s process exited before restoring the API:\n%s", process.role, out)
+		}
+		return false, ""
+	}
+	diag := diagStringer(func() string {
+		return fmt.Sprintf("%s process did not restore the API:\n%s", process.role, process.Logs())
+	})
+	waitFor(t, process.role+" restoring the API", apiWaitTimeout, apiPollInterval, cond, abort, diag)
 }
 
 // observeListenerGap returns the last-success to first-recovery interval around

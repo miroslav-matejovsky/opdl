@@ -14,6 +14,7 @@ import (
 // registration API, decides a proposal, and reports its configuration. Both are
 // external processes; nothing here imports builder or platform Go code.
 func TestBuildAndRunSingleMachine(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "scenario")

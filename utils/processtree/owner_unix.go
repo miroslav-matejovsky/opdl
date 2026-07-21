@@ -19,14 +19,6 @@ type Owner struct {
 	err     error
 }
 
-// ConfigureGraceful prepares cmd to run in a distinct process group.
-func ConfigureGraceful(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.Setpgid = true
-}
-
 // Start launches cmd in a distinct process group and returns an Owner to manage its tree.
 func Start(cmd *exec.Cmd) (*Owner, error) {
 	if cmd.SysProcAttr == nil {

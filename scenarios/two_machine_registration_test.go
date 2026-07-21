@@ -19,6 +19,7 @@ import (
 // machine it is waiting for. When that machine finally starts, nothing hands it
 // the backlog — it finds the proposal in the retained journal and answers.
 func TestTwoMachineRegistration(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")

@@ -87,15 +87,6 @@ type Owner struct {
 	err     error
 }
 
-// ConfigureGraceful configures cmd so that graceful console control signals
-// can be sent without targeting the parent process group.
-func ConfigureGraceful(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.CreationFlags |= createNewProcessGroup
-}
-
 // Start launches cmd inside an OS process container (job object on Windows) and
 // returns an Owner to manage its lifecycle and containment.
 func Start(command *exec.Cmd) (*Owner, error) {
@@ -107,7 +98,10 @@ func Start(command *exec.Cmd) (*Owner, error) {
 	if command.SysProcAttr == nil {
 		command.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	command.SysProcAttr.CreationFlags |= createSuspended
+	// createNewProcessGroup makes the child its own process group leader, which is
+	// what lets Stop target it with a console control event without hitting the
+	// parent. Unix Start sets Setpgid for the same reason.
+	command.SysProcAttr.CreationFlags |= createSuspended | createNewProcessGroup
 	command.Cancel = owner.Kill
 	if err := command.Start(); err != nil {
 		_ = owner.Close()

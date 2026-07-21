@@ -24,7 +24,12 @@ Push-Location (Join-Path $RepoRoot "scenarios")
 try {
     # Process failover must execute on every resilience gate. Cached results can
     # hide changes to fencing, signals, listeners, or child-process cleanup.
-    gotestsum --format testname -- -count=1 ./...
+    #
+    # The timeout is raised from the 10 minute default because it bounds the whole
+    # binary, not one test. Scenarios run concurrently under a machine budget, so a
+    # loaded or small host serializes them behind the budget rather than failing,
+    # and the default leaves no room for that.
+    gotestsum --format testname -- -count=1 -timeout 30m ./...
     if ($LASTEXITCODE -ne 0) {
         throw "scenarios failed (exit $LASTEXITCODE)"
     }

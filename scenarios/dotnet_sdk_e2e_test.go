@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/miroslav-matejovsky/opdl/utils/procrun"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,6 +44,9 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Skip("dotnet not installed; skipping dotnet SDK end-to-end scenario")
 	}
+	// After the skip, so a host without dotnet reports the skip immediately
+	// instead of parking the test until the serial phase ends.
+	t.Parallel()
 
 	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
@@ -67,15 +71,20 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 		"OPDL_PLATFORM_BASEURL_B="+second.url,
 		"OPDL_CONTROL_DIR="+controlDir,
 	)
-	sdkTest := startProcess(t, command)
+	sdkTest, err := procrun.Start(command)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sdkTest.Kill()
+		_, _ = sdkTest.Wait()
+	})
 
 	// Node B starts only once the SDK test has proven pending behavior.
 	waitForMarker(t, controlDir, pendingObservedMarker, sdkTest, func() string {
-		return diagnose([]*machine{first, second}) + "\n--- dotnet SDK test output so far ---\n" + sdkTest.logs()
+		return diagnose([]*machine{first, second}) + "\n--- dotnet SDK test output so far ---\n" + sdkTest.Logs()
 	})
 	second.start(ctx, t)
 
-	testOut, err := sdkTest.wait()
+	testOut, err := sdkTest.Wait()
 	require.NoErrorf(t, err, "dotnet SDK end-to-end tests failed:\n%s%s",
 		testOut, diagnostics(first, second))
 	// The tests skip without their environment variables, so a run that skipped

@@ -28,6 +28,7 @@ import (
 // requires the site to keep accepting and projecting events, then brings it back
 // onto its own journal storage and requires it to rejoin with the same state.
 func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "four-machine")
@@ -140,8 +141,8 @@ func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 // event stream rather than inferring it from later domain state.
 func waitForConnectionEvent(t *testing.T, m *machine, eventType string, addresses ...string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
-		for _, line := range strings.Split(m.output.String(), "\n") {
+	cond := func() bool {
+		for _, line := range strings.Split(m.logs(), "\n") {
 			if !strings.Contains(line, fmt.Sprintf(`"type":%q`, eventType)) {
 				continue
 			}
@@ -152,8 +153,18 @@ func waitForConnectionEvent(t *testing.T, m *machine, eventType string, addresse
 			}
 		}
 		return false
-	}, apiWaitTimeout, apiPollInterval, "%s never emitted %s for servers %v:%s",
-		m.name, eventType, addresses, diagnostics(m))
+	}
+	abort := func() (bool, string) {
+		if m.exited() {
+			return true, fmt.Sprintf("%s exited before emitting %s:\n%s", m.name, eventType, m.logs())
+		}
+		return false, ""
+	}
+	diag := diagStringer(func() string {
+		return fmt.Sprintf("%s never emitted %s for servers %v:%s",
+			m.name, eventType, addresses, diagnostics(m))
+	})
+	waitFor(t, fmt.Sprintf("%s emitting %s for %v", m.name, eventType, addresses), apiWaitTimeout, apiPollInterval, cond, abort, diag)
 }
 
 // proposeEventually submits a registration until the site takes it.
@@ -173,7 +184,7 @@ func proposeEventually(ctx context.Context, t *testing.T, m *machine, body strin
 	t.Helper()
 	var accepted proposalAccepted
 	var poll lastPoll
-	require.Eventually(t, func() bool {
+	cond := func() bool {
 		result, code, err := submitRegistration(ctx, m, body)
 		poll.record(registration{}, code, err)
 		if err != nil || code != http.StatusAccepted {
@@ -181,9 +192,18 @@ func proposeEventually(ctx context.Context, t *testing.T, m *machine, body strin
 		}
 		accepted = result
 		return true
-	}, apiWaitTimeout, apiPollInterval,
-		"%s never took the proposal after a storage machine was lost; %s%s",
-		m.name, &poll, diagnostics(m))
+	}
+	abort := func() (bool, string) {
+		if m.exited() {
+			return true, fmt.Sprintf("%s exited before taking proposal after storage machine loss:\n%s", m.name, m.logs())
+		}
+		return false, ""
+	}
+	diag := diagStringer(func() string {
+		return fmt.Sprintf("%s never took the proposal after a storage machine was lost; %s%s",
+			m.name, &poll, diagnostics(m))
+	})
+	waitFor(t, m.name+" taking proposal after storage machine loss", apiWaitTimeout, apiPollInterval, cond, abort, diag)
 	require.NotEmpty(t, accepted.ProposalID)
 	return accepted
 }
@@ -192,6 +212,6 @@ func proposeEventually(ctx context.Context, t *testing.T, m *machine, body strin
 // machine reported most recently, without stopping it to read it.
 func lastFabricConfig(t *testing.T, m *machine) fabricConfig {
 	t.Helper()
-	configs := parseFabricConfigs(t, m.name, m.output.String())
+	configs := parseFabricConfigs(t, m.name, m.logs())
 	return configs[len(configs)-1]
 }

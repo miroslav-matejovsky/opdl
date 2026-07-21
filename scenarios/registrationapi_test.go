@@ -1,11 +1,11 @@
 package scenarios
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -102,6 +102,51 @@ func (r registration) instance(t *testing.T, machine string) platformInstance {
 	return platformInstance{}
 }
 
+// getJSON issues a GET and decodes a 200 body into T. A non-200 is returned as
+// a code with no value. Transport failures are returned, never asserted, so
+// this is safe to call from inside a poll.
+func getJSON[T any](ctx context.Context, url string) (value T, code int, err error) {
+	var zero T
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return zero, 0, err
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return zero, 0, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return zero, response.StatusCode, nil
+	}
+	if err := json.NewDecoder(response.Body).Decode(&value); err != nil {
+		return zero, response.StatusCode, err
+	}
+	return value, response.StatusCode, nil
+}
+
+// postJSON is the same for a JSON request body.
+func postJSON[T any](ctx context.Context, url, body string) (value T, code int, err error) {
+	var zero T
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return zero, 0, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return zero, 0, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusAccepted && response.StatusCode != http.StatusOK {
+		return zero, response.StatusCode, nil
+	}
+	if err := json.NewDecoder(response.Body).Decode(&value); err != nil {
+		return zero, response.StatusCode, err
+	}
+	return value, response.StatusCode, nil
+}
+
 // submitRegistration submits a registration request to one machine and reports
 // what came back, including a transport failure as an error rather than as a
 // fatal assertion. The proposal is meaningful only on 202.
@@ -113,48 +158,20 @@ func (r registration) instance(t *testing.T, machine string) platformInstance {
 // so no result is ever sent, the wait silently stops polling, and it burns its
 // whole timeout before reporting "Condition never satisfied" — hiding the single
 // transport error that was the actual failure.
+//
+// Note that stage 6 removed the underlying hazard, since waitfor.Poll runs its
+// condition on the caller's goroutine. Keep the reporting variants anyway: a
+// function that returns an error is the better shape regardless, and the comment
+// explaining the history is worth preserving as a warning.
 func submitRegistration(ctx context.Context, m *machine, body string) (proposalAccepted, int, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, m.url+"/registrations", bytes.NewReader([]byte(body)))
-	if err != nil {
-		return proposalAccepted{}, 0, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return proposalAccepted{}, 0, err
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusAccepted {
-		return proposalAccepted{}, response.StatusCode, nil
-	}
-	var accepted proposalAccepted
-	if err := json.NewDecoder(response.Body).Decode(&accepted); err != nil {
-		return proposalAccepted{}, response.StatusCode, err
-	}
-	return accepted, response.StatusCode, nil
+	return postJSON[proposalAccepted](ctx, m.url+"/registrations", body)
 }
 
 // fetchRegistration returns one machine's view of a proposal, the status code it
 // answered with, and any transport failure. The registration is meaningful only
 // on 200. It reports rather than asserts for the reason submitRegistration does.
 func fetchRegistration(ctx context.Context, m *machine, proposalID string) (registration, int, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, m.url+"/registrations/"+proposalID, http.NoBody)
-	if err != nil {
-		return registration{}, 0, err
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return registration{}, 0, err
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return registration{}, response.StatusCode, nil
-	}
-	var view registration
-	if err := json.NewDecoder(response.Body).Decode(&view); err != nil {
-		return registration{}, response.StatusCode, err
-	}
-	return view, response.StatusCode, nil
+	return getJSON[registration](ctx, m.url+"/registrations/"+proposalID)
 }
 
 // propose submits a registration request and requires the journal to take it,
@@ -181,30 +198,18 @@ func getRegistration(ctx context.Context, t *testing.T, m *machine, proposalID s
 // listRegistrations returns one machine's view of every proposal in the site.
 func listRegistrations(ctx context.Context, t *testing.T, m *machine) []registration {
 	t.Helper()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, m.url+"/registrations", http.NoBody)
+	registrations, code, err := getJSON[[]registration](ctx, m.url+"/registrations")
 	require.NoError(t, err)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-
-	var registrations []registration
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&registrations))
+	require.Equal(t, http.StatusOK, code)
 	return registrations
 }
 
 // listConflicts returns one machine's view of every resolved duplicate claim.
 func listConflicts(ctx context.Context, t *testing.T, m *machine) []conflict {
 	t.Helper()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, m.url+"/registrations/conflicts", http.NoBody)
+	conflicts, code, err := getJSON[[]conflict](ctx, m.url+"/registrations/conflicts")
 	require.NoError(t, err)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-
-	var conflicts []conflict
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&conflicts))
+	require.Equal(t, http.StatusOK, code)
 	return conflicts
 }
 
@@ -217,7 +222,7 @@ func listConflicts(ctx context.Context, t *testing.T, m *machine) []conflict {
 // happened.
 func waitForAPI(ctx context.Context, t *testing.T, m *machine) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	cond := func() bool {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, m.url+"/registrations", http.NoBody)
 		if err != nil {
 			return false
@@ -228,7 +233,17 @@ func waitForAPI(ctx context.Context, t *testing.T, m *machine) {
 		}
 		defer func() { _ = response.Body.Close() }()
 		return response.StatusCode == http.StatusOK
-	}, apiWaitTimeout, apiPollInterval, "%s never served its registration API:\n%s", m.name, m.output)
+	}
+	abort := func() (bool, string) {
+		if m.exited() {
+			return true, fmt.Sprintf("%s exited before serving its registration API:\n%s", m.name, m.logs())
+		}
+		return false, ""
+	}
+	diag := diagStringer(func() string {
+		return fmt.Sprintf("%s never served its registration API:\n%s", m.name, m.logs())
+	})
+	waitFor(t, m.name+" serving registration API", apiWaitTimeout, apiPollInterval, cond, abort, diag)
 }
 
 // waitForRegistrationStatus polls one machine until a proposal reaches want,
@@ -252,13 +267,22 @@ func waitForRegistrationStatus(ctx context.Context, t *testing.T, m *machine, pr
 func waitForRegistration(ctx context.Context, t *testing.T, m *machine, proposalID string, reached func(registration) bool, what string, extra ...fmt.Stringer) registration {
 	t.Helper()
 	var poll lastPoll
-	require.Eventually(t, func() bool {
+	cond := func() bool {
 		view, code, err := fetchRegistration(ctx, m, proposalID)
 		poll.record(view, code, err)
 		return err == nil && code == http.StatusOK && reached(view)
-	}, apiWaitTimeout, apiPollInterval,
-		"%s never reported proposal %s reaching %s; %s%s",
-		m.name, proposalID, what, &poll, appended(extra))
+	}
+	abort := func() (bool, string) {
+		if m.exited() {
+			return true, fmt.Sprintf("%s exited while waiting for proposal %s to reach %s:\n%s", m.name, proposalID, what, m.logs())
+		}
+		return false, ""
+	}
+	diag := diagStringer(func() string {
+		return fmt.Sprintf("%s never reported proposal %s reaching %s; %s%s",
+			m.name, proposalID, what, &poll, appended(extra))
+	})
+	waitFor(t, fmt.Sprintf("proposal %s reaching %s on %s", proposalID, what, m.name), apiWaitTimeout, apiPollInterval, cond, abort, diag)
 	return poll.registration()
 }
 

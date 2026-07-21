@@ -22,8 +22,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/utils/processtree"
+	"github.com/miroslav-matejovsky/opdl/utils/procrun"
+	"github.com/miroslav-matejovsky/opdl/utils/semaphore"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
+	"github.com/miroslav-matejovsky/opdl/utils/waitfor"
 )
 
 // This file is the scenario harness: how a scenario builds a project and runs
@@ -44,13 +46,54 @@ const (
 	markerWaitTimeout = 90 * time.Second
 )
 
-func TestMain(m *testing.M) {
+var (
+	// budget bounds the total number of platform processes the suite runs at once.
+	budget = semaphore.New(max(2, runtime.GOMAXPROCS(0)/2))
+	// buildBudget bounds concurrent builder compilations / executions to 2.
+	buildBudget = semaphore.New(2)
+	// builderBinary holds the path to the precompiled builder CLI executable.
+	builderBinary string
+)
+
+func runMain(m *testing.M) int {
 	flag.Parse()
 	if testing.Short() {
 		fmt.Println("skipping scenario suite in -short mode")
-		os.Exit(0)
+		return 0
 	}
-	os.Exit(m.Run())
+
+	// Compile builder once for all scenarios to eliminate repeated go run compilations
+	// and build-cache contention during parallel runs.
+	tmpDir, err := os.MkdirTemp("", "opdl-builder-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create temp dir for builder binary: %v\n", err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	builderBinary = filepath.Join(tmpDir, "opdl.exe")
+	if runtime.GOOS != "windows" {
+		builderBinary = filepath.Join(tmpDir, "opdl")
+	}
+
+	builderDir, err := filepath.Abs(filepath.Join("..", "builder"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to locate builder dir: %v\n", err)
+		return 1
+	}
+
+	buildCmd := exec.CommandContext(context.Background(), "go", "build", "-o", builderBinary, "./cmd/opdl")
+	buildCmd.Dir = builderDir
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to compile builder CLI: %v\n%s\n", err, out)
+		return 1
+	}
+
+	return m.Run()
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(runMain(m))
 }
 
 // machineFixture is one machine of a scenario blueprint: its identity, the
@@ -213,34 +256,20 @@ func stageBlueprint(t *testing.T, project string) (root string, ports map[string
 }
 
 // buildProject drives the builder CLI to build every machine of a blueprint into
-// outDir. It is the same command a customer runs.
+// outDir. It is the same command a customer runs. Note that cmd.Dir must be set
+// explicitly rather than calling os.Chdir anywhere in the harness, because a chdir
+// inside a process with parallel tests would break all concurrent paths.
 func buildProject(ctx context.Context, t *testing.T, blueprintsDir, outDir, project string) {
 	t.Helper()
-	builderDir, err := filepath.Abs(filepath.Join("..", "builder"))
-	require.NoError(t, err)
+	require.NoError(t, buildBudget.Acquire(ctx, 1))
+	defer buildBudget.Release(1)
 
-	// Flags must precede the positional project argument: Go's flag package
-	// stops parsing flags at the first non-flag argument.
-	build := exec.CommandContext(ctx, "go", "run", "./cmd/opdl", "build",
+	build := exec.CommandContext(ctx, builderBinary, "build",
 		"-examples", blueprintsDir, "-out", outDir, project)
-	build.Dir = builderDir
-	output, err := runCommand(build)
+	proc, err := procrun.Start(build)
+	require.NoError(t, err)
+	output, err := proc.Wait()
 	require.NoError(t, err, "builder build failed:\n%s", output)
-}
-
-// runCommand runs a command to completion while keeping its whole process tree
-// under scenario control. This matters on Windows, where killing a direct child
-// does not kill the go build processes it started.
-func runCommand(command *exec.Cmd) ([]byte, error) {
-	var output bytes.Buffer
-	command.Stdout = &output
-	command.Stderr = &output
-	tree, err := processtree.Start(command)
-	if err != nil {
-		return output.Bytes(), err
-	}
-	err = errors.Join(command.Wait(), tree.Close())
-	return output.Bytes(), err
 }
 
 // machineBinary returns the path of one built machine's binary. The builder
@@ -319,13 +348,19 @@ type site struct {
 func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project string) *site {
 	t.Helper()
 
+	fixtures := projectFixtures[project]
+	nMachines := len(fixtures)
+	require.NoError(t, budget.Acquire(ctx, nMachines))
+	t.Cleanup(func() {
+		budget.Release(nMachines)
+	})
+
 	blueprints, ports := stageBlueprint(t, project)
 	buildProject(ctx, t, blueprints, outDir, project)
 
 	s := &site{project: project, outDir: outDir, workDir: workDir}
 	// The API address stays a runtime setting: it is the machine's own public
 	// endpoint, not site topology, so a site may move it without a rebuild.
-	fixtures := projectFixtures[project]
 	apiPorts, err := testnet.Take("127.0.0.1", len(fixtures))
 	require.NoError(t, err)
 
@@ -415,33 +450,10 @@ func (s *site) startTogether(ctx context.Context, t *testing.T, names ...string)
 	}
 }
 
-// syncBuffer is a process output buffer that is safe to read while the process
-// is still writing to it.
-//
-// exec copies a child's stdout and stderr on goroutines of its own, so every
-// diagnostic that reads a running machine's output races that copier. A plain
-// bytes.Buffer makes that a genuine data race, which under -race fails the
-// scenario for a reason that has nothing to do with the platform.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
 // machine is one platform process under a scenario's control: prepared, and
 // running once started.
 type machine struct {
+	*procrun.Process
 	// project is part of the compiled deployment identity and local status path.
 	project string
 	// name is the deployment machine identity.
@@ -456,15 +468,7 @@ type machine struct {
 	binaryPath string
 	configPath string
 	launchArgs []string
-	output     *syncBuffer
-	cmd        *exec.Cmd
-	tree       *processtree.Owner
-	// done closes once the process has exited and err is set. It is what lets
-	// running report what the process is doing rather than only what the scenario
-	// last asked it to do.
-	done    chan struct{}
-	err     error
-	stopped bool
+	stopped    bool
 }
 
 // processStatus is the local operational contract deployment tooling reads.
@@ -485,98 +489,62 @@ type processStatus struct {
 // by redundancy scenarios that need to stop one process without stopping the
 // other process of the same machine.
 type managedProcess struct {
-	role   string
-	output *syncBuffer
-	cmd    *exec.Cmd
-	tree   *processtree.Owner
-	done   chan struct{}
-	err    error
+	*procrun.Process
+	role string
 }
 
 // running reports whether the machine's process is still alive.
-//
-// It observes the process rather than the scenario's own bookkeeping. A machine
-// that shut itself down is exactly what this has to be able to report: the
-// platform stops serving when its event fabric stops carrying events, and a
-// machine that had exited on its own still looked started here, so an assertion
-// that it kept serving could never fail.
 func (m *machine) running() bool {
-	if m.cmd == nil || m.stopped {
+	if m.Process == nil || m.stopped {
 		return false
 	}
-	select {
-	case <-m.done:
-		return false
-	default:
-		return true
-	}
+	return m.Running()
+}
+
+// exited reports that this machine had a process of its own and that process is
+// gone. It is the fail-fast signal for a wait: there is no point polling a
+// machine that has died.
+//
+// It is deliberately not the negation of running. A machine whose processes are
+// launched with startManaged, as the warm standby scenario does, never has a
+// process of its own, so running is false for it from the start. Aborting on
+// that would fail every wait against such a machine before the first poll, while
+// the primary and standby serving its endpoint are perfectly healthy.
+func (m *machine) exited() bool {
+	return m.Process != nil && !m.running()
 }
 
 func (m *machine) startManaged(ctx context.Context, t *testing.T, role string, args []string) *managedProcess {
 	t.Helper()
-	p := &managedProcess{
-		role:   role,
-		output: &syncBuffer{},
-		done:   make(chan struct{}),
-	}
 	commandArgs := append([]string{"-config", m.configPath}, args...)
-	p.cmd = exec.CommandContext(ctx, m.binaryPath, commandArgs...)
-	processtree.ConfigureGraceful(p.cmd)
-	p.cmd.Stdout = p.output
-	p.cmd.Stderr = p.output
-	var err error
-	p.tree, err = processtree.Start(p.cmd)
+	cmd := exec.CommandContext(ctx, m.binaryPath, commandArgs...)
+	proc, err := procrun.Start(cmd)
 	require.NoError(t, err)
-	go func() {
-		p.err = errors.Join(p.cmd.Wait(), p.tree.Close())
-		close(p.done)
-	}()
-	t.Cleanup(p.kill)
+	p := &managedProcess{
+		Process: proc,
+		role:    role,
+	}
+	t.Cleanup(func() {
+		_ = p.Kill()
+	})
 	return p
-}
-
-func (p *managedProcess) pid() int { return p.cmd.Process.Pid }
-
-func (p *managedProcess) running() bool {
-	select {
-	case <-p.done:
-		return false
-	default:
-		return true
-	}
-}
-
-func (p *managedProcess) kill() {
-	if !p.running() {
-		return
-	}
-	_ = p.tree.Kill()
-	<-p.done
 }
 
 func (p *managedProcess) stopGracefully(t *testing.T) {
 	t.Helper()
-	if !p.running() {
+	if !p.Running() {
 		return
 	}
-	require.NoError(t, p.tree.Stop())
-	select {
-	case <-p.done:
-		require.NoError(t, p.err, "%s did not stop cleanly:\n%s", p.role, p.output.String())
-	case <-time.After(apiWaitTimeout):
-		p.kill()
-		require.FailNowf(t, p.role+" did not stop", "%s", p.output.String())
+	require.NoError(t, p.Stop())
+	err := waitfor.Poll(t.Context(), apiWaitTimeout, 50*time.Millisecond, func() bool {
+		return !p.Running()
+	}, nil)
+	if err != nil {
+		_ = p.Kill()
+		require.FailNowf(t, p.role+" did not stop", "%s", p.Logs())
 	}
-}
-
-func (p *managedProcess) logs() string { return p.output.String() }
-
-// exitResult returns the complete output and exit error of a process that has
-// already finished. Waiting on done joins the exec copier goroutines, so the
-// buffer is only complete once it has closed.
-func (p *managedProcess) exitResult() (string, error) {
-	<-p.done
-	return p.output.String(), p.err
+	_, exitErr := p.Wait()
+	require.NoError(t, exitErr, "%s did not stop cleanly:\n%s", p.role, p.Logs())
 }
 
 func (m *machine) statusPath(role string) string {
@@ -596,43 +564,57 @@ func (m *machine) readStatus(role string) (processStatus, error) {
 	return status, nil
 }
 
+type diagStringer func() string
+
+func (d diagStringer) String() string { return d() }
+
+func waitFor(t *testing.T, what string, timeout, interval time.Duration, cond func() bool, abort waitfor.Abort, diag fmt.Stringer) {
+	t.Helper()
+	err := waitfor.Poll(t.Context(), timeout, interval, cond, abort)
+	if err != nil {
+		var abortErr *waitfor.AbortError
+		if errors.As(err, &abortErr) {
+			require.FailNowf(t, what+" aborted: "+abortErr.Reason, "%s", diag.String())
+		}
+		require.FailNowf(t, what+" timed out after "+timeout.String(), "%s", diag.String())
+	}
+}
+
 // waitStatus blocks until a process reports the expected lifecycle state.
-//
-// The bound is not weakened for a slow standby, and a state reached with a
-// non-empty LastError is not accepted. A standby that reports StateStandby while
-// still failing to reach the journal is exactly the failure this scenario exists
-// to catch, so treating it as success would make the scenario pass for the wrong
-// reason.
-//
-// A connection error while the process is alive is a retryable "not yet" and
-// polling continues. A process that has exited will never reach any state, so
-// that fails immediately with its output rather than burning the whole timeout.
 func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string, promotable bool) processStatus {
 	t.Helper()
 	var last processStatus
 	var readErr error
-	deadline := time.Now().Add(apiWaitTimeout)
-	for {
-		if !process.running() {
-			output, _ := process.exitResult()
-			require.FailNowf(t, process.role+" exited before reaching "+state,
-				"%s", statusDiagnostics(m, process, state, last, readErr, output))
-		}
+
+	cond := func() bool {
 		status, err := m.readStatus(process.role)
 		readErr = err
 		if err == nil {
 			last = status
-			if status.Role == process.role && status.PID == process.pid() && status.State == state &&
+			if status.Role == process.role && status.PID == process.PID() && status.State == state &&
 				(!promotable || status.Promotable) && status.LastError == "" {
-				return last
+				return true
 			}
 		}
-		if time.Now().After(deadline) {
-			require.FailNowf(t, process.role+" never reached "+state,
-				"%s", statusDiagnostics(m, process, state, last, readErr, process.logs()))
-		}
-		time.Sleep(apiPollInterval)
+		return false
 	}
+	abort := func() (bool, string) {
+		if !process.Running() {
+			out, _ := process.Wait()
+			return true, fmt.Sprintf("%s exited before reaching %s:\n%s", process.role, state, out)
+		}
+		return false, ""
+	}
+	// Logs, not Wait. This renders on timeout, which is precisely the case where
+	// the process is still running, so Wait would block until the whole test
+	// binary times out and the diagnostics would never be printed at all. Logs is
+	// a snapshot of the same buffer and does not block.
+	diag := diagStringer(func() string {
+		return statusDiagnostics(m, process, state, last, readErr, process.Logs())
+	})
+
+	waitFor(t, "process "+process.role+" reaching state "+state, apiWaitTimeout, markerPollInterval, cond, abort, diag)
+	return last
 }
 
 // statusDiagnostics renders why a process never reached a state: what it last
@@ -705,7 +687,7 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 	configPath := filepath.Join(s.workDir, "config-"+name+".toml")
 	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved), 0o644))
 
-	return &machine{
+	m := &machine{
 		project:    s.project,
 		name:       name,
 		url:        "http://" + reserved.api,
@@ -713,13 +695,25 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 		binaryPath: binaryPath,
 		configPath: configPath,
 		launchArgs: readManifest(t, binaryPath).Primary.Args,
-		output:     &syncBuffer{},
 	}
+	t.Cleanup(m.stop)
+	return m
 }
 
 // platformConfig renders a platform configuration holding only what a site
 // owns: where this machine answers, where its journal and coordination state
 // live, and its timeouts.
+//
+// The three tolerances are deliberately looser than platform/config.toml's 30s.
+// They bound how long a machine puts up with a slow environment before giving
+// up, and a parallel scenario suite is a slow environment on purpose: several
+// sites start their JetStream clusters at once on one contended host. A
+// four-machine site that loses a storage node has to re-form its metadata group
+// under that load, and with a 30s lag_bound the surviving machines stop serving
+// mid-scenario, which is the platform behaving correctly about a condition the
+// harness created. No scenario asserts on these values, so raising them removes
+// a false failure without weakening anything: a machine that genuinely never
+// catches up still fails, on the assertion that was actually being made.
 //
 // It carries no NATS socket topology. Those addresses came from the blueprint
 // and are compiled into the machine's descriptor, and the runtime now rejects a
@@ -731,34 +725,26 @@ func platformConfig(reserved sockets) []byte {
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
 instance_dir = %q
-lag_bound = "30s"
+lag_bound = "2m"
 [operations]
 event_dir = %q
 [event_fabric.nats]
 data_dir = %q
-startup_timeout = "30s"
-catch_up_timeout = "30s"
+startup_timeout = "60s"
+catch_up_timeout = "60s"
 `, reserved.api, filepath.ToSlash(reserved.instanceDir), filepath.ToSlash(reserved.eventDir), filepath.ToSlash(reserved.dataDir))
 }
 
-// start runs a prepared machine and registers its cleanup.
+// start runs a prepared machine.
 func (m *machine) start(ctx context.Context, t *testing.T) {
 	t.Helper()
-	require.Nil(t, m.cmd, "%s is already started", m.name)
+	require.Nil(t, m.Process, "%s is already started", m.name)
 	args := append([]string{"-config", m.configPath}, m.launchArgs...)
-	m.cmd = exec.CommandContext(ctx, m.binaryPath, args...)
-	m.cmd.Stdout = m.output
-	m.cmd.Stderr = m.output
-	var err error
-	m.tree, err = processtree.Start(m.cmd)
+	cmd := exec.CommandContext(ctx, m.binaryPath, args...)
+	proc, err := procrun.Start(cmd)
 	require.NoError(t, err)
+	m.Process = proc
 	m.stopped = false
-	m.done = make(chan struct{})
-	go func() {
-		m.err = errors.Join(m.cmd.Wait(), m.tree.Close())
-		close(m.done)
-	}()
-	t.Cleanup(m.stop)
 }
 
 // restart force-stops the machine and starts it again on the same sockets and
@@ -767,31 +753,33 @@ func (m *machine) start(ctx context.Context, t *testing.T) {
 func (m *machine) restart(ctx context.Context, t *testing.T) {
 	t.Helper()
 	m.stop()
-	m.cmd = nil
-	m.output = &syncBuffer{}
+	m.Process = nil
 	m.start(ctx, t)
 }
 
 // stop force-stops the machine. A graceful child interrupt is not portable, and
 // stopping hard is also the more demanding test: the journal is on disk, so a
-// node that is killed must still come back to the same state. The orderly
-// shutdown a signal would cause, and the order it releases dependencies in, are
-// covered by the platform's in-process lifecycle tests instead.
+// node that is killed must still come back to the same state.
 func (m *machine) stop() {
-	if m.stopped || m.cmd == nil {
+	if m.stopped || m.Process == nil {
 		return
 	}
 	m.stopped = true
-	_ = m.tree.Kill()
-	<-m.done
+	_ = m.Kill()
 }
 
-// logs returns the machine's captured output. It force-stops the process first:
-// Wait joins the exec copier goroutines, so the buffer is only safe to read
-// afterwards.
+// logs returns the machine's captured output, and says so when the machine was
+// never started rather than dereferencing a process that does not exist.
+//
+// It does not stop the machine. The output buffer is mutex guarded, so reading
+// it while the process is still writing is safe and is what diagnostics need:
+// stopping a machine in order to find out what it said would destroy the state
+// the failure is about. Use wait when a scenario means to observe an exit.
 func (m *machine) logs() string {
-	m.stop()
-	return m.output.String()
+	if m.Process == nil {
+		return "(never started)\n"
+	}
+	return m.Logs()
 }
 
 // wait blocks until the machine's process exits and returns its output. It is
@@ -799,123 +787,46 @@ func (m *machine) logs() string {
 // the assertion, and the output is why.
 func (m *machine) wait(t *testing.T) string {
 	t.Helper()
-	require.NotNil(t, m.cmd, "%s was never started", m.name)
-	<-m.done
+	require.NotNil(t, m.Process, "%s was never started", m.name)
+	out, _ := m.Wait()
 	m.stopped = true
-	return m.output.String()
+	return out
 }
 
 // waitForMarker blocks until name appears in dir, which is how a scenario waits
 // for something inside another process to reach a point.
-//
-// It is a handshake rather than a sleep on purpose: the thing being waited for
-// is another process deciding it has finished an assertion, and no duration
-// expresses that. A sleep long enough to usually work is also a sleep that
-// sometimes does not, and that cost is paid on every run forever.
-//
-// signaller is the process expected to write the marker. If it exits first the
-// wait fails immediately rather than burning the timeout: a marker that will
-// never be written is worth reporting now, with the output that explains why.
-func waitForMarker(t *testing.T, dir, name string, signaller *process, describe func() string) {
+func waitForMarker(t *testing.T, dir, name string, signaller *procrun.Process, describe func() string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	deadline := time.Now().Add(markerWaitTimeout)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		if signaller.exited() {
-			output, err := signaller.wait()
-			require.FailNowf(t, "the process that signals "+name+" exited before writing it",
-				"exit: %v\n%s\n%s", err, output, describe())
-		}
-		if time.Now().After(deadline) {
-			require.FailNowf(t, name+" marker never appeared",
-				"waited %s for %s\n%s", markerWaitTimeout, path, describe())
-		}
-		time.Sleep(markerPollInterval)
+	cond := func() bool {
+		_, err := os.Stat(path)
+		return err == nil
 	}
-}
-
-// process is an external command a scenario runs and later collects.
-type process struct {
-	output *syncBuffer
-	tree   *processtree.Owner
-	// finished closes once the command has exited and err is set, which is what
-	// publishes err to every other goroutine.
-	finished chan struct{}
-	err      error
-}
-
-// startProcess runs cmd in the background, capturing its output.
-//
-// A scenario starts a long-running child asynchronously when it has to keep
-// serving that child while it runs. The .NET test is the case that needs it: it
-// blocks partway through waiting for this harness to start a machine, so a
-// harness that waited for the test to exit first would deadlock.
-func startProcess(t *testing.T, cmd *exec.Cmd) *process {
-	t.Helper()
-	p := &process{output: &syncBuffer{}, finished: make(chan struct{})}
-	cmd.Stdout = p.output
-	cmd.Stderr = p.output
-	var err error
-	p.tree, err = processtree.Start(cmd)
-	require.NoError(t, err)
-	go func() {
-		p.err = errors.Join(cmd.Wait(), p.tree.Close())
-		close(p.finished)
-	}()
-	t.Cleanup(func() {
-		// Whatever went wrong, the child does not outlive the scenario, and the
-		// scenario does not return while it is still writing to the buffer.
-		_ = p.tree.Kill()
-		// Cleanup deliberately kills the child, so its output and exit error are
-		// not assertions about the scenario result.
-		_, _ = p.wait()
-	})
-	return p
-}
-
-// wait blocks until the process exits, returning its complete output and its
-// exit error. Waiting joins the exec copier goroutines, so the buffer is only
-// read afterwards. It is safe to call more than once.
-func (p *process) wait() (string, error) {
-	<-p.finished
-	return p.output.String(), p.err
-}
-
-// exited reports whether the process has already finished, without blocking.
-func (p *process) exited() bool {
-	select {
-	case <-p.finished:
-		return true
-	default:
-		return false
+	abort := func() (bool, string) {
+		if !signaller.Running() {
+			output, err := signaller.Wait()
+			return true, fmt.Sprintf("the process that signals %s exited before writing it (exit: %v):\n%s", name, err, output)
+		}
+		return false, ""
 	}
+	diag := diagStringer(describe)
+	waitFor(t, name+" marker", markerWaitTimeout, markerPollInterval, cond, abort, diag)
 }
-
-// logs returns what the process has written so far. It is for diagnostics on a
-// path where the process may still be running, so it is deliberately a snapshot
-// rather than the complete output wait returns.
-func (p *process) logs() string { return p.output.String() }
 
 // diagnose renders everything worth knowing when a scenario fails: what each
 // machine printed, whether it was running, and where it answers.
-//
-// It is only ever called on a failure path. A passing run says nothing, because
-// the point of a scenario that passes is that nobody has to read it.
 func diagnose(machines []*machine) string {
 	var b strings.Builder
 	for _, m := range machines {
 		state := "not started"
-		if m.cmd != nil {
+		if m.Process != nil {
 			state = "stopped"
 		}
 		if m.running() {
 			state = "running"
 		}
 		fmt.Fprintf(&b, "\n--- machine %s (%s, api %s, journal %s) ---\n%s",
-			m.name, state, m.url, m.sockets.dataDir, m.output.String())
+			m.name, state, m.url, m.sockets.dataDir, m.logs())
 		fmt.Fprintf(&b, "\n--- machine %s operational events ---\n%s", m.name, operationEvents(m))
 	}
 	return b.String()

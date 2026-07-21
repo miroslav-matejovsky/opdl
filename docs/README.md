@@ -16,4 +16,5 @@ Additional material:
 - [Bugs](bugs/README.md) contains known issues.
 - [Platform operations](operations/README.md) contains deployment,
   monitoring, event-analysis, and troubleshooting runbooks.
+- [Plan](plan/README.md) contains implementation plans and stage specifications.
 - Package-level details live next to Go code in `doc.go` files, or in `README.md` for top-level directories like `platform`.
