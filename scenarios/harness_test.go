@@ -499,14 +499,14 @@ type machine struct {
 // It is re-declared here so scenarios consume the packaged runtime as a black
 // box instead of importing platform internals.
 type processStatus struct {
-	Role       string    `json:"role"`
-	State      string    `json:"state"`
-	PID        int       `json:"pid"`
-	Applied    uint64    `json:"applied"`
-	HighWater  uint64    `json:"high_water"`
-	Promotable bool      `json:"promotable"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	LastError  string    `json:"last_error"`
+	Role          string    `json:"role"`
+	State         string    `json:"state"`
+	PID           int       `json:"pid"`
+	Applied       uint64    `json:"applied"`
+	HighWater     uint64    `json:"high_water"`
+	FailoverReady bool      `json:"failover_ready"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	LastError     string    `json:"last_error"`
 }
 
 // managedProcess is one explicitly named primary or standby process. It is used
@@ -605,7 +605,7 @@ func waitFor(t *testing.T, what string, timeout, interval time.Duration, cond fu
 }
 
 // waitStatus blocks until a process reports the expected lifecycle state.
-func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string, promotable bool) processStatus {
+func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string, failoverReady bool) processStatus {
 	t.Helper()
 	var last processStatus
 	var readErr error
@@ -616,7 +616,7 @@ func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string
 		if err == nil {
 			last = status
 			if status.Role == process.role && status.PID == process.PID() && status.State == state &&
-				(!promotable || status.Promotable) && status.LastError == "" {
+				(!failoverReady || status.FailoverReady) && status.LastError == "" {
 				return true
 			}
 		}

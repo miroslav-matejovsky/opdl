@@ -59,9 +59,9 @@
 //
 // The attribute is required, so omitting it cannot silently enable or disable
 // redundancy. A false value deploys a second local process that waits on the
-// machine fence. It does not add a second NATS endpoint: the two processes are
+// Primary Ownership. It does not add a second NATS endpoint: the two instances are
 // mutually exclusive owners of the machine's one client port and one cluster
-// port, so promotion rebinds the same addresses rather than moving the site onto
+// port, so a transfer rebinds the same addresses rather than moving the site onto
 // new ones.
 //
 // The hcl struct tags on these types are the authoring wire format and the

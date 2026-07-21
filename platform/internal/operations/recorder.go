@@ -33,12 +33,12 @@ const (
 	AttributeDurationMS = "duration_ms"
 	// AttributePath contains the local path involved in an operation.
 	AttributePath = "path"
-	// AttributeActivationKind identifies initial activation, promotion, or reclamation.
+	// AttributeActivationKind identifies initial activation, failover, or failback.
 	AttributeActivationKind = "activation_kind"
 	// AttributeAppliedSequence contains the last journal sequence projected locally.
 	AttributeAppliedSequence = "applied_sequence"
 	// AttributeObject contains the kernel object name involved in an operation,
-	// such as the machine fence's ownership mutex. A named kernel object has no
+	// such as the Primary Ownership mutex. A named kernel object has no
 	// path, so this is what identifies it to an operator.
 	AttributeObject = "object"
 	// AttributeAbandoned reports that ownership was taken over from a process that

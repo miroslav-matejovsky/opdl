@@ -13,16 +13,21 @@ import (
 // Status is a process's live operational snapshot, written to its status file
 // for deployment diagnostics: its role, lifecycle state, process id, how far
 // its projection has applied of the journal, how long it has
-// been lagging, whether it is promotable, and its last error.
+// been lagging, whether it is ready to take over, and its last error.
 //
-// It is not an active fence. The OS lock remains authoritative, and the runtime
-// never grants active ownership from this file. Deployment tooling may use a
-// fresh status whose PID is still live to verify handover readiness. A stale
-// status after a crash is only historical diagnostics.
+// It is not an active fence. The machine fence remains authoritative, and the
+// runtime never grants active ownership from this file. Deployment tooling may
+// use a fresh status whose PID is still live to verify handover readiness. A
+// stale status after a crash is only historical diagnostics.
 type Status struct {
-	// Role identifies the primary or standby process.
+	// Role is which fixed instance wrote this. It never changes.
+	//
+	// Role and State are different axes and both use the word "standby", so a
+	// reader must take them together: Role standby with State active is a machine
+	// that has failed over. docs/operations/monitoring.md tabulates the
+	// combinations an operator acts on.
 	Role InstanceRole `json:"role"`
-	// State is the process lifecycle state.
+	// State is what this instance is doing now.
 	State State `json:"state"`
 	// PID is the operating-system process id, so a stale file can be told from a
 	// live one.
@@ -35,8 +40,8 @@ type Status struct {
 	// Lag is how long the projection has continuously been behind the journal, as
 	// a duration string; "0s" when caught up.
 	Lag string `json:"lag"`
-	// Promotable reports whether this process is current enough to take over.
-	Promotable bool `json:"promotable"`
+	// FailoverReady reports whether this process is current enough to take over.
+	FailoverReady bool `json:"failover_ready"`
 	// UpdatedAt is when this snapshot was written, in UTC.
 	UpdatedAt time.Time `json:"updated_at"`
 	// LastError is the last error this process recorded, empty when none.

@@ -50,8 +50,8 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	}
 	failoverStarted := time.Now()
 	_ = primary.Kill()
-	promotedStatus := node.waitStatus(t, standby, "active", false)
-	promotionTime := promotedStatus.UpdatedAt.Sub(failoverStarted)
+	failedOverStatus := node.waitStatus(t, standby, "active", false)
+	failoverTime := failedOverStatus.UpdatedAt.Sub(failoverStarted)
 	waitForManagedAPI(ctx, t, node, standby)
 	var gap time.Duration
 	select {
@@ -62,7 +62,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 
 	require.Equal(t, stableView,
 		waitForRegistrationStatus(ctx, t, node, stable.ProposalID, "accepted"),
-		"promotion changed a registration retained before failover")
+		"failover changed a registration retained before it")
 	failoverView := waitForRegistrationStatus(ctx, t, node, aroundFailover.ProposalID, "accepted")
 	require.Len(t, failoverView.PlatformInstances, 1,
 		"primary and standby must remain one machine decision")
@@ -75,13 +75,13 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 
 	primaryReturned := node.startManaged(ctx, t, "primary", manifest.Primary.Args)
 	node.waitStatus(t, primaryReturned, "standby", true)
-	handoverStarted := time.Now()
+	failbackStarted := time.Now()
 	standby.stopGracefully(t)
 	node.waitStatus(t, primaryReturned, "active", false)
 	waitForManagedAPI(ctx, t, node, primaryReturned)
-	handoverTime := time.Since(handoverStarted)
+	failbackTime := time.Since(failbackStarted)
 
-	// Repeat failover and reclamation to expose stale status, lock, listener, or
+	// Repeat failover and failback to expose stale status, ownership, listener, or
 	// storage ownership left behind by the first transfer.
 	standbySecond := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
 	node.waitStatus(t, standbySecond, "standby", true)
@@ -104,7 +104,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	waitForManagedAPI(ctx, t, node, primarySecond)
 
 	// Full machine shutdown is primary-service stop followed by standby-service
-	// stop. The standby may promote in the bounded interval and must still stop.
+	// stop. The standby may become Active in the bounded interval and must still stop.
 	shutdownStandby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
 	node.waitStatus(t, shutdownStandby, "standby", true)
 	primarySecond.stopGracefully(t)
@@ -117,8 +117,8 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	// safe to read.
 	assertSharedEndpoints(t, primary, standby)
 
-	t.Logf("warm standby baseline: catch-up=%s promotion=%s listener-unavailable=%s handover=%s standby-working-set=%d bytes",
-		catchUpTime, promotionTime, gap, handoverTime, standbyMemory)
+	t.Logf("warm standby baseline: catch-up=%s failover=%s listener-unavailable=%s failback=%s standby-working-set=%d bytes",
+		catchUpTime, failoverTime, gap, failbackTime, standbyMemory)
 }
 
 // assertSharedEndpoints is the regression for the warm standby connection
@@ -126,7 +126,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 //
 // The defect was that the standby derived its own NATS configuration and got a
 // client address the active process was not serving on. Nothing was listening
-// there, so the standby retried forever and never became promotable, while every
+// there, so the standby retried forever and never became failover-ready, while every
 // log line about it looked ordinary. These assertions pin the property that makes
 // that impossible: the machine has one endpoint set, the standby connects to the
 // one the active process is serving on, and promotion rebinds that same address

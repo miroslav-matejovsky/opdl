@@ -17,15 +17,15 @@ func TestStatusWriteReadRoundTrip(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 
 	want := redundancy.Status{
-		Role:       redundancy.RoleStandby,
-		State:      redundancy.StateStandby,
-		PID:        4321,
-		Applied:    41,
-		HighWater:  42,
-		Lag:        "1.5s",
-		Promotable: true,
-		UpdatedAt:  time.Now().UTC().Truncate(time.Second),
-		LastError:  "",
+		Role:          redundancy.RoleStandby,
+		State:         redundancy.StateStandby,
+		PID:           4321,
+		Applied:       41,
+		HighWater:     42,
+		Lag:           "1.5s",
+		FailoverReady: true,
+		UpdatedAt:     time.Now().UTC().Truncate(time.Second),
+		LastError:     "",
 	}
 	require.NoError(t, want.Write(path))
 

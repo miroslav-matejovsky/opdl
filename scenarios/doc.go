@@ -124,7 +124,7 @@
 // Restart scenarios force-stop a process because crash recovery is the promise
 // they test. Warm-standby scenarios additionally use the operating system's
 // process-control signal for planned handover and full shutdown. No runtime
-// promotion endpoint exists. On Windows every launched command is placed in a
+// failover endpoint exists. On Windows every launched command is placed in a
 // job object that terminates its members when the last handle closes, which keeps
 // child processes inside the scenario lifecycle even when the test process itself
 // is terminated by a hard timeout.

@@ -2,13 +2,21 @@ package redundancy
 
 import "slices"
 
-// State is a process lifecycle state. Only the active state owns the
-// machine's externally visible, decision-producing capabilities.
+// State is what an instance is doing now, as opposed to InstanceRole, which is
+// which instance it is. The two axes are independent: a Standby Instance in
+// StateActive is a machine that has failed over.
+//
+// StateActive and StateStandby are the operational states. The rest are
+// transitional and exist so an operator can tell a process that has not yet
+// contended from one that contended and lost, and a clean stop from a failure.
+//
+// Only StateActive owns the machine's externally visible, decision-producing
+// capabilities.
 type State string
 
 const (
 	// StateStarting is the initial state: the process has launched but has not yet
-	// begun to contend for the machine fence.
+	// begun to contend for Primary Ownership.
 	StateStarting State = "starting"
 	// StateStandby is a process connected to the journal with caught-up local
 	// projections but no public listener, durable domain handlers, or embedded

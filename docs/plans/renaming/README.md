@@ -4,9 +4,8 @@ Align the platform's local high-availability architecture, its vocabulary, and
 its configuration with one intention. Staged so each part can be reviewed and
 settled on its own.
 
-Stage 04 is the only one that changes runtime behavior. Every other stage is
-naming, structure, or documentation, so the existing scenarios are the regression
-net throughout.
+No stage changes runtime behavior. Stage 04, which would have, is deferred, so
+every remaining stage is naming, structure, or documentation.
 
 ## The intention
 
@@ -90,7 +89,7 @@ intention was stated.
 | `ProcessRole` is the type for what the vocabulary calls an Instance | ~40 references | 01 |
 | `standby` is both a role and a state, in the same status file | documentation | 02 |
 | `fence` is the codebase's word for Primary Ownership | ~180 code, ~40 doc references | 03 |
-| **Failback is neither automatic nor configurable** | behavior gap | 04 |
+| Failback is neither automatic nor configurable | behavior gap | 04, deferred |
 | `promotion` and `reclamation` are the words for Failover and Failback | ~114 references | 05 |
 | Event names are `platform.fence_*` | 4 events plus runbooks | 06 |
 | Ownership configuration sits beside `standby`, optional | schema | 07 |
@@ -108,56 +107,54 @@ operator or deployment tooling stops the Active Standby. That is deliberate and
 documented, but it is a hardcoded manual-only failback policy rather than a
 configured one.
 
-Stage 04 covers it, and it must be settled before stage 05, because how failback
-is named depends on what failback does.
+Stage 04 covered it and is deferred: the behavior stays as described. Stage 05
+therefore states failback's trigger wherever it uses the word.
 
 ## Stages
 
 Ordered so the intention lands first and each later stage inherits settled
 vocabulary. Stages 02 through 05 are mostly mechanical once 01 is agreed.
 
-| Stage | Subject | Effort | Risk |
-| --- | --- | --- | --- |
-| [01](01-fixed-roles.md) | Fixed roles and the operator-visible instance identity | Medium | Medium |
-| [02](02-states.md) | Active and Standby states, and the role/state collision | Small | Low |
-| [03](03-ownership.md) | Primary Ownership vocabulary in code | Medium | Low |
-| [04](04-failback-policy.md) | **Failback policy: behavior, not naming** | Large | High |
-| [05](05-transitions.md) | Failover and Failback vocabulary | Small | Low |
-| [06](06-operational-contract.md) | Event names and runbooks | Small | Medium |
-| [07](07-configuration.md) | Ownership configuration under standby, required | Medium | Medium |
-| [08](08-scope-and-requirements.md) | Scope boundaries, requirements draft, adjacent plans | Small | Low |
+| Stage | Subject | Effort | Risk | State |
+| --- | --- | --- | --- | --- |
+| [01](01-fixed-roles.md) | Fixed roles and the operator-visible instance identity | Medium | Medium | done |
+| [02](02-states.md) | Active and Standby states, and the role/state collision | Small | Low | done |
+| [03](03-ownership.md) | Primary Ownership vocabulary in code | Medium | Low | done |
+| [04](04-failback-policy.md) | Failback policy: behavior, not naming | Large | High | **deferred** |
+| [05](05-transitions.md) | Failover and Failback vocabulary | Small | Low | |
+| [06](06-operational-contract.md) | Event names and runbooks | Small | Medium | |
+| [07](07-configuration.md) | Ownership configuration under standby, required | Medium | Medium | |
+| [08](08-scope-and-requirements.md) | Scope boundaries, requirements draft, adjacent plans | Small | Low | |
 
-Stage 04 is the only behavior change, and the only Large item. Stage 01 carries
-the only other new capability. Stage 07 is the only one that changes a derived
-value. Stage 06 is the only one that breaks an existing operational contract.
+Stage 04 is deferred: failback stays a manual operator procedure with no
+configuration. Stage 05 still adopts the word failback and states its trigger
+wherever it appears, so the vocabulary does not imply automation the platform does
+not have.
 
-Stage 04 has a scoping decision (its D2) that can remove the Large, High-risk work
-entirely: keep today's behavior, name it `manual`, and defer the automatic
-mechanism. Worth answering early, because it determines the size of the plan.
+Of what remains, stage 07 is the only one that changes a derived value, and stage
+06 the only one that breaks an existing operational contract.
 
 ### Dependencies
 
 ```text
-01 fixed roles          <- the intention; everything else assumes it
+01 fixed roles     done   <- the intention; everything else assumes it
    |
-   +-- 02 states -------------------+   (one state's meaning depends on 04)
-   |                                |
-   +-- 03 ownership ----+           |
-   |                    |           |
-   +-- 04 failback -----+-- 05 transitions
-   |   (behavior)       |           |
-   |                    +-----------+-- 06 operational contract
-   |                                    (events name roles, ownership, transitions)
+   +-- 02 states        done   (04 would have changed one state's meaning)
    |
-   +-- 07 configuration (schema names roles, ownership, and the failback policy)
+   +-- 03 ownership     done ----+
+   |                             |
+   +-- 04 failback  DEFERRED     |
+   |                             |
+   +-- 05 transitions -----------+-- 06 operational contract
+   |                                 (events name roles, ownership, transitions)
+   |
+   +-- 07 configuration (schema names roles and ownership)
 
-08 scope and requirements  <- independent, but settle its carve-out before any other stage
+08 scope and requirements  <- independent; settle its carve-out before 06 or 07
 ```
 
-Recommended execution order: settle 08's carve-out rule and 04's D2 scoping
-decision, then 01, then 04 and 07 together so the `standby` block is restructured
-once, then 03 and 05, then 02, then 06 last so runbooks are rewritten once
-against final names and final behavior.
+Remaining order: 05, then 07, then 08, then 06 last so the runbooks are rewritten
+once against final names.
 
 ## How to use this
 

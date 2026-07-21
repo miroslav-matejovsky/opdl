@@ -84,11 +84,11 @@ An active process stops serving when continuous lag exceeds `lag_bound`. Do not
 increase the bound only to suppress the symptom. Increasing it explicitly allows
 older query results for longer and changes the site's safety posture.
 
-## Standby does not become promotable
+## Standby does not become failover-ready
 
 The standby should emit `platform.standby_ready` and
 `platform.standby_waiting`. Its status must be fresh, `state=standby`,
-`promotable=true`, and have no `last_error`.
+`failover_ready=true`, and have no `last_error`.
 
 - Confirm the active process owns and serves the machine's one client port.
 - Confirm primary and standby use the same executable and TOML file.
@@ -98,12 +98,27 @@ The standby should emit `platform.standby_ready` and
   the same `fence.object`.
 
 Never start a standby with a separate client port. Both roles share one
-machine-level Event Fabric endpoint and the fence controls who binds it.
+machine-level Event Fabric endpoint and ownership controls who binds it.
+
+## The standby service is the one serving
+
+Expected after a failover, and not a fault. The instance role is fixed; the state
+is not. A Standby Instance reporting `state=active` owns the machine and serves
+correctly, and the Primary Instance beside it reports `state=standby`.
+
+Ownership does not return on its own. It moves back only when the Active instance
+is stopped, which is the controlled Ownership Transfer in `upgrade.md`. Until then
+this is a steady state, so alert on how long it lasts rather than on the fact of
+it. `monitoring.md` tabulates the role and state combinations.
+
+Investigate only if the Primary Instance is not `failover_ready=true` with a fresh
+status, because that is what a transfer needs and it is the part that can be
+broken.
 
 ## Two processes appear active
 
 Status files are not ownership evidence. Start from the operational events, not
-from the filesystem: the fence is a kernel object and has no path.
+from the filesystem: ownership is a kernel object and has no path.
 
 - `platform.fence_opened` reports the object each process opened. Both processes
   of a machine must report the same one. Two different objects means they were
@@ -112,7 +127,8 @@ from the filesystem: the fence is a kernel object and has no path.
 - `platform.fence_acquired` reports which process took it, and whether it was
   `abandoned`. An abandoned acquisition means the previous holder died rather than
   handed over.
-- The startup summary prints `fence` alongside the rest of the descriptor.
+- The startup summary prints the ownership object alongside the rest of the
+  descriptor.
 
 To confirm from outside the platform, list handles to the object with Process
 Explorer or `handle.exe` filtered on the object name. Neither ships with Windows,

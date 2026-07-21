@@ -70,8 +70,8 @@ type Platform struct {
 	// optional one, so its service is authored inside standby.
 	WinService *WinService `hcl:"winservice,block"`
 	// Nats is the machine's Event Fabric NATS port policy. It is machine-level:
-	// whichever process holds the machine fence binds these ports, so the primary
-	// and its standby never own separate endpoints.
+	// whichever instance holds Primary Ownership binds these ports, so the two
+	// instances never own separate endpoints.
 	Nats *Nats `hcl:"nats,block"`
 	// Standby is the machine's local redundancy policy.
 	Standby *Standby `hcl:"standby,block"`
@@ -150,7 +150,7 @@ type Fence struct {
 	// DefaultFenceNamespace.
 	//
 	// Unlike the standby decision, a default here is safe and therefore allowed:
-	// omitting it cannot make two machines share a fence, because their identities
+	// omitting it cannot make two machines share ownership, because their identities
 	// still differ. Omitting a standby decision could silently deploy redundancy
 	// nobody asked for, which is why that one is mandatory and this one is not.
 	Namespace string `hcl:"namespace,optional"`
@@ -170,9 +170,9 @@ type Standby struct {
 	// Disabled opts the machine out of a second local process. It is required, so
 	// omitting the attribute cannot silently enable or disable redundancy.
 	//
-	// A false value deploys a second local process that waits on the machine
-	// fence. It does not add a second NATS endpoint: the two processes are
-	// mutually exclusive owners of the same machine-level ports.
+	// A false value deploys a Standby Instance that waits for Primary Ownership. It
+	// does not add a second NATS endpoint: the two instances are mutually exclusive
+	// owners of the same machine-level ports.
 	Disabled bool `hcl:"disabled"`
 	// WinService is the Standby Instance's Windows Service identity.
 	//

@@ -104,6 +104,7 @@
     "testname",
     "unioned",
     "winmutex",
+    "winservice",
     "Xunit"
   ]
 }

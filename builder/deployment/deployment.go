@@ -110,7 +110,7 @@ type WinService struct {
 // replaceable without changing what the builder produces.
 type EventFabric struct {
 	// Nats is the machine's one resolved NATS topology, shared by whichever
-	// process holds the machine fence.
+	// instance holds Primary Ownership.
 	Nats EventFabricNats `json:"nats"`
 	// Peers are the other Event Fabric members of this machine's site, ordered by
 	// machine name so every machine derives the same list. A machine never lists
@@ -125,8 +125,8 @@ type EventFabric struct {
 // server would bind, and the addresses it reaches the site's journal through.
 //
 // There is exactly one of these per machine. The primary and standby processes
-// are mutually exclusive fence owners, so they share it: promotion does not
-// change the address other machines were told to connect to.
+// are mutually exclusive holders of Primary Ownership, so they share it: a
+// transfer does not change the address other machines were told to connect to.
 type EventFabricNats struct {
 	// ClientAddress is where this machine's server serves the client protocol,
 	// derived from the machine ip and the authored client port. It is present on
@@ -317,7 +317,7 @@ func (d Descriptor) validateStorageTopology(prefix string) error {
 	if hostsStorage {
 		// A storage node answers its own clients. Listing its own address first
 		// keeps its client on the local server while that server is up, so a
-		// promoted process does not route its own traffic through a peer.
+		// instance that becomes Active does not route its own traffic through a peer.
 		if nats.Servers[0] != nats.ClientAddress {
 			return fmt.Errorf("%s.servers: a storage machine must list its own client address %q first, got %q",
 				prefix, nats.ClientAddress, nats.Servers[0])

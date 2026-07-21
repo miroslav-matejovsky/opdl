@@ -56,7 +56,7 @@ type Ready struct {
 	HighWater uint64 `json:"high_water"`
 	// InstanceRole identifies the primary or standby process that became active.
 	InstanceRole string `json:"process_role"`
-	// ProcessState is active because only the fence owner publishes readiness.
+	// ProcessState is active because only the ownership holder publishes readiness.
 	ProcessState string `json:"process_state"`
 }
 

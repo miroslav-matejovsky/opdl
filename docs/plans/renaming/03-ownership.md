@@ -5,6 +5,31 @@ lands first.
 
 The largest mechanical stage. Entirely compiler-checked.
 
+## Status: done
+
+`task all` passes. `redundancy.Fence` is `redundancy.Ownership` in `ownership.go`,
+with `OpenOwnership`, `awaitOwnership`, `ownershipResult`, `runAsOwner`, and the
+receiver renamed from `f` to `o`. Prose across the platform, builder, operations
+runbooks, and `platform/README.md` uses Primary Ownership.
+
+`redundancy/doc.go` was rewritten rather than patched: it had accumulated
+overlapping explanations, and `ownership.go` now points at it instead of repeating
+the rationale on the type.
+
+Deliberately left for later stages, so the intermediate state is explicable rather
+than accidental:
+
+| Left | Stage |
+| --- | --- |
+| `platform.fence_*` event names and their log messages | 06 |
+| descriptor field `fence.object`, `deployment.Fence` type | 07 |
+| blueprint `platform.fence` block, `blueprint.Fence`, `validateFence` | 07 |
+
+D1 and D2 answered as recommended: type is `Ownership`, prose is "Primary
+Ownership", and the historical file-lock note survives only in `redundancy/doc.go`
+and `docs/01-architecture.md`. Ownership Validation is still named but not
+implemented.
+
 ## Intent
 
 The mechanism that guarantees only one instance can be Active is **Primary

@@ -55,7 +55,7 @@ The platform is composed around three boundaries:
 | `internal/httpapi` | Decodes and encodes the public HTTP contract. It does not decide registration state. |
 | `internal/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
 | `internal/eventfabric` | Publishes facts to the site's ordered journal, replays them, delivers them, and reports health. Runtime code does not depend on a transport. |
-| `internal/redundancy` | Owns process roles, lifecycle state, the machine fence, projection-lag state, and atomic status files. |
+| `internal/redundancy` | Owns process roles, lifecycle state, Primary Ownership, projection-lag state, and atomic status files. |
 | `internal/operations` | Writes local structured operational events to stderr and optional JSONL without depending on the Event Fabric. |
 
 The production adapter is `eventfabric/nats`. NATS is imported only by it.
@@ -146,11 +146,12 @@ journal is.
 #### One endpoint set per machine, shared by both processes
 
 A machine has one client port and at most one cluster port however many processes
-it runs. The primary and standby are mutually exclusive owners of them: the
-machine fence is released only after the active process has closed its embedded
-server, so the process that next acquires the fence binds the same addresses.
+it runs. The two instances are mutually exclusive owners of them: Primary
+Ownership is released only after the active process has closed its
+embedded server, so the instance that next acquires ownership binds the same
+addresses.
 
-This is why promotion does not change the address other machines were told to
+This is why a transfer does not change the address other machines were told to
 connect to, why a client-only standby reaches the journal on the address the
 active process is serving, and why the firewall inventory is one client port and
 at most one cluster port per storage machine.
@@ -279,7 +280,7 @@ selects a different server list or listener address.
 
 At startup each process prints the endpoints it actually composed, which is what
 distinguishes an active storage server from a client-only local standby, a
-client-only non-storage machine, and a storage node that has just been promoted:
+client-only non-storage machine, and a storage node that has just become Active:
 
 ```text
 platform: event fabric configuration endpoint=10.0.1.10:4222 binds=true
@@ -293,7 +294,7 @@ follows are visibly talking about the same endpoint.
 The primary and standby contend for one non-expiring Windows named mutex in the
 machine-wide `Global\` namespace. Only its holder may compose active
 capabilities. It is released after active resources close, or abandoned by the
-kernel when the holding process exits. A standby waits for the fence
+kernel when the holding process exits. A waiting instance waits for ownership
 independently of its projector, in a kernel wait rather than a poll, so it is
 woken the moment the holder releases or dies. After acquisition it marks itself
 activating, closes the client-only composition, opens the active Event Fabric,
@@ -317,8 +318,8 @@ filesystem each produced two simultaneous actives, and nothing detected any of
 them. None of the three is expressible now, and `instance_dir` no longer takes
 part in ownership at all.
 
-A process that takes the fence also learns how it became free. The kernel reports
-a mutex whose owner died without releasing it as abandoned, so a promotion caused
+An instance that takes ownership also learns how it became free. The kernel reports
+a mutex whose owner died without releasing it as abandoned, so a failover caused
 by a crash is distinguishable from a planned handover in
 `platform.fence_acquired`. The file lock reported both identically.
 
@@ -326,7 +327,7 @@ The mutex provides mutual exclusion, not a fencing token. What makes exclusion
 sufficient is two invariants around it: active resources close before ownership is
 released, and ownership lives on one pinned OS thread for the life of the process.
 Windows ties mutex ownership to a thread rather than a process, so without the
-second one a thread exiting would abandon the fence while the process still held
+second one a thread exiting would abandon ownership while the process still held
 its listener, handlers, and embedded server.
 
 The whole readiness sequence is bounded by `catch_up_timeout`. A node that cannot
@@ -344,7 +345,7 @@ handler that stops on its own also ends serving: the projection is what every
 query is answered from.
 
 Full-machine shutdown stops the primary service and then the standby service. A
-standby may promote during this bounded interval and is stopped immediately.
+standby may become Active during this bounded interval and is stopped immediately.
 
 The site journal is the platform's durable state. A node rebuilds its projections
 by replaying it at every start, so a machine that is killed comes back to the same
@@ -377,17 +378,17 @@ startup.
 ### Ownership
 
 OPDL can run a preferred primary and an optional standby for one machine. The
-fence owner runs active capabilities; the other process maintains a warm local
+owner runs active capabilities; the other process maintains a warm local
 projection. Both retain the same compiled machine identity, so they remain one
-registration voter. After failover, a returning primary reclaims ownership only
-through graceful handover from the promoted standby.
+registration voter. After failover, ownership returns to the Primary Instance only through an
+operator-initiated failback from the Active Standby.
 
 After failover, a returning primary starts projection-only and waits. Deployment
-tooling verifies that it is caught up, gracefully stops the promoted standby,
-and waits for the primary to acquire the released fence. The primary never
+tooling verifies that it is caught up, gracefully stops the Active Standby,
+and waits for the primary to acquire released ownership. The primary never
 steals ownership from a live standby. Journal replication remains separate from
 service redundancy: storage replicas protect site history, while the local
-process fence protects one machine's active capabilities.
+ownership protects one machine's active capabilities.
 
 ### Package and service-manager contract
 
@@ -404,50 +405,50 @@ error rather than a default.
 
 Deployment starts the primary and waits for its local status to become `active`
 before starting the standby. A handover requires a fresh, live standby status
-with `promotable=true`, no last error, and a caught-up sequence. The service
+with `failover_ready=true`, no last error, and a caught-up sequence. The service
 manager then gracefully stops the active process and waits for the other process
-to become `active`. A returning primary uses this procedure to reclaim
-ownership. Full machine shutdown stops the primary service and then the standby
-service; the standby may briefly promote between those operations.
+to become `active`. A returning Primary Instance uses this procedure
+to take ownership back. Full machine shutdown stops the primary service and then the standby
+service; the standby may briefly become Active between those operations.
 
 Status files are operational evidence, not ownership. They identify the process
-role and PID and report lifecycle state, projection progress, lag, promotability,
-and the last error. Only the OS fence grants active ownership.
+role and PID and report lifecycle state, projection progress, lag, failover readiness,
+and the last error. Only Primary Ownership makes an instance Active.
 
 ### Validation baseline
 
 The black-box warm-standby scenario builds a standby-enabled package, launches
 both processes, kills and hands ownership over repeatedly, preserves
-registrations, checks storage ownership, reclaims the preferred primary, and
+registrations, checks storage ownership, fails back to the Primary Instance, and
 completes full machine shutdown. It records measurements without enforcing an SLO.
 
 It also asserts the endpoint contract directly: that the standby binds nothing
-while the primary holds the fence, that it nonetheless composes the same machine
-endpoint and the same server list as the active process, and that the promoted
+while the primary holds ownership, that it nonetheless composes the same machine
+endpoint and the same server list as the active process, and that the newly Active
 process rebinds those same addresses rather than moving the site onto new ones.
 
-Three consecutive Windows development runs with the file-lock fence, followed by
+Three consecutive Windows development runs with the file lock, followed by
 one run after it was replaced with the named mutex:
 
 | Measurement | Lock 1 | Lock 2 | Lock 3 | Mutex |
 | --- | ---: | ---: | ---: | ---: |
 | Initial standby journal catch-up | 110.8 ms | 108.3 ms | 91.9 ms | 144.1 ms |
-| Forced-kill promotion | 182.6 ms | 126.8 ms | 149.4 ms | 86.6 ms |
+| Forced-kill failover | 182.6 ms | 126.8 ms | 149.4 ms | 86.6 ms |
 | Listener unavailable | 192.9 ms | 133.5 ms | 155.2 ms | 91.8 ms |
-| Planned handover | 275.8 ms | 266.6 ms | 177.8 ms | 164.0 ms |
+| Operator-initiated failback | 275.8 ms | 266.6 ms | 177.8 ms | 164.0 ms |
 
 The three ownership-transfer rows improved by roughly the amount the removed poll
 predicts. The file lock woke a waiter on its next 100 ms tick, so it added up to
-that and about 50 ms on average to every promotion and handover; the mutex wakes
+that and about 50 ms on average to every failover and failback; the mutex wakes
 the waiter in the kernel when the holder releases or dies. Catch-up is not an
 ownership measurement and its one mutex sample is within the noise of a single
 run.
 
-The earlier 2026-07-18 baseline measured a forced-kill promotion of about 29.9
+The earlier 2026-07-18 baseline measured a forced-kill failover of about 29.9
 seconds. That gap was a symptom rather than a performance property: the standby
 had been given its own NATS client address while the only running server was the
 active process's, so it never reached the journal and was never warm, and the
-promoted process had to complete a cold startup bounded by the same 30 second
+newly Active process had to complete a cold startup bounded by the same 30 second
 Event Fabric startup timeout.
 
 These remain development measurements, not production limits or percentiles. One

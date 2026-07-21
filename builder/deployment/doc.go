@@ -31,9 +31,9 @@
 // with no primary process would deploy nothing that can serve.
 //
 // The NATS topology is machine-level, not per slot. The primary and standby are
-// mutually exclusive owners of the machine fence and therefore of one set of
+// mutually exclusive holders of Primary Ownership and therefore of one set of
 // endpoints: the standby connects to the address the active process is serving
-// on, and promotion rebinds that same address rather than moving the site onto a
+// on, and a transfer rebinds that same address rather than moving the site onto a
 // second one. There is no monitor address; the platform runs no NATS monitoring
 // listener.
 //

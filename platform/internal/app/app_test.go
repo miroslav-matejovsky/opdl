@@ -125,7 +125,7 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) deployment.Descript
 
 // uniqueFenceObject returns an ownership object no other test or run shares.
 //
-// The embedded mock descriptor names one fence object, and the machine fence is a
+// The embedded mock descriptor names one ownership object, and ownership is a
 // kernel object in a machine-wide namespace, so every test in this binary would
 // otherwise contend for the same ownership. The ports above are moved for the same
 // reason; the fence needs it more, because a lock file was isolated for free by
@@ -460,7 +460,7 @@ func TestStartStatusStopsServingAfterFabricStateFailures(t *testing.T) {
 	}
 	status, err := redundancy.ReadStatus(statusPath)
 	require.NoError(t, err)
-	require.False(t, status.Promotable)
+	require.False(t, status.FailoverReady)
 	require.NotEqual(t, unknownLag, status.Lag)
 	require.Contains(t, status.LastError, "event fabric disconnected")
 
@@ -514,12 +514,12 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
 }
 
-// TestPromotionAndPrimaryReclamation exercises both ownership transfers.
+// TestFailoverAndFailback exercises both ownership transfers.
 // The service-manager action is represented by canceling the active process only
 // after the waiting process reports a caught-up standby status.
-func TestPromotionAndPrimaryReclamation(t *testing.T) {
+func TestFailoverAndFailback(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping promotion integration test in -short mode")
+		t.Skip("skipping failover integration test in -short mode")
 	}
 	dir := t.TempDir()
 	cfg, err := config.Load(writeConfig(t, dir))
@@ -527,7 +527,7 @@ func TestPromotionAndPrimaryReclamation(t *testing.T) {
 	descriptor := descriptorOnFreePorts(t, cfg)
 	// The standby is enabled and nothing else changes. It shares the machine's
 	// one NATS topology with the active process, so it connects to the address
-	// the active process is serving on and, once promoted, rebinds that same
+	// the active process is serving on and, once Active, rebinds that same
 	// address rather than moving the site onto a second one.
 	descriptor.Slots.Standby = deployment.Slot{Disabled: false}
 
@@ -540,27 +540,28 @@ func TestPromotionAndPrimaryReclamation(t *testing.T) {
 	standbyCtx, stopStandby := context.WithCancel(t.Context())
 	standbyDone := make(chan error, 1)
 	go func() { standbyDone <- runProcess(standbyCtx, cfg, descriptor, redundancy.RoleStandby) }()
-	waitForPromotableStandby(t, cfg, descriptor, redundancy.RoleStandby, standbyDone)
+	waitForFailoverReadyStandby(t, cfg, descriptor, redundancy.RoleStandby, standbyDone)
 
 	stopPrimary()
 	require.NoError(t, waitProcess(t, primaryDone), "the primary did not stop cleanly")
 	waitForProcessState(t, cfg, descriptor, redundancy.RoleStandby, redundancy.StateActive, standbyDone)
-	require.True(t, get(t.Context(), cfg.Address()), "the promoted standby did not restore the API")
+	require.True(t, get(t.Context(), cfg.Address()), "the Standby Instance did not restore the API after failover")
 
-	reclaimCtx, stopReclaim := context.WithCancel(t.Context())
-	reclaimDone := make(chan error, 1)
-	go func() { reclaimDone <- runProcess(reclaimCtx, cfg, descriptor, redundancy.RolePrimary) }()
-	waitForPromotableStandby(t, cfg, descriptor, redundancy.RolePrimary, reclaimDone)
+	failbackCtx, stopFailback := context.WithCancel(t.Context())
+	failbackDone := make(chan error, 1)
+	go func() { failbackDone <- runProcess(failbackCtx, cfg, descriptor, redundancy.RolePrimary) }()
+	waitForFailoverReadyStandby(t, cfg, descriptor, redundancy.RolePrimary, failbackDone)
 
-	// Deployment keeps the primary preferred by gracefully stopping the promoted
-	// standby only after the returning primary is caught up.
+	// Failback is operator-initiated: deployment keeps the Primary Instance
+	// preferred by gracefully stopping the Active Standby, and only after the
+	// returning Primary Instance is caught up.
 	stopStandby()
-	require.NoError(t, waitProcess(t, standbyDone), "the promoted standby did not stop cleanly")
-	waitForProcessState(t, cfg, descriptor, redundancy.RolePrimary, redundancy.StateActive, reclaimDone)
-	require.True(t, get(t.Context(), cfg.Address()), "the reclaimed primary did not restore the API")
+	require.NoError(t, waitProcess(t, standbyDone), "the Active Standby did not stop cleanly")
+	waitForProcessState(t, cfg, descriptor, redundancy.RolePrimary, redundancy.StateActive, failbackDone)
+	require.True(t, get(t.Context(), cfg.Address()), "the Primary Instance did not restore the API after failback")
 
-	stopReclaim()
-	require.NoError(t, waitProcess(t, reclaimDone), "the reclaimed primary did not stop cleanly")
+	stopFailback()
+	require.NoError(t, waitProcess(t, failbackDone), "the Primary Instance did not stop cleanly")
 }
 
 func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, state redundancy.State, done <-chan error) {
@@ -581,7 +582,7 @@ func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment
 	require.Falsef(t, exited, "%s exited before reaching %s: %v", role, state, processErr)
 }
 
-func waitForPromotableStandby(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, done <-chan error) {
+func waitForFailoverReadyStandby(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, done <-chan error) {
 	t.Helper()
 	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
 	var processErr error
@@ -594,7 +595,7 @@ func waitForPromotableStandby(t *testing.T, cfg *config.Config, descriptor deplo
 		default:
 		}
 		status, err := redundancy.ReadStatus(path)
-		return err == nil && status.State == redundancy.StateStandby && status.Promotable && status.LastError == ""
+		return err == nil && status.State == redundancy.StateStandby && status.FailoverReady && status.LastError == ""
 	}, 30*time.Second, 20*time.Millisecond, "%s never became a caught-up standby", role)
 	require.Falsef(t, exited, "%s exited before becoming a caught-up standby: %v", role, processErr)
 }

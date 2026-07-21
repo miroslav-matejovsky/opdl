@@ -58,12 +58,12 @@ Use separate local paths for:
 
 The primary and standby must use the same configuration and the same machine
 package. `instance_dir` holds operational evidence only and is no longer part of
-the ownership decision: the machine fence is a kernel object named by the
+the ownership decision: Primary Ownership is a kernel object named by the
 machine's compiled identity, so the two processes exclude each other even if their
 directories differ. Give them the same one anyway, so an operator reads one
 machine's status in one place.
 
-The fence itself needs no provisioning. The account the platform runs as must be
+Ownership itself needs no provisioning. The account the platform runs as must be
 able to create objects in the `Global\` kernel namespace, which requires
 `SeCreateGlobalPrivilege`. Windows services, administrators, and interactive
 logons hold it by default; a process that lacks it fails at startup with a
@@ -161,10 +161,10 @@ Startup order:
 2. Start other site machines after the journal is reachable.
 3. Start each preferred primary and wait for its status to report `active`.
 4. Start its standby, when configured, and wait for status `standby` with
-   `promotable=true` and an empty `last_error`.
+   `failover_ready=true` and an empty `last_error`.
 
 For full shutdown, stop primary services and then standby services. A standby may
-briefly acquire the fence between those stops, so the second stop is mandatory.
+briefly acquire ownership between those stops, so the second stop is mandatory.
 
 ## 7. Deployment acceptance checks
 
@@ -175,6 +175,6 @@ briefly acquire the fence between those stops, so the second stop is mandatory.
 - Active nodes emit `platform.site_ready` and `platform.api_listening`.
 - Standbys emit `platform.standby_ready` and `platform.standby_waiting`.
 - Status `updated_at` advances every second.
-- Active status has `state=active`, `promotable=true`, `last_error` absent, and
+- Active status has `state=active`, `failover_ready=true`, `last_error` absent, and
   `applied >= high_water` after catch-up.
 - No process listens on a NATS monitor port.

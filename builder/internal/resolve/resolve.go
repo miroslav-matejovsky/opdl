@@ -172,7 +172,7 @@ func eventFabricNats(site blueprint.Site, machine blueprint.Machine) deployment.
 		Servers:        []string{},
 	}
 	// A storage machine answers its own clients, so it connects to itself first
-	// and falls back to its peers. That ordering is what keeps a promoted process
+	// and falls back to its peers. That ordering is what keeps a newly Active instance
 	// on its own server rather than routing its traffic through a peer.
 	if hostsStorage {
 		out.Servers = append(out.Servers, out.ClientAddress)

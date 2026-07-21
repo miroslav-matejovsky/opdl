@@ -63,7 +63,7 @@ type Fence struct {
 // would decode as false and silently deploy redundancy nobody asked for; an
 // omitted event_fabric.nats would decode as a machine with no journal to reach;
 // an omitted fence.object would decode as an empty ownership object name, and a
-// machine whose two processes contend for nothing has no fence at all. Failing
+// machine whose two instances contend for nothing has no ownership at all. Failing
 // here turns a truncated or stale descriptor into a startup error instead of a
 // running machine with the wrong topology.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
@@ -205,7 +205,7 @@ type Slot struct {
 // changing the deployment contract.
 type EventFabric struct {
 	// Nats is the machine's one resolved NATS topology, shared by whichever
-	// process holds the machine fence.
+	// instance holds Primary Ownership.
 	Nats EventFabricNats `json:"nats"`
 	// Peers are the other Event Fabric members of this machine's site, ordered by
 	// machine name. A machine never lists itself, and the fabric spans exactly
@@ -217,8 +217,9 @@ type EventFabric struct {
 // server would bind, and the addresses it reaches the site's journal through.
 //
 // There is exactly one of these per machine. The primary and standby processes
-// are mutually exclusive fence owners, so they share it: a standby connects to
-// the address the active process is serving on, and promotion rebinds that same
+// are mutually exclusive holders of Primary Ownership, so they share it: a
+// waiting instance connects to
+// the address the active process is serving on, and a transfer rebinds that same
 // address rather than moving the site to a second one.
 type EventFabricNats struct {
 	// ClientAddress is where this machine's server serves the NATS client

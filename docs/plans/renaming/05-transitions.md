@@ -2,6 +2,31 @@
 
 **Effort:** Small. **Risk:** Low. **Depends on:** stage 01, and stage 04, whose policy decision determines what failback means.
 
+## Status: done
+
+`task all` passes. Activation kinds are `failover` and `failback`,
+`Status.Promotable` is `Status.FailoverReady` with JSON `failover_ready`, and
+promotion and reclamation prose is gone from code, runbooks, and the measurement
+tables. D1, D2, and D3 answered as recommended.
+
+### Failback names the transition, not its trigger
+
+Stage 04 is deferred, so failback is still operator-initiated. That makes the word
+correct rather than aspirational: manual failback is an ordinary arrangement, and
+what would mislead is leaving the trigger unstated.
+
+Every place the word appears in the runbooks now says so. `upgrade.md` gained a
+Failback section that states it plainly, including that
+`role=primary, state=standby` is a steady state and not a transient one.
+Re-examine that section if stage 04 is ever picked up.
+
+### Left alone
+
+`handover` survives in a few comments. It is not banned vocabulary, it reads
+naturally, and replacing it with Ownership Transfer everywhere would be churn
+without a reader benefit. The measurement tables use failover and failback because
+those label a metric, where consistency does pay.
+
 ## Intent
 
 There are two transitions: **Failover** and **Failback**.

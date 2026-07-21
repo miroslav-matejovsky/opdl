@@ -27,7 +27,7 @@
 //	}
 //
 // The NATS topology is machine-level rather than per slot, because the primary
-// and standby are mutually exclusive owners of the machine fence and therefore of
+// and standby are mutually exclusive holders of Primary Ownership and therefore of
 // one set of endpoints. Both process roles compose the same configuration from
 // it; only client-only conversion distinguishes a process that does not hold the
 // fence, and it removes ownership rather than selecting a different endpoint.

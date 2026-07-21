@@ -22,7 +22,7 @@ type file struct {
 	// it carries local coordination and diagnostics, not site history.
 	InstanceDir string `toml:"instance_dir"`
 	// LagBound bounds how long a process's projection may lag the journal before it
-	// stops being promotable, and before an active process stops serving rather than
+	// stops being ready to take over, and before an active process stops serving rather than
 	// answering from a stale view. It is required and must be positive.
 	LagBound    string      `toml:"lag_bound"`
 	Operations  Operations  `toml:"operations"`

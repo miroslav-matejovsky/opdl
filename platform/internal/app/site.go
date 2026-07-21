@@ -100,7 +100,7 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 	// A warm standby never opens the shared journal store or binds the storage
 	// node's listeners; the active process owns those. It reaches the journal as a
 	// client of the active's server, so it follows history without contending for
-	// the storage the fence protects.
+	// the storage ownership protects.
 	if !active {
 		fabricCfg = clientOnly(fabricCfg)
 	}
@@ -448,10 +448,10 @@ func (r *runner) failure() error {
 // natsConfig composes the Event Fabric adapter's configuration from the descriptor's
 // derived topology and runtime data paths/timeouts from the configuration file.
 //
-// It takes no process role. Every role on the machine composes the same
-// configuration from the same descriptor topology; only clientOnly distinguishes
-// a process that does not hold the fence, and it removes ownership rather than
-// selecting a different endpoint.
+// It takes no instance role. Both instances compose the same configuration from
+// the same descriptor topology; only clientOnly distinguishes an instance that
+// does not hold ownership, and it removes capabilities rather than selecting a
+// different endpoint.
 func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabric.Config, error) {
 	fabricCfg, err := natsfabric.DefaultConfig(descriptor)
 	if err != nil {
@@ -513,7 +513,7 @@ func clientOnly(cfg natsfabric.Config) natsfabric.Config {
 //	active storage server         endpoint=X binds=true  storage=true
 //	client-only local standby     endpoint=X binds=false storage=false, X in servers
 //	client-only non-storage node  endpoint=X binds=false storage=false, X not in servers
-//	storage node after promotion  endpoint=X binds=true  storage=true
+//	storage node after failover   endpoint=X binds=true  storage=true
 //
 // Those look alike in every other log line, and telling them apart after the
 // fact is what a failure to reach the journal actually needs. endpoint is the

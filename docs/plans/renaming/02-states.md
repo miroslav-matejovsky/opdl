@@ -3,6 +3,18 @@
 **Effort:** Small. **Risk:** Low. **Depends on:** stage 01, and stage 04 for what
 one of its state combinations means.
 
+## Status: done
+
+`task all` passes. The role and state combination table lives in
+`docs/operations/monitoring.md` only; `status.go`, `state.go`, and
+`troubleshooting.md` point at it rather than repeating it. D1 and D2 answered as
+recommended: nothing renamed, no states collapsed. D3 deferred to stage 04.
+
+`troubleshooting.md` gained one symptom section, "The standby service is the one
+serving", because that is the question the fixed-role model makes an operator ask
+and nothing answered it. It states the persistence explicitly, so stage 04 changes
+one paragraph rather than adding a section.
+
 Mostly documentation. The states already exist and are already named correctly;
 what is missing is a stated distinction between a role and a state.
 

@@ -138,12 +138,13 @@ func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout 
 // Event Fabric shutdown.
 func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
 
-// InstanceDir returns the local runtime directory holding this machine's fence
-// and per-process status files. Both processes share it.
+// InstanceDir returns the local runtime directory holding this machine's
+// per-instance status files. Both instances share it. It takes no part in the
+// ownership decision.
 func (c *Config) InstanceDir() string { return c.instanceDir }
 
 // LagBound returns the configured projection lag bound. A process lagging beyond
-// it is not promotable, and an active process beyond it stops serving.
+// it is not ready to take over, and an active process beyond it stops serving.
 func (c *Config) LagBound() time.Duration { return c.lagBound }
 
 // OperationsEventDir returns the optional directory for append-only JSONL

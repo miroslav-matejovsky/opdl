@@ -30,9 +30,9 @@ const unknownLag = "unknown"
 type activationKind string
 
 const (
-	activationInitial     activationKind = "initial activation"
-	activationPromotion   activationKind = "standby promotion"
-	activationReclamation activationKind = "primary reclamation"
+	activationInitial  activationKind = "initial activation"
+	activationFailover activationKind = "failover"
+	activationFailback activationKind = "failback"
 )
 
 // resolveRole validates the requested process role against the deployment policy.
@@ -53,9 +53,10 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 	return role, nil
 }
 
-// runProcess contends for the machine fence and runs active or standby composition.
+// runProcess contends for Primary Ownership and runs the active or standby
+// composition.
 //
-// The fence makes the primary and standby exclusive. Its holder owns every
+// Ownership makes the two instances exclusive. Its holder owns every
 // active-only capability; the other process follows the journal. A machine that
 // opted out of warm standby rejects the standby role.
 func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole) (runErr error) {
@@ -66,55 +67,55 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.D
 		return err
 	}
 
-	fence, err := redundancy.OpenFence(descriptor.Fence.Object, role)
+	ownership, err := redundancy.OpenOwnership(descriptor.Fence.Object, role)
 	if err != nil {
-		observer.Emit("platform.fence_open_failed", operations.LevelError, "platform.redundancy", "machine fence failed to open", map[string]any{operations.AttributeError: err.Error(), operations.AttributeObject: descriptor.Fence.Object})
+		observer.Emit("platform.fence_open_failed", operations.LevelError, "platform.redundancy", "ownership object failed to open", map[string]any{operations.AttributeError: err.Error(), operations.AttributeObject: descriptor.Fence.Object})
 		return err
 	}
-	// The fence owns kernel handles and a pinned OS thread. Closing it releases
+	// Ownership owns kernel handles and a pinned OS thread. Closing it releases
 	// ownership if this process still holds it, so a process that leaves without a
 	// clean release still hands over rather than looking like it crashed.
-	defer func() { runErr = errors.Join(runErr, fence.Close()) }()
+	defer func() { runErr = errors.Join(runErr, ownership.Close()) }()
 
-	observer.Emit("platform.fence_opened", operations.LevelInfo, "platform.redundancy", "machine fence ownership object opened", map[string]any{
-		operations.AttributeObject: fence.Name(),
+	observer.Emit("platform.fence_opened", operations.LevelInfo, "platform.redundancy", "ownership object opened", map[string]any{
+		operations.AttributeObject: ownership.Name(),
 		// Whether a peer process on this machine already had the object open. Both
 		// processes must report the same object; a machine whose two processes
 		// report different ones was built from mismatched packages.
-		operations.AttributeExisted: fence.Existed(),
+		operations.AttributeExisted: ownership.Existed(),
 	})
 
-	acquired, err := fence.TryAcquire()
+	acquired, err := ownership.TryAcquire()
 	if err != nil {
 		return err
 	}
 	if acquired.Held {
-		emitAcquired(observer, fence, acquired)
-		return runFencedActive(ctx, cfg, descriptor, role, statusPath, fence, activationInitial)
+		emitAcquired(observer, ownership, acquired)
+		return runAsOwner(ctx, cfg, descriptor, role, statusPath, ownership, activationInitial)
 	}
-	observer.Emit("platform.fence_waiting", operations.LevelInfo, "platform.redundancy", "active machine fence is held by another process", map[string]any{operations.AttributeObject: fence.Name()})
+	observer.Emit("platform.fence_waiting", operations.LevelInfo, "platform.redundancy", "Primary Ownership is held by the other instance", map[string]any{operations.AttributeObject: ownership.Name()})
 	if descriptor.Slots.Standby.Disabled {
-		return fmt.Errorf("another process already holds the active fence for machine %q and this machine does not run a standby slot", descriptor.Machine)
+		return fmt.Errorf("another process already holds Primary Ownership for machine %q and this machine deploys no Standby Instance", descriptor.Machine)
 	}
-	return runStandby(ctx, cfg, descriptor, role, statusPath, fence)
+	return runStandby(ctx, cfg, descriptor, role, statusPath, ownership)
 }
 
 // emitAcquired reports ownership and, crucially, how it was obtained.
 //
-// An abandoned fence means the previous owner died rather than handed over. The
-// file-lock fence this replaced could not tell the two apart, so an operator had
+// An abandoned ownership means the previous owner died rather than handed over. The
+// file-lock ownership this replaced could not tell the two apart, so an operator had
 // to correlate logs to answer whether a failover was planned.
-func emitAcquired(observer *operations.Recorder, fence *redundancy.Fence, acquired redundancy.Acquisition) {
+func emitAcquired(observer *operations.Recorder, ownership *redundancy.Ownership, acquired redundancy.Acquisition) {
 	attributes := map[string]any{
-		operations.AttributeObject:    fence.Name(),
+		operations.AttributeObject:    ownership.Name(),
 		operations.AttributeAbandoned: acquired.Abandoned,
 	}
 	if acquired.Abandoned {
 		observer.Emit("platform.fence_acquired", operations.LevelWarn, "platform.redundancy",
-			"active machine fence acquired from a process that died without releasing it", attributes)
+			"Primary Ownership acquired from a process that died without releasing it", attributes)
 		return
 	}
-	observer.Emit("platform.fence_acquired", operations.LevelInfo, "platform.redundancy", "active machine fence acquired", attributes)
+	observer.Emit("platform.fence_acquired", operations.LevelInfo, "platform.redundancy", "Primary Ownership acquired", attributes)
 }
 
 // runActive brings this node's Event Fabric up to readiness and serves the public
@@ -193,76 +194,76 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 }
 
 // runStandby keeps a client-only projection while independently waiting for the
-// fence. Fence acquisition cancels the client composition and starts activation.
-func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, fence *redundancy.Fence) error {
+// ownership. Fence acquisition cancels the client composition and starts activation.
+func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, ownership *redundancy.Ownership) error {
 	waitCtx, stopWaiting := context.WithCancel(ctx)
 	defer stopWaiting()
 	standbyCtx, stopStandby := context.WithCancel(waitCtx)
 	defer stopStandby()
 
-	// The wait is a kernel wait inside the fence, so this goroutine is parked until
+	// The wait happens in the kernel, so this goroutine is parked until
 	// the holder releases or dies rather than polling for it.
-	fenceDone := make(chan fenceResult, 1)
+	ownershipDone := make(chan ownershipResult, 1)
 	go func() {
-		acquired, err := fence.Acquire(waitCtx)
+		acquired, err := ownership.Acquire(waitCtx)
 		if err == nil {
 			stopStandby()
 		}
-		fenceDone <- fenceResult{acquired: acquired, err: err}
+		ownershipDone <- ownershipResult{acquired: acquired, err: err}
 	}()
 
-	opened, err := openWaitingStandby(ctx, standbyCtx, cfg, descriptor, role, statusPath, fence)
+	opened, err := openWaitingStandby(ctx, standbyCtx, cfg, descriptor, role, statusPath, ownership)
 	if err != nil {
 		stopWaiting()
-		<-fenceDone
+		<-ownershipDone
 		return err
 	}
 	standby := opened.site
-	acquired, err := awaitFence(ctx, waitCtx, cfg, role, statusPath, standby, fence, fenceDone, stopWaiting)
+	acquired, err := awaitOwnership(ctx, waitCtx, cfg, role, statusPath, standby, ownership, ownershipDone, stopWaiting)
 	if err != nil {
 		return err
 	}
-	emitAcquired(operations.FromContext(ctx), fence, acquired)
+	emitAcquired(operations.FromContext(ctx), ownership, acquired)
 
 	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
 		var closeErr error
 		if standby != nil {
 			closeErr = standby.close(ctx)
 		}
-		return errors.Join(err, closeErr, fence.Release())
+		return errors.Join(err, closeErr, ownership.Release())
 	}
 	if standby != nil {
 		if err := standby.close(ctx); err != nil {
-			return errors.Join(err, fence.Release(), writeFailedStatus(statusPath, role, err))
+			return errors.Join(err, ownership.Release(), writeFailedStatus(statusPath, role, err))
 		}
 	}
 
-	kind := activationPromotion
+	kind := activationFailover
 	if role == redundancy.RolePrimary {
-		kind = activationReclamation
+		kind = activationFailback
 	}
-	return runFencedActive(ctx, cfg, descriptor, role, statusPath, fence, kind)
+	return runAsOwner(ctx, cfg, descriptor, role, statusPath, ownership, kind)
 }
 
 type standbyOpenResult struct {
 	site *site
 }
 
-func openWaitingStandby(ctx, standbyCtx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, fence *redundancy.Fence) (standbyOpenResult, error) {
+func openWaitingStandby(ctx, standbyCtx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, ownership *redundancy.Ownership) (standbyOpenResult, error) {
 	observer := operations.FromContext(ctx)
 	attempt := 0
-	for !fence.Held() {
+	for !ownership.Held() {
 		attempt++
 		standby, err := open(standbyCtx, descriptor, cfg, false, role)
 		if err == nil {
 			return standbyOpenResult{site: standby}, nil
 		}
-		if fence.Held() || ctx.Err() != nil {
+		if ownership.Held() || ctx.Err() != nil {
 			return standbyOpenResult{}, nil
 		}
-		fmt.Fprintf(os.Stderr, "platform: %s standby projection unavailable: %v; waiting for the active fence\n", role, err)
+		fmt.Fprintf(os.Stderr, "platform: %s standby projection unavailable: %v; waiting for Primary Ownership\n", role, err)
 		if attempt == 1 || attempt%10 == 0 {
-			observer.Emit("platform.standby_open_retry", operations.LevelWarn, "platform.redundancy", "standby projection unavailable; waiting for active fence", map[string]any{"attempt": attempt, operations.AttributeError: err.Error()})
+			observer.Emit("platform.standby_open_retry", operations.LevelWarn, "platform.redundancy", "standby projection unavailable; waiting for Primary Ownership", map[string]any{"attempt": attempt, operations.AttributeError: err.Error()})
 		}
 		if writeErr := writeUnavailableStatus(statusPath, role, err); writeErr != nil {
 			return standbyOpenResult{}, errors.Join(err, writeErr)
@@ -275,17 +276,17 @@ func openWaitingStandby(ctx, standbyCtx context.Context, cfg *config.Config, des
 	return standbyOpenResult{}, nil
 }
 
-// fenceResult is one fence acquisition attempt's outcome, carried from the
+// ownershipResult is one ownership acquisition attempt's outcome, carried from the
 // waiting goroutine back to the standby that started it.
-type fenceResult struct {
+type ownershipResult struct {
 	acquired redundancy.Acquisition
 	err      error
 }
 
-func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundancy.InstanceRole, statusPath string, standby *site, fence *redundancy.Fence, fenceDone <-chan fenceResult, stopWaiting context.CancelFunc) (redundancy.Acquisition, error) {
+func awaitOwnership(ctx, waitCtx context.Context, cfg *config.Config, role redundancy.InstanceRole, statusPath string, standby *site, ownership *redundancy.Ownership, ownershipDone <-chan ownershipResult, stopWaiting context.CancelFunc) (redundancy.Acquisition, error) {
 	var statusDone <-chan error
 	var stopStatus context.CancelFunc
-	if standby != nil && !fence.Held() {
+	if standby != nil && !ownership.Held() {
 		statusCtx, cancelStatus := context.WithCancel(context.WithoutCancel(waitCtx))
 		stopStatus = cancelStatus
 		var err error
@@ -293,14 +294,14 @@ func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundanc
 		if err != nil {
 			stopStatus()
 			stopWaiting()
-			<-fenceDone
+			<-ownershipDone
 			return redundancy.Acquisition{}, errors.Join(err, standby.close(ctx), writeFailedStatus(statusPath, role, err))
 		}
-		fmt.Printf("platform: %s caught up and waiting for the active fence\n", role)
-		operations.FromContext(ctx).Emit("platform.standby_waiting", operations.LevelInfo, "platform.redundancy", "standby projection caught up and is waiting for active fence", nil)
+		fmt.Printf("platform: %s caught up and waiting for Primary Ownership\n", role)
+		operations.FromContext(ctx).Emit("platform.standby_waiting", operations.LevelInfo, "platform.redundancy", "standby projection caught up and is waiting for Primary Ownership", nil)
 	}
 
-	result := <-fenceDone
+	result := <-ownershipDone
 	if stopStatus != nil {
 		stopStatus()
 	}
@@ -321,16 +322,16 @@ func awaitFence(ctx, waitCtx context.Context, cfg *config.Config, role redundanc
 	return redundancy.Acquisition{}, errors.Join(result.err, statusErr, closeErr)
 }
 
-func runFencedActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, fence *redundancy.Fence, kind activationKind) error {
+func runAsOwner(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, ownership *redundancy.Ownership, kind activationKind) error {
 	observer := operations.FromContext(ctx)
 	started := time.Now()
 	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
-		return errors.Join(err, fence.Release())
+		return errors.Join(err, ownership.Release())
 	}
 	fmt.Printf("platform: %s started for %s\n", kind, role)
 	observer.Emit("platform.activation_started", operations.LevelInfo, "platform.redundancy", "active runtime activation started", map[string]any{operations.AttributeActivationKind: string(kind)})
 	err := runActive(ctx, cfg, descriptor, role, statusPath)
-	releaseErr := fence.Release()
+	releaseErr := ownership.Release()
 	if err != nil {
 		observer.Emit("platform.activation_failed", operations.LevelError, "platform.redundancy", "active runtime activation failed", map[string]any{operations.AttributeActivationKind: string(kind), operations.AttributeDurationMS: time.Since(started).Milliseconds(), operations.AttributeError: err.Error()})
 		return errors.Join(err, releaseErr, writeFailedStatus(statusPath, role, err))
@@ -351,18 +352,18 @@ func startStatus(ctx context.Context, fabric statusFabric, role redundancy.Insta
 	var lag redundancy.LagState
 	write := func() error {
 		now := time.Now()
-		status := redundancy.Status{Role: role, State: state, PID: os.Getpid(), UpdatedAt: now.UTC(), Promotable: true}
+		status := redundancy.Status{Role: role, State: state, PID: os.Getpid(), UpdatedAt: now.UTC(), FailoverReady: true}
 		st, err := fabric.State(ctx)
 		behind := lag.Observe(err != nil || !st.CaughtUp, now)
 		status.Lag = behind.String()
 		if err != nil {
 			status.LastError = err.Error()
-			status.Promotable = false
+			status.FailoverReady = false
 		} else {
 			status.Applied, status.HighWater = st.Applied, st.HighWater
 		}
 		if redundancy.Exceeds(behind, lagBound) {
-			status.Promotable = false
+			status.FailoverReady = false
 			if onLagExceeded != nil {
 				onLagExceeded()
 			}

@@ -12,19 +12,37 @@ They are atomic JSON snapshots with these fields:
 
 | Field | Meaning |
 | --- | --- |
-| `role` | `primary` or `standby` process identity |
-| `state` | Lifecycle state such as `activating`, `active`, `standby`, `stopping`, or `failed` |
+| `role` | Which fixed instance wrote this: `primary` or `standby` |
+| `state` | What that instance is doing: `active` or `standby`, or a transitional `starting`, `activating`, `stopping`, `failed` |
 | `pid` | Process that wrote the snapshot; validate it is still alive |
 | `applied` | Highest journal sequence projected locally |
 | `high_water` | Highest accepted journal sequence last observed |
 | `lag` | Continuous time behind the journal |
-| `promotable` | Whether this process is safe to activate |
+| `failover_ready` | Whether this instance is current enough to take over |
 | `updated_at` | UTC snapshot time |
 | `last_error` | Most recent health or lifecycle error |
 
-The OS fence, not the status file, owns activation. A stale file after a crash is
-historical evidence. Treat it as live only when `updated_at` is fresh and `pid`
-belongs to the expected service.
+Primary Ownership, not the status file, decides which instance is Active. A
+stale file after a crash is historical evidence. Treat it as live only when
+`updated_at` is fresh and `pid` belongs to the expected service.
+
+### Role and state are different axes
+
+`role` is fixed for the life of the installation. `state` changes. Both use the
+word `standby`, so read them together: the combinations that differ are the ones
+worth acting on.
+
+| `role` | `state` | Meaning |
+| --- | --- | --- |
+| `primary` | `active` | Normal operation |
+| `standby` | `standby` | Normal operation |
+| `standby` | `active` | **Failover has occurred.** The machine is serving from its Standby Instance |
+| `primary` | `standby` | The Primary Instance is available but does not own. Ownership returns only when the Active instance is stopped, so this persists until an operator acts |
+| both `active` | | Must never occur, and cannot |
+
+The fourth row is not an error and not transient. It is the steady state after a
+returning Primary Instance rejoins, and it stays until a controlled Ownership
+Transfer moves ownership back. See `upgrade.md`.
 
 ## Operational event stream
 
@@ -54,7 +72,7 @@ Important event types:
 | --- | --- |
 | `platform.process_started`, `platform.process_stopped` | Process lifetime and terminal error |
 | `platform.fence_opened`, `platform.fence_acquired`, `platform.fence_waiting` | Active ownership transition. `fence_opened` names the kernel object, which has no path; `fence_acquired` carries `abandoned`, distinguishing a crash failover from a planned handover |
-| `platform.activation_started`, `completed`, `failed` | Initial activation, promotion, or primary reclamation with duration |
+| `platform.activation_started`, `completed`, `failed` | Initial activation, failover, or failback with duration |
 | `event_fabric.server_starting`, `server_ready` | Embedded storage server lifecycle |
 | `event_fabric.client_connected`, `disconnected`, `reconnected`, `closed` | Selected NATS server and connection transitions |
 | `event_fabric.client_connect_retry`, `client_async_error` | Connection degradation |
@@ -82,7 +100,7 @@ or a local collector:
 | Projection backlog | `high_water - applied` | Number of accepted events not projected locally |
 | Projection lag seconds | Parse status `lag` | Continuous duration behind, used for serving safety |
 | Promotable standby count | Standby statuses | Local failover readiness |
-| Activation duration | `platform.activation_completed.attributes.duration_ms` | Initial, promotion, and reclamation performance |
+| Activation duration | `platform.activation_completed.attributes.duration_ms` | Initial activation, failover, and failback performance |
 | Catch-up duration | `platform.projection_caught_up.attributes.duration_ms` | Replay and post-handler convergence performance |
 | Connection outage duration | Time from `client_disconnected` to `client_reconnected` | Transport recovery performance |
 | Journal startup attempts | `journal_retry` and `journal_recovered` | Cluster formation delay or instability |
@@ -108,7 +126,7 @@ Warning:
 
 - `client_disconnected`, `client_connect_retry`, or `journal_retry` appears;
 - `high_water - applied` grows across successive status samples;
-- a configured standby is not fresh and promotable;
+- a configured standby is not fresh and failover-ready;
 - JSONL sink fallback text appears on stderr;
 - disk use in the journal or operations directory crosses the site's capacity
   threshold.

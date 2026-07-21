@@ -99,7 +99,7 @@ func TestDefaultConfigTakesNoProcessRole(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, first, second, "one machine, one topology, whatever the process role")
 	require.Equal(t, "10.0.1.10:4222", second.Servers[0],
-		"the server list points at the address the fence owner is serving on")
+		"the server list points at the address the ownership holder is serving on")
 }
 
 // TestDefaultConfigForATwoMachineSiteRunsOneServer pins the POC topology. Two

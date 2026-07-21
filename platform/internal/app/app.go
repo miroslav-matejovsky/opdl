@@ -18,7 +18,7 @@ import (
 
 // Run starts the platform runtime with the given command-line arguments. It
 // loads configuration, validates this process role against the machine
-// fence, and runs either the active runtime or a warm standby until signaled.
+// ownership, and runs either the active runtime or a warm standby until signaled.
 func Run(args []string) (runErr error) {
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
 	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")

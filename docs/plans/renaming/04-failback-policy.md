@@ -3,8 +3,33 @@
 **Effort:** Large. **Risk:** High. **Depends on:** stage 01. Couples to stage 07.
 
 The only stage in this plan that changes behavior. Every other stage is naming,
-structure, or documentation. Settle this one before stage 05, because how failback
-is named depends on what failback does.
+structure, or documentation.
+
+## Status: deferred
+
+Decided: skip for now. Behavior is unchanged, no policy is added to the blueprint,
+and failback remains an operator procedure with no configuration.
+
+The rest of the plan continues without it. Stage 05 still adopts the word
+**failback**, which is correct for a manual procedure: failback names the
+transition, not its trigger, and manual failback is an ordinary arrangement. To
+keep the word from implying more than the platform does, stage 05 and the runbooks
+state the trigger wherever they use it: **ownership returns only when an operator
+or deployment tooling stops the Active instance.**
+
+Everything below stands as the analysis for when this is picked up. The two facts
+that shape it, and are easy to lose:
+
+- Automatic failback needs a way for a returning Primary Instance to *ask* for
+  ownership, because the mutex has no preemption by design. The two instances have
+  no channel to ask through, so this means adding inter-instance communication to
+  an architecture that deliberately has none.
+- Both instances are on one machine, so failback buys operational uniformity, not
+  capability. An Active Standby is not degraded. The cost is a real interruption
+  of roughly one Ownership Transfer.
+
+And the trap: automatic failback would fight the rolling upgrade, sending
+ownership back to the un-upgraded instance the moment step 4 transfers it away.
 
 ## Why this stage exists
 

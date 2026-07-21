@@ -10,7 +10,7 @@ That gap is gone, and its cause is identified.
 
 The standby had been given its own NATS client address while the only running
 server was the active process's, so it never reached the journal and was never
-warm. On forced primary death the promoted process had to complete a cold startup
+warm. On forced primary death the newly Active process had to complete a cold startup
 bounded by the same 30 second Event Fabric startup timeout, which is why the
 measurement sat within a rounding error of that bound. Sharing one machine-level
 endpoint between the two processes removed it.
@@ -18,7 +18,7 @@ endpoint between the two processes removed it.
 Three consecutive Windows runs of `TestWarmStandbyFailoverAndPreferredPrimary`
 after the change:
 
-| Run | Catch-up | Promotion | Listener unavailable | Handover |
+| Run | Catch-up | Failover | Listener unavailable | Failback |
 | --- | ---: | ---: | ---: | ---: |
 | 1 | 110.8 ms | 182.6 ms | 192.9 ms | 275.8 ms |
 | 2 | 108.3 ms | 126.8 ms | 133.5 ms | 266.6 ms |

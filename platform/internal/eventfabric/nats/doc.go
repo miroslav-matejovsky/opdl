@@ -67,7 +67,7 @@
 // DefaultConfig takes no process role. A machine has one NATS topology, and the
 // primary and standby are mutually exclusive owners of it.
 //
-// On a storage machine only the process holding the machine fence enables the
+// On a storage machine only the instance holding Primary Ownership enables the
 // embedded server and opens the JetStream directory. Its standby composes the
 // same configuration and is then converted to client-only, which clears server
 // ownership, the listener addresses, the routes, and the data directory while
