@@ -24,8 +24,8 @@ import (
 // is a machine that stopped without warning, which is the case a customer meets.
 func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
 	ctx := t.Context()
-	outDir := t.TempDir()
-	deployment := deploySite(ctx, t, outDir, t.TempDir(), "scenario")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "scenario")
 	node := deployment.machine(t, "node")
 	node.start(ctx, t)
 	waitForAPI(ctx, t, node)
@@ -65,8 +65,8 @@ func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
 // look healthy while losing facts.
 func TestPlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
 	ctx := t.Context()
-	outDir := t.TempDir()
-	workDir := t.TempDir()
+	outDir := filepath.Join(scenarioDir(t), "out")
+	workDir := filepath.Join(scenarioDir(t), "work")
 	deployment := deploySite(ctx, t, outDir, workDir, "scenario")
 	node := deployment.machine(t, "node")
 

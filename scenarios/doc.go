@@ -91,8 +91,8 @@
 // A deployment derives every address from a machine's own IP on fixed ports, and
 // places the journal's storage where site operations decide. A scenario cannot:
 // several machines share one host, and those ports and paths are not the
-// scenario's to take. So the harness reserves ephemeral ports and a temporary
-// directory per machine and passes them as runtime overrides, which move sockets
+// scenario's to take. So the harness allocates distinct ports and a stable repo-local
+// scratch directory per machine and passes them as runtime overrides, which move sockets
 // and storage and nothing else. Which machine a process is stays what it was
 // built with.
 //
@@ -127,7 +127,36 @@
 // they test. Warm-standby scenarios additionally use the operating system's
 // process-control signal for planned handover and full shutdown. No runtime
 // promotion endpoint exists. On Windows every launched command is placed in a
-// kill-on-close job before it starts. This keeps nested builder, Go, and .NET
 // processes inside the scenario lifecycle even when the test process itself is
 // terminated by a hard timeout.
+//
+// # Where scenario artifacts live
+//
+// Every scenario artifact outlives the test run inside scenarios/.tmp/<TestName>/
+// (for example, scenarios/.tmp/TestFourMachineStorageTopologyAndFailure/),
+// emptied once on first access per test run. The subdirectories under each
+// scenario root are:
+//   - blueprints/: the temporary project.hcl rendered for the build
+//   - out/: the compiled packages and manifests produced by the builder
+//   - work/: runtime configuration files (config-*.toml), site journals
+//     (nats-*), status files (instance-*), and operational JSONL streams
+//     (operations-*)
+//   - control/: marker files used for coordination (such as in .NET SDK tests)
+//
+// Unlike standard t.TempDir() paths, these scratch roots outlive the test so a
+// developer investigating a failure can read the exact rendered blueprint, built
+// binaries, journals, and logs right next to the code.
+//
+// Because multiple platform binaries and NATS JetStream journals are preserved
+// across the suite, expect a few hundred megabytes under scenarios/.tmp/ after
+// a full test run. Running task clean removes the entire .tmp tree.
+//
+// # OPDL_SCENARIO_TMP
+//
+// When two go test invocations of the scenario suite execute concurrently (such
+// as during cross-process port allocation verification), they would otherwise
+// empty and overwrite each other's scenarios/.tmp/<TestName>/ directories mid-run.
+// Setting the OPDL_SCENARIO_TMP environment variable relocates the base scratch
+// root outside of scenarios/.tmp/ so concurrent test processes can run against
+// independent directories.
 package scenarios

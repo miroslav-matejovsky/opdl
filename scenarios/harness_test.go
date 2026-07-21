@@ -126,6 +126,53 @@ type natsPorts struct {
 	cluster int
 }
 
+var (
+	scenarioDirsMu sync.Mutex
+	scenarioDirs   = make(map[string]*sync.Once)
+)
+
+// scenarioDir returns this scenario's scratch root under scenarios/.tmp,
+// emptied on first use in this run.
+//
+// Layout:
+//
+//	scenarios/.tmp/
+//	  TestFourMachineStorageTopologyAndFailure/
+//	    blueprints/    rendered project.hcl
+//	    out/           built machine packages and manifests
+//	    work/          config-*.toml, nats-*, instance-*, operations-*
+//	    control/       marker files
+func scenarioDir(t *testing.T) string {
+	t.Helper()
+	testName, _, _ := strings.Cut(t.Name(), "/")
+
+	scenarioDirsMu.Lock()
+	once, ok := scenarioDirs[testName]
+	if !ok {
+		once = new(sync.Once)
+		scenarioDirs[testName] = once
+	}
+	scenarioDirsMu.Unlock()
+
+	baseDir := os.Getenv("OPDL_SCENARIO_TMP")
+	if baseDir == "" {
+		baseDir = ".tmp"
+	}
+	dir, err := filepath.Abs(filepath.Join(baseDir, testName))
+	require.NoError(t, err)
+
+	once.Do(func() {
+		if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("failed to empty scratch directory %s (a stale process from a previous run may still be holding a file): %v", dir, err)
+		}
+		for _, sub := range []string{"blueprints", "out", "work", "control"} {
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, sub), 0o755))
+		}
+	})
+
+	return dir
+}
+
 // stageBlueprint allocates each machine's NATS ports from the testnet pool and
 // renders the project's blueprint into a temporary blueprint root.
 func stageBlueprint(t *testing.T, project string) (root string, ports map[string]natsPorts) {
@@ -152,7 +199,7 @@ func stageBlueprint(t *testing.T, project string) (root string, ports map[string
 		ports[fixture.name] = natsPorts{client: client, cluster: cluster}
 	}
 
-	root = filepath.Join(t.TempDir(), "blueprints")
+	root = filepath.Join(scenarioDir(t), "blueprints")
 	projectDir := filepath.Join(root, project)
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 

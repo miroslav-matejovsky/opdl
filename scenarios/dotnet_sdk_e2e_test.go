@@ -47,13 +47,13 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
-	outDir := t.TempDir()
+	outDir := filepath.Join(scenarioDir(t), "out")
 	// Both machines are prepared up front so the .NET test knows where node B will
 	// answer, and started separately so node B is genuinely absent while the
 	// pending assertions run.
-	deployment := deploySite(ctx, t, outDir, t.TempDir(), "two-machine")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
 	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
-	controlDir := t.TempDir()
+	controlDir := filepath.Join(scenarioDir(t), "control")
 
 	first.start(ctx, t)
 	waitForAPI(ctx, t, first)

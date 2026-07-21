@@ -27,6 +27,7 @@ dist/
 bin/
 .gocache/
 .lintcache/
+.tmp/
 
 # Event Fabric journal storage written by `task run` (see platform/config.toml)
 .data/

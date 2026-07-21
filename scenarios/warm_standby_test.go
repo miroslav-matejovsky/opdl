@@ -3,6 +3,7 @@ package scenarios
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +17,8 @@ import (
 // registration assertions stay on the public API.
 func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	ctx := t.Context()
-	outDir := t.TempDir()
-	deployment := deploySite(ctx, t, outDir, t.TempDir(), "manifest-contract")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "manifest-contract")
 	node := deployment.machine(t, "node")
 	manifest := readManifest(t, node.binaryPath)
 	require.NotNil(t, manifest.Standby, "default policy must package a standby launch")

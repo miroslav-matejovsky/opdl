@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -28,8 +29,8 @@ import (
 // onto its own journal storage and requires it to rejoin with the same state.
 func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 	ctx := t.Context()
-	outDir := t.TempDir()
-	deployment := deploySite(ctx, t, outDir, t.TempDir(), "four-machine")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "four-machine")
 
 	// Storage is selected by sorted machine name, so node-a, node-b, and node-c
 	// store the journal and node-d does not. Nothing tells them that: each derives

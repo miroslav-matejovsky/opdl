@@ -1,6 +1,7 @@
 package scenarios
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,8 +11,8 @@ import (
 // without importing builder or platform internals.
 func TestManifestArgumentsMatchRuntime(t *testing.T) {
 	ctx := t.Context()
-	outDir := t.TempDir()
-	deployment := deploySite(ctx, t, outDir, t.TempDir(), "manifest-contract")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "manifest-contract")
 	node := deployment.machine(t, "node")
 	manifest := readManifest(t, node.binaryPath)
 	require.Equal(t, []string{"-instance", "primary"}, manifest.Primary.Args)

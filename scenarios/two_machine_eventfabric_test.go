@@ -1,6 +1,7 @@
 package scenarios
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,11 +22,11 @@ import (
 // What the site then decides is TestTwoMachineRegistration's subject.
 func TestTwoMachineEventFabric(t *testing.T) {
 	ctx := t.Context()
-	outDir := t.TempDir()
+	outDir := filepath.Join(scenarioDir(t), "out")
 	// node-a sorts first, so it is the site's storage node and node-b is a client
 	// of it. Nothing told either of them that: both derived it from the same
 	// topology in the blueprint the harness rendered and built.
-	deployment := deploySite(ctx, t, outDir, t.TempDir(), "two-machine")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
 	nodeA, nodeB := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
 	deployment.startAll(ctx, t)
 

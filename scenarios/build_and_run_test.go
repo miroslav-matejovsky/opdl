@@ -15,8 +15,8 @@ import (
 // external processes; nothing here imports builder or platform Go code.
 func TestBuildAndRunSingleMachine(t *testing.T) {
 	ctx := t.Context()
-	outDir := t.TempDir()
-	deployment := deploySite(ctx, t, outDir, t.TempDir(), "scenario")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "scenario")
 	node := deployment.machine(t, "node")
 	require.Nil(t, readManifest(t, node.binaryPath).Standby,
 		"an explicit per-machine opt-out must package only the primary launch")
