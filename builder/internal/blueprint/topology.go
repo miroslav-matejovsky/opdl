@@ -60,24 +60,48 @@ type Machine struct {
 // subsection of a machine so a blueprint reader sees these policies grouped and
 // explicit rather than mixed in with the machine's identity and services.
 //
-// Both subsections are mandatory. A machine that omits either one is rejected,
-// so redundancy and the Event Fabric's ports are always a stated decision rather
-// than an inherited default.
+// # The platform block is the Primary Instance
+//
+// Every machine deploys a Primary Instance and only some deploy a Standby
+// Instance, so the blocks directly under platform state the Primary Instance's
+// policy and the standby block restates the same three for the Standby Instance.
+// A machine that opts out of a standby states that once, with disabled, and
+// authors nothing further.
+//
+// The two instances are independent runtimes that run at the same time on one
+// host. Every port either of them binds is therefore its own: the api endpoint it
+// serves and the Event Fabric ports its own NATS server binds. Nothing on a
+// machine is shared between them except the ownership object, which is not a
+// port.
 type Platform struct {
-	// WinService is the Primary Instance's Windows Service identity. It is
-	// authored at platform level rather than inside a primary block because a
-	// machine always deploys a Primary Instance; the Standby Instance is the
-	// optional one, so its service is authored inside standby.
+	// API is the Primary Instance's local API endpoint policy.
+	API *API `hcl:"api,block"`
+	// WinService is the Primary Instance's Windows Service identity.
 	WinService *WinService `hcl:"winservice,block"`
-	// Nats is the machine's Event Fabric NATS port policy. It is machine-level:
-	// whichever instance holds Primary Ownership binds these ports, so the two
-	// instances never own separate endpoints.
+	// Nats is the Primary Instance's Event Fabric NATS port policy.
 	Nats *Nats `hcl:"nats,block"`
-	// Standby is the machine's local redundancy policy.
+	// Standby is the machine's local redundancy policy, and where a deployed
+	// Standby Instance states its own api, winservice, and nats.
 	Standby *Standby `hcl:"standby,block"`
 	// Fence is the machine's optional local ownership policy. An omitted block
 	// leaves the namespace at its default.
 	Fence *Fence `hcl:"fence,block"`
+}
+
+// API is one instance's local API endpoint policy.
+//
+// Only the port is authored. The builder joins it with the machine's ip to derive
+// the address the instance serves on, the same split the nats block follows: a
+// blueprint states what a machine needs open, and the builder derives what
+// reaches it.
+//
+// Each instance has its own port because both bind theirs for their whole
+// lifetime, not only while Active. That is what lets an operator ask a Standby
+// Instance about itself, which a single endpoint owned by whoever is Active
+// cannot answer.
+type API struct {
+	// Port is the port this instance serves its local API on.
+	Port int `hcl:"port"`
 }
 
 // maxWinServiceName bounds a Windows Service name. The Service Control Manager
@@ -165,40 +189,45 @@ func (m Machine) FenceNamespace() string {
 	return strings.TrimSpace(m.Platform.Fence.Namespace)
 }
 
-// Standby is a machine's local redundancy policy.
+// Standby is a machine's local redundancy policy, and the Standby Instance's own
+// policy when one is deployed.
+//
+// A deployed Standby Instance states the same three blocks the Primary Instance
+// states directly under platform, because it is an independent runtime and owns
+// its own endpoints. All three are required when it is deployed and rejected when
+// it is not: authoring an endpoint for an instance the machine does not run
+// states a decision that can never take effect, and a reader could not tell it
+// from one that does.
 type Standby struct {
 	// Disabled opts the machine out of a second local process. It is required, so
 	// omitting the attribute cannot silently enable or disable redundancy.
-	//
-	// A false value deploys a Standby Instance that waits for Primary Ownership. It
-	// does not add a second NATS endpoint: the two instances are mutually exclusive
-	// owners of the same machine-level ports.
 	Disabled bool `hcl:"disabled"`
+	// API is the Standby Instance's local API endpoint policy.
+	API *API `hcl:"api,block"`
 	// WinService is the Standby Instance's Windows Service identity.
-	//
-	// It is required when the standby is deployed and rejected when it is not:
-	// naming a service for an instance the machine does not run states a decision
-	// that can never take effect, and a reader could not tell it from one that
-	// does.
 	WinService *WinService `hcl:"winservice,block"`
+	// Nats is the Standby Instance's Event Fabric NATS port policy. Its server is
+	// a cluster member in its own right, so on a storage machine the two instances
+	// run two servers that route to each other.
+	Nats *Nats `hcl:"nats,block"`
 }
 
-// Nats is a machine's Event Fabric NATS port policy. It is authored inside
-// platform {} so a blueprint reader sees which ports the machine needs open.
+// Nats is one instance's Event Fabric NATS port policy, authored so a blueprint
+// reader sees which ports the machine needs open.
 //
 // Only ports are authored. The builder joins each port with the machine's ip to
-// derive the addresses that reach it, and derives the site's route and server
-// lists from the site topology. Authoring those lists directly could silently
-// split a site or point a machine at another site's journal.
+// derive the addresses that reach this instance, and derives the site's route and
+// server lists from the site topology. Authoring those lists directly could
+// silently split a site or point an instance at another site's journal.
 type Nats struct {
-	// ClientPort is the port the machine's server serves the NATS client protocol
-	// on. The platform's active process, a local standby following the journal,
-	// and every machine of the site that does not store the journal all reach the
-	// Event Fabric through it.
+	// ClientPort is the port this instance's server serves the NATS client
+	// protocol on. It is bound only on a storage machine; every other instance of
+	// the site reaches the journal through the storage machines' client ports.
 	ClientPort int `hcl:"client_port"`
-	// ClusterPort is the port the machine's server routes to the site's other
-	// storage nodes on. It carries the server-to-server route protocol only and
-	// is bound only when the site topology selects three storage nodes.
+	// ClusterPort is the port this instance's server routes to the site's other
+	// storage servers on, including its own machine's other instance. It carries
+	// the server-to-server route protocol only, and is bound only when the site
+	// has a second storage server to route to.
 	ClusterPort int `hcl:"cluster_port"`
 }
 
@@ -287,10 +316,10 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 	return validatePlatform(machine)
 }
 
-// validatePlatform checks a machine states both platform policies. Neither has a
-// default: an omitted nats block would leave the Event Fabric without ports, and
-// an omitted standby block would make local redundancy depend on what a reader
-// assumed rather than on what the blueprint says.
+// validatePlatform checks a machine states every platform policy. None has a
+// default: an omitted api or nats block would leave an instance without an
+// endpoint, and an omitted standby block would make local redundancy depend on
+// what a reader assumed rather than on what the blueprint says.
 func validatePlatform(machine Machine) error {
 	if machine.Platform == nil {
 		return fmt.Errorf("machine %q: platform block is required", machine.Name)
@@ -298,26 +327,94 @@ func validatePlatform(machine Machine) error {
 	if machine.Platform.Standby == nil {
 		return fmt.Errorf("machine %q: platform.standby block is required", machine.Name)
 	}
-	if machine.Platform.Nats == nil {
-		return fmt.Errorf("machine %q: platform.nats block is required", machine.Name)
-	}
-	nats := machine.Platform.Nats
-	if err := validatePort(machine.Name, "client_port", nats.ClientPort); err != nil {
+	if err := validateInstanceEndpoints(machine, "platform", machine.Platform.API, machine.Platform.Nats); err != nil {
 		return err
 	}
-	if err := validatePort(machine.Name, "cluster_port", nats.ClusterPort); err != nil {
+	if err := validateStandbyEndpoints(machine); err != nil {
 		return err
 	}
-	// One listener per port. The client and route protocols are different
-	// protocols on the same server, so a shared port would leave the server
-	// unable to bind the second of them.
-	if nats.ClientPort == nats.ClusterPort {
-		return fmt.Errorf("machine %q: platform.nats.client_port and cluster_port must differ, both are %d", machine.Name, nats.ClientPort)
+	if err := validateMachinePorts(machine); err != nil {
+		return err
 	}
 	if err := validateWinServices(machine); err != nil {
 		return err
 	}
 	return validateFence(machine)
+}
+
+// validateInstanceEndpoints checks one instance states both of its endpoint
+// policies with usable ports.
+func validateInstanceEndpoints(machine Machine, block string, api *API, nats *Nats) error {
+	if api == nil {
+		return fmt.Errorf("machine %q: %s.api block is required", machine.Name, block)
+	}
+	if err := validatePort(machine.Name, block+".api.port", api.Port); err != nil {
+		return err
+	}
+	if nats == nil {
+		return fmt.Errorf("machine %q: %s.nats block is required", machine.Name, block)
+	}
+	if err := validatePort(machine.Name, block+".nats.client_port", nats.ClientPort); err != nil {
+		return err
+	}
+	return validatePort(machine.Name, block+".nats.cluster_port", nats.ClusterPort)
+}
+
+// validateStandbyEndpoints checks a deployed Standby Instance states its own
+// endpoints, and that a machine which opts out of a standby states nothing for
+// one.
+func validateStandbyEndpoints(machine Machine) error {
+	standby := machine.Platform.Standby
+	if !standby.Disabled {
+		return validateInstanceEndpoints(machine, "platform.standby", standby.API, standby.Nats)
+	}
+	if standby.API != nil {
+		return fmt.Errorf("machine %q: platform.standby.api is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	}
+	if standby.Nats != nil {
+		return fmt.Errorf("machine %q: platform.standby.nats is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	}
+	return nil
+}
+
+// validateMachinePorts checks no two listeners on the machine are given the same
+// port.
+//
+// Every port a machine authors is bound on one host at one time: the two
+// instances are independent runtimes that run together, and each binds its own
+// api endpoint and, on a storage machine, its own NATS client and cluster
+// listeners. There is no ownership rule that makes any pair of them mutually
+// exclusive, so a repeated port is a listener that will fail to bind.
+//
+// This is the authoring mistake the six-port shape invites, and copying the
+// primary's block into standby is how it happens, so the message names both
+// listeners rather than only reporting a duplicate.
+func validateMachinePorts(machine Machine) error {
+	type listener struct {
+		where string
+		port  int
+	}
+	platform := machine.Platform
+	listeners := []listener{
+		{"platform.api.port", platform.API.Port},
+		{"platform.nats.client_port", platform.Nats.ClientPort},
+		{"platform.nats.cluster_port", platform.Nats.ClusterPort},
+	}
+	if !platform.Standby.Disabled {
+		listeners = append(listeners,
+			listener{"platform.standby.api.port", platform.Standby.API.Port},
+			listener{"platform.standby.nats.client_port", platform.Standby.Nats.ClientPort},
+			listener{"platform.standby.nats.cluster_port", platform.Standby.Nats.ClusterPort},
+		)
+	}
+	taken := make(map[int]string, len(listeners))
+	for _, l := range listeners {
+		if owner, used := taken[l.port]; used {
+			return fmt.Errorf("machine %q: %s and %s are both %d; every listener on a machine needs its own port", machine.Name, owner, l.where, l.port)
+		}
+		taken[l.port] = l.where
+	}
+	return nil
 }
 
 // validateWinServices checks each deployed instance states a usable Windows
@@ -423,9 +520,37 @@ func validateFence(machine Machine) error {
 	return nil
 }
 
-func validatePort(machineName, what string, port int) error {
+func validatePort(machineName, where string, port int) error {
 	if port < 1 || port > 65535 {
-		return fmt.Errorf("machine %q: platform.nats.%s must be in range 1-65535, got %d", machineName, what, port)
+		return fmt.Errorf("machine %q: %s must be in range 1-65535, got %d", machineName, where, port)
 	}
 	return nil
+}
+
+// Endpoints resolves one instance's authored endpoint ports, or nil when that
+// instance is not deployed. It is the one place resolution asks a machine which
+// ports an instance owns, so the primary-under-platform and standby-under-standby
+// asymmetry is read in a single place rather than repeated per endpoint.
+func (m Machine) Endpoints(standby bool) *Endpoints {
+	if m.Platform == nil {
+		return nil
+	}
+	api, nats := m.Platform.API, m.Platform.Nats
+	if standby {
+		if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
+			return nil
+		}
+		api, nats = m.Platform.Standby.API, m.Platform.Standby.Nats
+	}
+	if api == nil || nats == nil {
+		return nil
+	}
+	return &Endpoints{APIPort: api.Port, ClientPort: nats.ClientPort, ClusterPort: nats.ClusterPort}
+}
+
+// Endpoints are one instance's authored listener ports.
+type Endpoints struct {
+	APIPort     int
+	ClientPort  int
+	ClusterPort int
 }

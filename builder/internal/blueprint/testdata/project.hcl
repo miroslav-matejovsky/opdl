@@ -18,6 +18,11 @@ project "customer-a" {
       # Both platform blocks are mandatory. This machine opts out of a local
       # standby process; the others below opt in.
       platform {
+
+        api {
+          port = 8080
+        }
+
         winservice {
           name = "opdl-customer-a-north-sensor-primary"
         }
@@ -29,6 +34,17 @@ project "customer-a" {
 
         standby {
           disabled = true
+          OR
+          api {
+            port = 8080
+          }
+          winservice {
+            name = "opdl-customer-a-north-sensor-primary"
+          }
+          nats {
+            client_port  = 4222
+            cluster_port = 6222
+          }
         }
       }
     }

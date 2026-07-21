@@ -58,27 +58,50 @@ type Features struct {
 	Chaos bool `json:"chaos"`
 }
 
-// Slots is a machine's resolved slot topology. Both records are always present
-// and non-null, so a reader never infers a slot policy from an omitted field.
+// Slots is a machine's resolved instance topology. Both records are always
+// present and non-null, so a reader never infers a slot policy from an omitted
+// field.
 //
-// The slots are process roles, not endpoint owners: they are mutually exclusive
-// owners of the machine's one set of Event Fabric endpoints, which is why the
-// resolved NATS topology lives on EventFabric rather than on a slot.
+// Each slot is an independent runtime and owns its own endpoints, so everything
+// an instance binds is resolved onto its slot: its API address and its own NATS
+// server's topology. The machine holds no endpoint of its own.
 type Slots struct {
 	Primary Slot `json:"primary"`
 	Standby Slot `json:"standby"`
 }
 
-// Slot is one instance's resolved decision.
+// Slot is one instance's resolved decision: whether it is deployed, what the
+// service running it is called, and every endpoint it binds.
+//
+// The endpoint fields are present exactly when the instance is deployed. A
+// disabled standby carries nothing but Disabled, so a reader cannot mistake a
+// resolved endpoint for one that will ever be bound.
 type Slot struct {
 	// Disabled reports that the slot's process is not deployed. It is always
 	// false for the primary: a machine with no primary process would deploy
 	// nothing that can serve.
 	Disabled bool `json:"disabled"`
-	// Service is the instance's Windows Service identity, present exactly when
-	// the instance is deployed. It is carried for whoever installs the services;
-	// the runtime does not read it and the platform manages no services.
+	// Service is the instance's Windows Service identity. It is carried for
+	// whoever installs the services; the runtime does not read it and the platform
+	// manages no services.
 	Service *WinService `json:"service,omitempty"`
+	// APIAddress is where this instance serves its local API, derived from the
+	// machine ip and the instance's authored api port.
+	//
+	// Each instance has its own, and binds it for its whole lifetime rather than
+	// only while Active. A caller that needs the Active instance resolves which
+	// one that is; it does not get there by an address that changes owner.
+	APIAddress string `json:"api_address,omitempty"`
+	// Nats is this instance's own Event Fabric NATS topology.
+	Nats *EventFabricNats `json:"nats,omitempty"`
+}
+
+// Instance returns one slot by instance role.
+func (s Slots) Instance(standby bool) Slot {
+	if standby {
+		return s.Standby
+	}
+	return s.Primary
 }
 
 // WinService is one instance's resolved Windows Service identity.
