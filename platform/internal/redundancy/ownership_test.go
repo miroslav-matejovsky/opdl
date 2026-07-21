@@ -2,160 +2,189 @@ package redundancy_test
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"path/filepath"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
 
-// ownershipObject returns an ownership object name no other test or run uses.
+// These cover the ownership lifecycle: which composition runs, in which order,
+// and what happens on each way out. They are about sequencing rather than about
+// the kernel object, which lock_test.go covers.
+
+// recordingRuntime records the order the two compositions ran in, so a test can
+// assert the property the whole state machine exists for: an instance's passive
+// resources are closed before its active ones open.
+type recordingRuntime struct {
+	steps       atomic.Pointer[[]string]
+	passiveErr  error
+	activeErr   error
+	activeKinds chan redundancy.ActivationKind
+	// blockPassive keeps Passive running until its context is canceled, which is
+	// what a real passive composition does.
+	blockPassive bool
+}
+
+func newRecordingRuntime() *recordingRuntime {
+	r := &recordingRuntime{activeKinds: make(chan redundancy.ActivationKind, 1), blockPassive: true}
+	r.steps.Store(&[]string{})
+	return r
+}
+
+func (r *recordingRuntime) record(step string) {
+	for {
+		current := r.steps.Load()
+		next := append(append([]string{}, *current...), step)
+		if r.steps.CompareAndSwap(current, &next) {
+			return
+		}
+	}
+}
+
+func (r *recordingRuntime) recorded() []string { return *r.steps.Load() }
+
+func (r *recordingRuntime) runtime() redundancy.Runtime {
+	return redundancy.Runtime{
+		Passive: func(ctx context.Context) error {
+			r.record("passive start")
+			if r.passiveErr != nil {
+				r.record("passive failed")
+				return r.passiveErr
+			}
+			if r.blockPassive {
+				<-ctx.Done()
+			}
+			r.record("passive stop")
+			return nil
+		},
+		Active: func(ctx context.Context, kind redundancy.ActivationKind) error {
+			r.record("active start")
+			r.activeKinds <- kind
+			if r.activeErr != nil {
+				r.record("active failed")
+				return r.activeErr
+			}
+			<-ctx.Done()
+			r.record("active stop")
+			return nil
+		},
+	}
+}
+
+// TestContendActivatesImmediatelyWhenOwnershipIsFree checks the ordinary start:
+// an instance that takes the lock uncontested never enters the passive state at
+// all.
+func TestContendActivatesImmediatelyWhenOwnershipIsFree(t *testing.T) {
+	t.Parallel()
+
+	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
+	runtime := newRecordingRuntime()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- redundancy.Contend(ctx, lock, runtime.runtime()) }()
+
+	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds,
+		"an uncontested start is an initial activation, not a failover")
+	cancel()
+	require.NoError(t, <-done)
+
+	require.Equal(t, []string{"active start", "active stop"}, runtime.recorded(),
+		"nothing passive runs when ownership was free")
+}
+
+// TestContendWithoutALockIsActiveByConstruction checks a machine that deploys no
+// Standby Instance. There is no lock to contend for, so the lone Primary Instance
+// is Active from the start and never waits for anything.
+func TestContendWithoutALockIsActiveByConstruction(t *testing.T) {
+	t.Parallel()
+
+	runtime := newRecordingRuntime()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- redundancy.Contend(ctx, nil, runtime.runtime()) }()
+
+	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
+	cancel()
+	require.NoError(t, <-done)
+	require.Equal(t, []string{"active start", "active stop"}, runtime.recorded())
+}
+
+// TestContendRunsPassiveUntilOwnershipIsWon is the failover path, and it asserts
+// the ordering the two compositions depend on: Passive has returned before Active
+// starts.
 //
-// The ownership lives in a machine-wide kernel namespace, so unlike the lock file it
-// replaced it is not isolated by t.TempDir(). Every test generates its own name or
-// parallel tests would contend for each other's ownership.
-func ownershipObject(t *testing.T) string {
-	t.Helper()
-	suffix := make([]byte, 8)
-	_, err := rand.Read(suffix)
-	require.NoError(t, err)
-	return "opdl-ownership-test." + hex.EncodeToString(suffix)
-}
-
-func openLock(t *testing.T, object string, role redundancy.InstanceRole) *redundancy.Lock {
-	t.Helper()
-	f, err := redundancy.OpenLock(object, role)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = f.Close() })
-	return f
-}
-
-// TestStatusPathIsInsideTheInstancesOwnDirectory checks the path is the instance's
-// runtime directory and nothing else.
-//
-// It used to qualify the file by project, machine, and role, because one shared
-// directory held every instance on the host. The directory is now authored per
-// instance, so two instances are separated by the directory they were given
-// rather than by a name the runtime composes.
-func TestStatusPathIsInsideTheInstancesOwnDirectory(t *testing.T) {
-	t.Parallel()
-
-	primaryDir, standbyDir := t.TempDir(), t.TempDir()
-	a := redundancy.StatusPath(primaryDir)
-	b := redundancy.StatusPath(standbyDir)
-
-	require.Equal(t, filepath.Join(primaryDir, "process.status"), a)
-	require.Equal(t, primaryDir, filepath.Dir(a))
-	require.NotEqual(t, a, b, "two instances given their own directories write two files")
-}
-
-func TestOpenLockRejectsInvalidRole(t *testing.T) {
-	t.Parallel()
-
-	_, err := redundancy.OpenLock(ownershipObject(t), redundancy.InstanceRole("other"))
-	require.Error(t, err)
-}
-
-// TestOpenLockRejectsAnEmptyObject guards the descriptor contract: a machine
-// whose descriptor carries an empty lock object fails to open.
-func TestOpenLockRejectsAnEmptyObject(t *testing.T) {
-	t.Parallel()
-
-	_, err := redundancy.OpenLock("   ", redundancy.RolePrimary)
-	require.ErrorContains(t, err, "empty windows_mutex")
-}
-
-func TestOpenLockWithNilYieldsNilSafeLock(t *testing.T) {
-	t.Parallel()
-
-	lock, err := redundancy.OpenLock("", redundancy.RolePrimary)
-	require.NoError(t, err)
-	require.Nil(t, lock)
-
-	acquired, err := lock.TryAcquire()
-	require.NoError(t, err)
-	require.True(t, acquired.Held)
-	require.False(t, acquired.Abandoned)
-
-	acquired, err = lock.Acquire(t.Context())
-	require.NoError(t, err)
-	require.True(t, acquired.Held)
-	require.NoError(t, lock.Release())
-	require.NoError(t, lock.Close())
-	require.True(t, lock.Held())
-	require.False(t, lock.Existed())
-	require.Equal(t, "", lock.Name())
-	require.Equal(t, redundancy.RolePrimary, lock.Role())
-}
-
-func TestOwnershipAcquireReleaseCycle(t *testing.T) {
+// The two open the same journal storage and the same node identity, so an overlap
+// is a machine running two of itself. Nothing in the type system prevents it; this
+// is what does.
+func TestContendRunsPassiveUntilOwnershipIsWon(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
-	f := openLock(t, object, redundancy.RolePrimary)
-	require.Equal(t, redundancy.RolePrimary, f.Role())
-	require.Equal(t, `Global\`+object, f.Name(), "the ownership must live in the machine-wide namespace")
-	require.False(t, f.Held())
-
-	acquired, err := f.TryAcquire()
-	require.NoError(t, err)
-	require.True(t, acquired.Held)
-	require.False(t, acquired.Abandoned)
-	require.True(t, f.Held())
-
-	// TryAcquire is idempotent for the process that already holds the ownership.
-	acquired, err = f.TryAcquire()
+	holder := openLock(t, object, redundancy.RolePrimary)
+	acquired, err := holder.TryAcquire()
 	require.NoError(t, err)
 	require.True(t, acquired.Held)
 
-	require.NoError(t, f.Release())
-	require.False(t, f.Held())
+	standby := openLock(t, object, redundancy.RoleStandby)
+	runtime := newRecordingRuntime()
 
-	// Release is idempotent.
-	require.NoError(t, f.Release())
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- redundancy.Contend(ctx, standby, runtime.runtime()) }()
+
+	// The standby is passive while the other instance holds ownership.
+	require.Eventually(t, func() bool {
+		return len(runtime.recorded()) == 1
+	}, 5*time.Second, 10*time.Millisecond, "passive never started")
+	require.Equal(t, []string{"passive start"}, runtime.recorded())
+
+	require.NoError(t, holder.Release())
+
+	require.Equal(t, redundancy.ActivationFailover, <-runtime.activeKinds,
+		"a Standby Instance taking ownership is a failover")
+	cancel()
+	require.NoError(t, <-done)
+
+	require.Equal(t, []string{"passive start", "passive stop", "active start", "active stop"}, runtime.recorded(),
+		"the passive composition must be closed before the active one opens")
 }
 
-// TestOwnershipIsExclusive checks two contenders never hold the machine ownership
-// together: while one holds it, the other's TryAcquire fails and its blocking
-// Acquire waits out its context rather than acquiring a second copy.
-func TestOwnershipIsExclusive(t *testing.T) {
+// TestContendCallsAPrimaryTakingOverAFailback checks the activation kind is
+// derived from which instance won, not from how it won.
+func TestContendCallsAPrimaryTakingOverAFailback(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
-	a := openLock(t, object, redundancy.RolePrimary)
-	b := openLock(t, object, redundancy.RoleStandby)
-
-	acquired, err := a.TryAcquire()
+	holder := openLock(t, object, redundancy.RoleStandby)
+	acquired, err := holder.TryAcquire()
 	require.NoError(t, err)
 	require.True(t, acquired.Held)
 
-	// B finds the ownership held: TryAcquire is a clean "no", not an error.
-	acquired, err = b.TryAcquire()
-	require.NoError(t, err)
-	require.False(t, acquired.Held)
-	require.False(t, b.Held())
+	primary := openLock(t, object, redundancy.RolePrimary)
+	runtime := newRecordingRuntime()
 
-	// A bounded blocking wait ends in its deadline, not in a second holder.
-	waitCtx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
-	defer cancel()
-	_, err = b.Acquire(waitCtx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.False(t, b.Held())
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- redundancy.Contend(ctx, primary, runtime.runtime()) }()
 
-	// Once A releases, B can become active.
-	require.NoError(t, a.Release())
-	acquired, err = b.Acquire(t.Context())
-	require.NoError(t, err)
-	require.True(t, acquired.Held)
-	require.False(t, acquired.Abandoned, "a clean release must not look like a crash")
-	require.True(t, b.Held())
-	require.NoError(t, b.Release())
+	require.Eventually(t, func() bool { return len(runtime.recorded()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	require.NoError(t, holder.Release())
+
+	require.Equal(t, redundancy.ActivationFailback, <-runtime.activeKinds,
+		"the Primary Instance taking ownership back is a failback")
+	cancel()
+	require.NoError(t, <-done)
 }
 
-func TestOwnershipAcquireStopsOnCanceledContext(t *testing.T) {
+// TestContendStopsWithoutActivatingWhenTheProcessIsStopped checks an instance
+// asked to stop while waiting leaves quietly. Being told to stop is not a failure,
+// and a stopping instance must not activate on its way out.
+func TestContendStopsWithoutActivatingWhenTheProcessIsStopped(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
@@ -166,36 +195,81 @@ func TestOwnershipAcquireStopsOnCanceledContext(t *testing.T) {
 	defer func() { require.NoError(t, holder.Release()) }()
 
 	standby := openLock(t, object, redundancy.RoleStandby)
+	runtime := newRecordingRuntime()
 
 	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- redundancy.Contend(ctx, standby, runtime.runtime()) }()
+
+	require.Eventually(t, func() bool { return len(runtime.recorded()) == 1 }, 5*time.Second, 10*time.Millisecond)
 	cancel()
-	_, err = standby.Acquire(ctx)
-	require.ErrorIs(t, err, context.Canceled)
+
+	require.NoError(t, <-done, "a process asked to stop while waiting has not failed")
+	require.Equal(t, []string{"passive start", "passive stop"}, runtime.recorded(),
+		"a stopping instance must not activate on its way out")
 	require.False(t, standby.Held())
 }
 
-// TestOwnershipIdentityIsIndependentOfTheStatusDirectory is the property the file
-// lock could not provide. Ownership comes from the descriptor's object name, so
-// two processes given different runtime directories still exclude each other.
-// Under the previous ownership they would each have taken their own lock file and
-// both become active.
-func TestOwnershipIdentityIsIndependentOfTheStatusDirectory(t *testing.T) {
+// TestContendReportsAPassiveCompositionThatGivesUp checks a passive composition
+// that returns an error ends the instance rather than leaving it parked in a wait
+// it can no longer honour.
+//
+// An instance that cannot follow the journal must not keep waiting for ownership
+// it would be unable to use.
+func TestContendReportsAPassiveCompositionThatGivesUp(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
-	a := openLock(t, object, redundancy.RolePrimary)
-	b := openLock(t, object, redundancy.RoleStandby)
-
-	// Distinct status directories, which is what a misconfigured pair would have.
-	require.NotEqual(t,
-		redundancy.StatusPath(t.TempDir()),
-		redundancy.StatusPath(t.TempDir()))
-
-	acquired, err := a.TryAcquire()
+	holder := openLock(t, object, redundancy.RolePrimary)
+	acquired, err := holder.TryAcquire()
 	require.NoError(t, err)
 	require.True(t, acquired.Held)
+	defer func() { require.NoError(t, holder.Release()) }()
 
-	acquired, err = b.TryAcquire()
-	require.NoError(t, err)
-	require.False(t, acquired.Held, "the runtime directory must not affect ownership")
+	standby := openLock(t, object, redundancy.RoleStandby)
+	runtime := newRecordingRuntime()
+	runtime.passiveErr = errors.New("projection unavailable")
+
+	err = redundancy.Contend(t.Context(), standby, runtime.runtime())
+	require.ErrorContains(t, err, "projection unavailable")
+	require.Equal(t, []string{"passive start", "passive failed"}, runtime.recorded())
+	require.False(t, standby.Held(), "an instance that gave up waiting holds nothing")
+}
+
+// TestContendReleasesOwnershipAfterTheActiveCompositionReturns is the ordering
+// the other instance depends on.
+//
+// Releasing while this instance's active resources were still closing would let
+// the other one open the same listeners and the same storage on top of them.
+func TestContendReleasesOwnershipAfterTheActiveCompositionReturns(t *testing.T) {
+	t.Parallel()
+
+	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
+	runtime := newRecordingRuntime()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- redundancy.Contend(ctx, lock, runtime.runtime()) }()
+
+	<-runtime.activeKinds
+	require.True(t, lock.Held(), "ownership is held for the whole active composition")
+
+	cancel()
+	require.NoError(t, <-done)
+	require.False(t, lock.Held(), "ownership is released once the active composition has returned")
+}
+
+// TestContendReleasesOwnershipWhenTheActiveCompositionFails checks the failure
+// path releases too. An instance that failed to serve must not keep the other one
+// out.
+func TestContendReleasesOwnershipWhenTheActiveCompositionFails(t *testing.T) {
+	t.Parallel()
+
+	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
+	runtime := newRecordingRuntime()
+	runtime.activeErr = errors.New("fabric would not open")
+
+	err := redundancy.Contend(t.Context(), lock, runtime.runtime())
+	require.ErrorContains(t, err, "fabric would not open")
+	require.False(t, lock.Held(), "a failed activation still releases ownership")
 }

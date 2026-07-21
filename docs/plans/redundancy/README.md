@@ -48,7 +48,7 @@ so each stage that touches the runtime lands on settled names.
 | [01](01-restore-the-gate.md) | Restore the deadcode gate | Small | Low | done |
 | [02](02-active-and-passive.md) | Active and Passive runtime states | Small | Low | done |
 | [03](03-ownership-contract.md) | The lock in the blueprint, ownership in the runtime | Medium | Medium | done |
-| [04](04-instance-configuration.md) | Independent configuration per instance | Medium | High | done, less the Passive listener |
+| [04](04-instance-configuration.md) | Independent configuration per instance | Medium | High | done, less the scenario gate |
 | [05](05-instance-event-fabric.md) | Independent Event Fabric per instance | Large | High | |
 | [06](06-failback-policy.md) | Failback policy | Large | High | |
 | [07](07-service-notifications.md) | Platform-to-service notifications over Named Pipes | Large | Medium | |
@@ -176,7 +176,7 @@ stages that own them.
 | Blind sed on prose compiles and produces plausible nonsense | 02, 03 |
 | `TestFourMachineStorageTopologyAndFailure` is flaky under full-suite load | 01 |
 | **The authored `Global\` mutex name is passed to a package that adds its own** | unowned; see below |
-| A Passive instance binds nothing, so it cannot be asked about itself | deferred from 04 |
+| A Passive instance binds nothing, so it cannot be asked about itself | 04, closed |
 
 ### The lock name defect stage 03 shipped
 

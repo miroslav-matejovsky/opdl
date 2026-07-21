@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
@@ -27,14 +26,6 @@ const standbyRetryInterval = 200 * time.Millisecond
 
 const unknownLag = "unknown"
 
-type activationKind string
-
-const (
-	activationInitial  activationKind = "initial activation"
-	activationFailover activationKind = "failover"
-	activationFailback activationKind = "failback"
-)
-
 // instanceOf returns the running instance's own record: the endpoint it binds and
 // the directory it writes.
 //
@@ -45,6 +36,12 @@ const (
 // without a role is a value they would both take.
 func instanceOf(descriptor deployment.Descriptor, role redundancy.InstanceRole) deployment.Instance {
 	return descriptor.Instances.Get(deployment.Role(role == redundancy.RoleStandby))
+}
+
+// peerOf returns the machine's other instance's record. It is empty on a machine
+// that deploys only a Primary Instance.
+func peerOf(descriptor deployment.Descriptor, role redundancy.InstanceRole) deployment.Instance {
+	return descriptor.Instances.Get(deployment.Role(role != redundancy.RoleStandby))
 }
 
 // resolveRole validates the requested process role against the deployment policy.
@@ -65,12 +62,27 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 	return role, nil
 }
 
-// runProcess contends for Primary Ownership and runs the active or standby
-// composition.
+// instanceIdentity describes this instance to its own API in the given state.
 //
-// Ownership makes the two instances exclusive. Its holder owns every
-// active-only capability; the other process follows the journal. A machine that
-// opted out of warm standby rejects the standby role.
+// Nothing here comes from the journal, so it is answerable from the moment the
+// process starts: before the projection has caught up, and while it never does.
+// That is what makes a Passive instance worth asking.
+func instanceIdentity(descriptor deployment.Descriptor, role redundancy.InstanceRole, state string) api.Instance {
+	return api.Instance{
+		Machine:     descriptor.Machine,
+		Role:        string(role),
+		State:       state,
+		Address:     instanceOf(descriptor, role).APIAddress,
+		PeerAddress: peerOf(descriptor, role).APIAddress,
+	}
+}
+
+// runProcess binds this instance's API, contends for Primary Ownership, and runs
+// the passive or active composition on the outcome.
+//
+// The order is deliberate. The listener opens first and stays open for the whole
+// process, so an instance is reachable in every state and a bind failure stops it
+// at startup rather than at a failover. Ownership decides only what it answers.
 func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole) (runErr error) {
 	observer := operations.FromContext(ctx)
 	statusPath := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
@@ -93,69 +105,133 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.D
 	// clean release still hands over rather than looking like it crashed.
 	defer func() { runErr = errors.Join(runErr, lock.Close()) }()
 
-	if lock != nil {
-		observer.Emit("platform.lock_opened", operations.LevelInfo, "platform.redundancy", "ownership object opened", map[string]any{
-			operations.AttributeObject: lock.Name(),
-			// Whether a peer process on this machine already had the object open. Both
-			// processes must report the same object; a machine whose two processes
-			// report different ones was built from mismatched packages.
-			operations.AttributeExisted: lock.Existed(),
-		})
+	address := instanceOf(descriptor, role).APIAddress
+	passive := httpapi.NewPassiveHandler(func() api.Instance {
+		return instanceIdentity(descriptor, role, api.InstanceStatePassive)
+	})
+	server, err := openInstanceServer(ctx, address, cfg.ReadHeaderTimeout(), passive)
+	if err != nil {
+		observer.Emit("platform.api_listen_failed", operations.LevelError, "platform.http", "HTTP API listener failed", map[string]any{operations.AttributeAddress: address, operations.AttributeError: err.Error()})
+		return err
 	}
+	// Whatever else happens, the listener drains before the process leaves.
+	defer func() { runErr = errors.Join(runErr, server.shutdown(cfg.ShutdownTimeout())) }()
 
-	acquired, err := lock.TryAcquire()
+	fmt.Printf("platform: %s listening on %s\n", role, address)
+	observer.Emit("platform.api_listening", operations.LevelInfo, "platform.http", "HTTP API is accepting requests", map[string]any{
+		operations.AttributeAddress: address,
+		// A Passive instance is reachable too, and answers a different surface.
+		// Which one it is serving is the thing an operator is asking about.
+		operations.AttributeInstanceState: api.InstanceStatePassive,
+	})
+
+	return redundancy.Contend(ctx, lock, redundancy.Runtime{
+		Passive: func(passiveCtx context.Context) error {
+			return runPassive(passiveCtx, cfg, descriptor, role, statusPath)
+		},
+		Active: func(activeCtx context.Context, kind redundancy.ActivationKind) error {
+			return runActive(activeCtx, cfg, descriptor, role, statusPath, server, kind)
+		},
+	})
+}
+
+// runPassive follows the journal while the machine's other instance is Active,
+// and returns when this instance wins ownership or the process is stopping.
+//
+// It keeps its projection current so a takeover is quick, and it writes its
+// status so deployment tooling can see whether this instance is ready to take
+// over. It serves nothing: the listener is already up and answering the Passive
+// surface, which needs none of this.
+//
+// A projection that will not open is not fatal here. An instance that cannot
+// follow the journal must still be able to take ownership when the other one
+// stops, so this retries until its context ends rather than giving up.
+func runPassive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string) error {
+	observer := operations.FromContext(ctx)
+	site, err := openPassiveSite(ctx, cfg, descriptor, role, statusPath)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// Ownership was won, or the process is stopping, before a projection ever
+		// opened. Either way there is nothing to run and nothing to close, and
+		// neither is a failure.
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if acquired.Held {
-		emitAcquired(observer, lock, acquired)
-		return runAsOwner(ctx, cfg, descriptor, role, statusPath, lock, activationInitial)
+
+	statusCtx, stopStatus := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopStatus()
+	statusDone, err := startStatus(statusCtx, site.fabric, role, redundancy.StatePassive, statusPath, cfg.LagBound(), nil, nil)
+	if err != nil {
+		return errors.Join(err, site.close(ctx), writeFailedStatus(statusPath, role, err))
 	}
-	observer.Emit("platform.ownership_waiting", operations.LevelInfo, "platform.redundancy", "Primary Ownership is held by the other instance", map[string]any{operations.AttributeObject: lock.Name()})
-	if descriptor.Instances.Standby.Disabled {
-		return fmt.Errorf("another process already holds Primary Ownership for machine %q and this machine deploys no Standby Instance", descriptor.Machine)
-	}
-	return runStandby(ctx, cfg, descriptor, role, statusPath, lock)
+
+	fmt.Printf("platform: %s caught up and waiting for Primary Ownership\n", role)
+	observer.Emit("platform.standby_waiting", operations.LevelInfo, "platform.redundancy", "standby projection caught up and is waiting for Primary Ownership", nil)
+
+	// Wait for ownership or for the process to stop. Either arrives as a canceled
+	// context; which one it was is the ownership machine's business, not this
+	// function's.
+	<-ctx.Done()
+	stopStatus()
+	return errors.Join(<-statusDone, site.close(context.WithoutCancel(ctx)))
 }
 
-// emitAcquired reports ownership and, crucially, how it was obtained.
+// openPassiveSite opens the passive projection, retrying until it succeeds or
+// ctx ends.
 //
-// An abandoned ownership means the previous owner died rather than handed over. The
-// file-lock ownership this replaced could not tell the two apart, so an operator had
-// to correlate logs to answer whether a failover was planned.
-func emitAcquired(observer *operations.Recorder, lock *redundancy.Lock, acquired redundancy.Acquisition) {
-	if lock == nil {
-		return
+// A projection that will not open is not a reason to stop waiting. The instance's
+// job while Passive is to be ready to take over, and it can still take over with
+// a projection it has not managed to open yet — it just takes longer to catch up
+// afterwards. Giving up here would turn a slow journal into a machine with no
+// standby at all.
+//
+// It returns ctx.Err() when the context ended first, which the caller reads as
+// "won ownership, or stopping" rather than as a failure.
+func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string) (*site, error) {
+	observer := operations.FromContext(ctx)
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		opened, err := open(ctx, descriptor, cfg, false, role)
+		if err == nil {
+			return opened, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		fmt.Fprintf(os.Stderr, "platform: %s standby projection unavailable: %v; waiting for Primary Ownership\n", role, err)
+		if attempt == 1 || attempt%10 == 0 {
+			observer.Emit("platform.standby_open_retry", operations.LevelWarn, "platform.redundancy", "standby projection unavailable; waiting for Primary Ownership", map[string]any{"attempt": attempt, operations.AttributeError: err.Error()})
+		}
+		if writeErr := writeUnavailableStatus(statusPath, role, err); writeErr != nil {
+			return nil, errors.Join(err, writeErr)
+		}
+		select {
+		case <-time.After(standbyRetryInterval):
+		case <-ctx.Done():
+		}
 	}
-	attributes := map[string]any{
-		operations.AttributeObject:    lock.Name(),
-		operations.AttributeAbandoned: acquired.Abandoned,
-	}
-	if acquired.Abandoned {
-		observer.Emit("platform.ownership_acquired", operations.LevelWarn, "platform.redundancy",
-			"Primary Ownership acquired from a process that died without releasing it", attributes)
-		return
-	}
-	observer.Emit("platform.ownership_acquired", operations.LevelInfo, "platform.redundancy", "Primary Ownership acquired", attributes)
 }
 
-// runActive brings this node's Event Fabric up to readiness and serves the public
-// API until signaled or until its projection falls too far behind the journal.
-func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string) error {
+// runActive brings this instance's Event Fabric up to readiness and serves the
+// whole API until signaled, until its projection falls too far behind the
+// journal, or until its site stops carrying events.
+//
+// It does not open a listener. One is already bound and answering the Passive
+// surface, so activation swaps the handler rather than moving the endpoint, and
+// the address a caller uses never changes.
+func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, server *instanceServer, kind redundancy.ActivationKind) error {
 	observer := operations.FromContext(ctx)
+	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
+		return err
+	}
+	fmt.Printf("platform: %s started for %s\n", kind, role)
+
 	site, err := open(ctx, descriptor, cfg, true, role)
 	if err != nil {
-		return err
-	}
-
-	// This instance's own address, from its own descriptor record. Neither
-	// instance can bind the other's, so a failover does not move the endpoint.
-	addr := instanceOf(descriptor, role).APIAddress
-	var listen net.ListenConfig
-	listener, err := listen.Listen(ctx, "tcp", addr)
-	if err != nil {
-		observer.Emit("platform.api_listen_failed", operations.LevelError, "platform.http", "HTTP API listener failed", map[string]any{"address": addr, operations.AttributeError: err.Error()})
-		return errors.Join(fmt.Errorf("listen on %s: %w", addr, err), site.close(ctx))
+		return errors.Join(err, writeFailedStatus(statusPath, role, err))
 	}
 
 	// A projection that falls too far behind stops serving rather than answering
@@ -177,7 +253,7 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 	statusDone, err := startStatus(statusCtx, site.fabric, role, redundancy.StateActive, statusPath, cfg.LagBound(), onLagExceeded, onStatusFailure)
 	if err != nil {
 		stopStatus()
-		return errors.Join(err, listener.Close(), site.close(ctx))
+		return errors.Join(err, site.close(ctx), writeFailedStatus(statusPath, role, err))
 	}
 	statusStopped := false
 	stopActiveStatus := func() error {
@@ -189,179 +265,59 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 		return <-statusDone
 	}
 
-	fmt.Printf("platform: %s active, listening on %s\n", role, addr)
-	observer.Emit("platform.api_listening", operations.LevelInfo, "platform.http", "HTTP API is accepting requests", map[string]any{"address": addr})
-	srv := &http.Server{
-		Addr: addr,
+	address := instanceOf(descriptor, role).APIAddress
+	server.serveWith(httpapi.NewHandler(site.commands, site.queries, func() api.Instance {
+		return instanceIdentity(descriptor, role, api.InstanceStateActive)
+	},
 		// exposeSpec is false: the authoritative OpenAPI artifact is
 		// api-specifications/openapi.yaml in git, not an endpoint on the runtime.
-		Handler:           httpapi.NewHandler(site.commands, site.queries, false),
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout(),
-	}
-	serveErr := serveListener(serveCtx, srv, listener, site, cfg.ShutdownTimeout(), func() error {
-		return errors.Join(stopActiveStatus(), writeTransitionStatus(statusPath, role, redundancy.StateStopping))
+		false))
+	fmt.Printf("platform: %s active, serving on %s\n", role, address)
+	observer.Emit("platform.api_active", operations.LevelInfo, "platform.http", "HTTP API is serving domain operations", map[string]any{
+		operations.AttributeAddress:       address,
+		operations.AttributeInstanceState: api.InstanceStateActive,
 	})
-	stopServing()
-	statusErr := stopActiveStatus()
-	if statusErr != nil {
-		return errors.Join(serveErr, statusErr)
-	}
+
+	serveErr := awaitStop(serveCtx, site, server)
+
+	// Reverse of startup: HTTP intake stops and in-flight requests drain before
+	// anything they could be holding is closed. Only then does the site release.
+	transitionErr := errors.Join(stopActiveStatus(), writeTransitionStatus(statusPath, role, redundancy.StateStopping))
+	shutdownErr := server.shutdown(cfg.ShutdownTimeout())
+	closeErr := site.close(context.WithoutCancel(ctx))
+
+	err = errors.Join(serveErr, transitionErr, shutdownErr, closeErr)
 	level := operations.LevelInfo
 	attributes := map[string]any{}
-	if serveErr != nil {
+	if err != nil {
 		level = operations.LevelError
-		attributes[operations.AttributeError] = serveErr.Error()
+		attributes[operations.AttributeError] = err.Error()
 	}
 	observer.Emit("platform.api_stopped", level, "platform.http", "HTTP API stopped", attributes)
-	return serveErr
-}
-
-// runStandby keeps a client-only projection while independently waiting for the
-// ownership. Lock acquisition cancels the client composition and starts activation.
-func runStandby(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, lock *redundancy.Lock) error {
-	waitCtx, stopWaiting := context.WithCancel(ctx)
-	defer stopWaiting()
-	standbyCtx, stopStandby := context.WithCancel(waitCtx)
-	defer stopStandby()
-
-	// The wait happens in the kernel, so this goroutine is parked until
-	// the holder releases or dies rather than polling for it.
-	ownershipDone := make(chan ownershipResult, 1)
-	go func() {
-		acquired, err := lock.Acquire(waitCtx)
-		if err == nil {
-			stopStandby()
-		}
-		ownershipDone <- ownershipResult{acquired: acquired, err: err}
-	}()
-
-	opened, err := openWaitingStandby(ctx, standbyCtx, cfg, descriptor, role, statusPath, lock)
 	if err != nil {
-		stopWaiting()
-		<-ownershipDone
-		return err
+		return errors.Join(err, writeFailedStatus(statusPath, role, err))
 	}
-	standby := opened.site
-	acquired, err := awaitOwnership(ctx, waitCtx, cfg, role, statusPath, standby, lock, ownershipDone, stopWaiting)
-	if err != nil {
-		return err
-	}
-	emitAcquired(operations.FromContext(ctx), lock, acquired)
-
-	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
-		var closeErr error
-		if standby != nil {
-			closeErr = standby.close(ctx)
-		}
-		return errors.Join(err, closeErr, lock.Release())
-	}
-	if standby != nil {
-		if err := standby.close(ctx); err != nil {
-			return errors.Join(err, lock.Release(), writeFailedStatus(statusPath, role, err))
-		}
-	}
-
-	kind := activationFailover
-	if role == redundancy.RolePrimary {
-		kind = activationFailback
-	}
-	return runAsOwner(ctx, cfg, descriptor, role, statusPath, lock, kind)
+	return nil
 }
 
-type standbyOpenResult struct {
-	site *site
-}
-
-func openWaitingStandby(ctx, standbyCtx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, lock *redundancy.Lock) (standbyOpenResult, error) {
-	observer := operations.FromContext(ctx)
-	attempt := 0
-	for !lock.Held() {
-		attempt++
-		standby, err := open(standbyCtx, descriptor, cfg, false, role)
-		if err == nil {
-			return standbyOpenResult{site: standby}, nil
-		}
-		if lock.Held() || ctx.Err() != nil {
-			return standbyOpenResult{}, nil
-		}
-		fmt.Fprintf(os.Stderr, "platform: %s standby projection unavailable: %v; waiting for Primary Ownership\n", role, err)
-		if attempt == 1 || attempt%10 == 0 {
-			observer.Emit("platform.standby_open_retry", operations.LevelWarn, "platform.redundancy", "standby projection unavailable; waiting for Primary Ownership", map[string]any{"attempt": attempt, operations.AttributeError: err.Error()})
-		}
-		if writeErr := writeUnavailableStatus(statusPath, role, err); writeErr != nil {
-			return standbyOpenResult{}, errors.Join(err, writeErr)
-		}
-		select {
-		case <-time.After(standbyRetryInterval):
-		case <-standbyCtx.Done():
-		}
+// awaitStop blocks until the Active instance should stop serving.
+//
+// A projector or handler that stops on its own ends serving too. The projection
+// is what every query is answered from, so a node that stopped folding the
+// journal cannot answer for the site any more; serving on would mean quietly
+// returning a view the platform already knows is incomplete.
+func awaitStop(ctx context.Context, site *site, server *instanceServer) error {
+	select {
+	case err := <-server.stopped:
+		// The listener died without being asked to. Hand it back so shutdown does
+		// not wait on a channel nothing will write to again.
+		server.stopped <- err
+		return listenError(err)
+	case <-site.stopped:
+		fmt.Fprintln(os.Stderr, "platform: the event fabric stopped carrying events; shutting down")
+	case <-ctx.Done():
 	}
-	return standbyOpenResult{}, nil
-}
-
-// ownershipResult is one ownership acquisition attempt's outcome, carried from the
-// waiting goroutine back to the standby that started it.
-type ownershipResult struct {
-	acquired redundancy.Acquisition
-	err      error
-}
-
-func awaitOwnership(ctx, waitCtx context.Context, cfg *config.Config, role redundancy.InstanceRole, statusPath string, standby *site, lock *redundancy.Lock, ownershipDone <-chan ownershipResult, stopWaiting context.CancelFunc) (redundancy.Acquisition, error) {
-	var statusDone <-chan error
-	var stopStatus context.CancelFunc
-	if standby != nil && !lock.Held() {
-		statusCtx, cancelStatus := context.WithCancel(context.WithoutCancel(waitCtx))
-		stopStatus = cancelStatus
-		var err error
-		statusDone, err = startStatus(statusCtx, standby.fabric, role, redundancy.StatePassive, statusPath, cfg.LagBound(), nil, stopWaiting)
-		if err != nil {
-			stopStatus()
-			stopWaiting()
-			<-ownershipDone
-			return redundancy.Acquisition{}, errors.Join(err, standby.close(ctx), writeFailedStatus(statusPath, role, err))
-		}
-		fmt.Printf("platform: %s caught up and waiting for Primary Ownership\n", role)
-		operations.FromContext(ctx).Emit("platform.standby_waiting", operations.LevelInfo, "platform.redundancy", "standby projection caught up and is waiting for Primary Ownership", nil)
-	}
-
-	result := <-ownershipDone
-	if stopStatus != nil {
-		stopStatus()
-	}
-	var statusErr error
-	if statusDone != nil {
-		statusErr = <-statusDone
-	}
-	if result.err == nil {
-		return result.acquired, statusErr
-	}
-	var closeErr error
-	if standby != nil {
-		closeErr = standby.close(ctx)
-	}
-	if ctx.Err() != nil && statusErr == nil {
-		return redundancy.Acquisition{}, errors.Join(writeTransitionStatus(statusPath, role, redundancy.StateStopping), closeErr)
-	}
-	return redundancy.Acquisition{}, errors.Join(result.err, statusErr, closeErr)
-}
-
-func runAsOwner(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, statusPath string, lock *redundancy.Lock, kind activationKind) error {
-	observer := operations.FromContext(ctx)
-	started := time.Now()
-	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
-		return errors.Join(err, lock.Release())
-	}
-	fmt.Printf("platform: %s started for %s\n", kind, role)
-	observer.Emit("platform.activation_started", operations.LevelInfo, "platform.redundancy", "active runtime activation started", map[string]any{operations.AttributeActivationKind: string(kind)})
-	err := runActive(ctx, cfg, descriptor, role, statusPath)
-	releaseErr := lock.Release()
-	if err != nil {
-		observer.Emit("platform.activation_failed", operations.LevelError, "platform.redundancy", "active runtime activation failed", map[string]any{operations.AttributeActivationKind: string(kind), operations.AttributeDurationMS: time.Since(started).Milliseconds(), operations.AttributeError: err.Error()})
-		return errors.Join(err, releaseErr, writeFailedStatus(statusPath, role, err))
-	}
-	fmt.Printf("platform: %s completed for %s\n", kind, role)
-	observer.Emit("platform.activation_completed", operations.LevelInfo, "platform.redundancy", "active runtime activation completed", map[string]any{operations.AttributeActivationKind: string(kind), operations.AttributeDurationMS: time.Since(started).Milliseconds()})
-	return releaseErr
+	return nil
 }
 
 type statusFabric interface {

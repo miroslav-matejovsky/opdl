@@ -48,6 +48,13 @@ const (
 	// AttributeExisted reports that a kernel object already existed when this
 	// process opened it, meaning a peer process on this machine is running.
 	AttributeExisted = "existed"
+	// AttributeAddress contains the host:port an instance binds. Each instance
+	// binds its own for its whole lifetime, so this identifies the instance a
+	// request would reach as well as the socket.
+	AttributeAddress = "address"
+	// AttributeInstanceState contains what an instance is doing: active or
+	// passive. It is the half that changes; the role never does.
+	AttributeInstanceState = "instance_state"
 )
 
 // Event is one self-contained operational JSONL record.

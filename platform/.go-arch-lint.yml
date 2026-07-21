@@ -47,9 +47,18 @@ deps:
   embedded:
     mayDependOn: [deployment]
   app:
-    mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, operations, redundancy, registration]
+    # api is here because composition is what knows which instance this process
+    # is: it fills the instance identity both the Active and the Passive handler
+    # serve. The domain operations stay behind httpapi.
+    mayDependOn: [api, config, deployment, eventfabric, eventfabric-nats, httpapi, operations, redundancy, registration]
   redundancy:
     canUse: [sys, atomicfile, winmutex]
+    # Ownership transitions are operational events in their own right: which
+    # instance became Active, when, and whether it took over from a process that
+    # died. The package that runs the transitions is the one that can report them
+    # accurately, so it emits them itself rather than returning them for a caller
+    # to describe.
+    mayDependOn: [operations]
   config:
     canUse: [toml]
     mayDependOn: [deployment, embedded]

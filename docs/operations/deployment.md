@@ -142,6 +142,18 @@ number that an Event Fabric listener uses on the machine `ip` without either
 failing to bind. The builder rejects it anyway, so a machine's port map stays
 readable as one list.
 
+**Both instances bind their API address, and hold it for their whole lifetime.**
+A Passive instance is reachable: it answers `GET /instance` about itself and
+refuses domain operations with a `503` naming the other instance. See
+[monitoring](monitoring.md). Two consequences for deployment:
+
+- Both ports must be free on the host at all times, not just the Active one. An
+  address that cannot be bound fails the process at startup rather than at a
+  failover.
+- A failover does not move an address. The Standby Instance serves on its own
+  port, so anything that reaches the platform must resolve which instance is
+  Active rather than assuming one fixed port.
+
 ## 5. Configure firewall rules
 
 Allow only the minimum paths:

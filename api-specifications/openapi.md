@@ -6,10 +6,39 @@ HTTP API served by the OPDL platform runtime.
 
 HTTP Request | Description
 -------------|------------
+GET [/instance](#getinstance) | Report this instance's identity and state
 GET [/registrations](#getregistrations) | List registration proposals
 POST [/registrations](#postregistrations) | Propose a unit registration
 GET [/registrations/conflicts](#getregistrationsconflicts) | List resolved registration conflicts
 GET [/registrations/{proposal_id}](#getregistrationsproposalid) | Get a registration proposal's status
+
+## GET /instance
+
+Answered by every instance in every state, including a Passive one that refuses every domain operation.
+
+### Responses
+
+#### 200 Response
+
+OK
+
+```json
+{
+   "address": "127.0.0.1:8080",
+   "machine": "local-server",
+   "peer_address": "127.0.0.1:8081",
+   "role": "primary",
+   "state": "active"
+}
+```
+
+#### Field Definitions
+
+- `address` *(string, required)* This instance's own loopback API address.
+- `machine` *(string, required)* Descriptor machine this instance runs on.
+- `peer_address` *(string)* The machine's other instance's API address, if one is deployed.
+- `role` *(string, required)* Fixed build-time instance role: primary or standby.
+- `state` *(string, required)* Current runtime state: active or passive.
 
 ## GET /registrations
 

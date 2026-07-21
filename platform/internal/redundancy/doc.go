@@ -11,15 +11,30 @@
 // Primary Ownership. A returning Primary Instance takes ownership back through
 // graceful handover, never by seizing it from a Standby Instance in the Active state.
 //
-// Only the owner may bind the public API, run durable handlers, publish lifecycle
-// readiness, or host the embedded NATS server and storage. The other instance
-// (whether Primary or Standby) runs a client-only projector in the Passive state.
+// Only the owner may serve domain operations, run durable handlers, publish
+// lifecycle readiness, or host the embedded NATS server and storage. The other
+// instance (whether Primary or Standby) runs a client-only projector in the
+// Passive state, and answers for itself on its own API address.
+//
+// # What this package decides, and what it does not
+//
+// This package owns the ownership lifecycle: which of a machine's two instances
+// may run its active composition, when the other must have stopped, and what an
+// operator is told about the move. It does not know what a composition is. The
+// runtime supplies two functions — one to run while Passive, one to run while
+// Active — and Contend decides when each runs. See ownership.go.
+//
+// The sequencing is the point. The two compositions open the same journal
+// storage and the same node identity, so an overlap is a machine running two of
+// itself, and nothing in the type system prevents it. Contend does: Passive has
+// returned before Active is called, and ownership is released only after Active
+// has returned.
 //
 // # Primary Ownership
 //
 // Ownership is a non-expiring Windows named mutex in the machine-wide Global
-// namespace, under a name the builder derives from the machine's compiled
-// deployment identity. It is released after active resources close, or abandoned
+// namespace, under a name authored in the machine's blueprint and carried in its
+// deployment descriptor. It is released after active resources close, or abandoned
 // by the kernel when the process exits. Waiting is a kernel wait, so a waiter is
 // woken when the holder releases rather than on a polling interval.
 //
@@ -37,34 +52,36 @@
 // resources are still held. See utils/winmutex for why the second is a
 // correctness requirement rather than an implementation detail.
 //
-// # Shared endpoints and transfer ordering
+// # Per-instance endpoints and transfer ordering
 //
-// The two instances share one set of Event Fabric endpoints rather than owning
-// one each. The addresses come from the deployment descriptor, and whichever
-// instance holds ownership binds them. That works because ownership is released
-// only after the active process has closed its active resources, including the
-// embedded NATS server:
+// Each instance owns its own endpoints. Every address either of them binds is
+// resolved onto that instance's record in the deployment descriptor, and nothing
+// on a machine is shared between them except the ownership object, which is not a
+// port.
 //
-//	active closes HTTP and Event Fabric
+// An instance's API address is bound for its whole lifetime rather than only
+// while it is Active, so a transfer changes which address serves domain
+// operations rather than moving one address between processes:
+//
+//	both instances are listening, on their own addresses
+//	active closes domain serving and Event Fabric
 //	active embedded NATS stops
 //	active releases ownership
 //	waiter acquires ownership
-//	waiter opens embedded NATS on the same endpoints
-//	waiter catches up and serves HTTP
+//	waiter opens its own embedded NATS
+//	waiter catches up and serves domain operations on the address it already had
 //
-// Sharing is what keeps the waiting instance genuinely warm: it connects to the
-// address the active process is serving on. A transfer does not move the site
-// onto new addresses, and the firewall inventory stays one client port and at
-// most one cluster port per storage machine.
+// The ordering is what makes this safe, and it is the same ordering a shared
+// endpoint needed: ownership is released only after the active process has closed
+// its active resources. What changed is that the waiter no longer waits for an
+// address to be freed, so it cannot be left waiting on an address nothing is
+// listening on — the failure this design once had.
 //
-// Separate per-instance endpoints are rejected. They double the endpoint
-// inventory and require every client and route list to carry both. Giving the
-// Standby Instance its own endpoint is what once left it waiting on an address nothing was
-// listening on.
-//
-// If a bind fails after acquiring ownership, the process records a failed status
-// with the bind error. It never falls back to an alternate or random port: the
-// endpoint is the machine's identity on the site's network, not a preference.
+// A binding failure is a startup failure. The listener opens before an instance
+// knows whether it will be Active, so an unusable address stops the process
+// immediately rather than at a failover, which is the worst time to find out. It
+// never falls back to an alternate or random port: the endpoint is the instance's
+// identity, not a preference.
 //
 // # Status files
 //

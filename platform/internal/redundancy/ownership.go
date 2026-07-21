@@ -2,28 +2,20 @@ package redundancy
 
 import (
 	"context"
-	"fmt"
-	"path/filepath"
-	"strings"
+	"errors"
+	"time"
 
-	"github.com/miroslav-matejovsky/opdl/utils/winmutex"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 )
 
-// StatusPath returns an instance's status-file path inside its own runtimeDir.
+// This file is ownership: what holding the lock means at runtime, and the order
+// the two states are entered and left in. The lock itself is lock.go.
 //
-// The path carries no project, machine, or role qualifier. It used to: one shared
-// directory held every instance of every machine on the host, so the file name had
-// to say which instance wrote it. The directory is now authored per instance in
-// the blueprint and resolved onto that instance's descriptor record, so the
-// qualification lives in the authored path and the builder rejects a machine whose
-// two instances share a directory.
-//
-// Status files are operational evidence only. Primary Ownership decides which
-// instance is Active, so runtimeDir takes no part in that decision and may be
-// moved without affecting it.
-func StatusPath(runtimeDir string) string {
-	return filepath.Join(runtimeDir, "process.status")
-}
+// The state machine used to live in the runtime composition package, mixed in
+// with opening an Event Fabric and serving HTTP. It is here because none of it is
+// about what an instance runs: it is about which instance may run it, when the
+// other one must have stopped, and what an operator is told about the move. The
+// composition package now supplies two functions and this decides when each runs.
 
 // Acquisition is the outcome of contending for Primary Ownership.
 type Acquisition struct {
@@ -39,154 +31,197 @@ type Acquisition struct {
 	Abandoned bool
 }
 
-// Lock is a machine's Primary Ownership handle, held through a Windows named mutex.
-// Holding it is what makes an instance Active; nothing else does.
+// ActivationKind is why an instance became Active. It is derived here rather than
+// by the caller, because the reason is a fact about how ownership was obtained.
+type ActivationKind string
+
+const (
+	// ActivationInitial is an instance that took ownership uncontested at startup.
+	ActivationInitial ActivationKind = "initial activation"
+	// ActivationFailover is a Standby Instance that took ownership from the
+	// Primary Instance.
+	ActivationFailover ActivationKind = "failover"
+	// ActivationFailback is a Primary Instance that took ownership back from the
+	// Standby Instance.
+	ActivationFailback ActivationKind = "failback"
+)
+
+// Runtime is the pair of compositions an instance moves between. Contend runs at
+// most one of them at a time, and never both.
 //
-// Exactly one process holds it, and only the holder releasing it or exiting frees
-// it. A crash frees it automatically, because the kernel abandons a mutex whose
-// owning process is gone. There is no lease and no timeout, so a paused holder
-// keeps ownership until its service manager terminates it and can never wake into
-// a second Active instance.
-//
-// See the package documentation for why ownership is a kernel object rather than
-// a lock file, and for the release ordering the shared endpoints depend on.
-//
-// A Lock is safe for concurrent use.
-type Lock struct {
-	mutex *winmutex.Mutex
-	role  InstanceRole
+// The two are separated by ownership, which is the whole point: Passive must have
+// returned before Active is called, so an instance's active resources are opened
+// only after its passive ones have closed and only while it holds the lock.
+type Runtime struct {
+	// Passive runs while the machine's other instance holds ownership. Its context
+	// is canceled the moment this instance wins ownership, and it must return when
+	// that happens: Active does not start until it has.
+	//
+	// A Passive composition that cannot open is not fatal. It is expected to keep
+	// trying until its context ends, because an instance that cannot follow the
+	// journal yet must still be able to take over when asked.
+	Passive func(ctx context.Context) error
+	// Active runs while this instance holds ownership. Returning ends the
+	// instance's turn, and ownership is released once it has.
+	Active func(ctx context.Context, kind ActivationKind) error
 }
 
-// OpenLock prepares this instance to contend for the ownership object named
-// in the machine's deployment descriptor lock block. It opens or creates the
-// object but does not take it; call TryAcquire or Acquire to contend.
+// Contend drives one instance through its whole ownership lifecycle.
 //
-// When windowsMutex is empty (standby is disabled on the machine), OpenLock returns nil, nil,
-// and calling TryAcquire or Acquire on that nil Lock immediately succeeds because
-// a lone Primary Instance is Active by construction.
-func OpenLock(windowsMutex string, role InstanceRole) (*Lock, error) {
-	if !role.Valid() {
-		return nil, fmt.Errorf("redundancy: open lock: invalid instance role %q", role)
+// An instance that takes the lock at startup goes straight to Active. One that
+// does not runs Passive until the holder releases or dies, then activates. A
+// machine that deploys no standby has no lock, so lock is nil, acquiring always
+// succeeds, and Passive is never reached.
+//
+// The wait is a kernel wait, so a waiting instance is parked until the holder
+// lets go rather than polling for it.
+//
+// Ownership is released after Active returns and before Contend does, so the
+// other instance cannot start composing its active resources while this one is
+// still closing its own.
+func Contend(ctx context.Context, lock *Lock, runtime Runtime) error {
+	observer := operations.FromContext(ctx)
+
+	if lock != nil {
+		observer.Emit("platform.lock_opened", operations.LevelInfo, "platform.redundancy", "ownership object opened", map[string]any{
+			operations.AttributeObject: lock.Name(),
+			// Whether a peer process on this machine already had the object open. Both
+			// processes must report the same object; a machine whose two processes
+			// report different ones was built from mismatched packages.
+			operations.AttributeExisted: lock.Existed(),
+		})
 	}
-	if windowsMutex == "" {
-		return nil, nil //nolint:nilnil // returning nil Lock when standby is disabled is intentional and nil-safe by contract
-	}
-	if strings.TrimSpace(windowsMutex) == "" {
-		return nil, fmt.Errorf("redundancy: open lock: descriptor carries empty windows_mutex")
-	}
-	mutex, err := winmutex.Open(windowsMutex)
+
+	acquired, err := lock.TryAcquire()
 	if err != nil {
-		return nil, fmt.Errorf("redundancy: open lock object: %w", err)
+		return err
 	}
-	return &Lock{mutex: mutex, role: role}, nil
+	if acquired.Held {
+		emitAcquired(observer, lock, acquired)
+		return activate(ctx, lock, runtime, ActivationInitial)
+	}
+
+	observer.Emit("platform.ownership_waiting", operations.LevelInfo, "platform.redundancy",
+		"Primary Ownership is held by the other instance", map[string]any{operations.AttributeObject: lock.Name()})
+
+	acquired, err = waitWhilePassive(ctx, lock, runtime)
+	if err != nil || !acquired.Held {
+		return err
+	}
+	emitAcquired(observer, lock, acquired)
+	return activate(ctx, lock, runtime, activationKind(lock.Role()))
 }
 
-// TryAcquire takes Primary Ownership without blocking. It reports the outcome,
-// and an error only for an unexpected failure, never for ownership the other
-// instance legitimately holds.
-//
-// The instance that takes it becomes Active. The other remains Standby.
-func (l *Lock) TryAcquire() (Acquisition, error) {
-	if l == nil {
-		return Acquisition{Held: true, Abandoned: false}, nil
+// activationKind names why this instance is taking over after waiting. A Standby
+// Instance winning ownership is a failover; the Primary Instance winning it back
+// is a failback.
+func activationKind(role InstanceRole) ActivationKind {
+	if role == RolePrimary {
+		return ActivationFailback
 	}
-	outcome, err := l.mutex.TryAcquire()
+	return ActivationFailover
+}
+
+// waitWhilePassive runs the Passive composition until this instance wins
+// ownership or ctx ends.
+//
+// The wait and the composition run together, and the composition's context is
+// canceled as soon as ownership is won. Waiting for Passive to return before
+// reporting the acquisition is what guarantees the instance's passive resources
+// are closed before its active ones open: the two compositions open the same
+// journal storage and the same node identity, so an overlap is a machine running
+// two of itself.
+func waitWhilePassive(ctx context.Context, lock *Lock, runtime Runtime) (Acquisition, error) {
+	passiveCtx, stopPassive := context.WithCancel(ctx)
+	defer stopPassive()
+
+	type outcome struct {
+		acquired Acquisition
+		err      error
+	}
+	// The wait happens in the kernel, so this goroutine is parked until the holder
+	// releases or dies rather than polling for it.
+	won := make(chan outcome, 1)
+	go func() {
+		acquired, err := lock.Acquire(passiveCtx)
+		// Ownership is this instance's from here, so the passive composition must
+		// stop before anything else happens.
+		stopPassive()
+		won <- outcome{acquired: acquired, err: err}
+	}()
+
+	passiveErr := runtime.Passive(passiveCtx)
+	// Passive returning on its own means the instance can no longer follow the
+	// journal. It stops waiting rather than staying parked in a state where it
+	// could win ownership it is not ready to use.
+	stopPassive()
+	result := <-won
+
+	switch {
+	case passiveErr != nil:
+		return Acquisition{}, passiveErr
+	case result.err != nil && ctx.Err() != nil:
+		// The process was asked to stop while waiting. That is not a failure.
+		return Acquisition{}, nil
+	case result.err != nil:
+		return Acquisition{}, result.err
+	}
+	return result.acquired, nil
+}
+
+// activate runs the Active composition and releases ownership once it returns.
+//
+// Release happens here rather than in the caller so that it cannot be forgotten
+// on an error path, and so it always happens after Active has returned, which is
+// the ordering the other instance depends on.
+func activate(ctx context.Context, lock *Lock, runtime Runtime, kind ActivationKind) error {
+	observer := operations.FromContext(ctx)
+	started := time.Now()
+	observer.Emit("platform.activation_started", operations.LevelInfo, "platform.redundancy", "active runtime activation started",
+		map[string]any{operations.AttributeActivationKind: string(kind)})
+
+	err := runtime.Active(ctx, kind)
+	releaseErr := lock.Release()
+
+	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
-		return Acquisition{}, fmt.Errorf("redundancy: acquire ownership %s: %w", l.mutex.Name(), err)
+		observer.Emit("platform.activation_failed", operations.LevelError, "platform.redundancy", "active runtime activation failed",
+			map[string]any{
+				operations.AttributeActivationKind: string(kind),
+				operations.AttributeDurationMS:     elapsed,
+				operations.AttributeError:          err.Error(),
+			})
+		return errors.Join(err, releaseErr)
 	}
-	return acquisition(outcome), nil
+	observer.Emit("platform.activation_completed", operations.LevelInfo, "platform.redundancy", "active runtime activation completed",
+		map[string]any{operations.AttributeActivationKind: string(kind), operations.AttributeDurationMS: elapsed})
+	return releaseErr
 }
 
-// Acquire blocks until this instance holds Primary Ownership or ctx is canceled.
+// emitAcquired reports ownership and, crucially, how it was obtained.
 //
-// The wait is a kernel wait: the waiter is woken the moment the holder releases or
-// dies, with no polling interval in between. Canceling ends the wait without
-// acquiring and without becoming Active.
-//
-// Acquire returning is not the moment an instance becomes Active. The caller
-// composes its active resources after Acquire returns, serves only then, and must
-// Release after those resources have closed.
-func (l *Lock) Acquire(ctx context.Context) (Acquisition, error) {
-	if l == nil {
-		return Acquisition{Held: true, Abandoned: false}, nil
+// An abandoned ownership means the previous owner died rather than handed over. The
+// file-lock ownership this replaced could not tell the two apart, so an operator had
+// to correlate logs to answer whether a failover was planned.
+func emitAcquired(observer *operations.Recorder, lock *Lock, acquired Acquisition) {
+	if lock == nil {
+		return
 	}
-	outcome, err := l.mutex.Acquire(ctx)
-	if err != nil {
-		if ctx.Err() != nil {
-			return Acquisition{}, ctx.Err()
-		}
-		return Acquisition{}, fmt.Errorf("redundancy: acquire ownership %s: %w", l.mutex.Name(), err)
+	attributes := map[string]any{
+		operations.AttributeObject:    lock.Name(),
+		operations.AttributeAbandoned: acquired.Abandoned,
 	}
-	return acquisition(outcome), nil
+	if acquired.Abandoned {
+		observer.Emit("platform.ownership_acquired", operations.LevelWarn, "platform.redundancy",
+			"Primary Ownership acquired from a process that died without releasing it", attributes)
+		return
+	}
+	observer.Emit("platform.ownership_acquired", operations.LevelInfo, "platform.redundancy", "Primary Ownership acquired", attributes)
 }
 
-func acquisition(outcome winmutex.Outcome) Acquisition {
-	return Acquisition{Held: outcome.Held(), Abandoned: outcome == winmutex.AcquiredAbandoned}
-}
-
-// Release drops Primary Ownership so the other instance may become Active. It must
-// be called only after the caller's active resources have closed: releasing while a
-// listener, handler, or embedded server is still up would let a second process open
-// the same resources and overlap. Release is idempotent.
-func (l *Lock) Release() error {
-	if l == nil {
-		return nil
-	}
-	if err := l.mutex.Release(); err != nil {
-		return fmt.Errorf("redundancy: release ownership %s: %w", l.mutex.Name(), err)
-	}
-	return nil
-}
-
-// Close releases the object's kernel handles and stops its owner thread. It is
-// idempotent, and it releases ownership first if the caller still holds it, so an
-// instance that closes without releasing hands over cleanly rather than appearing
-// to have crashed.
-func (l *Lock) Close() error {
-	if l == nil {
-		return nil
-	}
-	if err := l.mutex.Close(); err != nil {
-		return fmt.Errorf("redundancy: close ownership %s: %w", l.mutex.Name(), err)
-	}
-	return nil
-}
-
-// Held reports whether this instance currently holds Primary Ownership.
-func (l *Lock) Held() bool {
-	if l == nil {
-		return true
-	}
-	return l.mutex.Held()
-}
-
-// Name returns the fully qualified ownership object name. It is what an operator
-// needs to identify the object, which unlike a lock file has no path.
-func (l *Lock) Name() string {
-	if l == nil {
-		return ""
-	}
-	return l.mutex.Name()
-}
-
-// Existed reports whether the ownership object already existed when this process
-// opened it, meaning a peer process on this machine is running.
-//
-// It is a diagnostic, not a fault. On a machine deploying both a primary and a
-// standby, the second to start legitimately finds the object. A process that
-// expects a peer and does not find one, or finds one on a machine deployed
-// without a standby, is worth an operator's attention.
-func (l *Lock) Existed() bool {
-	if l == nil {
-		return false
-	}
-	return l.mutex.Existed()
-}
-
-// Role returns the instance role contending for ownership.
-func (l *Lock) Role() InstanceRole {
-	if l == nil {
-		return RolePrimary
-	}
-	return l.role
-}
+// There is no branch here for "another process holds ownership on a machine with
+// no standby". A machine that deploys no Standby Instance has no lock at all, so
+// lock is nil, TryAcquire always succeeds, and this instance is Active by
+// construction. A second copy of it fails when it cannot bind a port it was told
+// to bind, which is stage 03's D3 ruling and is why the check the runtime used to
+// make here was already unreachable.

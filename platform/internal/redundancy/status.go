@@ -10,6 +10,22 @@ import (
 	"github.com/miroslav-matejovsky/opdl/utils/atomicfile"
 )
 
+// StatusPath returns an instance's status-file path inside its own runtimeDir.
+//
+// The path carries no project, machine, or role qualifier. It used to: one shared
+// directory held every instance of every machine on the host, so the file name had
+// to say which instance wrote it. The directory is now authored per instance in
+// the blueprint and resolved onto that instance's descriptor record, so the
+// qualification lives in the authored path and the builder rejects a machine whose
+// two instances share a directory.
+//
+// Status files are operational evidence only. Primary Ownership decides which
+// instance is Active, so runtimeDir takes no part in that decision and may be
+// moved without affecting it.
+func StatusPath(runtimeDir string) string {
+	return filepath.Join(runtimeDir, "process.status")
+}
+
 // Status is a process's live operational snapshot, written to its status file
 // for deployment diagnostics: its role, lifecycle state, process id, how far
 // its projection has applied of the journal, how long it has

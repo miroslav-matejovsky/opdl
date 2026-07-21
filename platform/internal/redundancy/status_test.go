@@ -10,6 +10,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestStatusPathIsInsideTheInstancesOwnDirectory checks the path is the instance's
+// runtime directory and nothing else.
+//
+// It used to qualify the file by project, machine, and role, because one shared
+// directory held every instance on the host. The directory is now authored per
+// instance, so two instances are separated by the directory they were given
+// rather than by a name the runtime composes.
+func TestStatusPathIsInsideTheInstancesOwnDirectory(t *testing.T) {
+	t.Parallel()
+
+	primaryDir, standbyDir := t.TempDir(), t.TempDir()
+	a := redundancy.StatusPath(primaryDir)
+	b := redundancy.StatusPath(standbyDir)
+
+	require.Equal(t, filepath.Join(primaryDir, "process.status"), a)
+	require.Equal(t, primaryDir, filepath.Dir(a))
+	require.NotEqual(t, a, b, "two instances given their own directories write two files")
+}
+
 func TestStatusWriteReadRoundTrip(t *testing.T) {
 	t.Parallel()
 

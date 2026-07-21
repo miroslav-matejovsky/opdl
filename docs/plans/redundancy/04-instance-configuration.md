@@ -195,22 +195,61 @@ being ignored. That existing behavior is what makes this change safe to ship.
 The startup summary states both instances' addresses and marks which one this
 process is, so a two-instance machine's two logs are told apart at a glance.
 
-## What this stage deliberately does not do
+## Both instances now bind
 
 Under the goal architecture each instance binds its own port for its whole
-lifetime, so an operator can ask a Passive instance about itself. Today only the
-Active instance listens, and **after this stage that is still true.**
+lifetime, so an operator can ask a Passive instance about itself. That is now
+true.
 
-Serving from a Passive instance is a separate design question, not a consequence
-of splitting the configuration. It must not serve the full API: it holds no
-ownership, its projection is not authoritative, and answering domain queries from
-it would make the ownership rule meaningless. Deciding which routes it does answer,
-and opening its listener at startup rather than on activation, is carried out of
-this stage. See the carried findings in [README](README.md).
+A Passive instance must not serve the full API: it holds no ownership, its
+projection is not authoritative, and answering domain queries from it would make
+the ownership rule meaningless. So it answers exactly one operation and refuses
+the rest. See D2.
 
-What this stage delivers is that the Passive instance's address is already
-resolved, already its own, and already distinct from the Active instance's — so
-the follow-up is a listener and a handler, not another configuration change.
+### One listener, swapped handlers
+
+The listener opens at startup, before the instance knows whether it will be
+Active, and is never rebound. Activation replaces the handler behind it.
+
+The alternative — a Passive instance binding nothing and opening its listener on
+activation — was rejected for two reasons. It leaves the address free for the
+length of the handover, so anything else on the host can take the port and the
+instance then fails to serve at all. And it defers the bind to the moment of a
+failover, which is the worst time to discover an address is unusable. Binding at
+startup turns that into a startup failure, when nothing has been composed yet and
+there is nothing to tear down.
+
+This also simplified the runtime. Serving no longer opens a listener and closes a
+site together, because those two lifetimes are no longer the same.
+
+## Where the ownership lifecycle lives
+
+The runtime composition package used to hold the whole ownership state machine:
+opening the lock, contending, waiting, interleaving the standby projection with
+the wait, and ordering the release. It was mixed in with opening an Event Fabric
+and serving HTTP.
+
+None of it is about what an instance runs. It is about which instance may run it,
+when the other must have stopped, and what an operator is told about the move. It
+now lives in `platform/internal/redundancy`, split along the vocabulary this plan
+sets:
+
+- `lock.go` is the object: the Windows named mutex and the operations on it.
+- `ownership.go` is what holding it means: `Contend` drives an instance through
+  its lifecycle, given a `Runtime` of two functions the composition package
+  supplies.
+
+The sequencing guarantee is the reason it is worth a package boundary. The two
+compositions open the same journal storage and the same node identity, so an
+overlap is a machine running two of itself, and nothing in the type system
+prevents it. `Contend` does: Passive has returned before Active is called, and
+ownership is released only after Active has returned. Both are now tested
+directly, which they could not be while they were interleaved with a real Event
+Fabric.
+
+`redundancy` emits its own operational events. It gained a dependency on
+`operations` for that, recorded in `.go-arch-lint.yml`: the package that runs the
+transitions is the one that can report them accurately.
 
 ## Decisions
 
@@ -218,11 +257,32 @@ the follow-up is a listener and a handler, not another configuration change.
 resolved to `127.0.0.1:<local_port>`. Descriptor validation enforces the loopback
 host. `peers[].api_address` is dropped.
 
-**D2. What does a Passive instance's API answer?** Deferred with the listener
-itself; see above. The recommendation stands for whoever picks it up: health,
-status, and the instance's own identity, with every domain route returning `503`
-and a body naming the Active instance's address. Under D1 that address is on
-loopback, and both instances share the host, so it remains a followable pointer.
+**D2. What does a Passive instance's API answer?** Settled: one operation,
+`GET /instance`, reporting the machine, the instance's fixed role, its current
+state, its own address, and the machine's other instance's address. Every domain
+operation returns `503` with an `application/problem+json` body naming where to
+go instead.
+
+Three details are worth keeping.
+
+*It is one operation, not three.* The earlier recommendation said health, status,
+and identity. Status is already a file, written every second and richer than an
+endpoint would be, and health on an instance that deliberately serves nothing is
+a question with no useful answer beyond "it is passive". Collapsing all three into
+identity-and-state removed two endpoints nobody would have called.
+
+*Both instances serve it.* An Active instance answers the same operation on the
+same path with the same shape, differing only in `state`. An endpoint that existed
+on one instance and 404'd on the other would be worse than no endpoint. It is
+therefore in the generated OpenAPI specification and the .NET client, like every
+other operation.
+
+*The refusal is a 503, not a 404.* The domain paths are registered on a Passive
+instance precisely so they can be refused. An unregistered path answers 404, which
+says the operation does not exist rather than that it is not served here — and a
+caller that got 404 would stop, where one that gets 503 with an address can follow
+it. An unknown path still answers 404, so a typo is not reported as a temporary
+outage.
 
 **D3. Does `instance_dir` stay shared?** Settled: no. It becomes `runtime_dir`,
 authored per instance in the blueprint and carried on the instance's descriptor
@@ -266,6 +326,14 @@ configuration nobody would vary.
 9. Update `docs/operations/deployment.md` for the new configuration file shape,
    `docs/operations/monitoring.md` for the status file path, and
    `docs/operations/troubleshooting.md`.
+10. Add `GET /instance` to `platform/api`, served by both instances, and a
+    Passive handler in `platform/internal/httpapi` that answers it and refuses
+    the domain paths. Regenerate the specification and the .NET client.
+11. Bind the listener at startup and swap the handler on activation, in
+    `platform/internal/app/server.go`.
+12. Move the ownership lifecycle out of `platform/internal/app` into
+    `platform/internal/redundancy`, split into `lock.go` and `ownership.go` with
+    their own tests.
 
 ## Validation
 
@@ -283,6 +351,16 @@ configuration nobody would vary.
   ever binds the other's. `TestFailoverAndFailback` asserts both directions: the
   taking-over instance serves on its own address, and the stopped instance's
   address answers nothing.
+- A Passive instance answers `GET /instance` with `state: passive` and refuses a
+  domain operation with a `503` naming the other instance's address, while the
+  Active instance is serving. `TestFailoverAndFailback` asserts this against two
+  real running instances, not a handler in isolation.
+- The same address answers `state: passive` before a takeover and `state: active`
+  after it, which is what proves the handler swapped rather than the endpoint
+  moving.
+- `Contend` runs the passive composition to completion before the active one
+  starts, and releases ownership only after the active one returns, on both the
+  success and failure paths.
 
 ### What the scenario suite is still blocked on
 

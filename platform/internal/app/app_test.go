@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/deployment"
 	"github.com/miroslav-matejovsky/opdl/platform/embedded"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
@@ -53,14 +56,6 @@ func freeAddress(t *testing.T) string {
 	require.NoError(t, err)
 	require.NoError(t, res.Release())
 	return res.Addresses()[0]
-}
-
-// newTestServer builds a server that answers on addr, so a test can tell a
-// running platform from a stopped one.
-func newTestServer(addr string) *http.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: time.Second}
 }
 
 // get reports whether addr answers an HTTP request.
@@ -217,49 +212,82 @@ func TestOpenStatesReadyIntoTheJournal(t *testing.T) {
 	require.Equal(t, 1, info.Replicas)
 }
 
-// TestSiteServesAndReleasesOnSignal checks the whole ordered lifecycle: the
-// server answers, an interrupt stops it, and the site releases everything it
-// composed without reporting a failure. An orderly shutdown is not an error.
-func TestSiteServesAndReleasesOnSignal(t *testing.T) {
-	s := openTestSite(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+// TestInstanceServerServesUntilShutdown checks the listener an instance holds for
+// its whole lifetime: it answers as soon as it is open, and stops answering once
+// it has drained. An orderly shutdown is not an error.
+func TestInstanceServerServesUntilShutdown(t *testing.T) {
 	addr := freeAddress(t)
+	server, err := openInstanceServer(t.Context(), addr, time.Second, okHandler())
+	require.NoError(t, err)
 
-	stopped := make(chan error, 1)
-	go func() { stopped <- serve(ctx, newTestServer(addr), s, 10*time.Second) }()
-	require.Eventually(t, func() bool { return get(ctx, addr) }, 10*time.Second, 20*time.Millisecond,
+	require.Eventually(t, func() bool { return get(t.Context(), addr) }, 10*time.Second, 20*time.Millisecond,
 		"server never became reachable")
 
-	// Canceling the context is what an interrupt does to the runtime.
-	cancel()
-	select {
-	case err := <-stopped:
-		require.NoError(t, err, "an orderly shutdown is not an error")
-	case <-time.After(20 * time.Second):
-		t.Fatal("serve did not return after its context was canceled")
-	}
+	require.NoError(t, server.shutdown(10*time.Second), "an orderly shutdown is not an error")
 	require.False(t, get(t.Context(), addr), "server still accepts requests after shutdown")
+	require.NoError(t, server.shutdown(10*time.Second), "shutdown is idempotent")
 }
 
-// TestServeReleasesTheSiteWhenTheServerCannotStart checks the failure path
-// releases what startup composed: a platform that cannot listen must not leave a
-// NATS server and its store running behind it.
-func TestServeReleasesTheSiteWhenTheServerCannotStart(t *testing.T) {
-	s := openTestSite(t)
-
-	// Hold the address so ListenAndServe fails immediately.
+// TestInstanceServerFailsToOpenOnATakenAddress checks a bind failure is reported
+// where it happens: at startup, before anything else is composed.
+//
+// This is what binding at startup buys. The listener used to open on activation,
+// after the Event Fabric was up, so an unusable address meant tearing a composed
+// site back down — and it meant discovering the problem at a failover rather than
+// at a start. Now there is nothing to release, because nothing has been opened.
+func TestInstanceServerFailsToOpenOnATakenAddress(t *testing.T) {
 	var listen net.ListenConfig
 	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { _ = listener.Close() }()
 
-	err = serve(t.Context(), newTestServer(listener.Addr().String()), s, 10*time.Second)
-	require.ErrorContains(t, err, "serve HTTP", "a server that cannot start must report why")
+	_, err = openInstanceServer(t.Context(), listener.Addr().String(), time.Second, okHandler())
+	require.ErrorContains(t, err, "listen on", "a listener that cannot bind must report why")
+}
 
-	// The transport really is released, not just reported as released.
-	_, err = s.fabric.HighWater(t.Context())
-	require.Error(t, err, "the fabric is closed even on the failure path")
+// TestInstanceServerSwapsHandlerWithoutRebinding is the property activation
+// depends on: the address never changes, only what answers on it.
+//
+// A Passive instance that bound nothing and opened its listener on activation
+// would leave its address free for the length of the handover, and anything else
+// on the host could take it.
+func TestInstanceServerSwapsHandlerWithoutRebinding(t *testing.T) {
+	addr := freeAddress(t)
+	server, err := openInstanceServer(t.Context(), addr, time.Second, body(http.StatusOK, "passive"))
+	require.NoError(t, err)
+	defer func() { _ = server.shutdown(10 * time.Second) }()
+
+	require.Eventually(t, func() bool { return read(t, addr) == "passive" }, 10*time.Second, 20*time.Millisecond)
+
+	server.serveWith(body(http.StatusOK, "active"))
+	require.Equal(t, "active", read(t, addr), "the swap takes effect on the same listener")
+	require.Equal(t, addr, server.address, "activation must not move the endpoint")
+}
+
+// okHandler answers every request, so a test can tell a running listener from a
+// stopped one.
+func okHandler() http.Handler { return body(http.StatusOK, "ok") }
+
+func body(status int, text string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(text))
+	})
+}
+
+// read returns addr's response body.
+func read(t *testing.T, addr string) string {
+	t.Helper()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr, http.NoBody)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = response.Body.Close() }()
+	data, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	return string(data)
 }
 
 // TestCloseIsIdempotent checks a site can be released twice. serve releases on
@@ -566,12 +594,19 @@ func TestFailoverAndFailback(t *testing.T) {
 	go func() { primaryDone <- runProcess(primaryCtx, cfg, descriptor, redundancy.RolePrimary) }()
 	waitForProcessState(t, descriptor, redundancy.RolePrimary, redundancy.StateActive, primaryDone)
 	require.True(t, get(t.Context(), primaryAPI), "the preferred primary did not serve")
-	require.False(t, get(t.Context(), standbyAPI), "a Passive instance serves nothing yet")
+	require.False(t, get(t.Context(), standbyAPI), "nothing is on the standby's address before it starts")
+	requireInstance(t, primaryAPI, "primary", api.InstanceStateActive)
 
 	standbyCtx, stopStandby := context.WithCancel(t.Context())
 	standbyDone := make(chan error, 1)
 	go func() { standbyDone <- runProcess(standbyCtx, cfg, descriptor, redundancy.RoleStandby) }()
 	waitForFailoverReadyStandby(t, descriptor, redundancy.RoleStandby, standbyDone)
+
+	// The Passive instance binds its own address for its whole lifetime, so an
+	// operator can ask it about itself while the other instance is the one
+	// serving. It answers for itself and refuses domain operations.
+	requireInstance(t, standbyAPI, "standby", api.InstanceStatePassive)
+	requirePassiveRefusal(t, standbyAPI, primaryAPI)
 
 	stopPrimary()
 	require.NoError(t, waitProcess(t, primaryDone), "the primary did not stop cleanly")
@@ -580,6 +615,9 @@ func TestFailoverAndFailback(t *testing.T) {
 	// Instance was on. Nothing binds the stopped instance's address.
 	require.True(t, get(t.Context(), standbyAPI), "the Standby Instance did not restore the API after failover")
 	require.False(t, get(t.Context(), primaryAPI), "the Standby Instance took over the Primary Instance's address")
+	// Same address, same listener, different answer: activation swapped the
+	// handler rather than moving the endpoint.
+	requireInstance(t, standbyAPI, "standby", api.InstanceStateActive)
 
 	failbackCtx, stopFailback := context.WithCancel(t.Context())
 	failbackDone := make(chan error, 1)
@@ -678,4 +716,42 @@ catch_up_timeout = "30s"
 	err := Run([]string{"-config", path, "-instance", "primary"})
 	require.ErrorContains(t, err, "data directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
+}
+
+// requireInstance checks the instance serving at addr reports the role and state
+// it should. It is how a test asks an instance what it is, which is the same
+// question an operator asks it.
+func requireInstance(t *testing.T, addr, role, state string) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+api.PathInstance, http.NoBody)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+
+	var instance api.Instance
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&instance))
+	require.Equal(t, role, instance.Role, "the role is fixed at build time")
+	require.Equal(t, state, instance.State)
+	require.Equal(t, addr, instance.Address)
+}
+
+// requirePassiveRefusal checks a Passive instance refuses a domain operation and
+// points at the instance that holds ownership, so a caller that reached the wrong
+// one can follow it rather than give up.
+func requirePassiveRefusal(t *testing.T, passiveAddr, activeAddr string) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		"http://"+passiveAddr+api.PathRegistrations, http.NoBody)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	defer func() { _ = response.Body.Close() }()
+
+	require.Equal(t, http.StatusServiceUnavailable, response.StatusCode,
+		"a Passive instance must not answer a domain query from a projection that is not authoritative")
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), activeAddr, "the refusal names where to go instead")
 }

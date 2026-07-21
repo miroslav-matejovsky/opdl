@@ -1,5 +1,34 @@
 # Monitoring and event analysis
 
+## Asking an instance what it is
+
+Every instance answers `GET /instance` on its own loopback address, in every
+state, for its whole lifetime:
+
+```json
+{
+  "machine": "local-server",
+  "role": "primary",
+  "state": "active",
+  "address": "127.0.0.1:8080",
+  "peer_address": "127.0.0.1:8081"
+}
+```
+
+`role` is fixed at build time and never changes. `state` is `active` or `passive`
+and changes only when Primary Ownership moves, so asking both of a machine's
+addresses is how an operator answers "which one is serving" without reading a
+file or a log.
+
+A Passive instance answers this and refuses every domain operation with `503` and
+a body naming `peer_address`, which is where ownership is. A `503` from this
+platform therefore means "you reached the wrong instance", not "the platform is
+down" — the address in the body is the one to use.
+
+Nothing in this endpoint comes from the site journal, so it answers while an
+instance's projection is still catching up, and while it never does. That is what
+makes it usable when something is wrong.
+
 ## Status files
 
 Each instance writes one status file inside its own runtime directory:
