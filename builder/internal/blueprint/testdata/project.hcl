@@ -15,10 +15,17 @@ project "customer-a" {
       ip       = "10.0.1.10"
       services = ["sensor-services"]
 
-      # warm standby is enabled by default; this machine opts out and runs only
-      # the preferred primary process.
+      # Both platform blocks are mandatory. This machine opts out of a local
+      # standby process; the others below opt in.
       platform {
-        warm_standby = false
+        nats {
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = true
+        }
       }
     }
 
@@ -26,6 +33,16 @@ project "customer-a" {
       role     = "local-server"
       ip       = "10.0.1.11"
       services = ["core-services"]
+      platform {
+        nats {
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = false
+        }
+      }
     }
   }
 
@@ -34,16 +51,46 @@ project "customer-a" {
       role     = "master-server"
       ip       = "10.0.2.10"
       services = ["core-services"]
+      platform {
+        nats {
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = false
+        }
+      }
     }
     machine "slave" {
       role     = "slave-server"
       ip       = "10.0.2.11"
       services = ["core-services"]
+      platform {
+        nats {
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = false
+        }
+      }
     }
     machine "integration" {
       role     = "integration-server"
       ip       = "10.0.2.12"
       services = ["integration-services"]
+      platform {
+        nats {
+          client_port  = 4222
+          cluster_port = 6222
+        }
+
+        standby {
+          disabled = false
+        }
+      }
     }
   }
 }

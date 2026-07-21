@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 )
 
 // journalConfig is the site journal's required configuration. The journal is
@@ -30,15 +32,81 @@ func (f *Fabric) journalConfig() jetstream.StreamConfig {
 	}
 }
 
+// journalRetryInterval is how often startup re-attempts the journal while the
+// site's JetStream cluster is still coming up.
+const journalRetryInterval = 200 * time.Millisecond
+
 // ensureJournal creates the site journal or validates an existing one against
-// what this build requires. It looks the journal up first: an existing journal
-// is validated, and only its absence leads to creation. A storage node creates a
-// missing journal; a node that does not host storage waits for a storage node to
-// create it. Either way, a journal whose stored configuration is incompatible is
-// refused rather than adopted or silently mutated.
+// what this build requires, waiting for the site's journal to become reachable.
+//
+// The waiting is the point on a site with three storage nodes. Their JetStream
+// metadata group has no leader until a quorum of the three servers has found
+// each other, and until it does the JetStream API does not answer at all: a
+// request against it times out rather than reporting a missing journal. Every
+// storage node starts at once, so on a cold site that is the normal first
+// answer, not a failure. Treating it as one is what would make a correctly
+// configured three-node site refuse to boot.
+//
+// The bound is the same StartupTimeout that bounds connecting, and it separates
+// "the site's cluster is still forming" from "this site has no reachable
+// journal". A journal whose stored configuration is incompatible is refused
+// immediately rather than retried: waiting cannot make it compatible.
 func (f *Fabric) ensureJournal(ctx context.Context) (jetstream.Stream, error) {
 	want := f.journalConfig()
+	deadline := time.Now().Add(f.cfg.StartupTimeout)
 
+	var last error
+	attempt := 0
+	started := time.Now()
+	for {
+		attempt++
+		stream, err := f.attemptJournal(ctx, want)
+		if err == nil {
+			// Creation being acknowledged by the metadata leader does not mean the
+			// server this client is attached to can already read the stream. Verify
+			// that local view before readiness uses the returned handle.
+			_, infoErr := stream.Info(ctx)
+			if infoErr == nil {
+				if attempt > 1 {
+					f.observer.Emit("event_fabric.journal_recovered", operations.LevelInfo, "event_fabric.nats", "site journal became available", map[string]any{
+						attributeJournal: want.Name, "attempts": attempt, operations.AttributeDurationMS: time.Since(started).Milliseconds(),
+					})
+				}
+				return stream, nil
+			}
+			err = fmt.Errorf("nats: verify journal %s locally: %w", want.Name, infoErr)
+		}
+		if !retryableJournalError(ctx, err) {
+			return nil, err
+		}
+		last = err
+		if attempt == 1 || attempt%10 == 0 {
+			f.observer.Emit("event_fabric.journal_retry", operations.LevelWarn, "event_fabric.nats", "site journal is unavailable; retrying", map[string]any{
+				attributeJournal: want.Name, attributeAttempt: attempt, operations.AttributeError: err.Error(),
+			})
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("nats: wait for journal %s: %w", want.Name, ctxErr)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("nats: journal %s was not available within %s: %w",
+				want.Name, f.cfg.StartupTimeout, last)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("nats: wait for journal %s: %w", want.Name, ctx.Err())
+		case <-time.After(journalRetryInterval):
+		}
+	}
+}
+
+// attemptJournal is one attempt at reaching the site journal: look it up, and
+// create it when it is absent and this node stores the journal.
+//
+// A node that does not host storage never creates it. The journal belongs to the
+// storage nodes, and a client that created it could create it with a replica
+// count the site's storage cannot hold.
+func (f *Fabric) attemptJournal(ctx context.Context, want jetstream.StreamConfig) (jetstream.Stream, error) {
 	stream, err := f.js.Stream(ctx, want.Name)
 	if err == nil {
 		return f.checkJournal(stream, want)
@@ -46,10 +114,10 @@ func (f *Fabric) ensureJournal(ctx context.Context) (jetstream.Stream, error) {
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
 		return nil, fmt.Errorf("nats: look up journal %s: %w", want.Name, err)
 	}
-
 	if !f.cfg.HostsStorage {
-		return f.awaitJournal(ctx, want)
+		return nil, fmt.Errorf("nats: journal %s does not exist yet: %w", want.Name, jetstream.ErrStreamNotFound)
 	}
+
 	stream, err = f.js.CreateStream(ctx, want)
 	if errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
 		// Another storage node created it between the lookup and now; validate it.
@@ -61,27 +129,50 @@ func (f *Fabric) ensureJournal(ctx context.Context) (jetstream.Stream, error) {
 	return stream, nil
 }
 
-// awaitJournal waits for a storage node to create the journal, then validates
-// it. It is how a non-storage node joins a site whose journal it does not host.
-func (f *Fabric) awaitJournal(ctx context.Context, want jetstream.StreamConfig) (jetstream.Stream, error) {
-	deadline := time.Now().Add(f.cfg.StartupTimeout)
-	for {
-		stream, err := f.js.Stream(ctx, want.Name)
-		if err == nil {
-			return f.checkJournal(stream, want)
-		}
-		if !errors.Is(err, jetstream.ErrStreamNotFound) {
-			return nil, fmt.Errorf("nats: look up journal %s: %w", want.Name, err)
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("nats: journal %s was not created within %s", want.Name, f.cfg.StartupTimeout)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("nats: wait for journal %s: %w", want.Name, ctx.Err())
-		case <-time.After(200 * time.Millisecond):
-		}
+// errCodeClusterNoPeers is the JetStream API error for "no suitable peers for
+// placement". The nats.go client does not name it.
+//
+// A three-replica journal needs three storage peers the metadata leader already
+// knows about. Immediately after an election the leader may know about fewer,
+// so a cold site can answer this to the first create and accept the same request
+// a moment later.
+const errCodeClusterNoPeers jetstream.ErrorCode = 10005
+
+// errCodeStreamNotFound is returned briefly by a server whose local metadata
+// view has not caught up with a stream the cluster leader just created.
+const errCodeStreamNotFound jetstream.ErrorCode = 10059
+
+// retryableJournalError reports whether err is a site that has not finished
+// coming up rather than one this node cannot join.
+//
+// The retryable shapes all mean "not yet". A missing journal means no storage
+// node has created it, which is what a client-only machine waits through. No
+// responder means the JetStream API subject has nobody serving it. A deadline
+// from the request itself, as opposed to from ctx, means the API accepted the
+// request and no metadata leader answered, which is a cluster mid-election. And
+// no suitable peers means the leader has not yet seen enough of the site's
+// storage nodes to place the journal's replicas.
+//
+// Everything else, including an incompatible journal, is this node's answer and
+// is returned immediately. Waiting cannot make an incompatible journal
+// compatible, so retrying one would only turn a clear refusal into a timeout.
+func retryableJournalError(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
 	}
+	if errors.Is(err, eventfabric.ErrIncompatibleJournal) {
+		return false
+	}
+	var apiErr *jetstream.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.ErrorCode == errCodeClusterNoPeers || apiErr.ErrorCode == errCodeStreamNotFound
+	}
+	return errors.Is(err, jetstream.ErrStreamNotFound) ||
+		errors.Is(err, jetstream.ErrNoStreamResponse) ||
+		errors.Is(err, nats.ErrNoResponders) ||
+		errors.Is(err, jetstream.ErrJetStreamNotEnabled) ||
+		errors.Is(err, jetstream.ErrJetStreamNotEnabledForAccount) ||
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 // validateJournal loads an existing journal and checks it against want.

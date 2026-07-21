@@ -23,13 +23,10 @@ import (
 // The kill is deliberate. An orderly shutdown proves less: what has to survive
 // is a machine that stopped without warning, which is the case a customer meets.
 func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	scenariosDir, err := filepath.Abs(".")
-	require.NoError(t, err)
-	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "scenario")
-
-	deployment := prepareSite(t, outDir, t.TempDir(), "scenario", "node")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "scenario")
 	node := deployment.machine(t, "node")
 	node.start(ctx, t)
 	waitForAPI(ctx, t, node)
@@ -68,14 +65,11 @@ func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
 // proposals it could never retain, which is worse than not starting: it would
 // look healthy while losing facts.
 func TestPlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	scenariosDir, err := filepath.Abs(".")
-	require.NoError(t, err)
-	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "scenario")
-
-	workDir := t.TempDir()
-	deployment := prepareSite(t, outDir, workDir, "scenario", "node")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	workDir := filepath.Join(scenarioDir(t), "work")
+	deployment := deploySite(ctx, t, outDir, workDir, "scenario")
 	node := deployment.machine(t, "node")
 
 	// Put a file where the journal's directory has to be, so creating it cannot

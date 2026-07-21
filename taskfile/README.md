@@ -25,7 +25,9 @@ than once at the root.
 - `validate.ps1`: runs `opdl validate` for all project blueprints in
   `examples/` (or specific blueprints when names are passed as arguments).
 - `scenarios.ps1`: runs platform integration tests and the black-box scenario
-  suite.
+  suite. The scenario suite runs concurrently under a bounded load budget; when
+  debugging, you can serialize scenario execution by running `go test -parallel 1 ./...`
+  directly inside `scenarios/`.
 
 Run everything with `task all` from the repository root.
 

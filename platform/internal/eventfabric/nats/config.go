@@ -20,14 +20,6 @@ const (
 	// lifecycle events.
 	Name = "nats"
 
-	// ClientPort is the fixed port the embedded server serves clients on.
-	ClientPort = 4222
-	// ClusterPort is the fixed port the embedded servers route to each other on.
-	ClusterPort = 6222
-	// MonitorPort is the fixed port the embedded server serves monitoring on. It
-	// binds to loopback by default so it is not exposed off the machine.
-	MonitorPort = 8222
-
 	// smallSiteMax is the largest site that runs one JetStream storage node. A
 	// site with three or more machines runs three.
 	smallSiteMax = 2
@@ -60,6 +52,9 @@ const (
 // machine. Nothing here is an identity: overriding an address changes where the
 // node listens or connects, never which machine it is.
 type Config struct {
+	// ClientName identifies this machine's connection in NATS diagnostics. It is
+	// always set, including on a machine that does not host a server.
+	ClientName string
 	// ServerName is this node's name within the site cluster. It is unique per
 	// site. It is only meaningful on a storage node.
 	ServerName string
@@ -70,11 +65,10 @@ type Config struct {
 	// only used on a storage node.
 	ClientAddress string
 	// ClusterAddress is the host:port this node's server routes to peers on. It
-	// is only used on a storage node.
+	// is only used on a storage node, and only when Routes is non-empty: a site
+	// with one storage node has no peer to route to and binds no cluster
+	// listener.
 	ClusterAddress string
-	// MonitorAddress is the host:port this node's server serves monitoring on. It
-	// is only used on a storage node.
-	MonitorAddress string
 	// Routes are the cluster host:port addresses of the site's other storage
 	// nodes. Only storage nodes route to each other, and a site with one storage
 	// node has none.
@@ -124,6 +118,12 @@ type Config struct {
 // whether this one runs a server at all, which peers it clusters with, and which
 // servers it connects to. It leaves DataDir and credentials for the composer,
 // which knows the runtime data path and reads secrets from files.
+//
+// It takes no process role. The machine has one NATS topology, and the primary
+// and standby processes are mutually exclusive owners of it: a standby that
+// derived its own endpoint would connect to an address no server is listening
+// on, because the process that owns the fence is serving on the machine's.
+// Turning a client-only standby into one is the composer's job, not this one's.
 func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	ips, err := siteIPs(descriptor)
 	if err != nil {
@@ -132,33 +132,13 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	storage := StorageNodes(slices.Sorted(maps.Keys(ips)))
 	hostsStorage := slices.Contains(storage, descriptor.Machine)
 
-	// Every machine can reach all storage nodes. A storage machine puts its own
-	// server first below, while retaining the peers for its client-only standby.
-	//
-	// The cluster is exactly the storage nodes: they are the only servers, and a
-	// server that is not one of them would only add a peer to the journal's
-	// metadata group without adding a replica to hold it.
-	servers := make([]string, 0, len(storage))
-	routes := make([]string, 0, len(storage))
-	for _, machine := range storage {
-		client, err := address(ips[machine], ClientPort)
-		if err != nil {
-			return Config{}, fmt.Errorf("nats: storage node %q: %w", machine, err)
-		}
-		servers = append(servers, client)
-		if machine == descriptor.Machine {
-			continue
-		}
-		route, err := address(ips[machine], ClusterPort)
-		if err != nil {
-			return Config{}, fmt.Errorf("nats: storage node %q: %w", machine, err)
-		}
-		routes = append(routes, route)
-	}
+	nats := descriptor.EventFabric.Nats
 
 	cfg := Config{
+		ClientName:      descriptor.Machine,
 		ClusterName:     string(eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)),
-		Servers:         servers,
+		Servers:         append([]string(nil), nats.Servers...),
+		Routes:          append([]string(nil), nats.Routes...),
 		HostsStorage:    hostsStorage,
 		Replicas:        Replicas(len(ips)),
 		MaxBytes:        DefaultMaxBytes,
@@ -169,23 +149,10 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 		CatchUpTimeout:  DefaultCatchUpTimeout,
 		ShutdownTimeout: DefaultShutdownTimeout,
 	}
-	if !hostsStorage {
-		return cfg, nil
-	}
-
-	cfg.ServerName = descriptor.Machine
-	cfg.Routes = routes
-	if cfg.ClientAddress, err = address(descriptor.IP, ClientPort); err != nil {
-		return Config{}, fmt.Errorf("nats: client address: %w", err)
-	}
-	cfg.Servers = append([]string{cfg.ClientAddress}, slices.DeleteFunc(cfg.Servers, func(server string) bool {
-		return server == cfg.ClientAddress
-	})...)
-	if cfg.ClusterAddress, err = address(descriptor.IP, ClusterPort); err != nil {
-		return Config{}, fmt.Errorf("nats: cluster address: %w", err)
-	}
-	if cfg.MonitorAddress, err = address("127.0.0.1", MonitorPort); err != nil {
-		return Config{}, fmt.Errorf("nats: monitor address: %w", err)
+	if hostsStorage {
+		cfg.ServerName = descriptor.Machine
+		cfg.ClientAddress = nats.ClientAddress
+		cfg.ClusterAddress = nats.ClusterAddress
 	}
 	return cfg, nil
 }
@@ -239,6 +206,9 @@ func Replicas(siteSize int) int {
 // bad address or an unwritable data directory fails at startup rather than half
 // way through binding sockets or creating a stream.
 func (c Config) Validate() error {
+	if strings.TrimSpace(c.ClientName) == "" {
+		return fmt.Errorf("nats: client name is required")
+	}
 	if len(c.Servers) == 0 {
 		return fmt.Errorf("nats: no server to connect to: the site has no storage node")
 	}
@@ -290,13 +260,12 @@ func (c Config) validateServer() error {
 	for what, addr := range map[string]string{
 		"client address":  c.ClientAddress,
 		"cluster address": c.ClusterAddress,
-		"monitor address": c.MonitorAddress,
 	} {
 		if err := validateAddress(what, addr); err != nil {
 			return err
 		}
 	}
-	if err := uniqueAddresses(c.ClientAddress, c.ClusterAddress, c.MonitorAddress); err != nil {
+	if err := uniqueAddresses(c.ClientAddress, c.ClusterAddress); err != nil {
 		return err
 	}
 	for _, route := range c.Routes {
@@ -343,7 +312,7 @@ func (c Config) validateStorage() error {
 func (c Config) validateCredentials() error {
 	all := slices.Concat(c.Servers, c.Routes)
 	if c.HostsStorage {
-		all = append(all, c.ClientAddress, c.ClusterAddress, c.MonitorAddress)
+		all = append(all, c.ClientAddress, c.ClusterAddress)
 	}
 	exposed := false
 	for _, addr := range all {
@@ -360,17 +329,6 @@ func (c Config) validateCredentials() error {
 		return fmt.Errorf("nats: username and password are required when any address is non-loopback")
 	}
 	return nil
-}
-
-// address renders a validated host:port from an IP and a port.
-func address(ip string, port int) (string, error) {
-	if strings.TrimSpace(ip) == "" {
-		return "", fmt.Errorf("host is required")
-	}
-	if port < 1 || port > 65535 {
-		return "", fmt.Errorf("port %d is out of range 1-65535", port)
-	}
-	return net.JoinHostPort(ip, strconv.Itoa(port)), nil
 }
 
 // validateAddress checks addr is a usable host:port.

@@ -22,6 +22,7 @@ type Config struct {
 	shutdownTimeout   time.Duration
 	instanceDir       string
 	lagBound          time.Duration
+	operations        Operations
 	eventFabric       EventFabric
 	username          string
 	password          string
@@ -65,6 +66,7 @@ func Load(configPath string) (*Config, error) {
 		shutdownTimeout:   shutdownTimeout,
 		instanceDir:       f.InstanceDir,
 		lagBound:          lagBound,
+		operations:        f.Operations,
 		eventFabric:       f.EventFabric,
 	}
 	// Credentials are read here rather than by the adapter: composition owns
@@ -144,6 +146,10 @@ func (c *Config) InstanceDir() string { return c.instanceDir }
 // it is not promotable, and an active process beyond it stops serving.
 func (c *Config) LagBound() time.Duration { return c.lagBound }
 
+// OperationsEventDir returns the optional directory for append-only JSONL
+// operational events. An empty path disables file retention, not stderr events.
+func (c *Config) OperationsEventDir() string { return c.operations.EventDir }
+
 // EventFabric returns the Event Fabric adapter settings from the configuration
 // file. Only runtime composition reads it: it is how a site places the journal's
 // storage and moves the transport's sockets, and no domain package has any
@@ -172,7 +178,7 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
-	fmt.Fprintf(&b, "    instances    warm_standby=%t\n", d.Instances.WarmStandby)
+	fmt.Fprintf(&b, "    slots        primary=true standby=%t\n", !d.Slots.Standby.Disabled)
 	fmt.Fprintf(&b, "    event_fabric %s\n", eventFabricSummary(d.EventFabric))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    address             %s\n", c.address)
@@ -180,6 +186,7 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
 	fmt.Fprintf(&b, "    instance_dir        %s\n", c.instanceDir)
 	fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
+	fmt.Fprintf(&b, "    operations.event_dir %s\n", optionalPathSummary(c.operations.EventDir))
 	fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
 	return b.String()
 }
@@ -205,28 +212,12 @@ func eventFabricSummary(f deployment.EventFabric) string {
 // is copied into tickets and chat windows, so a secret must not be able to reach
 // it in the first place.
 func natsSummary(n EventFabricNats) string {
-	parts := []string{
+	return strings.Join([]string{
 		"data_dir=" + n.DataDir,
 		"startup_timeout=" + n.StartupTimeout,
 		"catch_up_timeout=" + n.CatchUpTimeout,
 		"credentials_file=" + credentialsSummary(n.CredentialsFile),
-	}
-	if n.ClientAddress != "" {
-		parts = append(parts, "client="+n.ClientAddress)
-	}
-	if n.ClusterAddress != "" {
-		parts = append(parts, "cluster="+n.ClusterAddress)
-	}
-	if n.MonitorAddress != "" {
-		parts = append(parts, "monitor="+n.MonitorAddress)
-	}
-	if n.Routes != nil {
-		parts = append(parts, "routes="+strings.Join(n.Routes, ","))
-	}
-	if n.Servers != nil {
-		parts = append(parts, "servers="+strings.Join(n.Servers, ","))
-	}
-	return strings.Join(parts, " ")
+	}, " ")
 }
 
 // lagBoundSummary renders the required projection lag bound.
@@ -238,6 +229,13 @@ func lagBoundSummary(bound time.Duration) string { return bound.String() }
 func credentialsSummary(path string) string {
 	if path == "" {
 		return "(none: loopback only)"
+	}
+	return path
+}
+
+func optionalPathSummary(path string) string {
+	if path == "" {
+		return "(disabled; JSON events remain on stderr)"
 	}
 	return path
 }

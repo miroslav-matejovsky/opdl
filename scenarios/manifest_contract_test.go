@@ -1,7 +1,6 @@
 package scenarios
 
 import (
-	"bytes"
 	"path/filepath"
 	"testing"
 
@@ -11,13 +10,10 @@ import (
 // TestManifestArgumentsMatchRuntime consumes the packaged launch contract
 // without importing builder or platform internals.
 func TestManifestArgumentsMatchRuntime(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	scenariosDir, err := filepath.Abs(".")
-	require.NoError(t, err)
-	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "manifest-contract")
-
-	deployment := prepareSite(t, outDir, t.TempDir(), "manifest-contract", "node")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "manifest-contract")
 	node := deployment.machine(t, "node")
 	manifest := readManifest(t, node.binaryPath)
 	require.Equal(t, []string{"-instance", "primary"}, manifest.Primary.Args)
@@ -31,11 +27,13 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 		{name: "primary", launch: manifest.Primary},
 		{name: "standby", launch: *manifest.Standby},
 	}
+	// These subtests share one machine instance and sequentially start/stop it
+	// with different arguments. They must never run concurrently with each other,
+	// so do not add t.Parallel() inside this subtest loop.
 	for _, process := range launches {
 		t.Run(process.name, func(t *testing.T) {
 			node.launchArgs = process.launch.Args
-			node.output = &bytes.Buffer{}
-			node.cmd = nil
+			node.Process = nil
 			node.start(ctx, t)
 			waitForAPI(ctx, t, node)
 			node.stop()

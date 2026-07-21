@@ -2,6 +2,7 @@ package pack
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,26 +35,31 @@ type Packer struct {
 	outputDir   string
 	goos        string
 	goarch      string
-	placeholder []byte
 }
 
 // New builds a Packer. platformDir is the platform module root; outputDir is
 // where packages are written; goos/goarch cross-compile (empty means host). It
-// snapshots the current embedded deployment descriptor so Restore can put it
-// back.
+// validates the platform's neutral embedded descriptor exists. Machine builds
+// replace it through a Go build overlay and never modify the working tree.
 func New(platformDir, outputDir, goos, goarch string) (*Packer, error) {
-	embedFile := filepath.Join(platformDir, "embedded", deploymentFile)
-	placeholder, err := os.ReadFile(embedFile)
+	absolutePlatformDir, err := filepath.Abs(platformDir)
 	if err != nil {
-		return nil, fmt.Errorf("snapshot embedded deployment descriptor: %w", err)
+		return nil, fmt.Errorf("resolve platform directory: %w", err)
+	}
+	embedFile := filepath.Join(absolutePlatformDir, "embedded", deploymentFile)
+	if _, err := os.Stat(embedFile); err != nil {
+		return nil, fmt.Errorf("find embedded deployment descriptor: %w", err)
+	}
+	absoluteOutputDir, err := filepath.Abs(outputDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve output directory: %w", err)
 	}
 	return &Packer{
-		platformDir: platformDir,
+		platformDir: absolutePlatformDir,
 		embedFile:   embedFile,
-		outputDir:   outputDir,
+		outputDir:   absoluteOutputDir,
 		goos:        goos,
 		goarch:      goarch,
-		placeholder: placeholder,
 	}, nil
 }
 
@@ -68,9 +74,20 @@ type Result struct {
 // embedded folder, compiles the platform, and assembles the deployment
 // package: the binary, a copy of the descriptor, a manifest, release metadata,
 // and a checksums file.
-func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (*Result, error) {
-	if err := writeJSON(p.embedFile, d); err != nil {
-		return nil, fmt.Errorf("stage deployment descriptor: %w", err)
+func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (result *Result, resultErr error) {
+	stageDir, err := os.MkdirTemp("", "opdl-build-overlay-")
+	if err != nil {
+		return nil, fmt.Errorf("create build overlay directory: %w", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(stageDir); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove build overlay directory: %w", err))
+		}
+	}()
+
+	overlayPath, err := p.stageOverlay(stageDir, d)
+	if err != nil {
+		return nil, err
 	}
 
 	pkgDir := filepath.Join(p.outputDir, d.Project, d.Site, d.Machine)
@@ -80,7 +97,7 @@ func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (*Re
 
 	binaryName := d.Machine + p.binaryExt()
 	binaryPath := filepath.Join(pkgDir, binaryName)
-	if err := p.compile(ctx, binaryPath); err != nil {
+	if err := p.compile(ctx, binaryPath, overlayPath); err != nil {
 		return nil, err
 	}
 
@@ -99,18 +116,26 @@ func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (*Re
 	return &Result{Dir: pkgDir, Binary: binaryName, SHA256: sum}, nil
 }
 
-// Restore rewrites the embedded deployment descriptor with the snapshot taken
-// at construction, leaving the working tree clean.
-func (p *Packer) Restore() error {
-	if err := atomicfile.WriteFile(p.embedFile, p.placeholder, 0o644); err != nil {
-		return fmt.Errorf("restore embedded deployment descriptor: %w", err)
+// stageOverlay writes the machine descriptor and the Go overlay that maps the
+// neutral embedded descriptor to it for this build only.
+func (p *Packer) stageOverlay(stageDir string, d deployment.Descriptor) (string, error) {
+	stagedDescriptor := filepath.Join(stageDir, deploymentFile)
+	if err := writeJSON(stagedDescriptor, d); err != nil {
+		return "", fmt.Errorf("stage deployment descriptor: %w", err)
 	}
-	return nil
+	overlayPath := filepath.Join(stageDir, "overlay.json")
+	overlay := struct {
+		Replace map[string]string `json:"Replace"`
+	}{Replace: map[string]string{p.embedFile: stagedDescriptor}}
+	if err := writeJSON(overlayPath, overlay); err != nil {
+		return "", fmt.Errorf("write build overlay: %w", err)
+	}
+	return overlayPath, nil
 }
 
 // compile runs go build for the platform command into out.
-func (p *Packer) compile(ctx context.Context, out string) error {
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", out, platformCmd)
+func (p *Packer) compile(ctx context.Context, out, overlayPath string) error {
+	cmd := exec.CommandContext(ctx, "go", "build", "-overlay", overlayPath, "-o", out, platformCmd)
 	cmd.Dir = p.platformDir
 	cmd.Env = p.buildEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -122,7 +147,7 @@ func (p *Packer) compile(ctx context.Context, out string) error {
 // writeMetadata writes the manifest, release metadata, and checksums file.
 func (p *Packer) writeMetadata(pkgDir string, d deployment.Descriptor, binary, sum string) error {
 	now := time.Now().UTC()
-	primary, standby := launches(d.Instances.WarmStandby)
+	primary, standby := launches(!d.Slots.Standby.Disabled)
 	man := Manifest{
 		Project:     d.Project,
 		Site:        d.Site,

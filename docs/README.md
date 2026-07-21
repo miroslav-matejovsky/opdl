@@ -14,4 +14,6 @@ Additional material:
 
 - [Backlog](backlog/README.md) contains deferred, actionable work.
 - [Bugs](bugs/README.md) contains known issues.
+- [Platform operations](operations/README.md) contains deployment,
+  monitoring, event-analysis, and troubleshooting runbooks.
 - Package-level details live next to Go code in `doc.go` files, or in `README.md` for top-level directories like `platform`.

@@ -25,7 +25,15 @@ type file struct {
 	// stops being promotable, and before an active process stops serving rather than
 	// answering from a stale view. It is required and must be positive.
 	LagBound    string      `toml:"lag_bound"`
+	Operations  Operations  `toml:"operations"`
 	EventFabric EventFabric `toml:"event_fabric"`
+}
+
+// Operations configures local operational event retention. Structured events
+// are always written to the process error stream; EventDir optionally retains
+// the same records as JSONL for incident analysis.
+type Operations struct {
+	EventDir string `toml:"event_dir"`
 }
 
 // EventFabric carries per-adapter runtime settings for the Event Fabric. It is
@@ -65,25 +73,6 @@ type EventFabricNats struct {
 	// replay to the captured high-water mark, handler backlog, and the ready
 	// event, such as "30s".
 	CatchUpTimeout string `toml:"catch_up_timeout"`
-
-	// ClientAddress overrides the host:port this node's server serves clients on.
-	// It applies only on a machine that stores the site journal.
-	ClientAddress string `toml:"client_address"`
-	// ClusterAddress overrides the host:port this node's server routes to the
-	// site's other storage nodes on. It applies only on a machine that stores the
-	// site journal.
-	ClusterAddress string `toml:"cluster_address"`
-	// MonitorAddress overrides the host:port this node's server serves monitoring
-	// on. It applies only on a machine that stores the site journal.
-	MonitorAddress string `toml:"monitor_address"`
-	// Routes overrides the cluster addresses of the site's other storage nodes.
-	// An explicit empty list is not an override; omit the field to keep the
-	// routes the descriptor derived.
-	Routes []string `toml:"routes"`
-	// Servers overrides the client addresses of the site's storage nodes, which
-	// is where this node reaches the journal. An explicit empty list is not an
-	// override; omit the field to keep the servers the descriptor derived.
-	Servers []string `toml:"servers"`
 }
 
 // credentials is the schema of the file CredentialsFile points at. It is a
@@ -106,8 +95,12 @@ func loadFile(path string) (file, error) {
 		return file{}, fmt.Errorf("read configuration file %s: %w", path, err)
 	}
 	var f file
-	if err := toml.Unmarshal(data, &f); err != nil {
+	meta, err := toml.Decode(string(data), &f)
+	if err != nil {
 		return file{}, fmt.Errorf("invalid configuration file %s: %w", path, err)
+	}
+	if err := rejectUnknownKeys(path, meta); err != nil {
+		return file{}, err
 	}
 	f.Address = strings.TrimSpace(f.Address)
 	if f.Address == "" {
@@ -132,6 +125,7 @@ func loadFile(path string) (file, error) {
 	if f.LagBound == "" {
 		return file{}, fmt.Errorf("configuration file %s: lag_bound is required", path)
 	}
+	f.Operations.EventDir = strings.TrimSpace(f.Operations.EventDir)
 	nats := &f.EventFabric.Nats
 	nats.DataDir = strings.TrimSpace(nats.DataDir)
 	if nats.DataDir == "" {
@@ -153,10 +147,33 @@ func loadFile(path string) (file, error) {
 	// address usable is the adapter's business, so the composed adapter
 	// configuration is validated at startup, before any listener opens.
 	nats.CredentialsFile = strings.TrimSpace(nats.CredentialsFile)
-	nats.ClientAddress = strings.TrimSpace(nats.ClientAddress)
-	nats.ClusterAddress = strings.TrimSpace(nats.ClusterAddress)
-	nats.MonitorAddress = strings.TrimSpace(nats.MonitorAddress)
 	return f, nil
+}
+
+// rejectUnknownKeys fails a configuration file that sets a key this schema does
+// not define.
+//
+// The strictness is the point. A key the decoder does not recognise is silently
+// dropped by default, and a setting that is silently dropped looks exactly like
+// one that was applied: the platform starts, reports a healthy configuration,
+// and behaves as though the file had never mentioned it. That is how a NATS
+// socket override left over from an earlier schema turns into a machine
+// connecting to an address nobody wrote down. Deployment topology comes from the
+// descriptor, so an obsolete override here has no correct interpretation and
+// must not be treated as one.
+//
+// The error names every unknown key rather than only the first, so a stale file
+// is fixed in one pass.
+func rejectUnknownKeys(path string, meta toml.MetaData) error {
+	undecoded := meta.Undecoded()
+	if len(undecoded) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(undecoded))
+	for _, key := range undecoded {
+		keys = append(keys, key.String())
+	}
+	return fmt.Errorf("configuration file %s: unknown key(s): %s", path, strings.Join(keys, ", "))
 }
 
 // loadCredentials reads the site's NATS username and password from path. The

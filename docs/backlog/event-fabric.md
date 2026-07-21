@@ -2,14 +2,29 @@
 
 Focused follow-up work for the retained NATS site journal.
 
-## Prove the three-storage-node failure topology
+The original three-storage-node item is now proven by
+`TestFourMachineStorageTopologyAndFailure`: three machines are selected by sorted
+name, only those three bind a cluster listener, the fourth is client-only,
+publication and replay cross machines, the site keeps accepting and projecting
+after the client-only machine's selected storage server stops, and the stopped
+machine rejoins its own storage and reconverges. Structured connection events
+make the disconnect and reconnect explicit. The remaining product decision is
+recorded below.
 
-**Effort:** medium. **Value:** high.
+## Decide whether the platform absorbs the post-failure write window
 
-Add one focused integration test that starts the three storage nodes used by a
-site of three or more machines. Verify publication and replay through different
-nodes, continued writes after one node stops, and correct restart and rejoin.
+**Effort:** small. **Value:** medium.
 
-The current suite proves single-storage restart and two-machine behavior. It does
-not yet prove the one-node failure tolerance claimed by the three-replica
-topology. Complete this before relying on that topology in production.
+Immediately after a storage machine is lost, the journal's replica group elects a
+new leader, and writes submitted during that window are rejected rather than
+held. The platform does not retry internally, so the error reaches the client.
+
+The scenario retries as a real client would, and says so. The open decision is
+whether a bounded publish retry belongs in the platform. Absorbing the window
+makes single writes more reliable but hides back-pressure; leaving it means every
+client needs retry logic. Either is defensible; the contract should state which
+one it is.
+
+The four-machine failure scenario preserves this behavior explicitly in
+`proposeEventually`; the harness fix does not change the production write
+contract.

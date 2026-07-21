@@ -59,10 +59,6 @@ lag_bound = "30s"
 data_dir = " /var/lib/opdl/nats "
 startup_timeout = "30s"
 catch_up_timeout = "25s"
-client_address = "127.0.0.1:4001"
-cluster_address = "127.0.0.1:4002"
-monitor_address = "127.0.0.1:4003"
-routes = ["127.0.0.2:4002"]
 `))
 	require.NoError(t, err)
 
@@ -70,24 +66,24 @@ routes = ["127.0.0.2:4002"]
 	require.Equal(t, "/var/lib/opdl/nats", nats.DataDir, "surrounding space is trimmed")
 	require.Equal(t, "30s", nats.StartupTimeout)
 	require.Equal(t, "25s", nats.CatchUpTimeout)
-	require.Equal(t, "127.0.0.1:4001", nats.ClientAddress)
-	require.Equal(t, "127.0.0.1:4002", nats.ClusterAddress)
-	require.Equal(t, "127.0.0.1:4003", nats.MonitorAddress)
-	require.Equal(t, []string{"127.0.0.2:4002"}, nats.Routes)
 }
 
-// TestLoadDistinguishesAnAbsentRouteListFromAnEmptyOne pins what composition
-// depends on: an omitted list keeps the peers the descriptor derived, while an
-// explicit empty list is a deliberate "route to nobody".
-func TestLoadDistinguishesAnAbsentRouteListFromAnEmptyOne(t *testing.T) {
-	absent, err := config.Load(writeConfig(t, validBaseConfig))
+func TestLoadReadsOptionalOperationsEventDirectory(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"
+read_header_timeout = "5s"
+shutdown_timeout = "10s"
+instance_dir = "/var/lib/opdl/instance"
+lag_bound = "30s"
+[operations]
+event_dir = " /var/log/opdl/events "
+[event_fabric.nats]
+data_dir = "/var/lib/opdl/nats"
+startup_timeout = "30s"
+catch_up_timeout = "25s"
+`))
 	require.NoError(t, err)
-	require.Nil(t, absent.EventFabric().Nats.Routes)
-
-	empty, err := config.Load(writeConfig(t, validBaseConfig+"routes = []\n"))
-	require.NoError(t, err)
-	require.NotNil(t, empty.EventFabric().Nats.Routes)
-	require.Empty(t, empty.EventFabric().Nats.Routes)
+	require.Equal(t, "/var/log/opdl/events", cfg.OperationsEventDir())
+	require.Contains(t, cfg.Summary(), "operations.event_dir /var/log/opdl/events")
 }
 
 // TestLoadAcceptsUnusableDataDir documents that a configured path is not checked
@@ -346,6 +342,61 @@ func TestLoadReadsInstanceDir(t *testing.T) {
 	cfg, err := config.Load(writeConfig(t, validBaseConfig))
 	require.NoError(t, err)
 	require.Equal(t, "/var/lib/opdl/instance", cfg.InstanceDir())
+}
+
+// TestLoadRejectsUnknownKeys checks a configuration file that sets something
+// this schema does not define fails at load time.
+//
+// The obsolete socket overrides are the case that matters. They were silently
+// ignored while the decoder tolerated unknown keys, so a machine kept using the
+// deployment's addresses while its configuration file said otherwise and the
+// platform reported a healthy startup either way. The failure that produced was
+// slow to diagnose precisely because nothing said the setting had been dropped.
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	tests := map[string]struct {
+		extra string
+		want  string
+	}{
+		"obsolete nats client address": {
+			extra: "client_address = \"127.0.0.1:4222\"\n",
+			want:  "event_fabric.nats.client_address",
+		},
+		"obsolete nats cluster address": {
+			extra: "cluster_address = \"127.0.0.1:6222\"\n",
+			want:  "event_fabric.nats.cluster_address",
+		},
+		"obsolete nats monitor address": {
+			extra: "monitor_address = \"127.0.0.1:8222\"\n",
+			want:  "event_fabric.nats.monitor_address",
+		},
+		"obsolete nats routes": {
+			extra: "routes = [\"127.0.0.2:6222\"]\n",
+			want:  "event_fabric.nats.routes",
+		},
+		"obsolete nats servers": {
+			extra: "servers = [\"127.0.0.1:4222\"]\n",
+			want:  "event_fabric.nats.servers",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := config.Load(writeConfig(t, validBaseConfig+test.extra))
+			require.ErrorContains(t, err, "unknown key")
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+
+	t.Run("unknown top-level key", func(t *testing.T) {
+		_, err := config.Load(writeConfig(t, validBaseConfig+"totally_made_up = 1\n"))
+		require.ErrorContains(t, err, "unknown key")
+		require.ErrorContains(t, err, "totally_made_up")
+	})
+
+	t.Run("every unknown key is named", func(t *testing.T) {
+		_, err := config.Load(writeConfig(t, validBaseConfig+"client_address = \"127.0.0.1:4222\"\nmonitor_address = \"127.0.0.1:8222\"\n"))
+		require.ErrorContains(t, err, "event_fabric.nats.client_address")
+		require.ErrorContains(t, err, "event_fabric.nats.monitor_address")
+	})
 }
 
 func TestLoadRejectsMalformedFile(t *testing.T) {

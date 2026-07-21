@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/miroslav-matejovsky/opdl/utils/logscan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,16 +22,13 @@ import (
 //
 // What the site then decides is TestTwoMachineRegistration's subject.
 func TestTwoMachineEventFabric(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	scenariosDir, err := filepath.Abs(".")
-	require.NoError(t, err)
-	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "two-machine")
-
-	// node-a sorts first, so it is the site's storage node and node-b routes to
-	// it. Nothing told either of them that: both derived it from the same
-	// topology, and the harness only moved their sockets onto this host.
-	deployment := prepareSite(t, outDir, t.TempDir(), "two-machine", "node-a", "node-b")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	// node-a sorts first, so it is the site's storage node and node-b is a client
+	// of it. Nothing told either of them that: both derived it from the same
+	// topology in the blueprint the harness rendered and built.
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
 	nodeA, nodeB := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
 	deployment.startAll(ctx, t)
 
@@ -65,8 +63,8 @@ func TestTwoMachineEventFabric(t *testing.T) {
 	require.Equal(t, listRegistrations(ctx, t, nodeA), listRegistrations(ctx, t, nodeB))
 
 	// The startup order the platform promises: the Event Fabric is ready before
-	// the public API accepts anything. Reading a machine's logs stops it, so the
-	// wait for both to serve came first.
+	// the public API accepts anything. Both machines are still running here; the
+	// lines being checked are startup lines, so they are long since written.
 	for _, m := range []*machine{nodeA, nodeB} {
 		logs := m.logs()
 		fabricAt := strings.Index(logs, "event fabric")
@@ -82,20 +80,17 @@ func TestTwoMachineEventFabric(t *testing.T) {
 func journalOf(t *testing.T, m *machine) string {
 	t.Helper()
 	const marker = "journal "
-	logs := m.output.String()
-	at := strings.Index(logs, marker)
-	require.GreaterOrEqual(t, at, 0, "%s did not name its journal:\n%s", m.name, logs)
-
-	rest := logs[at+len(marker):]
-	end := strings.IndexAny(rest, " \r\n")
-	require.Positive(t, end, "%s named an empty journal:\n%s", m.name, logs)
-	return rest[:end]
+	logs := m.logs()
+	tokens := logscan.After(logs, marker)
+	require.NotEmpty(t, tokens, "%s did not name its journal:\n%s", m.name, logs)
+	require.NotEmpty(t, tokens[0], "%s named an empty journal:\n%s", m.name, logs)
+	return tokens[0]
 }
 
 // requireReported checks a running machine said something at startup, without
 // stopping it to find out.
 func requireReported(t *testing.T, m *machine, want string, because ...string) {
 	t.Helper()
-	require.Containsf(t, m.output.String(), want, "%s did not report %q: %s\n%s",
-		m.name, want, strings.Join(because, " "), m.output.String())
+	require.Containsf(t, m.logs(), want, "%s did not report %q: %s\n%s",
+		m.name, want, strings.Join(because, " "), m.logs())
 }

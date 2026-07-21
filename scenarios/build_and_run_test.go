@@ -14,13 +14,10 @@ import (
 // registration API, decides a proposal, and reports its configuration. Both are
 // external processes; nothing here imports builder or platform Go code.
 func TestBuildAndRunSingleMachine(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	scenariosDir, err := filepath.Abs(".")
-	require.NoError(t, err)
-	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "scenario")
-
-	deployment := prepareSite(t, outDir, t.TempDir(), "scenario", "node")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "scenario")
 	node := deployment.machine(t, "node")
 	require.Nil(t, readManifest(t, node.binaryPath).Standby,
 		"an explicit per-machine opt-out must package only the primary launch")

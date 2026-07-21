@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
@@ -42,6 +42,7 @@ type site struct {
 	commands   *registration.CommandService
 	queries    *registration.QueryService
 	role       redundancy.ProcessRole
+	observer   *operations.Recorder
 
 	// projector is the node-wide ordered consumer: one loop, from the first
 	// retained event through live delivery, so nothing falls in a replay-to-live
@@ -88,8 +89,12 @@ type service struct {
 // follows the site's history without producing a decision or holding an
 // active-only capability.
 func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.ProcessRole) (*site, error) {
+	observer := operations.FromContext(ctx)
+	openedAt := time.Now()
+	observer.Emit("platform.site_opening", operations.LevelInfo, "platform.site", "site runtime opening", map[string]any{"active": active})
 	fabricCfg, err := natsConfig(descriptor, cfg)
 	if err != nil {
+		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "site configuration failed", map[string]any{operations.AttributeError: err.Error()})
 		return nil, err
 	}
 	// A warm standby never opens the shared journal store or binds the storage
@@ -99,11 +104,13 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 	if !active {
 		fabricCfg = clientOnly(fabricCfg)
 	}
+	logEffectiveFabric(descriptor, fabricCfg)
 	// Open validates the configuration and probes the journal's storage before it
 	// binds a listener, so an unusable data directory or address fails here
 	// rather than half way through starting a server.
 	fabric, err := natsfabric.Open(ctx, descriptor, fabricCfg)
 	if err != nil {
+		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "Event Fabric failed to open", map[string]any{operations.AttributeError: err.Error()})
 		return nil, err
 	}
 	info := fabric.Info()
@@ -115,6 +122,7 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 		fabric:          fabric,
 		projection:      registration.NewProjection(),
 		role:            role,
+		observer:        observer,
 		stopped:         make(chan struct{}),
 		catchUpTimeout:  fabricCfg.CatchUpTimeout,
 		shutdownTimeout: fabricCfg.ShutdownTimeout,
@@ -122,8 +130,12 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 
 	if !active {
 		if err := s.startStandby(ctx); err != nil {
+			observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "standby site failed to catch up", map[string]any{operations.AttributeError: err.Error()})
 			return nil, errors.Join(err, s.close(ctx))
 		}
+		observer.Emit("platform.standby_ready", operations.LevelInfo, "platform.site", "standby projection caught up", map[string]any{
+			operations.AttributeDurationMS: time.Since(openedAt).Milliseconds(), operations.AttributeAppliedSequence: s.projection.Sequence(),
+		})
 		return s, nil
 	}
 
@@ -142,8 +154,12 @@ func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Con
 	}
 
 	if err := s.start(ctx, handler); err != nil {
+		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "active site readiness failed", map[string]any{operations.AttributeError: err.Error()})
 		return nil, errors.Join(err, s.close(ctx))
 	}
+	observer.Emit("platform.site_ready", operations.LevelInfo, "platform.site", "active site is ready to serve", map[string]any{
+		operations.AttributeDurationMS: time.Since(openedAt).Milliseconds(), operations.AttributeAppliedSequence: s.projection.Sequence(),
+	})
 	return s, nil
 }
 
@@ -219,11 +235,18 @@ func (s *site) startStandby(ctx context.Context) error {
 // waited for a moving target would never start. Reaching a recorded mark is what
 // "caught up" means.
 func (s *site) catchUp(ctx context.Context, what string) error {
+	started := time.Now()
 	high, err := s.fabric.HighWater(ctx)
 	if err != nil {
 		return fmt.Errorf("read the journal high-water mark: %w", s.readinessError(err))
 	}
-	return s.awaitApplied(ctx, high, what)
+	if err := s.awaitApplied(ctx, high, what); err != nil {
+		return err
+	}
+	s.observer.Emit("platform.projection_caught_up", operations.LevelInfo, "platform.site", "projection reached captured journal high-water mark", map[string]any{
+		"phase": what, "high_water": high, operations.AttributeAppliedSequence: s.projection.Sequence(), operations.AttributeDurationMS: time.Since(started).Milliseconds(),
+	})
+	return nil
 }
 
 // awaitApplied waits for the projection to reach sequence, or for the projector
@@ -300,6 +323,7 @@ func (s *site) close(ctx context.Context) error {
 }
 
 func (s *site) release(ctx context.Context) error {
+	s.observer.Emit("platform.site_stopping", operations.LevelInfo, "platform.site", "site runtime stopping", map[string]any{"ready": s.ready})
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownTimeout)
 	defer cancel()
 
@@ -315,7 +339,15 @@ func (s *site) release(ctx context.Context) error {
 		}
 	}
 	errs = append(errs, s.projector.stop(), s.fabric.Close(stopCtx))
-	return errors.Join(errs...)
+	err := errors.Join(errs...)
+	level := operations.LevelInfo
+	attributes := map[string]any{}
+	if err != nil {
+		level = operations.LevelError
+		attributes[operations.AttributeError] = err.Error()
+	}
+	s.observer.Emit("platform.site_stopped", level, "platform.site", "site runtime stopped", attributes)
+	return err
 }
 
 // readinessError turns an expired readiness bound into the Event Fabric's
@@ -377,6 +409,13 @@ func (s *site) run(ctx context.Context, name string, loop func(context.Context) 
 			s.stoppedOnce.Do(func() { close(s.stopped) })
 		}()
 		r.err = loop(runCtx)
+		level := operations.LevelInfo
+		attributes := map[string]any{"loop": name}
+		if r.err != nil {
+			level = operations.LevelError
+			attributes[operations.AttributeError] = r.err.Error()
+		}
+		s.observer.Emit("platform.background_loop_stopped", level, "platform.site", "background Event Fabric loop stopped", attributes)
 	}()
 	return r
 }
@@ -406,17 +445,19 @@ func (r *runner) failure() error {
 	return fmt.Errorf("%s stopped", r.name)
 }
 
-// natsConfig composes the Event Fabric adapter's configuration: the descriptor's
-// derived topology first, then whatever the configuration file places or moves.
-// Deriving first means an absent override is the deployment's own value rather
-// than a blank.
+// natsConfig composes the Event Fabric adapter's configuration from the descriptor's
+// derived topology and runtime data paths/timeouts from the configuration file.
+//
+// It takes no process role. Every role on the machine composes the same
+// configuration from the same descriptor topology; only clientOnly distinguishes
+// a process that does not hold the fence, and it removes ownership rather than
+// selecting a different endpoint.
 func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabric.Config, error) {
 	fabricCfg, err := natsfabric.DefaultConfig(descriptor)
 	if err != nil {
 		return natsfabric.Config{}, err
 	}
 	settings := cfg.EventFabric().Nats
-	derivedClientAddress := fabricCfg.ClientAddress
 
 	fabricCfg.DataDir = nodeDataDir(settings.DataDir, descriptor)
 	fabricCfg.Username, fabricCfg.Password = cfg.Credentials()
@@ -433,36 +474,6 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 	}
 	fabricCfg.CatchUpTimeout = catchUpTimeout
 
-	if settings.ClientAddress != "" {
-		fabricCfg.ClientAddress = settings.ClientAddress
-	}
-	if settings.ClusterAddress != "" {
-		fabricCfg.ClusterAddress = settings.ClusterAddress
-	}
-	if settings.MonitorAddress != "" {
-		fabricCfg.MonitorAddress = settings.MonitorAddress
-	}
-	// A present but empty list is a deliberate "route to nobody"; an absent one
-	// keeps the peers the descriptor derived.
-	if settings.Routes != nil {
-		fabricCfg.Routes = settings.Routes
-	}
-	if settings.Servers != nil {
-		fabricCfg.Servers = settings.Servers
-	} else if fabricCfg.HostsStorage && fabricCfg.ClientAddress != derivedClientAddress {
-		for i, server := range fabricCfg.Servers {
-			if server == derivedClientAddress {
-				fabricCfg.Servers[i] = fabricCfg.ClientAddress
-				break
-			}
-		}
-	}
-	if fabricCfg.HostsStorage {
-		peers := slices.DeleteFunc(slices.Clone(fabricCfg.Servers), func(server string) bool {
-			return server == fabricCfg.ClientAddress
-		})
-		fabricCfg.Servers = append([]string{fabricCfg.ClientAddress}, peers...)
-	}
 	return fabricCfg, nil
 }
 
@@ -480,14 +491,50 @@ func clientOnly(cfg natsfabric.Config) natsfabric.Config {
 		return cfg
 	}
 	cfg.HostsStorage = false
-	// cfg.Servers keeps the local server first and all peer storage servers after
-	// it. Peers let the standby remain caught up if the local active disappears.
+	// cfg.Servers is kept whole and unchanged: the local server first, then every
+	// peer storage server. That list is what the standby reaches the journal
+	// through, and its first entry is the address the local active process is
+	// serving on right now. Narrowing or substituting it here is exactly the bug
+	// this shape exists to prevent, because the standby would then wait on an
+	// address no process is listening on.
 	cfg.ClientAddress = ""
 	cfg.ClusterAddress = ""
-	cfg.MonitorAddress = ""
 	cfg.Routes = nil
 	cfg.DataDir = ""
 	return cfg
+}
+
+// logEffectiveFabric prints the Event Fabric endpoints this process actually
+// composed, before anything is bound or connected.
+//
+// It exists so the four cases a machine can be in are distinguishable from the
+// process output alone:
+//
+//	active storage server         endpoint=X binds=true  storage=true
+//	client-only local standby     endpoint=X binds=false storage=false, X in servers
+//	client-only non-storage node  endpoint=X binds=false storage=false, X not in servers
+//	storage node after promotion  endpoint=X binds=true  storage=true
+//
+// Those look alike in every other log line, and telling them apart after the
+// fact is what a failure to reach the journal actually needs. endpoint is the
+// machine's own address from the descriptor and is printed whether or not this
+// process binds it, so a standby and the active process it follows are visibly
+// talking about the same endpoint.
+//
+// Every value is a single token so the line can be parsed. No credential is
+// printed, and there is no monitor endpoint to print.
+func logEffectiveFabric(descriptor deployment.Descriptor, cfg natsfabric.Config) {
+	cluster := "none"
+	if len(cfg.Routes) > 0 {
+		cluster = cfg.ClusterAddress
+	}
+	routes := "none"
+	if len(cfg.Routes) > 0 {
+		routes = strings.Join(cfg.Routes, ",")
+	}
+	fmt.Printf("platform: event fabric configuration endpoint=%s binds=%t cluster=%s servers=%s routes=%s storage=%t replicas=%d\n",
+		descriptor.EventFabric.Nats.ClientAddress, cfg.ClientAddress != "", cluster,
+		strings.Join(cfg.Servers, ","), routes, cfg.HostsStorage, cfg.Replicas)
 }
 
 // nodeDataDir places this node's journal storage in its own subdirectory of the

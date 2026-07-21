@@ -1,10 +1,12 @@
 package pack
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/miroslav-matejovsky/opdl/builder/deployment"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,24 +23,29 @@ func fakePlatform(t *testing.T) string {
 
 func TestNewFailsWithoutEmbeddedDescriptor(t *testing.T) {
 	_, err := New(t.TempDir(), t.TempDir(), "", "")
-	require.ErrorContains(t, err, "snapshot embedded deployment descriptor")
+	require.ErrorContains(t, err, "find embedded deployment descriptor")
 }
 
-func TestRestoreReinstatesPlaceholder(t *testing.T) {
+func TestStageOverlayLeavesPlaceholderUnchanged(t *testing.T) {
 	platformDir := fakePlatform(t)
 	embedFile := filepath.Join(platformDir, "embedded", deploymentFile)
 
 	p, err := New(platformDir, t.TempDir(), "", "")
 	require.NoError(t, err)
-
-	// Simulate staging: overwrite the placeholder with a machine descriptor.
-	require.NoError(t, os.WriteFile(embedFile, []byte(`{"project":"customer-a"}`), 0o644))
-
-	require.NoError(t, p.Restore())
+	overlayPath, err := p.stageOverlay(t.TempDir(), deployment.Descriptor{Project: "customer-a"})
+	require.NoError(t, err)
 
 	data, err := os.ReadFile(embedFile)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"project":"mock"}`, string(data))
+
+	overlay, err := os.ReadFile(overlayPath)
+	require.NoError(t, err)
+	var document struct {
+		Replace map[string]string `json:"Replace"`
+	}
+	require.NoError(t, json.Unmarshal(overlay, &document))
+	require.Equal(t, filepath.Join(filepath.Dir(overlayPath), deploymentFile), document.Replace[filepath.Clean(embedFile)])
 }
 
 func TestFileSHA256Stable(t *testing.T) {
@@ -65,13 +72,13 @@ func TestBinaryExtByTarget(t *testing.T) {
 }
 
 func TestLaunches(t *testing.T) {
-	t.Run("warm standby enabled", func(t *testing.T) {
+	t.Run("standby enabled", func(t *testing.T) {
 		primary, standby := launches(true)
 		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
 		require.Equal(t, &Launch{Args: []string{"-instance", "standby"}}, standby)
 	})
 
-	t.Run("warm standby disabled", func(t *testing.T) {
+	t.Run("standby disabled", func(t *testing.T) {
 		primary, standby := launches(false)
 		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
 		require.Nil(t, standby)

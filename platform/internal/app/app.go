@@ -13,12 +13,13 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 )
 
 // Run starts the platform runtime with the given command-line arguments. It
 // loads configuration, validates this process role against the machine
 // fence, and runs either the active runtime or a warm standby until signaled.
-func Run(args []string) error {
+func Run(args []string) (runErr error) {
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
 	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")
 	instance := fs.String("instance", "", "process role: primary or standby")
@@ -34,17 +35,37 @@ func Run(args []string) error {
 
 	// Validate the explicit role before opening sockets or storage. Primary-only
 	// machines reject standby.
-	role, err := resolveRole(*instance, descriptor.Instances.WarmStandby)
+	role, err := resolveRole(*instance, !descriptor.Slots.Standby.Disabled)
 	if err != nil {
 		return err
 	}
+	recorder, err := operations.Open(cfg.OperationsEventDir(), descriptor, role.String())
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, recorder.Close()) }()
 	fmt.Println(cfg.Summary())
-	fmt.Printf("    instance     role=%s warm_standby=%t\n", role, descriptor.Instances.WarmStandby)
+	fmt.Printf("    instance     role=%s standby=%t\n", role, !descriptor.Slots.Standby.Disabled)
+	recorder.Emit("platform.process_started", operations.LevelInfo, "platform", "platform process started", map[string]any{
+		"operations_file": recorder.Path(),
+		"standby_enabled": !descriptor.Slots.Standby.Disabled,
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx = operations.WithRecorder(ctx, recorder)
 
-	return runProcess(ctx, cfg, descriptor, role)
+	runErr = runProcess(ctx, cfg, descriptor, role)
+	level := operations.LevelInfo
+	message := "platform process stopped"
+	attributes := map[string]any{}
+	if runErr != nil {
+		level = operations.LevelError
+		message = "platform process failed"
+		attributes[operations.AttributeError] = runErr.Error()
+	}
+	recorder.Emit("platform.process_stopped", level, "platform", message, attributes)
+	return runErr
 }
 
 // serve runs srv until it stops on its own, its site stops carrying events, or

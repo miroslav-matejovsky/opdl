@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/miroslav-matejovsky/opdl/utils/procrun"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,19 +44,20 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Skip("dotnet not installed; skipping dotnet SDK end-to-end scenario")
 	}
+	// After the skip, so a host without dotnet reports the skip immediately
+	// instead of parking the test until the serial phase ends.
+	t.Parallel()
 
 	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
-	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "two-machine")
-
+	outDir := filepath.Join(scenarioDir(t), "out")
 	// Both machines are prepared up front so the .NET test knows where node B will
 	// answer, and started separately so node B is genuinely absent while the
 	// pending assertions run.
-	deployment := prepareSite(t, outDir, t.TempDir(), "two-machine", "node-a", "node-b")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
 	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
-	controlDir := t.TempDir()
+	controlDir := filepath.Join(scenarioDir(t), "control")
 
 	first.start(ctx, t)
 	waitForAPI(ctx, t, first)
@@ -63,26 +65,31 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	// The .NET test runs asynchronously: it blocks partway through waiting for
 	// node B, so this scenario has to still be running to start it.
 	e2eProject := filepath.Join(scenariosDir, "..", "sdk-dotnet", "tests", "Opdl.Sdk.E2E", "Opdl.Sdk.E2E.csproj")
-	command := exec.CommandContext(ctx, dotnet, "test", e2eProject, "--nologo", "--verbosity", "quiet")
+	command := exec.CommandContext(ctx, dotnet, "test", e2eProject, "--nologo", "--verbosity", "quiet", "--logger", "console;verbosity=normal")
 	command.Env = append(os.Environ(),
 		"OPDL_PLATFORM_BASEURL_A="+first.url,
 		"OPDL_PLATFORM_BASEURL_B="+second.url,
 		"OPDL_CONTROL_DIR="+controlDir,
 	)
-	sdkTest := startProcess(t, command)
+	sdkTest, err := procrun.Start(command)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sdkTest.Kill()
+		_, _ = sdkTest.Wait()
+	})
 
 	// Node B starts only once the SDK test has proven pending behavior.
 	waitForMarker(t, controlDir, pendingObservedMarker, sdkTest, func() string {
-		return diagnose([]*machine{first, second}) + "\n--- dotnet SDK test output so far ---\n" + sdkTest.logs()
+		return diagnose([]*machine{first, second}) + "\n--- dotnet SDK test output so far ---\n" + sdkTest.Logs()
 	})
 	second.start(ctx, t)
 
-	testOut, err := sdkTest.wait()
-	require.NoErrorf(t, err, "dotnet SDK end-to-end tests failed:\n%s\n%s",
-		testOut, diagnose([]*machine{first, second}))
+	testOut, err := sdkTest.Wait()
+	require.NoErrorf(t, err, "dotnet SDK end-to-end tests failed:\n%s%s",
+		testOut, diagnostics(first, second))
 	// The tests skip without their environment variables, so a run that skipped
 	// would otherwise pass while proving nothing.
-	require.Containsf(t, testOut, "Passed!",
+	require.Containsf(t, testOut, "Passed Opdl.Sdk.E2E.RegistrationTests.RegistrationIsAcceptedOnlyAfterEveryExpectedMachineConfirms",
 		"dotnet SDK end-to-end tests did not run to a pass (skipped or empty?):\n%s", testOut)
 
 	// The platform's public projection and the SDK's account agree about what

@@ -19,13 +19,10 @@ import (
 // machine it is waiting for. When that machine finally starts, nothing hands it
 // the backlog — it finds the proposal in the retained journal and answers.
 func TestTwoMachineRegistration(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	scenariosDir, err := filepath.Abs(".")
-	require.NoError(t, err)
-	outDir := t.TempDir()
-	buildProject(ctx, t, filepath.Join(scenariosDir, "testdata"), outDir, "two-machine")
-
-	deployment := prepareSite(t, outDir, t.TempDir(), "two-machine", "node-a", "node-b")
+	outDir := filepath.Join(scenarioDir(t), "out")
+	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
 	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
 	const request = `{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Billing","role":"Master"}`
 

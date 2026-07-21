@@ -22,6 +22,10 @@ func validProject() *blueprint.Project {
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
+				Platform: &blueprint.Platform{
+					Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+					Standby: &blueprint.Standby{Disabled: false},
+				},
 			}},
 		}},
 	}
@@ -88,6 +92,10 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 			Role:     "sensor-node",
 			IP:       "10.0.1.12",
 			Services: []string{"sensor-services"},
+			Platform: &blueprint.Platform{
+				Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+				Standby: &blueprint.Standby{Disabled: false},
+			},
 		}},
 	})
 	require.ErrorContains(t, p.Validate(), "duplicate site")
@@ -104,6 +112,10 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 			Role:     "gateway-node",
 			IP:       "10.0.1.10",
 			Services: []string{"core-services"},
+			Platform: &blueprint.Platform{
+				Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+				Standby: &blueprint.Standby{Disabled: false},
+			},
 		})
 		require.ErrorContains(t, p.Validate(), `machines "sensor" and "gateway" share ip "10.0.1.10"`)
 	})
@@ -117,6 +129,10 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 				Role:     "sensor-node",
 				IP:       "10.0.1.10",
 				Services: []string{"sensor-services"},
+				Platform: &blueprint.Platform{
+					Nats:    &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+					Standby: &blueprint.Standby{Disabled: false},
+				},
 			}},
 		})
 		require.ErrorContains(t, p.Validate(), `share ip "10.0.1.10"`)
@@ -128,11 +144,10 @@ func TestFeatures(t *testing.T) {
 	require.True(t, f.Chaos)
 }
 
-// TestMachinePlatformWarmStandby checks the platform subsection decodes as a
-// presence-aware value: absent block, absent attribute, and explicit true/false
-// are all distinguishable, which is what lets resolution default an omission to
-// enabled while honoring an explicit opt-out.
-func TestMachinePlatformWarmStandby(t *testing.T) {
+// TestMachinePlatformStandby checks the platform subsection decodes as a
+// presence-aware value: absent block, absent standby block, and explicit standby
+// subsections are all distinguishable.
+func TestMachinePlatformStandby(t *testing.T) {
 	machine := func(t *testing.T, body string) blueprint.Machine {
 		t.Helper()
 		p := decodeHCL(t, `project "p" {
@@ -153,23 +168,112 @@ func TestMachinePlatformWarmStandby(t *testing.T) {
 	t.Run("no platform block", func(t *testing.T) {
 		require.Nil(t, machine(t, "").Platform)
 	})
-	t.Run("platform block without warm_standby", func(t *testing.T) {
-		m := machine(t, "platform {}")
+	t.Run("standby enabled", func(t *testing.T) {
+		m := machine(t, `platform {
+		  nats {
+		    client_port  = 4222
+		    cluster_port = 6222
+		  }
+		  standby {
+		    disabled = false
+		  }
+		}`)
 		require.NotNil(t, m.Platform)
-		require.Nil(t, m.Platform.WarmStandby)
+		require.NotNil(t, m.Platform.Nats)
+		require.Equal(t, 4222, m.Platform.Nats.ClientPort)
+		require.Equal(t, 6222, m.Platform.Nats.ClusterPort)
+		require.NotNil(t, m.Platform.Standby)
+		require.False(t, m.Platform.Standby.Disabled)
 	})
-	t.Run("explicit false", func(t *testing.T) {
-		m := machine(t, "platform { warm_standby = false }")
-		require.NotNil(t, m.Platform)
-		require.NotNil(t, m.Platform.WarmStandby)
-		require.False(t, *m.Platform.WarmStandby)
+	t.Run("standby explicitly disabled", func(t *testing.T) {
+		m := machine(t, `platform {
+		  nats {
+		    client_port  = 4222
+		    cluster_port = 6222
+		  }
+		  standby {
+		    disabled = true
+		  }
+		}`)
+		require.NotNil(t, m.Platform.Standby)
+		require.True(t, m.Platform.Standby.Disabled)
 	})
-	t.Run("explicit true", func(t *testing.T) {
-		m := machine(t, "platform { warm_standby = true }")
-		require.NotNil(t, m.Platform)
-		require.NotNil(t, m.Platform.WarmStandby)
-		require.True(t, *m.Platform.WarmStandby)
-	})
+}
+
+// TestMachinePlatformDecodeFailures checks the mandatory parts of the platform
+// subsection are enforced by the decoder itself, before any validation runs.
+//
+// The disabled attribute matters most here. It is a bool, so an omitted one
+// would decode to false and enable redundancy nobody asked for. Requiring it at
+// decode time is what makes that impossible to express rather than merely
+// invalid.
+func TestMachinePlatformDecodeFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		errText string
+	}{
+		{
+			name: "standby block without disabled attribute",
+			body: `platform {
+			  nats {
+			    client_port  = 4222
+			    cluster_port = 6222
+			  }
+			  standby {}
+			}`,
+			errText: `"disabled"`,
+		},
+		{
+			name: "nats block without client_port",
+			body: `platform {
+			  nats {
+			    cluster_port = 6222
+			  }
+			  standby {
+			    disabled = true
+			  }
+			}`,
+			errText: `"client_port"`,
+		},
+		{
+			name: "nats block without cluster_port",
+			body: `platform {
+			  nats {
+			    client_port = 4222
+			  }
+			  standby {
+			    disabled = true
+			  }
+			}`,
+			errText: `"cluster_port"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src := `project "p" {
+			  environment = "production"
+			  features {}
+			  site "north" {
+			    machine "m1" {
+			      role     = "node"
+			      ip       = "10.0.1.10"
+			      services = ["core-services"]
+			      ` + tc.body + `
+			    }
+			  }
+			}`
+			parser := hclparse.NewParser()
+			file, diags := parser.ParseHCL([]byte(src), "test.hcl")
+			require.False(t, diags.HasErrors(), diags.Error())
+
+			var tf topologyFile
+			diags = gohcl.DecodeBody(file.Body, nil, &tf)
+			require.True(t, diags.HasErrors(), "expected a decode error")
+			require.Contains(t, diags.Error(), tc.errText)
+		})
+	}
 }
 
 type topologyFile struct {
@@ -250,6 +354,15 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      role     = "node"
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
+			      platform {
+			        nats {
+			          client_port  = 4222
+			          cluster_port = 6222
+			        }
+			        standby {
+			          disabled = false
+			        }
+			      }
 			    }
 			  }
 			  site "south" {
@@ -257,6 +370,15 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      role     = "node"
 			      ip       = "10.0.1.11"
 			      services = ["core-services"]
+			      platform {
+			        nats {
+			          client_port  = 4222
+			          cluster_port = 6222
+			        }
+			        standby {
+			          disabled = false
+			        }
+			      }
 			    }
 			  }
 			}`,
@@ -267,6 +389,34 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := decodeHCL(t, tc.hcl)
+			require.ErrorContains(t, p.Validate(), tc.errText)
+		})
+	}
+}
+
+func TestProjectValidateNatsFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*blueprint.Project)
+		errText string
+	}{
+		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, `machine "sensor": platform block is required`},
+		{"missing nats block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats = nil }, `machine "sensor": platform.nats block is required`},
+		{"missing standby block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby = nil }, `machine "sensor": platform.standby block is required`},
+		{"zero client port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = 0 }, `platform.nats.client_port must be in range 1-65535, got 0`},
+		{"negative client port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = -1 }, `platform.nats.client_port must be in range 1-65535, got -1`},
+		{"client port above range", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = 65536 }, `platform.nats.client_port must be in range 1-65535, got 65536`},
+		{"zero cluster port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterPort = 0 }, `platform.nats.cluster_port must be in range 1-65535, got 0`},
+		{"cluster port above range", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterPort = 70000 }, `platform.nats.cluster_port must be in range 1-65535, got 70000`},
+		{"colliding ports", func(p *blueprint.Project) {
+			p.Sites[0].Machines[0].Platform.Nats.ClusterPort = p.Sites[0].Machines[0].Platform.Nats.ClientPort
+		}, `platform.nats.client_port and cluster_port must differ, both are 4222`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validProject()
+			tc.mutate(p)
 			require.ErrorContains(t, p.Validate(), tc.errText)
 		})
 	}

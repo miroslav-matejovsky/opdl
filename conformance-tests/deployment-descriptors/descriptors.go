@@ -37,19 +37,37 @@ func checkContractsMatch() error {
 	return nil
 }
 
+// These values are named so the descriptor and its peer topology stay easy to
+// compare without scattering literals through the fixture.
+const (
+	site            = "north"
+	machine         = "sensor"
+	machineIP       = "10.0.1.10"
+	peerMachine     = "gateway"
+	peerIP          = "10.0.1.11"
+	clientAddr      = "10.0.1.10:4222"
+	clusterAddr     = "10.0.1.10:6222"
+	peerClientAddr  = "10.0.1.11:4222"
+	peerClusterAddr = "10.0.1.11:6222"
+)
+
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
 // produces marshals to JSON the platform reads back with every field intact.
+//
+// Both standby policies are checked. The standby decision is a bool, so an
+// enabled and a disabled machine differ by one JSON value that has a usable
+// zero: a round trip that only ever carried one of them would pass while the
+// other silently decoded to the default.
 func checkRoundTrip() error {
-	// These values are named so the descriptor and its peer topology stay easy to
-	// compare without scattering literals through the fixture.
-	const (
-		site        = "north"
-		machine     = "sensor"
-		machineIP   = "10.0.1.10"
-		peerMachine = "gateway"
-		peerIP      = "10.0.1.11"
-	)
+	for _, standbyDisabled := range []bool{false, true} {
+		if err := checkRoundTripFor(standbyDisabled); err != nil {
+			return fmt.Errorf("standby disabled=%t: %w", standbyDisabled, err)
+		}
+	}
+	return nil
+}
 
+func checkRoundTripFor(standbyDisabled bool) error {
 	built := builderdeployment.Descriptor{
 		Platform:    "opdl",
 		Project:     "customer-a",
@@ -60,8 +78,17 @@ func checkRoundTrip() error {
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    builderdeployment.Features{Chaos: true},
-		Instances:   builderdeployment.InstancePolicy{WarmStandby: true},
+		Slots: builderdeployment.Slots{
+			Primary: builderdeployment.Slot{Disabled: false},
+			Standby: builderdeployment.Slot{Disabled: standbyDisabled},
+		},
 		EventFabric: builderdeployment.EventFabric{
+			Nats: builderdeployment.EventFabricNats{
+				ClientAddress:  clientAddr,
+				ClusterAddress: clusterAddr,
+				Routes:         []string{peerClusterAddr},
+				Servers:        []string{clientAddr, peerClientAddr},
+			},
 			Peers: []builderdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
 			},
@@ -72,20 +99,8 @@ func checkRoundTrip() error {
 	if err != nil {
 		return err
 	}
-	var wire map[string]json.RawMessage
-	if err := json.Unmarshal(data, &wire); err != nil {
+	if err := checkWireShape(data); err != nil {
 		return err
-	}
-	instances, ok := wire["instances"]
-	if !ok {
-		return fmt.Errorf("builder descriptor omitted instances")
-	}
-	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(instances, &policy); err != nil {
-		return err
-	}
-	if _, ok := policy["warm_standby"]; !ok {
-		return fmt.Errorf("builder descriptor omitted instances.warm_standby")
 	}
 
 	var got platformdeployment.Descriptor
@@ -103,8 +118,17 @@ func checkRoundTrip() error {
 		IP:          machineIP,
 		Services:    []string{"sensor-services", "core-services"},
 		Features:    platformdeployment.Features{Chaos: true},
-		Instances:   platformdeployment.InstancePolicy{WarmStandby: true},
+		Slots: platformdeployment.Slots{
+			Primary: platformdeployment.Slot{Disabled: false},
+			Standby: platformdeployment.Slot{Disabled: standbyDisabled},
+		},
 		EventFabric: platformdeployment.EventFabric{
+			Nats: platformdeployment.EventFabricNats{
+				ClientAddress:  clientAddr,
+				ClusterAddress: clusterAddr,
+				Routes:         []string{peerClusterAddr},
+				Servers:        []string{clientAddr, peerClientAddr},
+			},
 			Peers: []platformdeployment.EventFabricPeer{
 				{Site: site, Machine: peerMachine, IP: peerIP},
 			},
@@ -112,6 +136,65 @@ func checkRoundTrip() error {
 	}
 	if !reflect.DeepEqual(got, want) {
 		return fmt.Errorf("builder descriptor did not round-trip into the platform descriptor:\n  got:  %+v\n  want: %+v", got, want)
+	}
+	return nil
+}
+
+// checkWireShape checks the JSON the builder emits carries every decision the
+// platform is required to read explicitly, and carries no monitor endpoint.
+//
+// The presence checks are on the wire rather than on the decoded value because
+// that is where the distinction exists: once decoded, an omitted "disabled" and
+// an explicit false are the same Go value, and the platform's requirement that
+// the field be stated can only be proven against the bytes.
+func checkWireShape(data []byte) error {
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	slots, ok := wire["slots"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted slots")
+	}
+	var policy map[string]json.RawMessage
+	if err := json.Unmarshal(slots, &policy); err != nil {
+		return err
+	}
+	for _, slot := range []string{"primary", "standby"} {
+		raw, ok := policy[slot]
+		if !ok {
+			return fmt.Errorf("builder descriptor omitted slots.%s", slot)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return err
+		}
+		if _, ok := fields["disabled"]; !ok {
+			return fmt.Errorf("builder descriptor omitted slots.%s.disabled", slot)
+		}
+		if _, ok := fields["event_fabric"]; ok {
+			return fmt.Errorf("builder descriptor put event_fabric on slots.%s: NATS endpoints are machine-level and shared by both slots", slot)
+		}
+	}
+
+	fabric, ok := wire["event_fabric"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted event_fabric")
+	}
+	var fabricFields map[string]json.RawMessage
+	if err := json.Unmarshal(fabric, &fabricFields); err != nil {
+		return err
+	}
+	nats, ok := fabricFields["nats"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted event_fabric.nats")
+	}
+	var natsFields map[string]json.RawMessage
+	if err := json.Unmarshal(nats, &natsFields); err != nil {
+		return err
+	}
+	if _, ok := natsFields["monitor_address"]; ok {
+		return fmt.Errorf("builder descriptor carries event_fabric.nats.monitor_address: the platform runs no NATS monitoring listener")
 	}
 	return nil
 }

@@ -35,6 +35,7 @@ components:
   eventfabric: { in: internal/eventfabric }
   eventfabric-nats: { in: internal/eventfabric/nats }
   httpapi: { in: internal/httpapi }
+  operations: { in: internal/operations }
   redundancy: { in: internal/redundancy }
   registration: { in: internal/registration }
 
@@ -46,7 +47,7 @@ deps:
   embedded:
     mayDependOn: [deployment]
   app:
-    mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, redundancy, registration]
+    mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, operations, redundancy, registration]
   redundancy:
     canUse: [sys, atomicfile, filelock]
   config:
@@ -59,7 +60,10 @@ deps:
     mayDependOn: [events]
   eventfabric-nats:
     canUse: [nats-server, nats-client]
-    mayDependOn: [deployment, events, eventfabric]
+    mayDependOn: [deployment, events, eventfabric, operations]
+
+  operations:
+    mayDependOn: [deployment]
   httpapi:
     canUse: [huma]
     mayDependOn: [api, registration]

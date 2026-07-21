@@ -12,10 +12,23 @@
   "features": {
     "chaos": false
   },
-  "instances": {
-    "warm_standby": false
+  "slots": {
+    "primary": {
+      "disabled": false
+    },
+    "standby": {
+      "disabled": true
+    }
   },
   "event_fabric": {
+    "nats": {
+      "client_address": "127.0.0.1:4222",
+      "cluster_address": "127.0.0.1:6222",
+      "routes": [],
+      "servers": [
+        "127.0.0.1:4222"
+      ]
+    },
     "peers": []
   }
 }
