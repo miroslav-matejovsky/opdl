@@ -43,31 +43,31 @@ func (e versionedEvent) SchemaVersion() int { return e.version }
 
 // testNode is the deployment identity a test recorder stamps onto every record.
 var testNode = Node{
-	Project:     "scenario",
-	Environment: "development",
-	Site:        "local",
-	Machine:     "node",
-	Role:        "all-in-one",
+	Project:        "scenario",
+	Environment:    "development",
+	Site:           "local",
+	Machine:        "node",
+	MachineProfile: "all-in-one",
 }
 
 func TestNodeFromDescriptorTakesDeploymentIdentity(t *testing.T) {
 	node := NodeFromDescriptor(deployment.Descriptor{
-		Platform:    "opdl",
-		Project:     "scenario",
-		Environment: "development",
-		Site:        "local",
-		Machine:     "node",
-		Role:        "all-in-one",
-		IP:          "127.0.0.1",
-		Services:    []string{"core-services"},
+		Platform:       "opdl",
+		Project:        "scenario",
+		Environment:    "development",
+		Site:           "local",
+		Machine:        "node",
+		MachineProfile: "all-in-one",
+		IP:             "127.0.0.1",
+		Services:       []string{"core-services"},
 	})
 
 	require.Equal(t, Node{
-		Project:     "scenario",
-		Environment: "development",
-		Site:        "local",
-		Machine:     "node",
-		Role:        "all-in-one",
+		Project:        "scenario",
+		Environment:    "development",
+		Site:           "local",
+		Machine:        "node",
+		MachineProfile: "all-in-one",
 	}, node)
 }
 
@@ -130,7 +130,7 @@ func TestRecordEncodesEnvelopeAndPayloadOnOneLevel(t *testing.T) {
 			"environment": "development",
 			"site": "local",
 			"machine": "node",
-			"role": "all-in-one"
+			"machine_profile": "all-in-one"
 		},
 		"tags": ["warning"],
 		"data": {"detail": "started"}

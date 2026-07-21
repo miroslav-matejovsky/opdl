@@ -267,7 +267,7 @@ func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 type site struct {
 	t        *testing.T
 	journal  *journal
-	machines []deployment.EventFabricPeer
+	machines []deployment.Peer
 }
 
 // journal is an ordered, in-process site journal. It stamps each published event
@@ -319,8 +319,9 @@ func newSite(t *testing.T, machines ...string) *site {
 		journal: &journal{t: t, scope: eventfabric.NewSiteScope("test", "development", "local")},
 	}
 	for i, machine := range machines {
-		s.machines = append(s.machines, deployment.EventFabricPeer{
-			Site: "local", Machine: machine, IP: fmt.Sprintf("127.0.0.%d", i+1),
+		s.machines = append(s.machines, deployment.Peer{
+			Site: "local", Machine: machine, Role: deployment.RolePrimary,
+			IP: fmt.Sprintf("127.0.0.%d", i+1),
 		})
 	}
 	return s
@@ -344,7 +345,7 @@ func (s *site) start(machine string) *node {
 	n := &node{
 		identity: events.Node{
 			Project: "test", Environment: "development", Site: "local",
-			Machine: self.Machine, Role: "all-in-one",
+			Machine: self.Machine, MachineProfile: "all-in-one",
 		},
 		projection: registration.NewProjection(),
 	}

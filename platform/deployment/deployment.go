@@ -46,6 +46,7 @@ type Descriptor struct {
 // decided at build time and never assigned, negotiated, or exchanged at runtime.
 type PlatformInstanceRole string
 
+// The two fixed roles a machine's platform instances are built with.
 const (
 	RolePrimary PlatformInstanceRole = "primary"
 	RoleStandby PlatformInstanceRole = "standby"

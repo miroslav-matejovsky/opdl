@@ -24,7 +24,7 @@ import (
 
 var testDescriptor = deployment.Descriptor{
 	Platform: "opdl", Project: "customer-a", Environment: "production",
-	Site: "north", Machine: "node", Role: "all-in-one", IP: "127.0.0.1",
+	Site: "north", Machine: "node", MachineProfile: "all-in-one", IP: "127.0.0.1",
 }
 
 // open starts a fabric for cfg and closes it when the test ends. It skips the

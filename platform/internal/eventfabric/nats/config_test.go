@@ -14,20 +14,26 @@ import (
 // descriptorFor builds a machine's descriptor the way the resolver would: the
 // machine's own addresses, the topology it resolved, and the peers that make up
 // its site.
-func descriptorFor(machine, ip string, nats deployment.EventFabricNats, peers ...deployment.EventFabricPeer) deployment.Descriptor {
+func descriptorFor(machine, ip string, nats deployment.Nats, peers ...deployment.Peer) deployment.Descriptor {
+	own := deployment.Peer{
+		Site: "north", Machine: machine, Role: deployment.RolePrimary, IP: ip,
+		Nats: deployment.PeerNats{ClientAddress: nats.ClientAddress, ClusterAddress: nats.ClusterAddress},
+	}
 	return deployment.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "north",
 		Machine: machine, IP: ip,
-		Slots: deployment.Slots{
-			Primary: deployment.Slot{Disabled: false},
-			Standby: deployment.Slot{Disabled: false},
+		Instances: deployment.Instances{
+			Primary: deployment.Instance{Disabled: false, Nats: &nats},
+			Standby: deployment.Instance{Disabled: true},
 		},
-		EventFabric: deployment.EventFabric{Nats: nats, Peers: peers},
+		Peers: append([]deployment.Peer{own}, peers...),
 	}
 }
 
-func peer(machine, ip string) deployment.EventFabricPeer {
-	return deployment.EventFabricPeer{Site: "north", Machine: machine, IP: ip}
+// peer is another machine's Primary Instance. The adapter selects storage by
+// machine, so these fixtures give each machine one instance and vary the machines.
+func peer(machine, ip string) deployment.Peer {
+	return deployment.Peer{Site: "north", Machine: machine, Role: deployment.RolePrimary, IP: ip}
 }
 
 func TestStorageNodesSelectsBySortedName(t *testing.T) {
@@ -58,7 +64,7 @@ func TestReplicasMatchStorageNodeCount(t *testing.T) {
 }
 
 func TestDefaultConfigForASingleNodeSiteHostsStorageAlone(t *testing.T) {
-	cfg, err := DefaultConfig(descriptorFor("node-a", "10.0.1.10", deployment.EventFabricNats{
+	cfg, err := DefaultConfig(descriptorFor("node-a", "10.0.1.10", deployment.Nats{
 		ClientAddress:  "10.0.1.10:4222",
 		ClusterAddress: "10.0.1.10:6222",
 		Routes:         []string{},
@@ -86,7 +92,7 @@ func TestDefaultConfigForASingleNodeSiteHostsStorageAlone(t *testing.T) {
 // There is one topology per machine now, and the only role-dependent step is
 // clientOnly, which removes ownership rather than choosing a different endpoint.
 func TestDefaultConfigTakesNoProcessRole(t *testing.T) {
-	descriptor := descriptorFor("node-a", "10.0.1.10", deployment.EventFabricNats{
+	descriptor := descriptorFor("node-a", "10.0.1.10", deployment.Nats{
 		ClientAddress:  "10.0.1.10:4222",
 		ClusterAddress: "10.0.1.10:6222",
 		Routes:         []string{},
@@ -113,7 +119,7 @@ func TestDefaultConfigTakesNoProcessRole(t *testing.T) {
 // and one client is what keeps a two-machine site working when the second
 // machine is down.
 func TestDefaultConfigForATwoMachineSiteRunsOneServer(t *testing.T) {
-	storage, err := DefaultConfig(descriptorFor("node-a", "10.0.1.10", deployment.EventFabricNats{
+	storage, err := DefaultConfig(descriptorFor("node-a", "10.0.1.10", deployment.Nats{
 		ClientAddress:  "10.0.1.10:4222",
 		ClusterAddress: "10.0.1.10:6222",
 		Routes:         []string{},
@@ -124,7 +130,7 @@ func TestDefaultConfigForATwoMachineSiteRunsOneServer(t *testing.T) {
 	require.Empty(t, storage.Routes, "the site's only server has nobody to cluster with")
 	require.Equal(t, []string{"10.0.1.10:4222"}, storage.Servers)
 
-	client, err := DefaultConfig(descriptorFor("node-b", "10.0.1.11", deployment.EventFabricNats{
+	client, err := DefaultConfig(descriptorFor("node-b", "10.0.1.11", deployment.Nats{
 		ClientAddress:  "10.0.1.11:4222",
 		ClusterAddress: "10.0.1.11:6222",
 		Routes:         []string{},
@@ -146,7 +152,7 @@ func TestDefaultConfigForATwoMachineSiteRunsOneServer(t *testing.T) {
 // of the three routes to it: routing to a server that holds no journal would
 // only enlarge the metadata group's quorum without enlarging its storage.
 func TestDefaultConfigForALargerSiteClustersTheStorageNodes(t *testing.T) {
-	cfg, err := DefaultConfig(descriptorFor("node-c", "10.0.1.12", deployment.EventFabricNats{
+	cfg, err := DefaultConfig(descriptorFor("node-c", "10.0.1.12", deployment.Nats{
 		ClientAddress:  "10.0.1.12:4222",
 		ClusterAddress: "10.0.1.12:6222",
 		Servers:        []string{"10.0.1.12:4222", "10.0.1.10:4222", "10.0.1.11:4222"},
@@ -165,7 +171,7 @@ func TestDefaultConfigForALargerSiteClustersTheStorageNodes(t *testing.T) {
 }
 
 func TestDefaultConfigLeavesOutStorageForALaterNode(t *testing.T) {
-	cfg, err := DefaultConfig(descriptorFor("node-d", "10.0.1.13", deployment.EventFabricNats{
+	cfg, err := DefaultConfig(descriptorFor("node-d", "10.0.1.13", deployment.Nats{
 		ClientAddress:  "10.0.1.13:4222",
 		ClusterAddress: "10.0.1.13:6222",
 		Routes:         []string{},

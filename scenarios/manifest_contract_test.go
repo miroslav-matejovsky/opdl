@@ -22,7 +22,7 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 
 	// The machine's purpose is profile; the two launches carry the other kind
 	// of role. One word for both axes is what the rename removed.
-	require.Equal(t, "all-in-one", manifest.Profile)
+	require.Equal(t, "all-in-one", manifest.MachineProfile)
 
 	// Both fixed instances name the Windows Service that should run them, and the
 	// two differ: they share a host, so identical names would be an install

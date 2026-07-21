@@ -155,17 +155,17 @@ func (p *Packer) writeMetadata(pkgDir string, d deployment.Descriptor, binary, s
 	now := time.Now().UTC()
 	primary, standby := launches(d.Instances)
 	man := Manifest{
-		Project:     d.Project,
-		Site:        d.Site,
-		Machine:     d.Machine,
+		Project:        d.Project,
+		Site:           d.Site,
+		Machine:        d.Machine,
 		MachineProfile: d.MachineProfile,
-		Platform:    d.Platform,
-		Binary:      binary,
-		Services:    d.Services,
-		Deployment:  deploymentFile,
-		Primary:     primary,
-		Standby:     standby,
-		GeneratedAt: now,
+		Platform:       d.Platform,
+		Binary:         binary,
+		Services:       d.Services,
+		Deployment:     deploymentFile,
+		Primary:        primary,
+		Standby:        standby,
+		GeneratedAt:    now,
 	}
 	rel := Release{
 		Builder:      builderName,

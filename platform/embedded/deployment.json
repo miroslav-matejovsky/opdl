@@ -4,7 +4,7 @@
   "environment": "development",
   "site": "local",
   "machine": "mock",
-  "role": "all-in-one",
+  "machine_profile": "all-in-one",
   "ip": "127.0.0.1",
   "services": [
     "core-services"
@@ -12,12 +12,21 @@
   "features": {
     "chaos": false
   },
-  "slots": {
+  "instances": {
     "primary": {
       "disabled": false,
       "service": {
         "name": "opdl-mock-local-mock-primary",
         "display_name": "OPDL mock local mock (Primary Instance)"
+      },
+      "api_address": "127.0.0.1:8080",
+      "nats": {
+        "client_address": "127.0.0.1:4222",
+        "cluster_address": "127.0.0.1:6222",
+        "routes": [],
+        "servers": [
+          "127.0.0.1:4222"
+        ]
       }
     },
     "standby": {
@@ -27,15 +36,17 @@
   "fence": {
     "object": "opdl.fence.6d6f636b6d6f636b6d6f636b6d6f636b"
   },
-  "event_fabric": {
-    "nats": {
-      "client_address": "127.0.0.1:4222",
-      "cluster_address": "127.0.0.1:6222",
-      "routes": [],
-      "servers": [
-        "127.0.0.1:4222"
-      ]
-    },
-    "peers": []
-  }
+  "peers": [
+    {
+      "site": "local",
+      "machine": "mock",
+      "role": "primary",
+      "ip": "127.0.0.1",
+      "api_address": "127.0.0.1:8080",
+      "nats": {
+        "client_address": "127.0.0.1:4222",
+        "cluster_address": "127.0.0.1:6222"
+      }
+    }
+  ]
 }

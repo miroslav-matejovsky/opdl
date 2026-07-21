@@ -38,11 +38,11 @@ var testDescriptor = deployment.Descriptor{
 	Project:     "scenario",
 	Environment: "development",
 	Site:        "local",
-	Machine:     "node",
-	Role:        "all-in-one",
-	IP:          "127.0.0.1",
-	Services:    []string{"core-services"},
-	EventFabric: deployment.EventFabric{},
+
+	Machine:        "node",
+	MachineProfile: "all-in-one",
+	IP:             "127.0.0.1",
+	Services:       []string{"core-services"},
 }
 
 // freeAddress reserves an ephemeral loopback port, then releases it so the
@@ -115,10 +115,12 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) deployment.Descript
 	t.Helper()
 	descriptor := cfg.Descriptor()
 	client, cluster := freeAddress(t), freeAddress(t)
-	descriptor.EventFabric.Nats.ClientAddress = client
-	descriptor.EventFabric.Nats.ClusterAddress = cluster
-	descriptor.EventFabric.Nats.Servers = []string{client}
-	descriptor.EventFabric.Nats.Routes = []string{}
+	descriptor.Instances.Primary.Nats = &deployment.Nats{
+		ClientAddress:  client,
+		ClusterAddress: cluster,
+		Servers:        []string{client},
+		Routes:         []string{},
+	}
 	descriptor.Fence.Object = uniqueFenceObject(t)
 	return descriptor
 }
@@ -263,18 +265,18 @@ func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 	descriptor := deployment.Descriptor{
 		Project: "customer-a", Environment: "production",
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
-		Slots: deployment.Slots{
-			Primary: deployment.Slot{Disabled: false},
-			Standby: deployment.Slot{Disabled: false},
-		},
-		EventFabric: deployment.EventFabric{
-			Nats: deployment.EventFabricNats{
+		Instances: deployment.Instances{
+			Primary: deployment.Instance{Disabled: false, Nats: &deployment.Nats{
 				ClientAddress:  "10.0.1.10:4222",
 				ClusterAddress: "10.0.1.10:6222",
 				Routes:         []string{},
 				Servers:        []string{"10.0.1.10:4222"},
-			},
-			Peers: []deployment.EventFabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
+			}},
+			Standby: deployment.Instance{Disabled: true},
+		},
+		Peers: []deployment.Peer{
+			{Site: "north", Machine: "node-a", Role: deployment.RolePrimary, IP: "10.0.1.10"},
+			{Site: "north", Machine: "node-b", Role: deployment.RolePrimary, IP: "10.0.1.11"},
 		},
 	}
 	settings := func(t *testing.T, nats string) *config.Config {
@@ -361,15 +363,20 @@ func TestNodeDataDirIsNamedAfterTheMachine(t *testing.T) {
 func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
 	self, expected := topology(deployment.Descriptor{
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
-		EventFabric: deployment.EventFabric{
-			Peers: []deployment.EventFabricPeer{{Site: "north", Machine: "node-b", IP: "10.0.1.11"}},
+		Peers: []deployment.Peer{
+			{Site: "north", Machine: "node-a", Role: deployment.RolePrimary, IP: "10.0.1.10"},
+			{Site: "north", Machine: "node-b", Role: deployment.RolePrimary, IP: "10.0.1.11"},
+			// node-b deploys a standby as well. It is a second member of the
+			// fabric but not a second confirmation: exactly one of a machine's
+			// instances is Active, and it answers for the machine.
+			{Site: "north", Machine: "node-b", Role: deployment.RoleStandby, IP: "10.0.1.11"},
 		},
 	})
 	require.Equal(t, registration.Location{Machine: "node-a", IP: "10.0.1.10"}, self)
 	require.Equal(t, []registration.Location{
 		{Machine: "node-a", IP: "10.0.1.10"},
 		{Machine: "node-b", IP: "10.0.1.11"},
-	}, expected, "a machine confirms its own registrations too")
+	}, expected, "a machine confirms its own registrations too, and once per machine")
 
 	self, expected = topology(testDescriptor)
 	require.Equal(t, []registration.Location{self}, expected,
@@ -525,11 +532,11 @@ func TestFailoverAndFailback(t *testing.T) {
 	cfg, err := config.Load(writeConfig(t, dir))
 	require.NoError(t, err)
 	descriptor := descriptorOnFreePorts(t, cfg)
-	// The standby is enabled and nothing else changes. It shares the machine's
-	// one NATS topology with the active process, so it connects to the address
-	// the active process is serving on and, once Active, rebinds that same
-	// address rather than moving the site onto a second one.
-	descriptor.Slots.Standby = deployment.Slot{Disabled: false}
+	// The standby is enabled and nothing else changes. The descriptor now resolves
+	// a NATS topology per instance, but the runtime has not yet been changed to
+	// start the standby's own server: it is still turned client-only and follows
+	// the address the Active instance is serving on. See nats.DefaultConfig.
+	descriptor.Instances.Standby = deployment.Instance{Disabled: false}
 
 	primaryCtx, stopPrimary := context.WithCancel(t.Context())
 	primaryDone := make(chan error, 1)

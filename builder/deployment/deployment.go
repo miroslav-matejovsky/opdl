@@ -50,6 +50,7 @@ type Descriptor struct {
 // Instance; it operates Active until ownership returns.
 type PlatformInstanceRole string
 
+// The two fixed roles a machine's platform instances are built with.
 const (
 	RolePrimary PlatformInstanceRole = "primary"
 	RoleStandby PlatformInstanceRole = "standby"
@@ -242,7 +243,7 @@ func (d Descriptor) Validate() error {
 		return fmt.Errorf("machine is required")
 	}
 	if strings.TrimSpace(d.MachineProfile) == "" {
-		return fmt.Errorf("profile is required")
+		return fmt.Errorf("machine profile is required")
 	}
 	if net.ParseIP(d.IP) == nil {
 		return fmt.Errorf("ip %q is not a valid IP address", d.IP)

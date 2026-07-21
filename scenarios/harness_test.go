@@ -147,11 +147,19 @@ var projectFixtures = map[string][]machineFixture{
 // renderedMachine is one machine's template data: its fixture identity plus the
 // ports reserved for this run.
 type renderedMachine struct {
-	Name            string
-	IP              string
-	ClientPort      int
-	ClusterPort     int
-	StandbyDisabled bool
+	Name string
+	IP   string
+	// The Primary Instance's ports.
+	APIPort     int
+	ClientPort  int
+	ClusterPort int
+	// The Standby Instance's ports, zero when the machine deploys none. The two
+	// instances run together on one host, so every one of these is its own
+	// listener and none may repeat.
+	StandbyAPIPort     int
+	StandbyClientPort  int
+	StandbyClusterPort int
+	StandbyDisabled    bool
 }
 
 // renderedProject is the blueprint template's data.
@@ -250,17 +258,32 @@ func stageBlueprint(t *testing.T, project string) (root string, ports map[string
 	for _, fixture := range fixtures {
 		// Take from this machine's own loopback address. A port is only free per
 		// interface, so taking on 127.0.0.1 would say nothing about 127.0.0.2.
-		p, err := testnet.Take(fixture.ip, 2)
+		//
+		// A machine that deploys both instances needs six: each instance serves
+		// its own API and runs its own Event Fabric server. Reserving them all in
+		// one call is what keeps them distinct, which the builder requires.
+		wanted := 3
+		if !fixture.standbyDisabled {
+			wanted = 6
+		}
+		p, err := testnet.Take(fixture.ip, wanted)
 		require.NoError(t, err)
-		client, cluster := p[0], p[1]
-		data.Machines = append(data.Machines, renderedMachine{
+
+		machine := renderedMachine{
 			Name:            fixture.name,
 			IP:              fixture.ip,
-			ClientPort:      client,
-			ClusterPort:     cluster,
+			APIPort:         p[0],
+			ClientPort:      p[1],
+			ClusterPort:     p[2],
 			StandbyDisabled: fixture.standbyDisabled,
-		})
-		ports[fixture.name] = natsPorts{client: client, cluster: cluster}
+		}
+		if !fixture.standbyDisabled {
+			machine.StandbyAPIPort = p[3]
+			machine.StandbyClientPort = p[4]
+			machine.StandbyClusterPort = p[5]
+		}
+		data.Machines = append(data.Machines, machine)
+		ports[fixture.name] = natsPorts{client: machine.ClientPort, cluster: machine.ClusterPort}
 	}
 
 	root = filepath.Join(scenarioDir(t), "blueprints")
@@ -311,8 +334,8 @@ type launch struct {
 
 type packageManifest struct {
 	MachineProfile string  `json:"machine_profile"`
-	Primary     launch  `json:"primary"`
-	Standby     *launch `json:"standby"`
+	Primary        launch  `json:"primary"`
+	Standby        *launch `json:"standby"`
 }
 
 func readManifest(t *testing.T, binaryPath string) packageManifest {

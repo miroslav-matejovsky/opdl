@@ -22,7 +22,7 @@ func TestLoad(t *testing.T) {
 
 	m1 := p.Sites[0].Machines[0]
 	require.Equal(t, "sensor", m1.Name)
-	require.Equal(t, "sensor-node", m1.Role)
+	require.Equal(t, "sensor-node", m1.MachineProfile)
 	require.Equal(t, "10.0.1.10", m1.IP)
 	require.Equal(t, []string{"sensor-services"}, m1.Services)
 	require.NotNil(t, m1.Platform)

@@ -16,23 +16,45 @@ func validProject() *blueprint.Project {
 		Environment: "production",
 		Features:    blueprint.Features{Chaos: true},
 		Sites: []blueprint.Site{{
-			Name: "north",
-			Machines: []blueprint.Machine{{
-				Name:     "sensor",
-				Role:     "sensor-node",
-				IP:       "10.0.1.10",
-				Services: []string{"sensor-services"},
-				Platform: &blueprint.Platform{
-					WinService: &blueprint.WinService{Name: "primary"},
-					Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
-					Standby: &blueprint.Standby{
-						Disabled:   false,
-						WinService: &blueprint.WinService{Name: "standby"},
-					},
-				},
-			}},
+			Name:     "north",
+			Machines: []blueprint.Machine{validMachine()},
 		}},
 	}
+}
+
+// validMachine is a machine that deploys both instances, with every listener on
+// its own port. Tests that exercise one rule start from it and break only that
+// rule, so a fixture missing an unrelated block cannot be what a failure is
+// really reporting.
+func validMachine() blueprint.Machine {
+	return blueprint.Machine{
+		Name:           "sensor",
+		MachineProfile: "sensor-node",
+		IP:             "10.0.1.10",
+		Services:       []string{"sensor-services"},
+		Platform: &blueprint.Platform{
+			API:        &blueprint.API{Port: 8080},
+			WinService: &blueprint.WinService{Name: "primary"},
+			Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+			Standby: &blueprint.Standby{
+				Disabled:   false,
+				API:        &blueprint.API{Port: 8081},
+				WinService: &blueprint.WinService{Name: "standby"},
+				Nats:       &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322},
+			},
+		},
+	}
+}
+
+// namedMachine is validMachine under another name and address, for the rules
+// that need a second machine in the project.
+func namedMachine(name, ip string) blueprint.Machine {
+	m := validMachine()
+	m.Name = name
+	m.IP = ip
+	m.Platform.WinService = &blueprint.WinService{Name: name + "-primary"}
+	m.Platform.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
+	return m
 }
 
 func TestProjectValidateOK(t *testing.T) {
@@ -51,10 +73,10 @@ func TestProjectValidateMissingEnvironment(t *testing.T) {
 	require.ErrorContains(t, p.Validate(), "environment is required")
 }
 
-func TestProjectValidateMissingRole(t *testing.T) {
+func TestProjectValidateMissingProfile(t *testing.T) {
 	p := validProject()
-	p.Sites[0].Machines[0].Role = ""
-	require.ErrorContains(t, p.Validate(), "role is required")
+	p.Sites[0].Machines[0].MachineProfile = ""
+	require.ErrorContains(t, p.Validate(), "profile is required")
 }
 
 func TestProjectValidateMissingIP(t *testing.T) {
@@ -90,21 +112,8 @@ func TestProjectValidateDuplicateMachine(t *testing.T) {
 func TestProjectValidateDuplicateSite(t *testing.T) {
 	p := validProject()
 	p.Sites = append(p.Sites, blueprint.Site{
-		Name: "north",
-		Machines: []blueprint.Machine{{
-			Name:     "other",
-			Role:     "sensor-node",
-			IP:       "10.0.1.12",
-			Services: []string{"sensor-services"},
-			Platform: &blueprint.Platform{
-				WinService: &blueprint.WinService{Name: "primary"},
-				Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
-				Standby: &blueprint.Standby{
-					Disabled:   false,
-					WinService: &blueprint.WinService{Name: "standby"},
-				},
-			},
-		}},
+		Name:     "north",
+		Machines: []blueprint.Machine{namedMachine("other", "10.0.1.12")},
 	})
 	require.ErrorContains(t, p.Validate(), "duplicate site")
 }
@@ -115,41 +124,15 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 func TestProjectValidateDuplicateIP(t *testing.T) {
 	t.Run("within one site", func(t *testing.T) {
 		p := validProject()
-		p.Sites[0].Machines = append(p.Sites[0].Machines, blueprint.Machine{
-			Name:     "gateway",
-			Role:     "gateway-node",
-			IP:       "10.0.1.10",
-			Services: []string{"core-services"},
-			Platform: &blueprint.Platform{
-				WinService: &blueprint.WinService{Name: "primary"},
-				Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
-				Standby: &blueprint.Standby{
-					Disabled:   false,
-					WinService: &blueprint.WinService{Name: "standby"},
-				},
-			},
-		})
+		p.Sites[0].Machines = append(p.Sites[0].Machines, namedMachine("gateway", "10.0.1.10"))
 		require.ErrorContains(t, p.Validate(), `machines "sensor" and "gateway" share ip "10.0.1.10"`)
 	})
 
 	t.Run("across sites", func(t *testing.T) {
 		p := validProject()
 		p.Sites = append(p.Sites, blueprint.Site{
-			Name: "south",
-			Machines: []blueprint.Machine{{
-				Name:     "south-node",
-				Role:     "sensor-node",
-				IP:       "10.0.1.10",
-				Services: []string{"sensor-services"},
-				Platform: &blueprint.Platform{
-					WinService: &blueprint.WinService{Name: "primary"},
-					Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
-					Standby: &blueprint.Standby{
-						Disabled:   false,
-						WinService: &blueprint.WinService{Name: "standby"},
-					},
-				},
-			}},
+			Name:     "south",
+			Machines: []blueprint.Machine{namedMachine("south-node", "10.0.1.10")},
 		})
 		require.ErrorContains(t, p.Validate(), `share ip "10.0.1.10"`)
 	})
@@ -171,7 +154,7 @@ func TestMachinePlatformStandby(t *testing.T) {
 		  features {}
 		  site "north" {
 		    machine "m1" {
-		      role     = "node"
+		      profile  = "node"
 		      ip       = "10.0.1.10"
 		      services = ["core-services"]
 		      `+body+`
@@ -273,7 +256,7 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 			  features {}
 			  site "north" {
 			    machine "m1" {
-			      role     = "node"
+			      profile  = "node"
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			      ` + tc.body + `
@@ -316,19 +299,19 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 		errText string
 	}{
 		{
-			name: "missing role",
-			hcl: `project "bad-role" {
+			name: "missing profile",
+			hcl: `project "bad-profile" {
 			  environment = "production"
 			  features {}
 			  site "north" {
 			    machine "m1" {
-			      role     = ""
+			      profile  = ""
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			    }
 			  }
 			}`,
-			errText: "role is required",
+			errText: "profile is required",
 		},
 		{
 			name: "missing ip",
@@ -337,7 +320,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  features {}
 			  site "north" {
 			    machine "m1" {
-			      role     = "node"
+			      profile  = "node"
 			      ip       = ""
 			      services = ["core-services"]
 			    }
@@ -352,7 +335,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  features {}
 			  site "north" {
 			    machine "m1" {
-			      role     = "node"
+			      profile  = "node"
 			      ip       = "not-an-ip"
 			      services = ["core-services"]
 			    }
@@ -367,10 +350,13 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  features {}
 			  site "north" {
 			    machine "node-1" {
-			      role     = "node"
+			      profile  = "node"
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			      platform {
+			        api {
+			          port = 8080
+			        }
 			        winservice {
 			          name = "primary"
 			        }
@@ -380,8 +366,15 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
+			          api {
+			            port = 8081
+			          }
 			          winservice {
 			            name = "standby"
+			          }
+			          nats {
+			            client_port  = 4322
+			            cluster_port = 6322
 			          }
 			        }
 			      }
@@ -389,10 +382,13 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  }
 			  site "south" {
 			    machine "node-1" {
-			      role     = "node"
+			      profile  = "node"
 			      ip       = "10.0.1.11"
 			      services = ["core-services"]
 			      platform {
+			        api {
+			          port = 8080
+			        }
 			        winservice {
 			          name = "primary"
 			        }
@@ -402,8 +398,15 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
+			          api {
+			            port = 8081
+			          }
 			          winservice {
 			            name = "standby"
+			          }
+			          nats {
+			            client_port  = 4322
+			            cluster_port = 6322
 			          }
 			        }
 			      }
@@ -418,6 +421,56 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := decodeHCL(t, tc.hcl)
 			require.ErrorContains(t, p.Validate(), tc.errText)
+		})
+	}
+}
+
+// disableStandby opts a machine out of its Standby Instance the way a blueprint
+// does: the decision plus every block that instance would have authored. A
+// machine that keeps one of them is rejected, which is its own test.
+func disableStandby(p *blueprint.Project) {
+	standby := p.Sites[0].Machines[0].Platform.Standby
+	standby.Disabled = true
+	standby.API = nil
+	standby.WinService = nil
+	standby.Nats = nil
+}
+
+// TestStandbyEndpointsAreRejectedWhenNotDeployed checks each block a Standby
+// Instance can author is refused when the machine deploys no standby. Authoring
+// an endpoint for an instance that never runs states a decision that can never
+// take effect, and a reader could not tell it from one that does.
+func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
+	tests := map[string]func(*blueprint.Standby){
+		"api":        func(s *blueprint.Standby) { s.API = &blueprint.API{Port: 8081} },
+		"winservice": func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
+		"nats":       func(s *blueprint.Standby) { s.Nats = &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322} },
+	}
+	for label, author := range tests {
+		t.Run(label, func(t *testing.T) {
+			p := validProject()
+			disableStandby(p)
+			author(p.Sites[0].Machines[0].Platform.Standby)
+			require.ErrorContains(t, p.Validate(), "standby is disabled")
+		})
+	}
+}
+
+// TestMachineListenersMustNotShareAPort is the mistake the six-port shape
+// invites: the two instances run together on one host, so nothing makes any pair
+// of their listeners mutually exclusive.
+func TestMachineListenersMustNotSharePort(t *testing.T) {
+	tests := map[string]func(*blueprint.Platform){
+		"standby api copies primary api":       func(pl *blueprint.Platform) { pl.Standby.API.Port = pl.API.Port },
+		"standby nats copies primary nats":     func(pl *blueprint.Platform) { pl.Standby.Nats.ClientPort = pl.Nats.ClientPort },
+		"standby cluster copies primary":       func(pl *blueprint.Platform) { pl.Standby.Nats.ClusterPort = pl.Nats.ClusterPort },
+		"api collides with this instance nats": func(pl *blueprint.Platform) { pl.API.Port = pl.Nats.ClientPort },
+	}
+	for label, collide := range tests {
+		t.Run(label, func(t *testing.T) {
+			p := validProject()
+			collide(p.Sites[0].Machines[0].Platform)
+			require.ErrorContains(t, p.Validate(), "needs its own port")
 		})
 	}
 }
@@ -438,7 +491,7 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 		{"cluster port above range", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterPort = 70000 }, `platform.nats.cluster_port must be in range 1-65535, got 70000`},
 		{"colliding ports", func(p *blueprint.Project) {
 			p.Sites[0].Machines[0].Platform.Nats.ClusterPort = p.Sites[0].Machines[0].Platform.Nats.ClientPort
-		}, `platform.nats.client_port and cluster_port must differ, both are 4222`},
+		}, `platform.nats.client_port and platform.nats.cluster_port are both 4222`},
 	}
 
 	for _, tc := range tests {
@@ -516,8 +569,7 @@ func TestMachineWinServiceIsRequiredForEveryDeployedInstance(t *testing.T) {
 
 	t.Run("disabled standby needs no service", func(t *testing.T) {
 		p := validProject()
-		p.Sites[0].Machines[0].Platform.Standby.Disabled = true
-		p.Sites[0].Machines[0].Platform.Standby.WinService = nil
+		disableStandby(p)
 		require.NoError(t, p.Validate())
 	})
 }
@@ -563,5 +615,8 @@ func TestWinServiceIdentityFillsDisplayNameDefault(t *testing.T) {
 	require.Equal(t, primary.Name, primary.DisplayName)
 
 	machine.Platform.Standby.Disabled = true
+	machine.Platform.Standby.API = nil
+	machine.Platform.Standby.Nats = nil
+	machine.Platform.Standby.WinService = nil
 	require.Nil(t, machine.WinServiceIdentity(true), "an undeployed instance has no service")
 }
