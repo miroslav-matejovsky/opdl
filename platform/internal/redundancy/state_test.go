@@ -13,7 +13,7 @@ func TestStateStringAndValid(t *testing.T) {
 
 	all := []redundancy.State{
 		redundancy.StateStarting,
-		redundancy.StateStandby,
+		redundancy.StatePassive,
 		redundancy.StateActivating,
 		redundancy.StateActive,
 		redundancy.StateStopping,
@@ -31,7 +31,7 @@ func TestStateActive(t *testing.T) {
 	t.Parallel()
 
 	require.True(t, redundancy.StateActive.Active())
-	require.False(t, redundancy.StateStandby.Active())
+	require.False(t, redundancy.StatePassive.Active())
 	require.False(t, redundancy.StateActivating.Active())
 	require.False(t, redundancy.StateStopping.Active())
 }
@@ -40,15 +40,15 @@ func TestStateCanTransition(t *testing.T) {
 	t.Parallel()
 
 	allowed := map[redundancy.State][]redundancy.State{
-		redundancy.StateStarting:   {redundancy.StateStandby, redundancy.StateActivating, redundancy.StateStopping, redundancy.StateFailed},
-		redundancy.StateStandby:    {redundancy.StateActivating, redundancy.StateStopping, redundancy.StateFailed},
+		redundancy.StateStarting:   {redundancy.StatePassive, redundancy.StateActivating, redundancy.StateStopping, redundancy.StateFailed},
+		redundancy.StatePassive:    {redundancy.StateActivating, redundancy.StateStopping, redundancy.StateFailed},
 		redundancy.StateActivating: {redundancy.StateActive, redundancy.StateStopping, redundancy.StateFailed},
 		redundancy.StateActive:     {redundancy.StateStopping, redundancy.StateFailed},
 		redundancy.StateStopping:   {redundancy.StateFailed},
 		redundancy.StateFailed:     {},
 	}
 	all := []redundancy.State{
-		redundancy.StateStarting, redundancy.StateStandby, redundancy.StateActivating,
+		redundancy.StateStarting, redundancy.StatePassive, redundancy.StateActivating,
 		redundancy.StateActive, redundancy.StateStopping, redundancy.StateFailed,
 	}
 	for from, nexts := range allowed {
@@ -59,12 +59,12 @@ func TestStateCanTransition(t *testing.T) {
 	}
 }
 
-// TestStandbyCannotJumpToActive checks a standby must activate first, composing
+// TestPassiveCannotJumpToActive checks a passive instance must activate first, composing
 // its active resources, before it owns any active capability.
-func TestStandbyCannotJumpToActive(t *testing.T) {
+func TestPassiveCannotJumpToActive(t *testing.T) {
 	t.Parallel()
 
-	require.False(t, redundancy.StateStandby.CanTransition(redundancy.StateActive))
-	require.True(t, redundancy.StateStandby.CanTransition(redundancy.StateActivating))
+	require.False(t, redundancy.StatePassive.CanTransition(redundancy.StateActive))
+	require.True(t, redundancy.StatePassive.CanTransition(redundancy.StateActivating))
 	require.True(t, redundancy.StateActivating.CanTransition(redundancy.StateActive))
 }

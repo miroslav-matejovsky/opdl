@@ -18,7 +18,7 @@ Check all of them. Each is machine-readable from the target's status file.
 
 | Condition | Where |
 | --- | --- |
-| Target is `state=standby` | status file |
+| Target is `state=passive` | status file |
 | Target reports `failover_ready=true` | status file |
 | Target has no `last_error` | status file |
 | Target's `updated_at` is advancing | status file, written every second |
@@ -53,8 +53,8 @@ operator**: the platform never fails back on its own, and there is no failback
 policy to configure.
 
 A returning Primary Instance does not seize ownership. It starts, finds ownership
-held, and waits as a standby, reporting `role=primary, state=standby` until
-someone stops the Active Standby. That combination is a steady state, not a
+held, and waits in the Passive state, reporting `role=primary, state=passive` until
+someone stops the Standby Instance that is currently Active. That combination is a steady state, not a
 transient one.
 
 ## Rolling upgrade
@@ -66,7 +66,7 @@ Upgrades a machine's binary with interruption bounded by one switchover.
 1. Verify the machine has a healthy holder and a failover-ready standby.
 2. Stop the standby service, replace its package, start it. It rejoins as a
    waiter and warms its projection.
-3. Wait for it to report `state=standby`, `failover_ready=true`, no `last_error`.
+3. Wait for it to report `state=passive`, `failover_ready=true`, no `last_error`.
 4. Perform a controlled switchover. The upgraded process takes ownership.
 5. Stop the now-standby former holder, replace its package, start it.
 6. Optionally switch back so the preferred primary holds again.

@@ -87,7 +87,7 @@ older query results for longer and changes the site's safety posture.
 ## Standby does not become failover-ready
 
 The standby should emit `platform.standby_ready` and
-`platform.standby_waiting`. Its status must be fresh, `state=standby`,
+`platform.standby_waiting`. Its status must be fresh, `state=passive`,
 `failover_ready=true`, and have no `last_error`.
 
 - Confirm the active process owns and serves the machine's one client port.
@@ -104,7 +104,7 @@ machine-level Event Fabric endpoint and ownership controls who binds it.
 
 Expected after a failover, and not a fault. The instance role is fixed; the state
 is not. A Standby Instance reporting `state=active` owns the machine and serves
-correctly, and the Primary Instance beside it reports `state=standby`.
+correctly, and the Primary Instance beside it reports `state=passive`.
 
 Ownership does not return on its own. It moves back only when the Active instance
 is stopped, which is the controlled Ownership Transfer in `upgrade.md`. Until then

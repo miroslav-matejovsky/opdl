@@ -160,7 +160,7 @@ Startup order:
 1. Start all selected storage machines together for a three-replica cold site.
 2. Start other site machines after the journal is reachable.
 3. Start each preferred primary and wait for its status to report `active`.
-4. Start its standby, when configured, and wait for status `standby` with
+4. Start its standby, when configured, and wait for status `state=passive` with
    `failover_ready=true` and an empty `last_error`.
 
 For full shutdown, stop primary services and then standby services. A standby may

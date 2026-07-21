@@ -602,7 +602,7 @@ func waitForFailoverReadyStandby(t *testing.T, cfg *config.Config, descriptor de
 		default:
 		}
 		status, err := redundancy.ReadStatus(path)
-		return err == nil && status.State == redundancy.StateStandby && status.FailoverReady && status.LastError == ""
+		return err == nil && status.State == redundancy.StatePassive && status.FailoverReady && status.LastError == ""
 	}, 30*time.Second, 20*time.Millisecond, "%s never became a caught-up standby", role)
 	require.Falsef(t, exited, "%s exited before becoming a caught-up standby: %v", role, processErr)
 }

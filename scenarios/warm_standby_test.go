@@ -35,7 +35,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 
 	standbyStarted := time.Now()
 	standby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
-	standbyStatus := node.waitStatus(t, standby, "standby", true)
+	standbyStatus := node.waitStatus(t, standby, "passive", true)
 	catchUpTime := standbyStatus.UpdatedAt.Sub(standbyStarted)
 	standbyMemory, err := processinfo.ResidentBytes(ctx, standby.PID())
 	require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	require.Len(t, listRegistrations(ctx, t, node), 2)
 
 	primaryReturned := node.startManaged(ctx, t, "primary", manifest.Primary.Args)
-	node.waitStatus(t, primaryReturned, "standby", true)
+	node.waitStatus(t, primaryReturned, "passive", true)
 	failbackStarted := time.Now()
 	standby.stopGracefully(t)
 	node.waitStatus(t, primaryReturned, "active", false)
@@ -84,13 +84,13 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	// Repeat failover and failback to expose stale status, ownership, listener, or
 	// storage ownership left behind by the first transfer.
 	standbySecond := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
-	node.waitStatus(t, standbySecond, "standby", true)
+	node.waitStatus(t, standbySecond, "passive", true)
 	_ = primaryReturned.Kill()
 	node.waitStatus(t, standbySecond, "active", false)
 	waitForManagedAPI(ctx, t, node, standbySecond)
 
 	primarySecond := node.startManaged(ctx, t, "primary", manifest.Primary.Args)
-	node.waitStatus(t, primarySecond, "standby", true)
+	node.waitStatus(t, primarySecond, "passive", true)
 	standbySecond.stopGracefully(t)
 	node.waitStatus(t, primarySecond, "active", false)
 	waitForManagedAPI(ctx, t, node, primarySecond)
@@ -98,7 +98,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	// Terminating a caught-up fence waiter must stop only that process. Context
 	// cancellation of Fence.Acquire is covered by the platform contract tests.
 	cancelledStandby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
-	node.waitStatus(t, cancelledStandby, "standby", true)
+	node.waitStatus(t, cancelledStandby, "passive", true)
 	_ = cancelledStandby.Kill()
 	require.True(t, primarySecond.Running())
 	waitForManagedAPI(ctx, t, node, primarySecond)
@@ -106,7 +106,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	// Full machine shutdown is primary-service stop followed by standby-service
 	// stop. The standby may become Active in the bounded interval and must still stop.
 	shutdownStandby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
-	node.waitStatus(t, shutdownStandby, "standby", true)
+	node.waitStatus(t, shutdownStandby, "passive", true)
 	primarySecond.stopGracefully(t)
 	node.waitStatus(t, shutdownStandby, "active", false)
 	shutdownStandby.stopGracefully(t)

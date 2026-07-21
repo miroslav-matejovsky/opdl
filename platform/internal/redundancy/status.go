@@ -20,12 +20,10 @@ import (
 // use a fresh status whose PID is still live to verify handover readiness. A
 // stale status after a crash is only historical diagnostics.
 type Status struct {
-	// Role is which fixed instance wrote this. It never changes.
-	//
-	// Role and State are different axes and both use the word "standby", so a
-	// reader must take them together: Role standby with State active is a machine
-	// that has failed over. docs/operations/monitoring.md tabulates the
-	// combinations an operator acts on.
+	// Role is which fixed instance wrote this (`primary` or `standby`). It never
+	// changes. Role and State (`active` or `passive`) are independent axes: Role
+	// standby with State active is a Standby Instance that has failed over.
+	// docs/operations/monitoring.md tabulates the combinations an operator acts on.
 	Role InstanceRole `json:"role"`
 	// State is what this instance is doing now.
 	State State `json:"state"`

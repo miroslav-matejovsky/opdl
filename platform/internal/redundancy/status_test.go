@@ -18,7 +18,7 @@ func TestStatusWriteReadRoundTrip(t *testing.T) {
 
 	want := redundancy.Status{
 		Role:          redundancy.RoleStandby,
-		State:         redundancy.StateStandby,
+		State:         redundancy.StatePassive,
 		PID:           4321,
 		Applied:       41,
 		HighWater:     42,
@@ -51,7 +51,7 @@ func TestStatusWriteIsAtomic(t *testing.T) {
 func TestStatusCanBeReplacedWhileDeploymentReadsIt(t *testing.T) {
 	path := redundancy.StatusPath(t.TempDir(), "p", "e", "s", "m", redundancy.RoleStandby)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, redundancy.Status{Role: redundancy.RoleStandby, State: redundancy.StateStandby}.Write(path))
+	require.NoError(t, redundancy.Status{Role: redundancy.RoleStandby, State: redundancy.StatePassive}.Write(path))
 
 	reader, err := os.Open(path)
 	require.NoError(t, err)

@@ -290,7 +290,7 @@ func awaitOwnership(ctx, waitCtx context.Context, cfg *config.Config, role redun
 		statusCtx, cancelStatus := context.WithCancel(context.WithoutCancel(waitCtx))
 		stopStatus = cancelStatus
 		var err error
-		statusDone, err = startStatus(statusCtx, standby.fabric, role, redundancy.StateStandby, statusPath, cfg.LagBound(), nil, stopWaiting)
+		statusDone, err = startStatus(statusCtx, standby.fabric, role, redundancy.StatePassive, statusPath, cfg.LagBound(), nil, stopWaiting)
 		if err != nil {
 			stopStatus()
 			stopWaiting()
@@ -421,7 +421,7 @@ func writeTransitionStatus(statusPath string, role redundancy.InstanceRole, stat
 func writeUnavailableStatus(statusPath string, role redundancy.InstanceRole, cause error) error {
 	return redundancy.Status{
 		Role:      role,
-		State:     redundancy.StateStandby,
+		State:     redundancy.StatePassive,
 		PID:       os.Getpid(),
 		Lag:       unknownLag,
 		UpdatedAt: time.Now().UTC(),

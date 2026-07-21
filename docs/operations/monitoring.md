@@ -13,7 +13,7 @@ They are atomic JSON snapshots with these fields:
 | Field | Meaning |
 | --- | --- |
 | `role` | Which fixed instance wrote this: `primary` or `standby` |
-| `state` | What that instance is doing: `active` or `standby`, or a transitional `starting`, `activating`, `stopping`, `failed` |
+| `state` | What that instance is doing: `active` or `passive`, or a transitional `starting`, `activating`, `stopping`, `failed` |
 | `pid` | Process that wrote the snapshot; validate it is still alive |
 | `applied` | Highest journal sequence projected locally |
 | `high_water` | Highest accepted journal sequence last observed |
@@ -26,18 +26,17 @@ Primary Ownership, not the status file, decides which instance is Active. A
 stale file after a crash is historical evidence. Treat it as live only when
 `updated_at` is fresh and `pid` belongs to the expected service.
 
-### Role and state are different axes
+### Role and state are independent axes
 
-`role` is fixed for the life of the installation. `state` changes. Both use the
-word `standby`, so read them together: the combinations that differ are the ones
-worth acting on.
+`role` (`primary` or `standby`) is fixed for the life of the installation. `state`
+changes (`active` vs `passive`). Both axes must be read together:
 
 | `role` | `state` | Meaning |
 | --- | --- | --- |
 | `primary` | `active` | Normal operation |
-| `standby` | `standby` | Normal operation |
+| `standby` | `passive` | Normal operation |
 | `standby` | `active` | **Failover has occurred.** The machine is serving from its Standby Instance |
-| `primary` | `standby` | The Primary Instance is available but does not own. Ownership returns only when the Active instance is stopped, so this persists until an operator acts |
+| `primary` | `passive` | The Primary Instance is available (`role=primary, state=passive`) but does not own. Ownership returns only when the Active instance is stopped, so this persists until an operator acts |
 | both `active` | | Must never occur, and cannot |
 
 The fourth row is not an error and not transient. It is the steady state after a

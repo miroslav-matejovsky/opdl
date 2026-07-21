@@ -9,11 +9,11 @@
 //
 // The Primary Instance is preferred, but being Active always comes from holding
 // Primary Ownership. A returning Primary Instance takes ownership back through
-// graceful handover, never by seizing it from a live Standby Instance.
+// graceful handover, never by seizing it from a Standby Instance in the Active state.
 //
 // Only the owner may bind the public API, run durable handlers, publish lifecycle
 // readiness, or host the embedded NATS server and storage. The other instance
-// runs a client-only projector.
+// (whether Primary or Standby) runs a client-only projector in the Passive state.
 //
 // # Primary Ownership
 //
@@ -59,7 +59,7 @@
 //
 // Separate per-instance endpoints are rejected. They double the endpoint
 // inventory and require every client and route list to carry both. Giving the
-// standby its own endpoint is what once left it waiting on an address nothing was
+// Standby Instance its own endpoint is what once left it waiting on an address nothing was
 // listening on.
 //
 // If a bind fails after acquiring ownership, the process records a failed status
@@ -68,7 +68,7 @@
 //
 // # Status files
 //
-// Status files report each instance's role, state, PID, projection progress, lag,
+// Status files report each instance's role (`primary` or `standby`), state (`active` or `passive`), PID, projection progress, lag,
 // and errors. They are operational evidence and never grant ownership, and the
 // directory holding them takes no part in the ownership decision.
 package redundancy

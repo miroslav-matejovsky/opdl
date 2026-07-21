@@ -2,11 +2,11 @@
 //
 // The Primary and Standby Instances contend for one Primary Ownership. Only the
 // owner opens storage, attaches durable handlers, publishes readiness, and
-// serves the public API. The other process runs a client-only projector. Each
+// serves the public API. The other process runs a client-only projector in the Passive state. Each
 // process writes local status and stops if that status cannot be maintained. A
-// standby waits for ownership independently of its projector and recomposes the
-// active runtime after acquiring it. A returning primary uses the same path
-// after an operator-initiated failback from the Active Standby.
+// Standby Instance in the Passive state waits for ownership independently of its projector and recomposes the
+// active runtime after acquiring it. A returning Primary Instance uses the same path
+// after an operator-initiated failback when the Standby Instance is Active.
 //
 // App owns startup, readiness, lag enforcement, and ordered shutdown. Domain
 // packages receive narrow Event Fabric and registration contracts and never
