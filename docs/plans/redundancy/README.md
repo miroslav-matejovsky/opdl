@@ -43,16 +43,23 @@ build-time, and operator-visible.
 Ordered so the validation gate is restored before anything changes behavior, and
 so each stage that touches the runtime lands on settled names.
 
-| Stage | Subject | Effort | Complexity |
-| --- | --- | --- | --- |
-| [01](01-restore-the-gate.md) | Restore the validation gate | Small | Low |
-| [02](02-active-and-passive.md) | Active and Passive runtime states | Small | Low |
-| [03](03-ownership-contract.md) | Finish the ownership rename: blueprint, descriptor, events | Medium | Medium |
-| [04](04-instance-configuration.md) | Independent configuration per instance | Medium | High |
-| [05](05-instance-event-fabric.md) | Independent Event Fabric per instance | Large | High |
-| [06](06-failback-policy.md) | Failback policy | Large | High |
-| [07](07-service-notifications.md) | Platform-to-service notifications over Named Pipes | Large | Medium |
-| [08](08-documentation.md) | Documentation, requirements, and scope | Small | Low |
+| Stage | Subject | Effort | Complexity | State |
+| --- | --- | --- | --- | --- |
+| [01](01-restore-the-gate.md) | Restore the deadcode gate | Small | Low | done |
+| [02](02-active-and-passive.md) | Active and Passive runtime states | Small | Low | |
+| [03](03-ownership-contract.md) | Finish the ownership rename: blueprint, descriptor, events | Medium | Medium | |
+| [04](04-instance-configuration.md) | Independent configuration per instance | Medium | High | |
+| [05](05-instance-event-fabric.md) | Independent Event Fabric per instance | Large | High | |
+| [06](06-failback-policy.md) | Failback policy | Large | High | |
+| [07](07-service-notifications.md) | Platform-to-service notifications over Named Pipes | Large | Medium | |
+| [08](08-documentation.md) | Documentation, requirements, and scope | Small | Low | |
+
+**Scenarios are off until the redundancy implementation changes.** `task all`
+currently starts no process and binds no socket. Stages 02 and 03 are
+compiler-checked renames and lose little; stages 04 onward are not, and each states
+the scenario coverage it needs. The suite has to be back before stage 04 lands, and
+it needs updating for the two-runtime model as part of stages 04 and 05. See stage
+01.
 
 **Effort** is how much work it is. **Complexity** is how much can go wrong that a
 compiler will not catch. Stage 04 is Medium effort and High complexity for exactly
@@ -62,7 +69,7 @@ serves the wrong thing.
 ### Dependencies
 
 ```text
-01 restore the gate      <- nothing after this can be trusted without it
+01 restore the gate  done
    |
    +-- 02 active/passive     (operator-visible names, no behavior)
    |
@@ -134,7 +141,7 @@ stages that own them.
 
 | Finding | Owned by |
 | --- | --- |
-| `task all` runs neither scenarios nor deadcode, so nothing proves a package boots | 01 |
+| `task all` runs no scenarios, so nothing proves a package boots | 01, then 04 |
 | The runtime reads the Primary Instance's NATS topology whichever instance runs | 05 |
 | JetStream replica placement is unconstrained once a machine runs two servers | 05 |
 | The API address has two sources of truth: descriptor and TOML | 04 |

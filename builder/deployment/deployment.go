@@ -56,14 +56,6 @@ const (
 	RoleStandby PlatformInstanceRole = "standby"
 )
 
-// Role returns the instance role for a standby flag.
-func Role(standby bool) PlatformInstanceRole {
-	if standby {
-		return RoleStandby
-	}
-	return RolePrimary
-}
-
 // Fence is the machine's resolved local ownership object: the Windows named mutex
 // its two instances contend for, and which exactly one of them holds at a time.
 //

@@ -1,48 +1,49 @@
-# Stage 01: Restore the validation gate
+# Stage 01: Restore the deadcode gate
 
 **Effort:** Small. **Complexity:** Low. **Depends on:** nothing.
 
-First, because every stage after this one changes behavior and none of them can be
-trusted without it.
+## Status: done
 
-## Intent
+`deadcode` is back in `task all` and the suite passes.
 
-`task all` must again prove that a built package starts, binds its endpoints, and
-transfers ownership. Today it proves that the code compiles and that unit tests
-pass with `-short`.
+It found one thing immediately: `builder/deployment.Role(standby bool)`, a helper
+added with the per-instance descriptor work and never called. The resolver converts
+the other direction, comparing against `RoleStandby` directly. The platform's copy
+of the same helper *is* used and stayed. Deleted from the builder.
 
-## Current state
-
-`Taskfile.yml:91,97` has two entries commented out:
-
-```yaml
-      # - task deadcode
-      ...
-      # - task scenarios
-```
-
-So `task all` runs tidy, vet, fmt, lint, arch, `test -short`, the .NET SDK build,
-and blueprint validation. It starts no process and binds no socket. The scenarios
-and the platform integration tests both live in `taskfile/scenarios.ps1`.
-
-This matters more now than it did when they were disabled. The vocabulary work
-that preceded this plan was compiler-checked by construction: a rename either
-compiled or it did not. Stages 04 through 07 change what the platform binds, reads,
-and connects to, and none of that is visible to a compiler.
-
-`deadcode` matters for a smaller but real reason: these stages delete paths, and an
+That is the small version of what this gate is for. The stages ahead delete whole
+paths — `clientOnly` in stage 05, the shared `address` setting in stage 04 — and an
 unreferenced function that used to be the only caller of another is how a
 half-finished migration hides.
 
-## Target
+### Scenarios are still off, deliberately
 
-Both entries enabled, and the suite green.
+`# - task scenarios` stays commented out until the redundancy implementation
+actually changes. Re-enabling it now would gate this plan on a suite that tests the
+single-runtime architecture the plan replaces.
 
-If either cannot be re-enabled today, this stage must say why in writing and the
-plan's remaining stages must state how they are validated instead. A gate that is
-off without a recorded reason becomes a gate nobody remembers turning off.
+**This is a real reduction in what `task all` proves, and every stage from 04
+onward has to account for it.** The gate currently covers tidy, vet, fmt, deadcode,
+lint, arch, unit tests with `-short`, the .NET SDK build, and blueprint validation.
+It starts no process and binds no socket.
 
-## Known obstacle: a flaky scenario
+Stages 02 and 03 are compiler-checked renames, so this costs them little. Stages 04
+through 07 change what the platform binds, reads, and connects to, and none of that
+is visible to a compiler or to a `-short` unit test. Each of those stages states its
+own scenario coverage under Validation, and those scenarios are the thing that has
+to come back before the plan can be called finished.
+
+### When to turn it back on
+
+Before stage 04 lands, not after. Stage 04 is the first stage that can produce a
+machine which starts, reports healthy, and serves the wrong endpoint, which is
+precisely the failure a black-box scenario catches and nothing else here does.
+
+The scenarios also need updating for the two-runtime model as part of stages 04 and
+05, so re-enabling is not a switch flip: the existing suite asserts one API address
+per machine and one NATS server per machine, and both stop being true.
+
+### Known obstacle when it does come back
 
 `TestFourMachineStorageTopologyAndFailure` has failed once under full-suite load
 and passed alone and on the next full run. The signature is
@@ -50,28 +51,7 @@ and passed alone and on the next full run. The signature is
 `context deadline exceeded`, immediately after the scenario's deliberate storage
 kill.
 
-It is recorded in `docs/backlog/event-fabric.md` as evidence for the open decision
-there. It is not caused by this plan and it must not be the reason the gate stays
-off. If it is still flaky, quarantine that one test explicitly rather than
-disabling the whole suite.
-
-## Decisions
-
-**D1.** Re-enable both, or only `scenarios`? Recommendation: both. `deadcode` is
-cheap and this plan deletes code.
-
-**D2.** If the four-machine scenario is still flaky, quarantine it or fix it first?
-Recommendation: quarantine with a comment pointing at the backlog entry. Fixing it
-is a separate investigation and blocking this plan on it costs more than it saves.
-
-## Work
-
-1. Uncomment `- task deadcode` and `- task scenarios` in `Taskfile.yml`.
-2. Run the full suite and fix what it finds.
-3. If the four-machine scenario flakes, apply D2.
-
-## Validation
-
-- `task all` passes with both entries enabled.
-- The run includes at least one scenario that starts a real package and one that
-  exercises ownership transfer.
+Recorded in `docs/backlog/event-fabric.md` as evidence for the open decision there.
+It is not caused by this plan, and it must not become the reason the suite stays
+off a second time. If it is still flaky, quarantine that one test with a comment
+pointing at the backlog entry rather than disabling the suite.
