@@ -1,131 +1,248 @@
-# Stage 03: Finish the ownership rename
+# Stage 03: The lock in the blueprint, ownership in the runtime
 
 **Effort:** Medium. **Complexity:** Medium. **Depends on:** stage 01.
 
 ## Intent
 
-`fence` disappears. The mechanism is Primary Ownership, and every place an operator
-or an author can see it says so.
+`fence` disappears. In its place, two words that mean different things:
 
-## Current state
+- a **lock** is the object instances contend for — a Windows Named Mutex. It is
+  configuration. It is authored, carried in the deployment descriptor, and opened.
+- **ownership** is what holding that lock means at runtime. It is behavior. It is
+  acquired, validated, released, and transferred.
 
-The internal rename is done: `platform/internal/redundancy` is built around
-`Ownership`, `OpenOwnership`, `Acquisition`, and `InstanceRole`. What was left
-behind is everything on a contract boundary, because renaming those changes files
-people have already written and dashboards people already watch.
+The blueprint and the descriptor talk about the lock. The runtime talks about
+ownership. Neither says fence.
 
-Three surfaces still say `fence`:
+`lock` is not banned vocabulary. The goal bans *distributed lock*, which is a
+different thing: a distributed lock coordinates across machines by consensus. This
+is one kernel object on one host with exactly two contenders.
 
-**The blueprint** (`builder/internal/blueprint/topology.go:86,147-172`):
+## Where the lock is authored
+
+Under `standby {}`, because the lock exists only when a Standby Instance is
+deployed:
 
 ```hcl
 platform {
-  fence { namespace = "opdl" }
+  api        { port = 8080 }
+  winservice { name = "opdl-customer-a-north-local-server-primary" }
+  nats       { client_port = 4222  cluster_port = 6222 }
+
+  standby {
+    disabled = false
+
+    lock { windows_mutex = "Global\\opdl-customer-a-north-local-server" }
+
+    api        { port = 8081 }
+    winservice { name = "opdl-customer-a-north-local-server-standby" }
+    nats       { client_port = 4322  cluster_port = 6322 }
+  }
 }
 ```
 
-with `Fence`, `DefaultFenceNamespace`, `maxFenceNamespace`, `validateFence`, and
-`Machine.FenceNamespace()`.
+A machine that opts out of a standby has nothing to contend with. It states
+`disabled = true` and authors no lock, and no lock reaches its descriptor.
 
-**The deployment descriptor** (`builder/deployment/deployment.go`,
-`platform/deployment/deployment.go`): the `Fence` type and the `fence.object`
-field, plus the derived name `<namespace>.fence.<digest>` in
-`builder/internal/resolve/resolve.go`.
+This is the same rule every other block in `standby {}` already follows:
+authoring something for an instance the machine does not deploy states a decision
+that can never take effect.
 
-**The operational events** (`platform/internal/app/runtime.go:72,80,96,114,118`):
-`platform.fence_open_failed`, `platform.fence_opened`, `platform.fence_waiting`,
-`platform.fence_acquired`. Their messages already say "ownership"; only the type
-strings lag. Referenced from `docs/01-architecture.md` and four runbooks.
+### Why the descriptor puts it back at machine level
+
+Recommended shape, and decision D1:
+
+```json
+"lock": {"windows_mutex": "Global\\opdl-customer-a-north-local-server"},
+"instances": {"primary": {...}, "standby": {...}}
+```
+
+present only when the standby is deployed, absent otherwise.
+
+The blueprint and the descriptor are answering different questions. The blueprint
+records **a decision**, and the decision to have a lock is part of the decision to
+deploy a standby, so it is authored there. The descriptor records **a resolved
+runtime fact**, and at runtime the lock belongs to neither instance — it is the one
+thing they share (goal:70). Nesting it under `instances.standby` would say it is
+the standby's, which is the one thing it is not.
+
+The asymmetry is the point, not an accident. Say so in both doc comments.
+
+## Authored, not derived
+
+Today the object name is derived: `<namespace>.fence.<digest>`, where the digest
+covers project, environment, site, and machine. A blueprint authors only the
+namespace.
+
+That changes. The blueprint authors the whole name.
+
+This is a deliberate trade and both halves need stating.
+
+**What is gained.** The name becomes readable. `opdl.fence.d8558e3e3549dc689184c77b74e544f3`
+tells an operator holding a `handle.exe` listing nothing at all;
+`Global\opdl-customer-a-north-local-server` tells them exactly which machine's
+platform is holding it. Ownership is invisible to ordinary tooling — that is the
+whole reason the object name is printed at startup — so making it legible has real
+operational value.
+
+**What is lost, and why it is affordable.** The digest existed so two machines
+could never be given the same object. Two machines are two hosts, and each host has
+its own `Global\` kernel namespace, so the same name on two machines is harmless in
+a real deployment.
+
+It stops being harmless when several machines run on **one** host. That is exactly
+what the scenario harness does, and it is why the harness renders a per-run random
+namespace today. Under authored names the harness must render a distinct
+`windows_mutex` per run and per machine instead. Same requirement, different place.
+
+The other loss is quieter: a copy-pasted blueprint machine now carries a
+copy-pasted mutex name, and nothing about the deployment looks wrong. See D2.
+
+## The `Global\` trap
+
+A Windows named object lives in a namespace, and which one is not cosmetic.
+
+`Global\` is machine-wide. `Local\` is **session-scoped**. Two instances running as
+Windows Services are in session 0 together, so `Local\` might appear to work in
+testing and then fail the moment anything runs interactively — two sessions, two
+separate mutexes, both instances Active, no error anywhere.
+
+That is a silent split brain caused by one word in a blueprint.
+
+The name is authored, so the builder must reject anything that is not `Global\`.
+This is not a preference; it is the one validation in this stage that prevents a
+correctness failure rather than a startup failure.
+
+Validation must check: the name begins with `Global\`, contains exactly that one
+backslash, is at most 260 characters (`utils/winmutex` bounds it), and is not blank
+or padded.
+
+## Ownership becomes conditional
+
+The consequence with the longest reach, and the one to settle before writing code.
+
+Today every instance opens the object and calls `TryAcquire`; acquiring is what
+makes it Active. With no lock on a standby-less machine, there is nothing to
+acquire, so **a lone Primary Instance is Active by construction.**
+
+That is consistent with the goal — "Mutex Owner → Active Instance" describes a
+machine that has a mutex — but it removes a property the platform has today:
+starting the same instance twice currently fails cleanly with "another process
+already holds Primary Ownership".
+
+Without a lock, the second copy instead fails when it tries to bind a port already
+held. That is still a failure, but a messier one: it may bind its API and fail on
+NATS, or the reverse, and the message names a socket rather than the actual problem.
+
+Options are decision D3. This must be answered before stage 04, which is where a
+second copy of an instance stops being hypothetical.
 
 ## Target
 
 | Now | Target |
 | --- | --- |
-| blueprint `fence { namespace }` | `ownership { namespace }` |
-| `DefaultFenceNamespace` | `DefaultOwnershipNamespace` |
-| `Machine.FenceNamespace()` | `Machine.OwnershipNamespace()` |
-| descriptor `Fence{Object}` / `fence.object` | `Ownership{Object}` / `ownership.object` |
-| derived `<ns>.fence.<digest>` | `<ns>.ownership.<digest>` |
-| `platform.fence_opened` | `platform.ownership_opened` |
-| `platform.fence_acquired` | `platform.ownership_acquired` |
+| blueprint `platform.fence { namespace }` | `platform.standby.lock { windows_mutex }` |
+| `DefaultFenceNamespace`, `maxFenceNamespace` | gone; the name is authored in full |
+| `Machine.FenceNamespace()` | `Machine.Lock()`, nil when no standby |
+| derived `<ns>.fence.<digest>` | nothing derived |
+| descriptor `Fence{Object}` / `fence.object` | `Lock{WindowsMutex}` / `lock.windows_mutex`, omitted when no standby |
+| `redundancy.Ownership` (the handle type) | `redundancy.Lock`; what it grants stays Ownership |
+| `platform.fence_opened` | `platform.lock_opened` |
+| `platform.fence_open_failed` | `platform.lock_open_failed` |
 | `platform.fence_waiting` | `platform.ownership_waiting` |
-| `platform.fence_open_failed` | `platform.ownership_open_failed` |
+| `platform.fence_acquired` | `platform.ownership_acquired` |
 
-## Where the ownership block belongs
+The event split follows the word split: opening the object is a lock operation,
+and who is Active is an ownership fact. See D4 if the mixed prefix is unwelcome.
 
-Under `platform {}`, at machine level. **Not** under `standby {}`.
+## The upgrade window
 
-An earlier plan proposed moving it under `standby` on the reasoning that ownership
-only matters when a standby is deployed. The goal architecture settles it the other
-way: the mutex is *the only shared resource between instances* (goal:70), so it is
-the one thing on a machine that belongs to neither instance. Every other block in
-the blueprint is now per-instance precisely because it is owned by one of them.
-Putting the shared object inside one instance's block would say the opposite of
-what the architecture means.
+The lock name changes, so the object two instances contend for changes.
 
-It also stays correct for a machine with no standby: a single Primary Instance
-still acquires ownership, and that acquisition is what makes it Active.
+A machine running one instance on the old derived name and one on the new authored
+name has **two locks and no contention.** Both acquire, both go Active, and nothing
+reports an error. That is a silent split brain and it is the same failure the
+`Local\` trap produces.
 
-## The one change with a real failure mode
-
-Renaming the derived object from `<ns>.fence.<digest>` to `<ns>.ownership.<digest>`
-changes the kernel object two instances contend for.
-
-A machine running one instance on the old name and one on the new name has **two
-ownership objects and no contention**. Both instances acquire, both go Active, and
-nothing reports an error. That is a silent split brain, and it is exactly the
-failure the derived name exists to prevent.
-
-Both instances of a machine must therefore be upgraded together. That is already
-what `docs/operations/upgrade.md` describes for a rolling upgrade, but the rolling
-upgrade deliberately runs the two instances on different binaries for a window, and
-during that window this change is unsafe.
-
-**This stage requires a stop-both-then-start-both upgrade, not a rolling one.** The
-runbook must say so for this release specifically.
+Both instances of a machine must be stopped and restarted together for this
+release. The rolling upgrade in `docs/operations/upgrade.md` deliberately runs the
+two instances on different binaries for a window, and during that window this
+change is unsafe. The runbook must say so for this release specifically.
 
 ## Decisions
 
-**D1.** Is anything outside the repo matching on the four event names, such as a
-log pipeline or an alert rule? They are the operational contract this stage breaks.
-If yes, decide whether to emit both names for one release.
+**D1. Descriptor placement.** Machine-level `lock`, omitted when the standby is
+disabled, as recommended above? Or mirror the blueprint at
+`instances.standby.lock`? Recommendation: machine-level, with both doc comments
+explaining why the two files disagree on purpose.
 
-**D2.** Given the split-brain window above, does this stage ship on its own with a
-documented full-restart upgrade, or does it wait and ship together with stage 04 or
-05, which also need a restart? Recommendation: ship it with stage 04, so the
-deployment takes one interruption rather than two.
+**D2. Duplicate mutex names within a project.** Harmless across real machines,
+almost certainly a copy-paste mistake, and catastrophic if those machines ever
+share a host. Recommendation: reject duplicates within a project. The check is
+cheap, and the failure it prevents is silent.
 
-**D3.** Keep the derived object's `<ns>.<kind>.<digest>` shape at all? It is
-already opaque to an operator. Recommendation: keep it. The middle token is what
-lets someone reading `Global\` object names tell an ownership object from something
-else the platform might name later.
+**D3. What replaces the lock for a machine with no standby?** Options: accept that
+a lone Primary is Active by construction and let a double start fail on port
+binding; or have every instance open a lock regardless, authored at machine level
+when there is no standby, which contradicts the placement above; or open an
+unshared per-instance object purely as a single-instance guard, which is a
+different mechanism wearing the same name. Recommendation: the first, with the
+double-start failure made explicit in the deployment runbook. Confirm before
+stage 04.
+
+**D4. Event prefixes.** `lock_*` for the object and `ownership_*` for the state, or
+one prefix for all four? Recommendation: the split, because the two really are
+different facts and an operator asking "who is Active" wants only the second pair.
+The cost is that a single grep no longer finds all four.
+
+**D5. Does anything outside the repo match the current event names?** They are the
+operational contract this stage breaks. If yes, decide whether to emit both names
+for one release.
 
 ## Work
 
-1. Blueprint: rename the block, the type, the constants, and the accessor.
-2. Resolver: rename the derived object's middle token.
-3. Both descriptors: rename the type and the JSON field, in lockstep. The
-   conformance check in `conformance-tests/deployment-descriptors` fails if only
-   one side moves, which is the safety net for this step.
-4. Events: rename the four types. Their messages already use the target vocabulary.
-5. Update every blueprint and fixture: `examples/customer-a/project.hcl`,
+1. Blueprint: delete the `Fence` block, constants, and accessor. Add `Lock` under
+   `Standby` with `windows_mutex`, required when the standby is deployed and
+   rejected when it is not. Validate per the `Global\` rules above and per D2.
+2. Resolver: stop deriving a name. Copy the authored value through, and emit no
+   lock at all when the standby is disabled.
+3. Both descriptors: replace `Fence` with `Lock`, in lockstep. The conformance
+   check in `conformance-tests/deployment-descriptors` fails if only one side
+   moves, which is the safety net for this step.
+4. Runtime: rename the handle type to `Lock`, keep ownership vocabulary for what
+   acquiring it means, and handle the no-lock case per D3.
+5. Events: rename per the table and D4.
+6. Update every blueprint and fixture: `examples/customer-a/project.hcl`,
    `builder/internal/blueprint/testdata/project.hcl`,
-   `scenarios/testdata/project.hcl.tmpl`, `platform/embedded/deployment.json`.
-6. Update `docs/01-architecture.md` and the four runbooks, including the
-   full-restart note from D2.
+   `platform/embedded/deployment.json`, and
+   `scenarios/testdata/project.hcl.tmpl`, where the per-run namespace becomes a
+   per-run mutex name.
+7. Update `docs/01-architecture.md` and the four runbooks, including the
+   full-restart note above.
 
-## The prose hazard, again
+## The prose hazard
 
-Same as stage 02, and this word is worse: `fence` is a common English noun and the
-codebase used it as one in comments. Sed the identifiers, replace prose with
-explicit pairs, then grep and read. Last time this exact rename ran, a
-word-boundary sed produced "the exclusive machine ownership", "not a ownership
-token", and "machine ownership ownership object opened", all of which compiled.
+`fence` is a common English noun and this codebase used it as one in comments. Sed
+the identifiers, replace prose with explicit before-and-after pairs, then grep the
+new words and read every hit.
+
+The last time this exact rename ran, a word-boundary sed produced "the exclusive
+machine ownership", "not a ownership token", and "machine ownership ownership
+object opened". All of it compiled and none of it means anything. There is no
+shortcut; budget for the reading.
+
+Reading is doubled here because there are two target words, and the wrong one in
+the wrong place is invisible: "the lock is transferred" and "ownership is opened"
+are both wrong and both read fine.
 
 ## Validation
 
-- `task all` passes with the gate enabled.
+- `task all` passes.
 - `grep -rin fence` returns nothing outside this plan's own history.
-- A scenario asserts the four renamed events by their new names.
-- Two instances of one machine still contend for one object: the warm standby
-  scenario's failover still works, which is what proves the derived name is shared.
+- A blueprint authoring `Local\...`, a bare name with no namespace, or a duplicate
+  within the project is rejected at build time with a message naming the machine.
+- A machine with `disabled = true` produces a descriptor with no lock, and its
+  Primary Instance still starts and serves.
+- A machine with a standby produces one lock shared by both instances, and the
+  warm standby failover still works, which is what proves they contend for the
+  same object.

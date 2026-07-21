@@ -58,13 +58,19 @@ is Large or enormous.
 ## Design questions the stage must answer
 
 **Pipe naming.** A machine runs two instances and each needs its own pipe, or one
-pipe needs to disambiguate. Naming should derive from the same identity the
-ownership object does, so a service on a machine with two instances can attach to
-the right one and two deployments on one host cannot collide.
+pipe needs to disambiguate. A service on a machine with two instances must be able
+to attach to the right one, and two deployments on one host must not collide.
 
-**Discovery.** How does a service find the pipe? Deriving the name from deployment
-identity means a service needs that identity. Publishing it in the deployment
-package is one option; a well-known name per machine is another.
+Stage 03 makes the lock's name **authored** rather than derived, and a pipe exists
+per instance where a lock exists per machine, so the lock's name is a poor model
+here. Either the blueprint authors pipe names per instance, matching how every
+other endpoint is now authored, or the platform derives them from deployment
+identity plus role. The first is consistent with the rest of the blueprint; the
+second cannot be got wrong by an author. This is D6.
+
+**Discovery.** How does a service find the pipe? An authored name has to be
+published somewhere a service can read; a derived name means a service needs the
+deployment identity. Publishing it in the deployment package covers both.
 
 **Lifecycle.** A service may start before the platform, outlive it, or reconnect
 after a failover. The channel must be reconnectable and must not require ordering
@@ -74,9 +80,9 @@ between the two.
 hint to go and ask the API; it is not a fact to be relied on. Making it reliable
 would recreate the Event Fabric on a pipe.
 
-**Security.** A named pipe has a DACL. The ownership mutex already establishes the
-pattern for deciding who may open a machine-scoped kernel object; follow it rather
-than inventing a second answer.
+**Security.** A named pipe has a DACL. The lock already establishes the pattern for
+deciding who may open a machine-scoped kernel object; follow it rather than
+inventing a second answer.
 
 ## Decisions
 
@@ -103,9 +109,15 @@ wire format.
 inspectable; a binary framing is faster and nothing here is hot. Recommendation:
 JSON lines.
 
+**D6.** Pipe names authored per instance in the blueprint, or derived from
+deployment identity plus role? Recommendation: derived. Every authored endpoint so
+far is a port, where a collision fails loudly at bind time. A pipe name collision
+between two deployments on one host is silent, and stage 03 has already traded away
+the derivation that used to prevent exactly that for the lock.
+
 ## Work
 
-1. Settle D1-D5. This stage is mostly design; the code follows quickly once the
+1. Settle D1-D6. This stage is mostly design; the code follows quickly once the
    shape is agreed.
 2. A pipe server in the platform, opened at startup by both instances, independent
    of ownership.

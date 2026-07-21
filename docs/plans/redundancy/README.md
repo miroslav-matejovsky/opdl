@@ -29,14 +29,14 @@ whole subject of this plan.
 | --- | --- | --- |
 | Independent network ports | goal:68 | One API address from TOML, one NATS server per machine |
 | Independent configuration context | goal:67 | One TOML file per machine, read by both instances |
-| Runtime states are Active and Passive | goal:20-22 | States are `active` and `standby`; `standby` is also a role |
 | Ownership is transferred back per a configured failback policy | goal:53-58 | No policy exists; failback is operator-only |
 | No lock files, marker files, or filesystem coordination | goal:44 | Ownership is a mutex and correct; status files need an explicit ruling |
 | Platform-to-service notifications use Named Pipes | goal:75 | No named pipe exists anywhere in the repo |
+| `fence` is not the word for any of this | goal:114 | The blueprint, both descriptors, and four event names still say it |
 
-Two things the goal requires are already true and need no stage: ownership is a
-Windows Named Mutex and is the single source of truth, and the roles are fixed,
-build-time, and operator-visible.
+Three things the goal requires are already true and need no stage: ownership is a
+Windows Named Mutex and is the single source of truth, the roles are fixed,
+build-time, and operator-visible, and the runtime states are Active and Passive.
 
 ## Stages
 
@@ -46,8 +46,8 @@ so each stage that touches the runtime lands on settled names.
 | Stage | Subject | Effort | Complexity | State |
 | --- | --- | --- | --- | --- |
 | [01](01-restore-the-gate.md) | Restore the deadcode gate | Small | Low | done |
-| [02](02-active-and-passive.md) | Active and Passive runtime states | Small | Low | |
-| [03](03-ownership-contract.md) | Finish the ownership rename: blueprint, descriptor, events | Medium | Medium | |
+| [02](02-active-and-passive.md) | Active and Passive runtime states | Small | Low | done |
+| [03](03-ownership-contract.md) | The lock in the blueprint, ownership in the runtime | Medium | Medium | |
 | [04](04-instance-configuration.md) | Independent configuration per instance | Medium | High | |
 | [05](05-instance-event-fabric.md) | Independent Event Fabric per instance | Large | High | |
 | [06](06-failback-policy.md) | Failback policy | Large | High | |
@@ -55,11 +55,11 @@ so each stage that touches the runtime lands on settled names.
 | [08](08-documentation.md) | Documentation, requirements, and scope | Small | Low | |
 
 **Scenarios are off until the redundancy implementation changes.** `task all`
-currently starts no process and binds no socket. Stages 02 and 03 are
-compiler-checked renames and lose little; stages 04 onward are not, and each states
-the scenario coverage it needs. The suite has to be back before stage 04 lands, and
-it needs updating for the two-runtime model as part of stages 04 and 05. See stage
-01.
+currently starts no process and binds no socket. Stage 02 was a compiler-checked
+rename and lost little. Stage 03 onward is not: 03 changes when a lock exists at
+all, and 04 onward changes what the platform binds and connects to. Each states the
+scenario coverage it needs. The suite has to be back before stage 04 lands, and it
+needs updating for the two-runtime model as part of stages 04 and 05. See stage 01.
 
 **Effort** is how much work it is. **Complexity** is how much can go wrong that a
 compiler will not catch. Stage 04 is Medium effort and High complexity for exactly
@@ -69,32 +69,43 @@ serves the wrong thing.
 ### Dependencies
 
 ```text
-01 restore the gate  done
+01 restore the gate   done
    |
-   +-- 02 active/passive     (operator-visible names, no behavior)
+   +-- 02 active/passive   done   (names only)
    |
-   +-- 03 ownership contract (operator-visible names, no behavior)
-   |
-   +-- 04 instance configuration  <- the first behavioral stage
+   +-- 03 lock and ownership  <- names, and a machine with no standby
+          |                      stops acquiring anything
           |
-          +-- 05 instance event fabric   <- the largest, needs 04's config split
+          +-- 04 instance configuration
                  |
-                 +-- 06 failback policy  <- needs a settled two-runtime model
+                 +-- 05 instance event fabric   <- the largest, needs 04's split
                         |
-                        +-- 07 service notifications
+                        +-- 06 failback policy  <- only exists where a lock does
+                               |
+                               +-- 07 service notifications
 
 08 documentation  <- last, so the runbooks are rewritten once
 ```
 
-Stages 01 through 03 can be done in any order and change no behavior. Stage 04 is
-the first that can break a deployment.
+Stage 03 is where behavior starts changing. Its D3 — what replaces the lock on a
+machine that deploys no standby — has to be answered before stage 04, because that
+is where a second copy of an instance stops being hypothetical.
 
-### The one ordering rule that matters
+### Two stages that must each land whole
 
-**Stage 05 must land as a single change.** Starting the Standby Instance's NATS
-server without taking its own resolved topology, or taking the topology without
-starting the server, both produce an instance pointed at an address nothing is
-listening on. That is a defect this codebase has already had once; see stage 05.
+**Stage 03.** The lock's name changes, so the object two instances contend for
+changes. A machine running one instance on the old derived name and one on the new
+authored name has two locks and no contention: both go Active and nothing reports
+an error. Both instances must be stopped and restarted together for that release,
+which the rolling upgrade procedure does not do.
+
+**Stage 05.** Starting the Standby Instance's NATS server without taking its own
+resolved topology, or taking the topology without starting the server, both produce
+an instance pointed at an address nothing is listening on. That is a defect this
+codebase has already had once; see stage 05.
+
+Both failures are silent. Neither is caught by a compiler, and with scenarios off
+neither is caught by `task all` either.
 
 ## Vocabulary
 
@@ -111,8 +122,25 @@ code. Repeated here only as the check to apply when writing new text.
 | Transitions | Failover, Failback |
 | Mechanism | Windows Named Mutex |
 
-Avoid: leader, follower, election, leadership, consensus, quorum, slot,
+Avoid: leader, follower, election, leadership, consensus, quorum, slot, fence,
 distributed lock, leadership token.
+
+### Lock and ownership are not synonyms
+
+The distinction stage 03 introduces, carried by every stage after it:
+
+- a **lock** is the object — a Windows Named Mutex. Configuration. It is authored,
+  carried in the deployment descriptor, and opened.
+- **ownership** is what holding that lock means at runtime. Behavior. It is
+  acquired, validated, released, and transferred.
+
+The blueprint and the descriptor talk about locks. The runtime talks about
+ownership. "The lock is transferred" and "ownership is opened" are both wrong and
+both read fine, which is why this is written down.
+
+Plain `lock` is not banned vocabulary. The goal bans *distributed lock*, which
+coordinates across machines by consensus. This is one kernel object on one host
+with exactly two contenders.
 
 ### What the vocabulary rule does not govern
 

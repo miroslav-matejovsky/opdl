@@ -111,6 +111,7 @@ Avoid using:
 - Consensus
 - Quorum
 - Slot
+- Fence
 - Distributed Lock
 - Leadership Token
 

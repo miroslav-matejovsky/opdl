@@ -73,18 +73,33 @@ automation.
 | `manual` | Ownership returns only when the Active instance is stopped by an operator or by deployment tooling. Today's behavior, made explicit and named. |
 | `automatic` | A returning Primary Instance requests ownership once it is safe, and the Active Standby releases cooperatively. |
 
-The policy is machine-level local high-availability policy, so it belongs beside
-the ownership block that stage 03 settles at `platform {}` level:
+The policy belongs under `standby {}`, beside the lock stage 03 puts there:
 
 ```hcl
-platform {
-  ownership { namespace = "opdl" }
-  failback  { mode = "manual" }
+standby {
+  disabled = false
+
+  lock     { windows_mutex = "Global\\opdl-customer-a-north-local-server" }
+  failback { mode = "manual" }
+
+  api        { port = 8081 }
+  winservice { name = "..." }
+  nats       { client_port = 4322  cluster_port = 6322 }
 }
 ```
 
+For the same reason the lock is there: **failback only exists where a standby
+does.** A machine that deploys no Standby Instance has nothing to fail over to and
+nothing to fail back from, so a failback policy on it would state a decision that
+can never take effect — which is the rule every block in `standby {}` follows.
+
 A mode string rather than a boolean, so a windowed policy can be added later
 without changing the shape.
+
+In the descriptor, the same reasoning as the lock applies: failback is a machine's
+runtime policy, read by whichever instance is running, so it resolves beside the
+lock rather than inside one instance's record. Settle it with stage 03's D1 so both
+move once.
 
 ## Mechanism, if automatic is adopted
 
@@ -96,10 +111,16 @@ without changing the shape.
    closes, and only then is ownership released.
 4. The waiting Primary's acquisition returns and it activates.
 
-**Signalling primitive.** A named kernel event beside the ownership mutex, in the
-same namespace and derived from the same identity, is the option that adds nothing
-new: machine-scoped, kernel-managed, no filesystem, disappears with the processes.
-A Named Pipe from stage 07 is the other. Decision D3.
+**Signalling primitive.** A named kernel event beside the lock, in the same
+`Global\` namespace and named from the authored mutex name, is the option that adds
+nothing new: machine-scoped, kernel-managed, no filesystem, disappears with the
+processes. A Named Pipe from stage 07 is the other. Decision D3.
+
+Note that after stage 03 the lock's name is authored rather than derived, so a
+request object named from it inherits whatever the blueprint author wrote. Suffix
+the authored name rather than deriving a fresh one, so the pair is visibly related
+in a `handle.exe` listing and a machine cannot end up with a lock and a request
+object that belong to different deployments.
 
 ### Safety conditions before requesting
 
