@@ -66,6 +66,14 @@ in one cluster cannot share a name.
 Storage is selected by **machine**, because a machine is the failure domain. Two
 copies of the journal behind one power supply is one copy.
 
+That much is already done and does not need deciding here. `siteIPs` in
+`platform/internal/eventfabric/nats/config.go` collapses the descriptor's peers —
+which are instances — back to machines before `StorageNodes` and `Replicas` see
+them, and carries the reasoning in its own doc comment. `topology` in
+`platform/internal/app/site.go` does the same for registration. Both survive this
+stage unchanged; what does not survive is the assumption that one storage machine
+means one server.
+
 But every instance a storage machine deploys runs a server. A three-machine site
 where every machine deploys both instances has **six servers on three failure
 domains**, and `Replicas` is computed from the machine count, which stays correct
@@ -104,31 +112,73 @@ one.
 Recommendation: unique tags keyed on the machine name. It is declarative, it
 survives a site growing, and it cannot be forgotten per stream.
 
-**D3.** Data directory layout. Recommendation: extend the existing per-machine
-subdirectory with the instance role, so a machine's two stores sit side by side and
-an operator can see both. Note that this doubles a machine's journal footprint, and
-say so in `docs/operations/deployment.md`.
+**D3.** Data directory layout. Settled: `data_dir` becomes a blueprint setting
+authored per instance, exactly like `runtime_dir`, and is resolved onto the
+instance's descriptor record. `event_fabric.nats.data_dir` leaves the configuration
+file, and `nodeDataDir` is deleted rather than extended.
 
-**D4.** What happens to a deployment upgrading into this? A machine that previously
-ran one server has one store; the Primary Instance keeps it and the Standby
-Instance starts empty and catches up. Confirm catch-up from empty is bounded, and
-that `catch_up_timeout` is sized for it.
+This is the same move stage 04 made for `runtime_dir`, applied to the last
+per-instance resource still resolved somewhere else. Every other thing an instance
+binds or writes — its API address, its NATS ports, its runtime directory — is
+authored per instance and carried on its own descriptor record. The journal store
+was the exception, derived by `nodeDataDir` from a machine-level file setting, and
+this stage is where that exception stops working anyway: two instances on one
+machine cannot share one derived path.
 
-**D5.** Does the site's storage selection stay per-machine? Recommendation: yes,
-explicitly, and write the reasoning into the resolver where the selection happens.
-It is the least obvious thing in this stage and the most costly to get wrong later.
+Authoring beats deriving here for the reason the descriptor exists. A derived path
+means an operator looking at a machine's storage has to reproduce
+`project-environment-site-machine-role` in their head to know which directory
+belongs to which instance. An authored one is readable in the blueprint next to the
+`runtime_dir` beside it, and the builder validates it the same way.
+
+**What this trades away**, recorded so it is not rediscovered as a surprise:
+relocating the journal to a different disk becomes a blueprint edit and a rebuild
+rather than a file edit and a restart. That is consistent with how everything else
+about a machine is changed in this architecture, and with the scope note in the plan
+README, but it does mean `platform/config/file.go` loses the one setting it
+described as a site's own decision. Its doc comment and the package doc both say so
+today and both must be rewritten; `credentials_file` becomes the file's remaining
+site-owned setting.
+
+**Presence rule.** `data_dir` is authored on every deployed instance and carried on
+every instance's descriptor record, whether or not that instance turns out to run a
+store. Whether it is used follows `HostsStorage`.
+
+This follows `cluster_address`, which the descriptor already treats exactly this
+way: "present on every instance; it is bound only when Routes is non-empty". The
+alternative — required on a storage machine's instances and rejected elsewhere —
+was rejected because storage selection is *derived*. `siteStorageMachines` picks
+the first three machines by sorted name, so making a field's requiredness depend on
+it would mean a blueprint author has to reproduce that selection in their head to
+know whether to write the field, and adding a machine to a site would silently
+change which machines must author one.
+
+Two stores per storage machine doubles its journal footprint. Say so in
+`docs/operations/deployment.md`.
 
 ## Work
 
-1. `DefaultConfig` takes the instance role and reads that instance's record.
-2. Delete `clientOnly` and its call site.
-3. Split the data directory per D3 and the server name per the machine plus role.
-4. Add placement per D2.
-5. Update the startup fabric log so it states which server this instance runs,
+1. Blueprint: add `data_dir` beside `runtime_dir` on the instance, per D3. Validate
+   it the way `runtime_dir` is validated, and reject a machine whose two instances
+   author the same one.
+2. Both descriptors, in lockstep: add `instances.*.data_dir`. The
+   conformance-tests module is what proves they stayed in lockstep.
+3. Resolver: carry `data_dir` onto each deployed instance's record.
+4. Configuration file: remove `event_fabric.nats.data_dir`. A file that still sets
+   it fails at `rejectUnknownKeys`, which is the intended outcome and needs no
+   special case. Rewrite the `EventFabricNats` doc comment and the `platform/config`
+   package doc, both of which currently call it the site's own decision.
+5. `DefaultConfig` takes the instance role and reads that instance's record,
+   including its `data_dir`. Delete `nodeDataDir`.
+6. Delete `clientOnly` and its call site.
+7. Split the server name per the machine plus role.
+8. Add placement per D2.
+9. Update the startup fabric log so it states which server this instance runs,
    which it routes to, and that the sibling is a peer.
-6. Re-check `Replicas` against the machine count with the new membership.
-7. Update `docs/01-architecture.md` on the site topology, and
-   `docs/operations/deployment.md` on the storage footprint.
+10. Re-check `Replicas` against the machine count with the new membership.
+11. Update `docs/01-architecture.md` on the site topology,
+    `docs/operations/deployment.md` on the storage footprint and the removed file
+    setting, and the example blueprint in `examples/customer-a/project.hcl`.
 
 ## Validation
 
@@ -140,3 +190,7 @@ It is the least obvious thing in this stage and the most costly to get wrong lat
 - Failover no longer involves rebinding a NATS listener, because neither instance
   ever binds the other's.
 - The four-machine storage scenario still passes with the new membership.
+- A Standby Instance whose store is empty reaches the journal's high-water mark
+  within `catch_up_timeout`. Every standby starts empty on a machine's first boot
+  now that the two instances no longer share a store, so this is the normal path
+  rather than an unusual one, and a timeout sized for a warm store would fail it.

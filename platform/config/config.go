@@ -160,6 +160,10 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
+	// This instance's own journal store, not the machine's. The two instances open
+	// two stores, so a block that named one path per machine would be telling an
+	// operator to look in a directory the other process is writing.
+	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(d.Instances.Get(Role(standby)).DataDir))
 	// A machine's primary and standby processes contend for one Windows named
 	// mutex, so printing it at startup is how an operator finds which object they
 	// contend for.
@@ -218,16 +222,18 @@ func peersSummary(peers []Peer) string {
 	return strings.Join(names, ", ")
 }
 
-// natsSummary renders the Event Fabric adapter's settings, so a startup log
-// shows where the journal is stored and whether a machine is running on its
-// deployment addresses or on local ones.
+// natsSummary renders the Event Fabric adapter's settings a site owns: its
+// startup bounds and where its transport credentials are read from.
+//
+// Where the journal is stored is no longer among them. It is the instance's own
+// and is rendered from the descriptor above, because a machine's two instances
+// open two stores.
 //
 // It names the credentials file and never renders its content: a startup block
 // is copied into tickets and chat windows, so a secret must not be able to reach
 // it in the first place.
 func natsSummary(n EventFabricNats) string {
 	return strings.Join([]string{
-		"data_dir=" + n.DataDir,
 		"startup_timeout=" + n.StartupTimeout,
 		"catch_up_timeout=" + n.CatchUpTimeout,
 		"credentials_file=" + credentialsSummary(n.CredentialsFile),

@@ -76,6 +76,14 @@ type Machine struct {
 type Platform struct {
 	// RuntimeDir is the Primary Instance's local runtime directory. Required.
 	RuntimeDir string `hcl:"runtime_dir,optional"`
+	// DataDir is the Primary Instance's own JetStream file store directory.
+	// Required.
+	//
+	// It is per instance because each instance runs its own Event Fabric server,
+	// and two servers on one host cannot open the same store. It is authored
+	// rather than derived so an operator reads a machine's storage layout off the
+	// blueprint instead of reproducing a naming rule.
+	DataDir string `hcl:"data_dir,optional"`
 	// API is the Primary Instance's local API endpoint policy.
 	API *API `hcl:"api,block"`
 	// WinService is the Primary Instance's Windows Service identity.
@@ -190,6 +198,12 @@ type Standby struct {
 	// RuntimeDir is the Standby Instance's local runtime directory. It is required
 	// when the Standby Instance is deployed and rejected when it is not.
 	RuntimeDir string `hcl:"runtime_dir,optional"`
+	// DataDir is the Standby Instance's own JetStream file store directory. It is
+	// required when the Standby Instance is deployed and rejected when it is not.
+	//
+	// It is never the primary's. The two instances run two servers on one host,
+	// and a shared store is the one thing neither of them can survive.
+	DataDir string `hcl:"data_dir,optional"`
 	// Lock is the machine's local ownership lock policy. It is required when the
 	// Standby Instance is deployed and rejected when it is not.
 	Lock *Lock `hcl:"lock,block"`
@@ -248,9 +262,6 @@ func (p *Project) Validate() error {
 		}
 		siteNames[site.Name] = true
 
-		if len(site.Machines) == 0 {
-			return fmt.Errorf("site %q: at least one machine is required", site.Name)
-		}
 		for _, machine := range site.Machines {
 			if err := p.validateMachine(site, machine, machineNames); err != nil {
 				return err
@@ -264,6 +275,65 @@ func (p *Project) Validate() error {
 			}
 			machineIPs[machine.IP] = machine.Name
 		}
+	}
+	// Site size is checked last, over every site, because it counts what the
+	// machines declare. A malformed machine is worth reporting as a malformed
+	// machine rather than as a site that came up an instance short because that
+	// machine did not parse, and a rule that spans sites, such as a machine name
+	// repeated in another one, should not be pre-empted by the size of the first
+	// site that happens to be too small.
+	for _, site := range p.Sites {
+		if err := validateSiteSize(site); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// minimumSiteMachines and minimumSiteInstances are the smallest site the
+// platform supports: two machines, at least one of which deploys a Standby
+// Instance.
+const (
+	minimumSiteMachines  = 2
+	minimumSiteInstances = 3
+)
+
+// validateSiteSize rejects a site too small for the platform to run on.
+//
+// The floor is three platform instances across at least two machines. It comes
+// from the site journal, which is a JetStream RAFT group: a group of three keeps
+// quorum after losing one member, and a group of two needs both members alive,
+// which is not redundancy but a second thing that can fail. Below three
+// instances the site journal can only be a single copy, and losing the instance
+// holding it loses the site's history.
+//
+// Two machines is required on top of the instance count because three instances
+// on one machine survive losing a process but not losing the host, and a host is
+// what actually fails. So the minimum is two machines with a standby on one of
+// them, which is three instances across two failure domains.
+//
+// This is a build-time rule rather than a runtime one because a site's shape is
+// decided when it is authored. A deployment that cannot be redundant should fail
+// where it is written, not at three in the morning when the standby it was
+// supposed to have turns out never to have been able to help.
+func validateSiteSize(site Site) error {
+	if len(site.Machines) < minimumSiteMachines {
+		return fmt.Errorf("site %q: %d machine(s); the platform requires at least %d, because a site journal on one host cannot survive losing that host",
+			site.Name, len(site.Machines), minimumSiteMachines)
+	}
+	instances := 0
+	for _, machine := range site.Machines {
+		if machine.Platform == nil {
+			continue
+		}
+		instances++
+		if machine.Platform.Standby != nil && !machine.Platform.Standby.Disabled {
+			instances++
+		}
+	}
+	if instances < minimumSiteInstances {
+		return fmt.Errorf("site %q: %d platform instance(s); the platform requires at least %d, so deploy a standby on at least one machine: a journal of two members needs both alive and is not redundant",
+			site.Name, instances, minimumSiteInstances)
 	}
 	return nil
 }
@@ -327,6 +397,9 @@ func validatePlatform(machine Machine) error {
 	if err := validateRuntimeDirs(machine); err != nil {
 		return err
 	}
+	if err := validateDataDirs(machine); err != nil {
+		return err
+	}
 	if err := validateMachinePorts(machine); err != nil {
 		return err
 	}
@@ -365,6 +438,9 @@ func validateStandbyEndpoints(machine Machine) error {
 	if strings.TrimSpace(standby.RuntimeDir) != "" {
 		return fmt.Errorf("machine %q: platform.standby.runtime_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
+	if strings.TrimSpace(standby.DataDir) != "" {
+		return fmt.Errorf("machine %q: platform.standby.data_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	}
 	if standby.Lock != nil {
 		return fmt.Errorf("machine %q: platform.standby.lock is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
@@ -391,19 +467,50 @@ func validateStandbyEndpoints(machine Machine) error {
 // only collides when several machines share a host, which is the scenario
 // harness, and the harness renders a distinct directory per instance.
 func validateRuntimeDirs(machine Machine) error {
-	primary := strings.TrimSpace(machine.Platform.RuntimeDir)
+	return validateInstanceDirs(machine, "runtime_dir",
+		machine.Platform.RuntimeDir, machine.Platform.Standby.RuntimeDir,
+		"the two instances run together and cannot share a runtime directory")
+}
+
+// validateDataDirs checks each deployed instance states its own JetStream file
+// store directory, and that a machine's two instances do not state the same one.
+//
+// The store is per instance because each instance runs its own Event Fabric
+// server, and two NATS servers cannot open one JetStream store. Unlike a shared
+// runtime directory, this failure is not silent: the second server fails to open
+// the store. It is rejected here anyway, because a build-time error names the
+// blueprint line to fix and a startup error names a lock file inside a directory.
+//
+// Two machines authoring the same directory is not rejected, for the same reason
+// it is not for runtime_dir: two machines are two hosts, and it only collides when
+// several machines share one, which is the scenario harness.
+func validateDataDirs(machine Machine) error {
+	return validateInstanceDirs(machine, "data_dir",
+		machine.Platform.DataDir, machine.Platform.Standby.DataDir,
+		"each instance runs its own Event Fabric server and two servers cannot open the same JetStream store")
+}
+
+// validateInstanceDirs checks one per-instance directory attribute: required on
+// the primary, required on a deployed standby, and never the same on both.
+//
+// The two callers differ only in which attribute they name and why sharing it is
+// wrong, so the shape is written once and the reason is passed in. A machine that
+// shares a directory is told which one and what breaks, rather than being told a
+// path is duplicated.
+func validateInstanceDirs(machine Machine, attribute, primaryDir, standbyDir, collision string) error {
+	primary := strings.TrimSpace(primaryDir)
 	if primary == "" {
-		return fmt.Errorf("machine %q: platform.runtime_dir is required; every machine deploys a Primary Instance", machine.Name)
+		return fmt.Errorf("machine %q: platform.%s is required; every machine deploys a Primary Instance", machine.Name, attribute)
 	}
 	if machine.Platform.Standby.Disabled {
 		return nil
 	}
-	standby := strings.TrimSpace(machine.Platform.Standby.RuntimeDir)
+	standby := strings.TrimSpace(standbyDir)
 	if standby == "" {
-		return fmt.Errorf("machine %q: platform.standby.runtime_dir is required when the standby is deployed", machine.Name)
+		return fmt.Errorf("machine %q: platform.standby.%s is required when the standby is deployed", machine.Name, attribute)
 	}
 	if primary == standby {
-		return fmt.Errorf("machine %q: platform.runtime_dir and platform.standby.runtime_dir are both %q; the two instances run together and cannot share a runtime directory", machine.Name, primary)
+		return fmt.Errorf("machine %q: platform.%s and platform.standby.%s are both %q; %s", machine.Name, attribute, attribute, primary, collision)
 	}
 	return nil
 }
@@ -611,4 +718,19 @@ func (m Machine) RuntimeDir(standby bool) string {
 		return ""
 	}
 	return strings.TrimSpace(m.Platform.Standby.RuntimeDir)
+}
+
+// DataDir returns one instance's authored JetStream file store directory, or an
+// empty string when that instance is not deployed.
+func (m Machine) DataDir(standby bool) string {
+	if m.Platform == nil {
+		return ""
+	}
+	if !standby {
+		return strings.TrimSpace(m.Platform.DataDir)
+	}
+	if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
+		return ""
+	}
+	return strings.TrimSpace(m.Platform.Standby.DataDir)
 }

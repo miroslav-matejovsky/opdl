@@ -29,15 +29,18 @@ project "{{ .Name }}" {
         # carries the Standby Instance's. Every port is reserved separately by the
         # harness, because the two instances run together on one host.
         #
-        # runtime_dir is per instance for the same reason the ports are: several
-        # machines share one host here, so the harness renders a distinct
-        # directory for every instance of every machine.
+        # runtime_dir and data_dir are per instance for the same reason the ports
+        # are: several machines share one host here, so the harness renders a
+        # distinct directory for every instance of every machine. data_dir needs
+        # it most, because two NATS servers cannot open one JetStream store and
+        # every deployed instance on a storage machine runs one.
         #
         # The platform installs and manages no services; the winservice names are
         # carried into the manifest so the roles are named consistently. The
         # namespace token keeps concurrent scenario runs from naming the same
         # service twice.
         runtime_dir = "{{ .RuntimeDir }}"
+        data_dir    = "{{ .DataDir }}"
 
         api {
           local_port = {{ .APIPort }}
@@ -57,6 +60,7 @@ project "{{ .Name }}" {
           disabled = {{ .StandbyDisabled }}
 {{- if not .StandbyDisabled }}
           runtime_dir = "{{ .StandbyRuntimeDir }}"
+          data_dir    = "{{ .StandbyDataDir }}"
 
           lock {
             windows_mutex = "Global\\{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}"

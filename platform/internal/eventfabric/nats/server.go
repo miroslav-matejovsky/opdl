@@ -13,6 +13,12 @@ import (
 
 const reconnectWait = 250 * time.Millisecond
 
+// machineTagPrefix namespaces the placement tag naming a server's failure
+// domain. JetStream tags are flat strings shared with any other use of tags, so
+// the prefix is what keeps "machine:node-a" from colliding with an unrelated tag
+// that happens to be a machine name.
+const machineTagPrefix = "machine:"
+
 // serverOptions translates the adapter's configuration into embedded server
 // options. It enables JetStream only on a storage node and configures the
 // cluster listener and routes only when the site has peers to route to. The

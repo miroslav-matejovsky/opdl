@@ -101,6 +101,7 @@ func instance(site blueprint.Site, machine blueprint.Machine, role deployment.Pl
 		Disabled:   false,
 		Service:    winService(machine, role == deployment.RoleStandby),
 		RuntimeDir: machine.RuntimeDir(role == deployment.RoleStandby),
+		DataDir:    machine.DataDir(role == deployment.RoleStandby),
 		APIAddress: loopbackAddress(endpoints.APILocalPort),
 		Nats:       &nats,
 	}
@@ -168,15 +169,16 @@ func peers(site blueprint.Site) []deployment.Peer {
 //
 // Nothing here is authored. The instance's own addresses are its blueprint ports
 // joined to its machine's ip, and the route and server lists are consequences of
-// which machines the site selects to store the journal. Letting a blueprint state
+// which instances the site selects to store the journal. Letting a blueprint state
 // those lists directly would let it split a site, drop a storage server, or point
 // an instance at a journal that is not its own, and none of that would be visible
 // in the descriptor as anything other than a working topology.
 //
-// Storage is selected by machine and served by instance: every instance a storage
-// machine deploys runs a server, and a machine's two servers route to each other
-// like any other pair. That is why a one-machine site with a standby still has a
-// cluster.
+// Storage is selected and served by instance: every selected instance runs a
+// server, and a machine's two servers route to each other like any other pair.
+// That is why a site of two machines that each deploy a standby has four servers
+// and a three-member cluster, rather than the two-member one a per-machine count
+// would give it.
 //
 // Both lists are always non-nil, so an empty list serialises as [] and a
 // descriptor reader can tell "no routes" from "not resolved".
@@ -190,7 +192,7 @@ func instanceNats(site blueprint.Site, machine blueprint.Machine, role deploymen
 	}
 	storage := siteStorageServers(site)
 	hostsStorage := slices.ContainsFunc(storage, func(s deployment.Peer) bool {
-		return s.Machine == machine.Name
+		return s.Machine == machine.Name && s.Role == role
 	})
 	// A storage server answers its own clients, so it connects to itself first and
 	// falls back to the rest. That ordering is what keeps an Active instance on its
@@ -203,9 +205,8 @@ func instanceNats(site blueprint.Site, machine blueprint.Machine, role deploymen
 			continue
 		}
 		out.Servers = append(out.Servers, server.Nats.ClientAddress)
-		// Only instances on storage machines route, and only to each other. A site
-		// with one storage server has no peer to route to and binds no cluster
-		// listener.
+		// Only storage instances route, and only to each other. A site with one
+		// storage instance has no peer to route to and binds no cluster listener.
 		if hostsStorage {
 			out.Routes = append(out.Routes, server.Nats.ClusterAddress)
 		}
@@ -214,29 +215,22 @@ func instanceNats(site blueprint.Site, machine blueprint.Machine, role deploymen
 }
 
 // siteStorageServers returns the platform instances that serve the site journal,
-// in peer order: the instances of the machines siteStorageMachines selects.
-func siteStorageServers(site blueprint.Site) []deployment.Peer {
-	storage := siteStorageMachines(site)
-	servers := make([]deployment.Peer, 0, len(storage)*2)
-	for _, peer := range peers(site) {
-		if slices.ContainsFunc(storage, func(m blueprint.Machine) bool { return m.Name == peer.Machine }) {
-			servers = append(servers, peer)
-		}
-	}
-	return servers
-}
-
-// siteStorageMachines returns the machines of a site that store the site
-// journal, sorted by name: one for a site smaller than three machines, the first
-// three otherwise. Selecting by sorted name makes every machine of the site
+// sorted by instance name: one for a site smaller than three instances, the first
+// three otherwise. Selecting by sorted name makes every instance of the site
 // derive the same set without coordinating.
 //
-// The unit is the machine because that is the failure domain. A machine stores
-// one copy of the journal however many instances it deploys.
-func siteStorageMachines(site blueprint.Site) []blueprint.Machine {
-	sorted := slices.Clone(site.Machines)
-	slices.SortFunc(sorted, func(a, b blueprint.Machine) int {
-		return strings.Compare(a.Name, b.Name)
+// The unit is the instance because an instance is what runs a server. A site of
+// two machines that each deploy a standby has four of them and can form a
+// three-member metadata group; counted by machine it would have two, and a
+// two-member group needs both members alive, which is no redundancy at all.
+//
+// That trades away a guarantee worth naming: three instances are not necessarily
+// three machines, so a two-machine site survives losing one instance but not
+// necessarily one machine. Machine tolerance still needs three machines.
+func siteStorageServers(site blueprint.Site) []deployment.Peer {
+	sorted := slices.Clone(peers(site))
+	slices.SortFunc(sorted, func(a, b deployment.Peer) int {
+		return strings.Compare(instanceKey(a), instanceKey(b))
 	})
 	switch {
 	case len(sorted) == 0:
@@ -248,7 +242,13 @@ func siteStorageMachines(site blueprint.Site) []blueprint.Machine {
 	}
 }
 
-// smallSiteMax is the largest site that runs one storage machine. It matches the
+// instanceKey names one platform instance within its site, for the deterministic
+// ordering storage selection depends on.
+func instanceKey(peer deployment.Peer) string {
+	return peer.Machine + "-" + string(peer.Role)
+}
+
+// smallSiteMax is the largest site that runs one storage instance. It matches the
 // platform adapter's rule; both derive the same set from the same site.
 const smallSiteMax = 2
 

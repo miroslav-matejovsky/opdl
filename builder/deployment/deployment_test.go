@@ -20,10 +20,12 @@ const (
 	// machine ip. That split is what the descriptor is checked against.
 	primaryAPI        = "127.0.0.1:8080"
 	primaryRuntime    = "C:/ProgramData/opdl/sensor/primary"
+	primaryDataDir    = "D:/opdl-journal/sensor/primary"
 	primaryClient     = "10.0.1.10:4222"
 	primaryCluster    = "10.0.1.10:6222"
 	standbyAPI        = "127.0.0.1:8081"
 	standbyRuntimeDir = "C:/ProgramData/opdl/sensor/standby"
+	standbyDataDir    = "D:/opdl-journal/sensor/standby"
 	standbyClient     = "10.0.1.10:4322"
 	standbyCluster    = "10.0.1.10:6322"
 
@@ -56,6 +58,7 @@ func validDescriptor() deployment.Descriptor {
 				Disabled:   false,
 				Service:    &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
 				RuntimeDir: primaryRuntime,
+				DataDir:    primaryDataDir,
 				APIAddress: primaryAPI,
 				Nats: &deployment.Nats{
 					ClientAddress:  primaryClient,
@@ -68,6 +71,7 @@ func validDescriptor() deployment.Descriptor {
 				Disabled:   false,
 				Service:    &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
 				RuntimeDir: standbyRuntimeDir,
+				DataDir:    standbyDataDir,
 				APIAddress: standbyAPI,
 				Nats: &deployment.Nats{
 					ClientAddress:  standbyClient,

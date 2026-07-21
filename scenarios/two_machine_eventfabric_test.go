@@ -62,16 +62,33 @@ func TestTwoMachineEventFabric(t *testing.T) {
 	// ordered journal. Two machines of one site do not disagree about the site.
 	require.Equal(t, listRegistrations(ctx, t, nodeA), listRegistrations(ctx, t, nodeB))
 
-	// The startup order the platform promises: the Event Fabric is ready before
-	// the public API accepts anything. Both machines are still running here; the
+	// The startup order the platform promises, in three steps rather than two.
+	//
+	// The listener opens first and stays open for the whole process, so an
+	// instance is reachable in every state and a bind failure stops it at startup
+	// rather than at a failover. The Event Fabric opens next. Only then does the
+	// instance activate, which is when it begins answering domain operations.
+	//
+	// So listening before the fabric is now correct, and the invariant worth
+	// holding is the last step: nothing serves domain operations before the
+	// journal behind them is ready. Both machines are still running here; the
 	// lines being checked are startup lines, so they are long since written.
 	for _, m := range []*machine{nodeA, nodeB} {
 		logs := m.logs()
-		fabricAt := strings.Index(logs, "event fabric")
 		listeningAt := strings.Index(logs, "listening on")
-		require.GreaterOrEqual(t, fabricAt, 0, "%s did not report its event fabric:\n%s", m.name, logs)
+		// The line the Event Fabric prints once it is open, which names the journal
+		// it reached. Matching on ", journal " rather than on "event fabric" keeps
+		// this off the configuration line printed before anything is opened, and
+		// off the server name, which is the machine's and differs per machine.
+		fabricAt := strings.Index(logs, ", journal ")
+		activeAt := strings.Index(logs, "active, serving on")
 		require.GreaterOrEqual(t, listeningAt, 0, "%s did not report its API address:\n%s", m.name, logs)
-		require.Less(t, fabricAt, listeningAt, "%s started its API before its event fabric:\n%s", m.name, logs)
+		require.GreaterOrEqual(t, fabricAt, 0, "%s did not report its event fabric:\n%s", m.name, logs)
+		require.GreaterOrEqual(t, activeAt, 0, "%s never became active:\n%s", m.name, logs)
+		require.Less(t, listeningAt, fabricAt,
+			"%s opened its event fabric before its listener; a passive instance must be reachable first:\n%s", m.name, logs)
+		require.Less(t, fabricAt, activeAt,
+			"%s served domain operations before its event fabric was ready:\n%s", m.name, logs)
 	}
 }
 

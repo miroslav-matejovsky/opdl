@@ -237,6 +237,14 @@ type Instance struct {
 	// runtimes writing into one directory would overwrite each other's evidence.
 	// It takes no part in the ownership decision.
 	RuntimeDir string `json:"runtime_dir,omitempty"`
+	// DataDir is the instance's own JetStream file store directory.
+	//
+	// It is present on every deployed instance; only an instance on a storage
+	// machine opens it, the same way ClusterAddress is present everywhere and
+	// bound only where there are routes. It is the instance's rather than the
+	// machine's because each instance runs its own Event Fabric server, and two
+	// servers cannot open one store.
+	DataDir string `json:"data_dir,omitempty"`
 	// APIAddress is where this instance serves its local API. Each instance has
 	// its own and binds it for its whole lifetime, not only while Active.
 	//

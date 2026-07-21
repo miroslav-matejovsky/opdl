@@ -44,21 +44,24 @@ type EventFabric struct {
 
 // EventFabricNats are the NATS adapter's runtime settings.
 //
-// Only DataDir is a site's own decision: the journal's storage is the one thing
-// a machine cannot derive from its descriptor, and site operations own the disk
-// it lives on. Everything else is an override that exists for development hosts
-// where the deployment's real addresses are not bindable, and for scenarios that
-// run several machines on one host.
+// Only CredentialsFile is a site's own decision: a site holds its own transport
+// secret, at its own path and its own permissions, and a machine cannot carry one
+// in a descriptor that is compiled in and readable by anyone holding the binary.
+// The timeouts are bounds a site may need to widen on slow hardware.
 //
-// The overrides move sockets and storage and nothing else. None of them changes
-// which machine this is: identity, and therefore a registration's machine and
-// IP, come from the embedded descriptor alone and are never configurable at a
-// site.
+// The journal's storage is deliberately not here. It moved to the deployment
+// descriptor when each instance gained its own Event Fabric server: a machine's
+// two instances need two stores, and a single machine-level setting cannot
+// express that without the runtime deriving per-instance paths from it. It is
+// authored per instance in the blueprint as data_dir. A configuration file that
+// still sets event_fabric.nats.data_dir fails at rejectUnknownKeys, which is the
+// intended outcome rather than an oversight: the path it names would not be the
+// path either instance opened.
+//
+// None of these changes which machine this is: identity, and therefore a
+// registration's machine and IP, comes from the embedded descriptor alone and is
+// never configurable at a site.
 type EventFabricNats struct {
-	// DataDir is the directory the JetStream file store lives in. It is required.
-	// The platform creates a node-specific subdirectory under it and never
-	// deletes it: capacity and backup belong to site operations.
-	DataDir string `toml:"data_dir"`
 	// CredentialsFile is the path of a TOML file holding the site's NATS
 	// username and password. It is required for a deployment that binds any
 	// non-loopback address; the adapter enforces that once the addresses are
@@ -114,10 +117,6 @@ func loadFile(path string) (file, error) {
 	}
 	f.Operations.EventDir = strings.TrimSpace(f.Operations.EventDir)
 	nats := &f.EventFabric.Nats
-	nats.DataDir = strings.TrimSpace(nats.DataDir)
-	if nats.DataDir == "" {
-		return file{}, fmt.Errorf("configuration file %s: [event_fabric.nats] data_dir is required", path)
-	}
 	nats.StartupTimeout = strings.TrimSpace(nats.StartupTimeout)
 	if nats.StartupTimeout == "" {
 		return file{}, fmt.Errorf("configuration file %s: [event_fabric.nats] startup_timeout is required", path)
@@ -126,13 +125,11 @@ func loadFile(path string) (file, error) {
 	if nats.CatchUpTimeout == "" {
 		return file{}, fmt.Errorf("configuration file %s: [event_fabric.nats] catch_up_timeout is required", path)
 	}
-	// The data directory is not probed here. A path is only known to be usable
-	// once it is written, so the adapter validates it by probing at startup
-	// rather than trusting a check that could go stale.
-	//
-	// Socket overrides are not required or validated here either: what makes an
-	// address usable is the adapter's business, so the composed adapter
-	// configuration is validated at startup, before any listener opens.
+	// Socket overrides are not required or validated here: what makes an address
+	// usable is the adapter's business, so the composed adapter configuration is
+	// validated at startup, before any listener opens. The instance's data
+	// directory is probed the same way and for the same reason, and it now arrives
+	// from the descriptor rather than from here.
 	nats.CredentialsFile = strings.TrimSpace(nats.CredentialsFile)
 	return f, nil
 }

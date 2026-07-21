@@ -83,8 +83,15 @@ func TestPlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
 
 	require.Contains(t, output, "data directory",
 		"a platform that cannot store its journal must say so:\n%s", output)
-	require.NotContains(t, output, "listening on",
+	// Listening is no longer the same fact as serving. Every instance binds its
+	// API for its whole lifetime and answers about itself while Passive, so this
+	// process does print "listening on" before it ever tries to open the journal.
+	// What it must never do is activate: becoming Active is what would let it
+	// answer domain operations from a journal it could not store.
+	require.NotContains(t, output, "active, serving on",
 		"a platform that cannot store its journal must not serve:\n%s", output)
+	require.NotContains(t, output, "platform.api_active",
+		"a platform that cannot store its journal must not activate its API:\n%s", output)
 
 	// The API never came up, so there is nothing to answer a client that tries.
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, node.url+"/registrations", http.NoBody)

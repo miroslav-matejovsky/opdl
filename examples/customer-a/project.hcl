@@ -28,6 +28,18 @@ project "customer-a" {
       # has its own: two runtimes writing into one directory would overwrite each
       # other's evidence, and nothing would report it.
       #
+      # data_dir is where this instance's Event Fabric server keeps the site
+      # journal. Each instance has its own for a harder reason than runtime_dir:
+      # each runs its own NATS server, and two servers cannot open one JetStream
+      # store. Only an instance on a machine the site selects for storage opens
+      # it, but every instance authors one, because which machines are selected
+      # is derived from the site and is not a blueprint author's decision.
+      #
+      # It is separate from runtime_dir because the two have nothing in common
+      # operationally: a status file is small and disposable, and the journal is
+      # the site's history on capacity-monitored storage. Here they are on
+      # different volumes for exactly that reason.
+      #
       # api is the port this instance serves its local API on. It is called
       # local_port because the builder joins it with 127.0.0.1 and never with the
       # machine's ip: the platform API is machine-local and is not exposed to the
@@ -51,6 +63,7 @@ project "customer-a" {
       # site availability. Because it opts out, it states nothing further.
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
+        data_dir    = "D:/opdl-journal/customer-a/north/sensor/primary"
 
         api {
           local_port = 8080
@@ -87,6 +100,7 @@ project "customer-a" {
       # both listeners.
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/primary"
+        data_dir    = "D:/opdl-journal/customer-a/north/local-server/primary"
 
         api {
           local_port = 8080
@@ -105,6 +119,7 @@ project "customer-a" {
         standby {
           disabled    = false
           runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/standby"
+          data_dir    = "D:/opdl-journal/customer-a/north/local-server/standby"
 
           # lock is mandatory when standby is enabled (disabled = false).
           # The machine's two instances contend for this Windows named mutex
@@ -138,6 +153,7 @@ project "customer-a" {
       services = ["core-services"]
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/primary"
+        data_dir    = "D:/opdl-journal/customer-a/control-room/master/primary"
 
         api {
           local_port = 8080
@@ -156,6 +172,7 @@ project "customer-a" {
         standby {
           disabled    = false
           runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/standby"
+          data_dir    = "D:/opdl-journal/customer-a/control-room/master/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-master"
@@ -184,6 +201,7 @@ project "customer-a" {
       services = ["core-services"]
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/primary"
+        data_dir    = "D:/opdl-journal/customer-a/control-room/slave/primary"
 
         api {
           local_port = 8080
@@ -202,6 +220,7 @@ project "customer-a" {
         standby {
           disabled    = false
           runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/standby"
+          data_dir    = "D:/opdl-journal/customer-a/control-room/slave/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-slave"
@@ -230,6 +249,7 @@ project "customer-a" {
       services = ["integration-services"]
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/primary"
+        data_dir    = "D:/opdl-journal/customer-a/control-room/integration/primary"
 
         api {
           local_port = 8080
@@ -248,6 +268,7 @@ project "customer-a" {
         standby {
           disabled    = false
           runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/standby"
+          data_dir    = "D:/opdl-journal/customer-a/control-room/integration/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-integration"

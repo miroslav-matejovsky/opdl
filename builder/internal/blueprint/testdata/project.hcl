@@ -20,6 +20,7 @@ project "customer-a" {
       # opts out of a standby, so it states that and authors nothing further.
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
+        data_dir    = "D:/opdl-journal/customer-a/north/sensor/primary"
 
         api {
           local_port = 8080
@@ -50,6 +51,7 @@ project "customer-a" {
       # ownership object, which is not a port.
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/primary"
+        data_dir    = "D:/opdl-journal/customer-a/north/local-server/primary"
 
         api {
           local_port = 8080
@@ -67,6 +69,7 @@ project "customer-a" {
         standby {
           disabled    = false
           runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/standby"
+          data_dir    = "D:/opdl-journal/customer-a/north/local-server/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-north-local-server"
@@ -96,6 +99,7 @@ project "customer-a" {
       services = ["core-services"]
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/primary"
+        data_dir    = "D:/opdl-journal/customer-a/control-room/master/primary"
 
         api {
           local_port = 8080
@@ -113,6 +117,7 @@ project "customer-a" {
         standby {
           disabled    = false
           runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/standby"
+          data_dir    = "D:/opdl-journal/customer-a/control-room/master/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-master"
@@ -140,6 +145,7 @@ project "customer-a" {
       services = ["core-services"]
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/primary"
+        data_dir    = "D:/opdl-journal/customer-a/control-room/slave/primary"
 
         api {
           local_port = 8080
@@ -157,6 +163,7 @@ project "customer-a" {
         standby {
           disabled    = false
           runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/standby"
+          data_dir    = "D:/opdl-journal/customer-a/control-room/slave/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-slave"
@@ -184,6 +191,7 @@ project "customer-a" {
       services = ["integration-services"]
       platform {
         runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/primary"
+        data_dir    = "D:/opdl-journal/customer-a/control-room/integration/primary"
 
         api {
           local_port = 8080
@@ -201,6 +209,7 @@ project "customer-a" {
         standby {
           disabled    = false
           runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/standby"
+          data_dir    = "D:/opdl-journal/customer-a/control-room/integration/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-integration"

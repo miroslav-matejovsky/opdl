@@ -36,9 +36,28 @@ type Lock struct {
 	role  InstanceRole
 }
 
+// namespacePrefix is the kernel namespace every ownership object lives in.
+//
+// It appears in two places on purpose, and this constant is the seam between
+// them. The descriptor carries the prefix as part of the authored name, because
+// an operator reading a blueprint has to see which namespace a machine's
+// ownership lives in; utils/winmutex takes a bare object name and applies the
+// namespace itself, so a caller cannot author a session-scoped Local\ object and
+// get a weaker guarantee than it asked for. Both are right, and the descriptor's
+// name has to have the prefix taken off before it crosses into winmutex.
+const namespacePrefix = `Global\`
+
 // OpenLock prepares this instance to contend for the ownership object named
 // in the machine's deployment descriptor lock block. It opens or creates the
 // object but does not take it; call TryAcquire or Acquire to contend.
+//
+// windowsMutex is the fully qualified descriptor name, including its Global\
+// prefix. A name without it is rejected rather than assumed: the builder requires
+// the prefix, so a name that arrives here without one was either hand-edited into
+// a descriptor or produced by a builder that stopped validating, and neither
+// should reach a kernel object. Ownership is machine-wide, and an object in any
+// other namespace would let both instances be Active at once without an error
+// anywhere.
 //
 // When windowsMutex is empty (standby is disabled on the machine), OpenLock returns nil, nil,
 // and calling TryAcquire or Acquire on that nil Lock immediately succeeds because
@@ -53,7 +72,11 @@ func OpenLock(windowsMutex string, role InstanceRole) (*Lock, error) {
 	if strings.TrimSpace(windowsMutex) == "" {
 		return nil, fmt.Errorf("redundancy: open lock: descriptor carries empty windows_mutex")
 	}
-	mutex, err := winmutex.Open(windowsMutex)
+	object, ok := strings.CutPrefix(windowsMutex, namespacePrefix)
+	if !ok {
+		return nil, fmt.Errorf("redundancy: open lock: descriptor windows_mutex %q must start with %s: ownership is machine-wide, and an object in another namespace would let both instances be Active", windowsMutex, namespacePrefix)
+	}
+	mutex, err := winmutex.Open(object)
 	if err != nil {
 		return nil, fmt.Errorf("redundancy: open lock object: %w", err)
 	}

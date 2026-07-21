@@ -15,9 +15,13 @@ func validProject() *blueprint.Project {
 		Name:        "customer-a",
 		Environment: "production",
 		Features:    blueprint.Features{Chaos: true},
+		// Two machines with a standby on one of them is the smallest site the
+		// platform supports, so it is what an otherwise-valid fixture has to be.
+		// A one-machine site is now rejected before any rule these tests are
+		// about gets a chance to run.
 		Sites: []blueprint.Site{{
 			Name:     "north",
-			Machines: []blueprint.Machine{validMachine()},
+			Machines: []blueprint.Machine{validMachine(), namedMachine("relay", "10.0.1.11")},
 		}},
 	}
 }
@@ -34,12 +38,14 @@ func validMachine() blueprint.Machine {
 		Services:       []string{"sensor-services"},
 		Platform: &blueprint.Platform{
 			RuntimeDir: "C:/ProgramData/opdl/sensor/primary",
+			DataDir:    "D:/opdl-journal/sensor/primary",
 			API:        &blueprint.API{LocalPort: 8080},
 			WinService: &blueprint.WinService{Name: "primary"},
 			Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
 			Standby: &blueprint.Standby{
 				Disabled:   false,
 				RuntimeDir: "C:/ProgramData/opdl/sensor/standby",
+				DataDir:    "D:/opdl-journal/sensor/standby",
 				Lock:       &blueprint.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
 				API:        &blueprint.API{LocalPort: 8081},
 				WinService: &blueprint.WinService{Name: "standby"},
@@ -56,7 +62,16 @@ func namedMachine(name, ip string) blueprint.Machine {
 	m.Name = name
 	m.IP = ip
 	m.Platform.WinService = &blueprint.WinService{Name: name + "-primary"}
+	// Everything a machine cannot share with another machine of its site is given
+	// its own value here: the ownership object, and both per-instance directories.
+	// Sharing a lock across machines is rejected, and sharing a directory is only
+	// safe because two machines are two hosts, which a fixture on one host is not.
+	m.Platform.RuntimeDir = "C:/ProgramData/opdl/" + name + "/primary"
+	m.Platform.DataDir = "D:/opdl-journal/" + name + "/primary"
 	m.Platform.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
+	m.Platform.Standby.RuntimeDir = "C:/ProgramData/opdl/" + name + "/standby"
+	m.Platform.Standby.DataDir = "D:/opdl-journal/" + name + "/standby"
+	m.Platform.Standby.Lock = &blueprint.Lock{WindowsMutex: `Global\opdl-customer-a-north-` + name}
 	return m
 }
 
@@ -135,7 +150,10 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 		p := validProject()
 		p.Sites = append(p.Sites, blueprint.Site{
 			Name:     "south",
-			Machines: []blueprint.Machine{namedMachine("south-node", "10.0.1.10")},
+			Machines: []blueprint.Machine{
+				namedMachine("south-node", "10.0.1.10"),
+				namedMachine("south-relay", "10.0.1.13"),
+			},
 		})
 		require.ErrorContains(t, p.Validate(), `share ip "10.0.1.10"`)
 	})
@@ -179,6 +197,7 @@ func TestMachinePlatformStandby(t *testing.T) {
 		  standby {
 		    disabled = false
 		    runtime_dir = "C:/ProgramData/opdl/m1/standby"
+		    data_dir = "D:/opdl-journal/m1/standby"
 		  }
 		}`)
 		require.NotNil(t, m.Platform)
@@ -359,6 +378,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      services = ["core-services"]
 			      platform {
 			        runtime_dir = "C:/ProgramData/opdl/node-1/primary"
+			        data_dir = "D:/opdl-journal/node-1/primary"
 			        api {
 			          local_port = 8080
 			        }
@@ -372,6 +392,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        standby {
 			          disabled = false
 			          runtime_dir = "C:/ProgramData/opdl/node-1/standby"
+			          data_dir = "D:/opdl-journal/node-1/standby"
 			          lock {
 			            windows_mutex = "Global\\dup-north-node-1"
 			          }
@@ -396,6 +417,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      services = ["core-services"]
 			      platform {
 			        runtime_dir = "C:/ProgramData/opdl/node-1/primary"
+			        data_dir = "D:/opdl-journal/node-1/primary"
 			        api {
 			          local_port = 8080
 			        }
@@ -409,6 +431,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        standby {
 			          disabled = false
 			          runtime_dir = "C:/ProgramData/opdl/node-1/standby"
+			          data_dir = "D:/opdl-journal/node-1/standby"
 			          lock {
 			            windows_mutex = "Global\\dup-south-node-1"
 			          }
@@ -446,6 +469,7 @@ func disableStandby(p *blueprint.Project) {
 	standby := p.Sites[0].Machines[0].Platform.Standby
 	standby.Disabled = true
 	standby.RuntimeDir = ""
+	standby.DataDir = ""
 	standby.Lock = nil
 	standby.API = nil
 	standby.WinService = nil

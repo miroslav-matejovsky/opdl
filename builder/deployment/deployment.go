@@ -119,6 +119,14 @@ type Instance struct {
 	// runtimes writing into one directory would overwrite each other's evidence,
 	// and nothing would report it. It takes no part in the ownership decision.
 	RuntimeDir string `json:"runtime_dir,omitempty"`
+	// DataDir is the instance's own JetStream file store directory.
+	//
+	// It is present on every deployed instance; only an instance on a storage
+	// machine opens it, the same way ClusterAddress is present everywhere and
+	// bound only where there are routes. It is the instance's rather than the
+	// machine's because each instance runs its own Event Fabric server, and two
+	// servers cannot open one store.
+	DataDir string `json:"data_dir,omitempty"`
 	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
 	// the instance's authored api local_port.
 	//
@@ -330,6 +338,9 @@ func (d Descriptor) validateEndpoints() error {
 		if d.Instances.Standby.RuntimeDir != "" {
 			return fmt.Errorf("instances.standby.runtime_dir is set but the standby is disabled")
 		}
+		if d.Instances.Standby.DataDir != "" {
+			return fmt.Errorf("instances.standby.data_dir is set but the standby is disabled")
+		}
 		if d.Instances.Standby.Nats != nil {
 			return fmt.Errorf("instances.standby.nats is set but the standby is disabled")
 		}
@@ -344,6 +355,14 @@ func (d Descriptor) validateEndpoints() error {
 	if d.Instances.Primary.RuntimeDir == d.Instances.Standby.RuntimeDir {
 		return fmt.Errorf("instances.primary.runtime_dir and instances.standby.runtime_dir are both %q; the two instances run together and cannot share a runtime directory",
 			d.Instances.Primary.RuntimeDir)
+	}
+	// Each instance runs its own Event Fabric server, and two NATS servers cannot
+	// open one JetStream store. Unlike the runtime directory this does report
+	// itself at startup, but it reports as a store that will not open rather than
+	// as a descriptor naming one directory twice.
+	if d.Instances.Primary.DataDir == d.Instances.Standby.DataDir {
+		return fmt.Errorf("instances.primary.data_dir and instances.standby.data_dir are both %q; each instance runs its own Event Fabric server and two servers cannot open the same JetStream store",
+			d.Instances.Primary.DataDir)
 	}
 	bound := []struct {
 		where   string
@@ -383,6 +402,9 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	}
 	if strings.TrimSpace(instance.RuntimeDir) == "" {
 		return fmt.Errorf("%s.runtime_dir is required", prefix)
+	}
+	if strings.TrimSpace(instance.DataDir) == "" {
+		return fmt.Errorf("%s.data_dir is required", prefix)
 	}
 	if instance.Nats == nil {
 		return fmt.Errorf("%s.nats is required", prefix)

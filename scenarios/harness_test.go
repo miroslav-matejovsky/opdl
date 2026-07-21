@@ -152,6 +152,7 @@ type renderedMachine struct {
 	// The Primary Instance's ports and its own runtime directory.
 	APIPort     int
 	RuntimeDir  string
+	DataDir     string
 	ClientPort  int
 	ClusterPort int
 	// The Standby Instance's, empty or zero when the machine deploys none. The
@@ -159,6 +160,7 @@ type renderedMachine struct {
 	// listener or directory and none may repeat.
 	StandbyAPIPort     int
 	StandbyRuntimeDir  string
+	StandbyDataDir     string
 	StandbyClientPort  int
 	StandbyClusterPort int
 	StandbyDisabled    bool
@@ -272,6 +274,18 @@ func runtimeDirFor(workDir, machine, role string) string {
 	return filepath.ToSlash(filepath.Join(workDir, "instance-"+machine, role))
 }
 
+// dataDirFor is one instance's own JetStream file store directory.
+//
+// It is per instance for a stricter reason than runtimeDirFor's. Two instances
+// sharing a runtime directory overwrite each other's status file silently; two
+// NATS servers cannot open one JetStream store at all, and on this host every
+// deployed instance of a storage machine runs a server. It is kept out of the
+// instance directory so a scenario reading one instance's evidence is not
+// walking a journal to find it.
+func dataDirFor(workDir, machine, role string) string {
+	return filepath.ToSlash(filepath.Join(workDir, "journal-"+machine, role))
+}
+
 // stageBlueprint allocates each machine's ports from the testnet pool, names each
 // instance's runtime directory, and renders the project's blueprint into a
 // temporary blueprint root.
@@ -317,6 +331,7 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 			IP:              fixture.ip,
 			APIPort:         takeAPIPort(),
 			RuntimeDir:      runtimeDirFor(workDir, fixture.name, "primary"),
+			DataDir:         dataDirFor(workDir, fixture.name, "primary"),
 			ClientPort:      p[0],
 			ClusterPort:     p[1],
 			StandbyDisabled: fixture.standbyDisabled,
@@ -324,6 +339,7 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
 			machine.StandbyRuntimeDir = runtimeDirFor(workDir, fixture.name, "standby")
+			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, "standby")
 			machine.StandbyClientPort = p[2]
 			machine.StandbyClusterPort = p[3]
 		}
@@ -399,10 +415,12 @@ func readManifest(t *testing.T, binaryPath string) packageManifest {
 
 // sockets are one machine's addresses and its local directories.
 //
-// Only dataDir and eventDir are runtime settings: they are the machine's own
-// concerns, and a site owns them. Everything else was rendered into the blueprint
-// before the build and is carried only so a scenario can reach a machine and
-// assert what the deployment should have derived.
+// Only eventDir is a runtime setting now: it is the machine's own concern and a
+// site owns it. Everything else was rendered into the blueprint before the build
+// and is carried only so a scenario can reach a machine and assert what the
+// deployment should have derived. dataDir is in that second group since stage
+// 05: it is the Primary Instance's authored store, repeated here so a scenario
+// can find the directory rather than state it.
 //
 // The API address moved into that second group in stage 04, along with each
 // instance's runtime directory. Both are an instance's rather than a machine's,
@@ -462,7 +480,11 @@ func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	for _, fixture := range fixtures {
 		reserved := endpoints[fixture.name]
 		s.machines = append(s.machines, prepareMachine(t, s, fixture.name, sockets{
-			dataDir:  filepath.Join(workDir, "nats-"+fixture.name),
+			// The Primary Instance's own journal store, matching what the
+			// blueprint authored for it. A scenario that sabotages storage has to
+			// aim at the directory that instance actually opens, and since stage
+			// 05 that is per instance rather than per machine.
+			dataDir:  filepath.FromSlash(dataDirFor(workDir, fixture.name, "primary")),
 			eventDir: filepath.Join(workDir, "operations-"+fixture.name),
 			// The API address the builder resolved: this machine's authored
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
@@ -829,11 +851,16 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 // a false failure without weakening anything: a machine that genuinely never
 // catches up still fails, on the assertion that was actually being made.
 //
-// It carries no NATS socket topology. Those addresses came from the blueprint
-// and are compiled into the machine's descriptor, and the runtime now rejects a
-// configuration file that sets them. That rejection is the point: a scenario
-// that could still override them would be exercising a path no deployment has,
-// which is what let the warm standby defect stay hidden.
+// It carries no NATS socket topology and, since stage 05, no data directory
+// either. Those addresses came from the blueprint and are compiled into the
+// machine's descriptor, and the runtime now rejects a configuration file that
+// sets them. That rejection is the point: a scenario that could still override
+// them would be exercising a path no deployment has, which is what let the warm
+// standby defect stay hidden.
+//
+// The journal's storage joined them when each instance gained its own server. A
+// machine's two instances open two stores, so one machine-level data_dir could
+// not name both, and it is now authored per instance in the blueprint.
 func platformConfig(reserved sockets) []byte {
 	return fmt.Appendf(nil, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
@@ -841,10 +868,9 @@ lag_bound = "2m"
 [operations]
 event_dir = %q
 [event_fabric.nats]
-data_dir = %q
 startup_timeout = "60s"
 catch_up_timeout = "60s"
-`, filepath.ToSlash(reserved.eventDir), filepath.ToSlash(reserved.dataDir))
+`, filepath.ToSlash(reserved.eventDir))
 }
 
 // start runs a prepared machine.

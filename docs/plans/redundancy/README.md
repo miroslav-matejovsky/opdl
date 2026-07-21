@@ -38,6 +38,17 @@ Three things the goal requires are already true and need no stage: ownership is 
 Windows Named Mutex and is the single source of truth, the roles are fixed,
 build-time, and operator-visible, and the runtime states are Active and Passive.
 
+## No deployment is being upgraded
+
+This is a proof of concept and nothing runs it in the field. No stage owes an
+existing deployment a migration, and no stage should carry a compatibility shim,
+a version negotiation, or a "what happens to a machine that was built before
+this" answer. A machine is rebuilt and redeployed from its blueprint.
+
+That is a scope decision, not an oversight. It is written here rather than in each
+stage so it does not have to be re-argued: where a change would otherwise need a
+migration path, it deletes the old shape outright.
+
 ## Stages
 
 Ordered so the validation gate is restored before anything changes behavior, and

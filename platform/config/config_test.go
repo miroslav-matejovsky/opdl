@@ -16,7 +16,6 @@ read_header_timeout = "5s"
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"
 `
@@ -64,14 +63,12 @@ func TestLoadReadsEventFabricSettings(t *testing.T) {
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = " /var/lib/opdl/nats "
 startup_timeout = "30s"
 catch_up_timeout = "25s"
 `))
 	require.NoError(t, err)
 
 	nats := cfg.EventFabric().Nats
-	require.Equal(t, "/var/lib/opdl/nats", nats.DataDir, "surrounding space is trimmed")
 	require.Equal(t, "30s", nats.StartupTimeout)
 	require.Equal(t, "25s", nats.CatchUpTimeout)
 }
@@ -83,7 +80,6 @@ lag_bound = "30s"
 [operations]
 event_dir = " /var/log/opdl/events "
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"
 `))
@@ -92,20 +88,28 @@ catch_up_timeout = "25s"
 	require.Contains(t, cfg.Summary(false), "operations.event_dir /var/log/opdl/events")
 }
 
-// TestLoadAcceptsUnusableDataDir documents that a configured path is not checked
-// here. Only writing to it proves it is usable, so the Event Fabric adapter
-// validates it by probing at startup, before it binds a listener.
-func TestLoadAcceptsUnusableDataDir(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `read_header_timeout = "5s"
+// TestLoadRejectsADataDirectory guards the tier boundary the journal's storage
+// moved across.
+//
+// It used to be this file's only real setting. It is now authored per instance in
+// the blueprint, because each instance runs its own Event Fabric server and two
+// servers cannot open one JetStream store, so a single machine-level path could
+// not name what either instance opens.
+//
+// A file carrying the old key must fail rather than be ignored. Ignoring it would
+// leave an operator looking at a directory nothing writes to, believing they had
+// placed the journal, while both instances used paths from the descriptor.
+func TestLoadRejectsADataDirectory(t *testing.T) {
+	_, err := config.Load(writeConfig(t, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "\\\\no-such-host\\share"
+data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"
 `))
-	require.NoError(t, err)
-	require.Equal(t, `\\no-such-host\share`, cfg.EventFabric().Nats.DataDir)
+	require.ErrorContains(t, err, "unknown key(s)")
+	require.ErrorContains(t, err, "event_fabric.nats.data_dir")
 }
 
 // TestLoadReadsCredentialsFromTheirOwnFile checks the secret is composed in but
@@ -179,7 +183,6 @@ func TestLoadMissingRequiredSettingsFails(t *testing.T) {
 			contents: `shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"`,
 			err: "read_header_timeout is required",
@@ -188,7 +191,6 @@ catch_up_timeout = "25s"`,
 			name: "missing shutdown_timeout",
 			contents: `read_header_timeout = "5s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"`,
 			err: "shutdown_timeout is required",
@@ -198,20 +200,9 @@ catch_up_timeout = "25s"`,
 			contents: `read_header_timeout = "5s"
 shutdown_timeout = "10s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"`,
 			err: "lag_bound is required",
-		},
-		{
-			name: "missing data_dir",
-			contents: `read_header_timeout = "5s"
-shutdown_timeout = "10s"
-lag_bound = "30s"
-[event_fabric.nats]
-startup_timeout = "30s"
-catch_up_timeout = "25s"`,
-			err: "[event_fabric.nats] data_dir is required",
 		},
 		{
 			name: "missing startup_timeout",
@@ -219,7 +210,6 @@ catch_up_timeout = "25s"`,
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 catch_up_timeout = "25s"`,
 			err: "[event_fabric.nats] startup_timeout is required",
 		},
@@ -229,7 +219,6 @@ catch_up_timeout = "25s"`,
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"`,
 			err: "[event_fabric.nats] catch_up_timeout is required",
 		},
@@ -238,7 +227,7 @@ startup_timeout = "30s"`,
 			contents: `read_header_timeout = "5s"
 shutdown_timeout = "10s"
 lag_bound = "30s"`,
-			err: "[event_fabric.nats] data_dir is required",
+			err: "[event_fabric.nats] startup_timeout is required",
 		},
 	}
 	for _, test := range tests {
@@ -254,7 +243,6 @@ func TestLoadRejectsUnusableDurations(t *testing.T) {
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "soon"
 catch_up_timeout = "25s"
 `))
@@ -264,7 +252,6 @@ catch_up_timeout = "25s"
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "0s"
 `))
@@ -280,7 +267,6 @@ func TestLoadReadsLagBound(t *testing.T) {
 shutdown_timeout = "10s"
 lag_bound = ` + bound + `
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"
 `
@@ -394,7 +380,10 @@ func TestSummaryShowsConfiguration(t *testing.T) {
 	require.Contains(t, s, "read_header_timeout 5s")
 	require.Contains(t, s, "shutdown_timeout    10s")
 	require.Contains(t, s, "lag_bound           30s")
-	require.Contains(t, s, "data_dir=/var/lib/opdl/nats")
+	// The journal store is the running instance's, rendered from the descriptor
+	// alongside the rest of its identity, rather than from the configuration
+	// file's Event Fabric section where it used to sit.
+	require.Contains(t, s, "data_dir     .data/journal/primary")
 	require.Contains(t, s, "startup_timeout=30s")
 	require.Contains(t, s, "catch_up_timeout=25s")
 }

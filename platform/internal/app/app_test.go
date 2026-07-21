@@ -74,22 +74,22 @@ func get(ctx context.Context, addr string) bool {
 // and coordination state under the test's own directory, so several tests can
 // run at once without colliding.
 //
-// It sets no socket topology, no API address, and no runtime directory. Every one
-// of those is the deployment's rather than the site's, and this file cannot move
-// them: a runtime that could would be able to point a machine at a journal that
-// is not its own, or give a machine's two instances one endpoint. Tests that need
-// free ports move the descriptor instead, through descriptorOnFreePorts.
+// It sets no socket topology, no API address, no runtime directory, and no data
+// directory. Every one of those is the deployment's rather than the site's, and
+// this file cannot move them: a runtime that could would be able to point a
+// machine at a journal that is not its own, or give a machine's two instances one
+// endpoint or one store. Tests that need free ports and private directories move
+// the descriptor instead, through descriptorOnFreePorts.
 func writeConfig(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "config.toml")
-	contents := fmt.Sprintf(`read_header_timeout = "5s"
+	contents := `read_header_timeout = "5s"
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = %q
 startup_timeout = "30s"
 catch_up_timeout = "30s"
-`, filepath.ToSlash(filepath.Join(dir, "nats")))
+`
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 	return path
 }
@@ -111,6 +111,7 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
 	runtimeRoot := t.TempDir()
+	journalRoot := t.TempDir()
 	for _, standby := range []bool{false, true} {
 		instance := descriptor.Instances.Get(config.Role(standby))
 		client, cluster := freeAddress(t), freeAddress(t)
@@ -122,6 +123,11 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 		}
 		instance.APIAddress = freeAddress(t)
 		instance.RuntimeDir = filepath.Join(runtimeRoot, string(config.Role(standby)))
+		// Each instance gets its own store, as the resolver gives it one. Two
+		// servers cannot open a shared JetStream store, so a test that let both
+		// point at one directory would fail in a way that says nothing about what
+		// it was testing.
+		instance.DataDir = filepath.Join(journalRoot, string(config.Role(standby)))
 		if standby {
 			descriptor.Instances.Standby = instance
 			continue
@@ -135,6 +141,36 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	return descriptor
 }
 
+// deployStandby turns a descriptor whose instances are already on free ports into
+// the shape the resolver produces for a single machine that deploys both.
+//
+// That shape is not two clustered servers, and the difference matters. Storage is
+// selected per instance, and a lone machine deploying both is a site of two
+// instances, which is below the three a replicated journal needs. So the resolver
+// selects one storage instance, the primary, and the standby is a client of it
+// with no server, no store, and no routes.
+//
+// Redundancy that survives losing a storage instance needs four instances: two
+// machines that each deploy a standby. That is the minimum redundant site, and it
+// is a scenario rather than a composition test, because it needs four processes.
+//
+// Getting this wrong is silent in a specific way worth naming: routing the two
+// instances to each other here, as if they were both storage, gives the primary a
+// route to an address nothing binds and its JetStream never reaches quorum.
+func deployStandby(descriptor config.Descriptor) config.Descriptor {
+	primary, standby := descriptor.Instances.Primary, descriptor.Instances.Standby
+	standby.Disabled = false
+	// One storage instance means nobody routes: there is no second server to
+	// cluster with, so neither binds a cluster listener.
+	primary.Nats.Routes = []string{}
+	standby.Nats.Routes = []string{}
+	primary.Nats.Servers = []string{primary.Nats.ClientAddress}
+	// The standby reaches the journal on the instance that stores it.
+	standby.Nats.Servers = []string{primary.Nats.ClientAddress}
+	descriptor.Instances.Primary, descriptor.Instances.Standby = primary, standby
+	return descriptor
+}
+
 // uniqueLockMutex returns an ownership mutex name no other test or run shares.
 //
 // The embedded mock descriptor names one ownership mutex, and ownership is a
@@ -142,12 +178,16 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 // otherwise contend for the same ownership. The ports above are moved for the same
 // reason; the lock needs it more, because a lock file was isolated for free by
 // each test's temporary directory and a kernel object is not.
+//
+// The Global\ prefix is part of the name because a descriptor's is. A composition
+// test that fed OpenLock a bare name would be testing a shape the builder cannot
+// produce; see TestOpenLockAcceptsTheDescriptorsQualifiedName.
 func uniqueLockMutex(t *testing.T) string {
 	t.Helper()
 	token := make([]byte, 8)
 	_, err := rand.Read(token)
 	require.NoError(t, err)
-	return "opdl-app-test." + hex.EncodeToString(token)
+	return `Global\opdl-app-test.` + hex.EncodeToString(token)
 }
 
 // embeddedDescriptor is the identity this test binary was compiled with. A
@@ -201,10 +241,12 @@ func TestOpenStatesReadyIntoTheJournal(t *testing.T) {
 	s := openTestSite(t)
 
 	// The node names itself from the descriptor it was compiled with, which for a
-	// test binary is the neutral mock the builder stages over.
+	// test binary is the neutral mock the builder stages over. The name carries
+	// the instance role: a machine runs one server per instance, and two servers
+	// in one cluster cannot share a name.
 	info := s.fabric.Info()
 	require.Equal(t, natsfabric.Name, info.Adapter)
-	require.Equal(t, embeddedDescriptor(t).Machine, info.Server)
+	require.Equal(t, embeddedDescriptor(t).Machine+"-primary", info.Server)
 	require.NotEmpty(t, info.Journal)
 	require.True(t, info.HostsStorage, "the only machine of a one-machine site stores its journal")
 	require.Equal(t, 1, info.Replicas)
@@ -298,9 +340,9 @@ func TestCloseIsIdempotent(t *testing.T) {
 }
 
 // TestNatsConfigDerivesFromDescriptor pins the ownership rule: the deployment
-// descriptor owns the Event Fabric's topology, and the configuration file owns
-// only the machine's own runtime concerns, such as where storage lives, how long
-// startup may take, and where credentials are read from.
+// descriptor owns the Event Fabric's topology and, since each instance runs its
+// own server, its store. The configuration file owns only how long startup may
+// take and where credentials are read from.
 //
 // The file cannot move a socket. Doing so could point a machine at a journal
 // that is not its own, and nothing downstream would be able to tell.
@@ -309,7 +351,7 @@ func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 		Project: "customer-a", Environment: "production",
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
 		Instances: config.Instances{
-			Primary: config.Instance{Disabled: false, Nats: &config.Nats{
+			Primary: config.Instance{Disabled: false, DataDir: "/var/lib/opdl/node-a/primary", Nats: &config.Nats{
 				ClientAddress:  "10.0.1.10:4222",
 				ClusterAddress: "10.0.1.10:6222",
 				Routes:         []string{},
@@ -332,10 +374,10 @@ func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 		require.NoError(t, err)
 		return cfg
 	}
-	const required = "data_dir = \"/var/lib/opdl\"\nstartup_timeout = \"45s\"\ncatch_up_timeout = \"25s\"\n"
+	const required = "startup_timeout = \"45s\"\ncatch_up_timeout = \"25s\"\n"
 
 	t.Run("endpoints come from the deployment", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t, required))
+		cfg, err := natsConfig(descriptor, settings(t, required), redundancy.RolePrimary)
 		require.NoError(t, err)
 		require.Equal(t, "10.0.1.10:4222", cfg.ClientAddress)
 		require.Equal(t, "10.0.1.10:6222", cfg.ClusterAddress)
@@ -348,7 +390,7 @@ func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 	})
 
 	t.Run("storage and replicas come from the site, not the file", func(t *testing.T) {
-		cfg, err := natsConfig(descriptor, settings(t, required))
+		cfg, err := natsConfig(descriptor, settings(t, required), redundancy.RolePrimary)
 		require.NoError(t, err)
 		require.True(t, cfg.HostsStorage, "node-a sorts first in a two-machine site")
 		require.Equal(t, 1, cfg.Replicas, "a site smaller than three machines runs one replica")
@@ -358,46 +400,47 @@ func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 		dir := t.TempDir()
 		secrets := filepath.Join(dir, "creds.toml")
 		require.NoError(t, os.WriteFile(secrets, []byte("username = \"opdl\"\npassword = \"s3cret\"\n"), 0o600))
-		cfg, err := natsConfig(descriptor, settings(t, required+fmt.Sprintf("credentials_file = %q\n", filepath.ToSlash(secrets))))
+		cfg, err := natsConfig(descriptor, settings(t, required+fmt.Sprintf("credentials_file = %q\n", filepath.ToSlash(secrets))), redundancy.RolePrimary)
 		require.NoError(t, err)
 		require.Equal(t, "opdl", cfg.Username)
 		require.Equal(t, "s3cret", cfg.Password)
 	})
 }
 
-func TestClientOnlyRetainsEveryStorageServer(t *testing.T) {
-	cfg := clientOnly(natsfabric.Config{
-		HostsStorage:  true,
-		ClientAddress: "10.0.1.10:4222",
-		Servers:       []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
-		DataDir:       "journal",
-	})
+// TestNatsConfigComposesEachInstanceSeparately replaces two tests that no longer
+// have subjects: one for clientOnly, which stripped a standby's server, and one
+// for nodeDataDir, which derived a machine's store path from its identity.
+//
+// Both existed because one server served a whole machine. Now each instance runs
+// its own, so nothing is stripped from a standby and no path is derived: the
+// store is the instance's own, from its descriptor record. What the two tests
+// were really protecting is checked here instead, on the composition rather than
+// on the helpers: a machine's two instances must not end up sharing anything they
+// each open.
+func TestNatsConfigComposesEachInstanceSeparately(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	descriptor := deployStandby(descriptorOnFreePorts(t, cfg))
 
-	require.False(t, cfg.HostsStorage)
-	require.Empty(t, cfg.ClientAddress)
-	require.Empty(t, cfg.DataDir)
-	require.Equal(t, []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"}, cfg.Servers)
-}
+	primary, err := natsConfig(descriptor, cfg, redundancy.RolePrimary)
+	require.NoError(t, err)
+	standby, err := natsConfig(descriptor, cfg, redundancy.RoleStandby)
+	require.NoError(t, err)
 
-// TestNodeDataDirIsNamedAfterTheMachine checks two machines sharing one
-// configured data directory never share a store. A JetStream store carries a
-// server's identity, so two nodes in one directory would claim each other's
-// journal.
-func TestNodeDataDirIsNamedAfterTheMachine(t *testing.T) {
-	dataDir := t.TempDir()
-	nodeA := nodeDataDir(dataDir, config.Descriptor{
-		Project: "customer-a", Environment: "production", Site: "north", Machine: "node-a",
-	})
-	nodeB := nodeDataDir(dataDir, config.Descriptor{
-		Project: "customer-a", Environment: "production", Site: "north", Machine: "node-b",
-	})
-	require.Equal(t, filepath.Join(dataDir, "customer-a-production-north-node-a"), nodeA)
-	require.NotEqual(t, nodeA, nodeB, "two machines of one site never share a store")
+	// Each reads its own record: its own client name, and its own server list.
+	require.NotEqual(t, primary.ClientName, standby.ClientName,
+		"a machine opens two connections and they must be told apart")
+	require.NotEmpty(t, primary.DataDir, "the storage instance stores its journal somewhere")
+	require.NotEqual(t, descriptor.Instances.Primary.DataDir, descriptor.Instances.Standby.DataDir,
+		"the descriptor gives each instance its own store, whichever ends up opening one")
 
-	otherSite := nodeDataDir(dataDir, config.Descriptor{
-		Project: "customer-a", Environment: "production", Site: "south", Machine: "node-a",
-	})
-	require.NotEqual(t, nodeA, otherSite, "the same machine name in another site is another node")
+	// On a lone machine only one instance is selected for storage, because two
+	// instances is below the three a replicated journal needs. The standby is a
+	// client of the instance that stores.
+	require.True(t, primary.HostsStorage)
+	require.False(t, standby.HostsStorage, "a site of two instances runs one storage node")
+	require.Equal(t, primary.ClientAddress, standby.Servers[0],
+		"the standby reaches the journal on the address the storage instance serves")
 }
 
 // TestTopologyExpectsEverySiteMachineIncludingItself checks the trusted
@@ -519,30 +562,43 @@ func TestStartStatusStopsServingAfterFabricStateFailures(t *testing.T) {
 }
 
 // TestActiveAndStandbyRunTogether checks one all-in-one machine can run two
-// processes against one journal while only the active
-// owns active capabilities, the standby is client-only and produces nothing, and
-// the standby catches up and follows new journal events.
+// processes against one site journal while only the active owns active
+// capabilities, the standby produces nothing, and the standby catches up and
+// follows new journal events.
+//
+// What "runs together" means changed with the per-instance Event Fabric. The
+// standby used to be a client of the active's server; now both run their own
+// server, on their own ports and their own store, and route to each other. So
+// the thing being checked is no longer that the standby is a lesser NATS
+// participant. It is a full cluster member. What makes it a standby is that it
+// holds no ownership: no handler, no services, no readiness.
 func TestActiveAndStandbyRunTogether(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping redundant Event Fabric composition in -short mode")
 	}
 	cfg, err := config.Load(writeConfig(t, t.TempDir()))
 	require.NoError(t, err)
-	descriptor := descriptorOnFreePorts(t, cfg)
+	descriptor := deployStandby(descriptorOnFreePorts(t, cfg))
 
 	active, err := open(t.Context(), descriptor, cfg, true, redundancy.RolePrimary)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = active.close(context.Background()) })
 	require.True(t, active.ready, "the active process announces readiness")
-	require.True(t, active.fabric.Info().HostsStorage, "the active process owns the journal store")
+	require.True(t, active.fabric.Info().HostsStorage, "the active process stores the journal")
 
 	standby, err := open(t.Context(), descriptor, cfg, false, redundancy.RoleStandby)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = standby.close(context.Background()) })
 
-	// The standby holds no active capability: client-only transport, no handler,
-	// no command or query service, and it never announces readiness.
-	require.False(t, standby.fabric.Info().HostsStorage, "a warm standby opens no journal store or listener")
+	// On a lone machine the site has two instances, which is below the three a
+	// replicated journal needs, so one is selected for storage and the standby is
+	// a client of it. A standby that is itself a storage member is the four
+	// instance case, which needs two machines and is a scenario.
+	require.False(t, standby.fabric.Info().HostsStorage,
+		"a site of two instances runs one storage node")
+
+	// It holds no active capability: no handler, no command or query service, and
+	// it never announces readiness.
 	require.Nil(t, standby.commands, "a standby exposes no command service")
 	require.Nil(t, standby.queries, "a standby exposes no query service")
 	require.Empty(t, standby.services, "a standby attaches no durable handler")
@@ -692,26 +748,32 @@ func TestRunReportsUnusableConfigFile(t *testing.T) {
 	require.ErrorContains(t, Run([]string{"-config", path}), "invalid configuration file")
 }
 
-// TestRunReportsUnusableJournalStorage checks a node fails at startup rather
+// TestOpenReportsUnusableJournalStorage checks a node fails at startup rather
 // than when its first event needs writing. The journal is the site's history: a
 // platform that cannot store it must not start and pretend otherwise.
-func TestRunReportsUnusableJournalStorage(t *testing.T) {
+//
+// It sabotages the descriptor's data directory rather than the configuration
+// file's, because there is no longer one in the file. The store is the
+// instance's own and arrives from its descriptor record, so that is the only
+// place a broken path can now come from. The end-to-end form of this, sabotaging
+// what the blueprint authored and starting the built binary, is the scenario
+// suite's TestPlatformRefusesToStartWithoutItsJournalStorage.
+func TestOpenReportsUnusableJournalStorage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Event Fabric composition in -short mode")
+	}
 	dir := t.TempDir()
+	cfg, err := config.Load(writeConfig(t, dir))
+	require.NoError(t, err)
+
+	// A file where the directory has to be, so creating it cannot succeed. It
+	// stands in for the real cases: no permission, or a full or unmounted disk.
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
+	descriptor := descriptorOnFreePorts(t, cfg)
+	descriptor.Instances.Primary.DataDir = blocked
 
-	path := filepath.Join(dir, "config.toml")
-	contents := fmt.Sprintf(`read_header_timeout = "5s"
-shutdown_timeout = "10s"
-lag_bound = "30s"
-[event_fabric.nats]
-data_dir = %q
-startup_timeout = "30s"
-catch_up_timeout = "30s"
-`, filepath.ToSlash(blocked))
-	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
-
-	err := Run([]string{"-config", path, "-instance", "primary"})
+	_, err = open(t.Context(), descriptor, cfg, true, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "data directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
 }

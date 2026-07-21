@@ -67,9 +67,15 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 
 	// The machine reported the configuration it booted with, including where its
 	// journal lives and that it is a site of one.
+	//
+	// Membership is read off the peers line rather than a one-member site count.
+	// The count was removed when peers became instances: a machine deploying both
+	// contributes two of them, so a number no longer says how many machines a site
+	// has, and the line that lists them does.
 	logs := node.logs()
 	require.Contains(t, logs, "platform configuration")
-	require.Contains(t, logs, "one-member site", "a standalone deployment is a site of one")
+	require.Contains(t, logs, "peers        node/primary (127.0.0.1)",
+		"a standalone deployment is a site of one, and names its single instance")
 	require.Contains(t, logs, "data_dir="+filepath.ToSlash(node.sockets.dataDir))
 	require.Contains(t, logs, "credentials_file=(none: loopback only)",
 		"a loopback deployment may run unauthenticated, and says so")

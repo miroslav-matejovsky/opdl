@@ -21,7 +21,7 @@ const (
 	Name = "nats"
 
 	// smallSiteMax is the largest site that runs one JetStream storage node. A
-	// site with three or more machines runs three.
+	// site with three or more platform instances runs three.
 	smallSiteMax = 2
 
 	// DefaultMaxBytes bounds the journal's total size. Reaching it rejects new
@@ -86,6 +86,9 @@ type Config struct {
 	HostsStorage bool
 	// DataDir is the JetStream file store directory. It is required on a storage
 	// node and unused on a node that does not host storage.
+	//
+	// It is the running instance's own, taken from its descriptor record. Two
+	// servers cannot open one JetStream store, and a storage machine runs two.
 	DataDir string
 	// Replicas is the site journal's replica count.
 	Replicas int
@@ -113,40 +116,46 @@ type Config struct {
 	Password string
 }
 
-// DefaultConfig derives the production configuration from a machine's resolved
-// deployment descriptor: which machines store the site journal, and therefore
-// whether this one runs a server at all, which peers it clusters with, and which
-// servers it connects to. It leaves DataDir and credentials for the composer,
-// which knows the runtime data path and reads secrets from files.
+// DefaultConfig derives the production configuration for the instance running as
+// role, from a machine's resolved deployment descriptor: which machines store the
+// site journal, and therefore whether this one runs a server at all, which peers
+// it clusters with, and which servers it connects to. It leaves credentials for
+// the composer, which reads secrets from files.
 //
-// It takes no instance role, and reads the Primary Instance's topology whichever
-// instance is running.
+// It reads that instance's own record and nothing else. Every instance a storage
+// machine deploys runs its own server on its own ports and joins the site's
+// cluster in its own right, so a machine deploying both contributes two cluster
+// members that route to each other like any other pair.
 //
-// That is deliberately behind the descriptor contract. The descriptor now
-// resolves a NATS topology per instance, because each instance is meant to run
-// its own server and cluster with the other. The runtime does not do that yet: a
-// standby is still turned client-only by the composer and follows the journal on
-// the address the Active instance is serving, which is the primary's. Reading the
-// standby's own topology here would point it at an address nothing is listening
-// on, which is the failure this shape was written to prevent.
-//
-// Take the per-instance topology only together with the runtime change that
-// starts the standby's server.
-func DefaultConfig(descriptor config.Descriptor) (Config, error) {
+// The role is what makes that safe. Reading one instance's topology for both,
+// which is what this did while only the Active instance ran a server, would point
+// the standby at addresses it never binds; taking the per-instance topology
+// without starting the standby's server would point the primary's routes at an
+// address nothing listens on. Both are the same defect from opposite sides, and
+// neither has a working intermediate state, which is why the role and the
+// standby's server arrived together.
+func DefaultConfig(descriptor config.Descriptor, role config.PlatformInstanceRole) (Config, error) {
 	ips, err := siteIPs(descriptor)
 	if err != nil {
 		return Config{}, err
 	}
 	storage := StorageNodes(slices.Sorted(maps.Keys(ips)))
-	hostsStorage := slices.Contains(storage, descriptor.Machine)
+	hostsStorage := slices.Contains(storage, instanceKey(descriptor.Machine, role))
 
-	nats := descriptor.Instances.Primary.Nats
+	instance := descriptor.Instances.Get(role)
+	if instance.Disabled {
+		return Config{}, fmt.Errorf("nats: descriptor does not deploy the %s instance", role)
+	}
+	nats := instance.Nats
 	if nats == nil {
-		return Config{}, fmt.Errorf("nats: descriptor has no primary instance topology")
+		return Config{}, fmt.Errorf("nats: descriptor has no %s instance topology", role)
 	}
 
 	cfg := Config{
-		ClientName:      descriptor.Machine,
+		// The client name identifies a connection in NATS diagnostics, and a
+		// machine now opens two. Naming both after the machine would make the two
+		// indistinguishable in exactly the place the name exists to help.
+		ClientName:      serverName(descriptor.Machine, role),
 		ClusterName:     string(eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)),
 		Servers:         append([]string(nil), nats.Servers...),
 		Routes:          append([]string(nil), nats.Routes...),
@@ -161,40 +170,77 @@ func DefaultConfig(descriptor config.Descriptor) (Config, error) {
 		ShutdownTimeout: DefaultShutdownTimeout,
 	}
 	if hostsStorage {
-		cfg.ServerName = descriptor.Machine
+		cfg.ServerName = serverName(descriptor.Machine, role)
 		cfg.ClientAddress = nats.ClientAddress
 		cfg.ClusterAddress = nats.ClusterAddress
+		cfg.DataDir = instance.DataDir
 	}
 	return cfg, nil
 }
 
-// siteIPs maps every machine of the site to its address.
+// serverName is one instance's name within the site cluster.
 //
-// Peers are instances, and a machine that deploys both contributes two of them,
-// so the map collapses them back to machines. Storage selection and the replica
-// count are both per machine: a machine is the failure domain, and two copies of
-// the journal on one host is one copy as far as losing that host is concerned.
+// Two servers in one cluster cannot share a name, and a storage machine now runs
+// two. The machine alone was unique while a machine meant a server; qualifying it
+// by role keeps the machine readable in the name, which is what an operator
+// matches against when reading cluster state.
+func serverName(machine string, role config.PlatformInstanceRole) string {
+	return machine + "-" + string(role)
+}
+
+// instanceKey names one platform instance within its site: the machine it runs
+// on and the role it runs as. It is the identity storage selection works in.
+func instanceKey(machine string, role config.PlatformInstanceRole) string {
+	return machine + "-" + string(role)
+}
+
+// siteIPs maps every instance of the site to its machine's address.
+//
+// The unit is the instance, not the machine. Each instance runs its own Event
+// Fabric server, so an instance is what a JetStream peer corresponds to, and
+// selecting storage or counting replicas by machine would describe a cluster the
+// site does not have: a two-machine site deploying both instances everywhere has
+// four servers, and calling that "two" leaves a two-member metadata group whose
+// quorum needs both processes of both machines.
+//
+// The cost is stated rather than hidden. A machine is still a real failure
+// domain, and nothing here constrains two of a stream's replicas to different
+// hosts, so losing one machine can cost two replicas. Instance-level granularity
+// is what makes a site of two machines able to form a cluster at all; machine
+// tolerance needs three machines, as it always did.
 func siteIPs(descriptor config.Descriptor) (map[string]string, error) {
 	if strings.TrimSpace(descriptor.Machine) == "" {
 		return nil, fmt.Errorf("nats: descriptor has no machine")
 	}
-	ips := map[string]string{descriptor.Machine: descriptor.IP}
+	ips := map[string]string{}
 	for _, peer := range descriptor.Peers {
 		if strings.TrimSpace(peer.Machine) == "" {
 			return nil, fmt.Errorf("nats: peer has no machine")
 		}
-		ips[peer.Machine] = peer.IP
+		ips[instanceKey(peer.Machine, peer.Role)] = peer.IP
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("nats: descriptor has no peers")
 	}
 	return ips, nil
 }
 
-// StorageNodes returns the machines that host JetStream storage for a site,
-// sorted by machine name: one storage node for a site smaller than three
-// machines, the first three for larger sites. Selecting a deterministic set by
-// sorted name avoids forming a two-member JetStream metadata group, which would
-// lose quorum when one member failed.
-func StorageNodes(machines []string) []string {
-	sorted := slices.Clone(machines)
+// StorageNodes returns the platform instances that host JetStream storage for a
+// site, sorted by instance name: one storage node for a site smaller than three
+// instances, the first three for larger sites.
+//
+// The unit is the instance because an instance is what runs a server. A site of
+// two machines that each deploy a standby has four instances and therefore four
+// candidates, which is what lets it form a three-member metadata group at all;
+// counted by machine it would have two, and a two-member group loses quorum the
+// moment either member stops.
+//
+// Selecting a deterministic set by sorted name is what lets every instance of
+// the site derive the same set without coordinating. Selecting exactly three
+// rather than all of them keeps quorum at two, so the site survives losing one
+// storage instance whatever its size.
+func StorageNodes(instances []string) []string {
+	sorted := slices.Clone(instances)
 	slices.Sort(sorted)
 	sorted = slices.Compact(sorted)
 	switch {
@@ -208,8 +254,14 @@ func StorageNodes(machines []string) []string {
 }
 
 // Replicas returns the site journal's replica count for a site of siteSize
-// machines: one replica for a site smaller than three machines, three
+// platform instances: one replica for a site smaller than three instances, three
 // otherwise. It matches the storage-node count so every replica has a host.
+//
+// Instances, not machines, for the same reason StorageNodes counts them. A
+// consequence worth stating plainly: three replicas across three instances do
+// not have to sit on three machines, so a site of two machines tolerates the loss
+// of one instance but not necessarily of one machine. Machine tolerance needs
+// three machines.
 func Replicas(siteSize int) int {
 	if siteSize <= smallSiteMax {
 		return 1

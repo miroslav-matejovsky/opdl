@@ -32,6 +32,7 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	if !standbyDisabled {
 		standby.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-" + name}
 		standby.RuntimeDir = runtimeDir(name, "standby")
+		standby.DataDir = dataDir(name, "standby")
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 		standby.Nats = &blueprint.Nats{ClientPort: standbyClientPort, ClusterPort: standbyClusterPort}
@@ -40,6 +41,7 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
 		Platform: &blueprint.Platform{
 			RuntimeDir: runtimeDir(name, "primary"),
+			DataDir:    dataDir(name, "primary"),
 			API:        &blueprint.API{LocalPort: apiPort},
 			WinService: &blueprint.WinService{Name: name + "-primary"},
 			Nats:       &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
@@ -51,6 +53,13 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 // runtimeDir is one instance's own local runtime directory.
 func runtimeDir(machine, role string) string {
 	return fmt.Sprintf("C:/ProgramData/opdl/%s/%s", machine, role)
+}
+
+// dataDir is one instance's own JetStream file store directory. It is separate
+// from runtimeDir because the two live on different volumes in a real
+// deployment: a status file is small and disposable, a journal is not.
+func dataDir(machine, role string) string {
+	return fmt.Sprintf("D:/opdl-journal/%s/%s", machine, role)
 }
 
 // addr is the address a machine's Event Fabric listener is reached on.

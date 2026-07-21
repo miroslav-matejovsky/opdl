@@ -16,12 +16,18 @@ import (
 // The ownership lives in a machine-wide kernel namespace, so unlike the lock file it
 // replaced it is not isolated by t.TempDir(). Every test generates its own name or
 // parallel tests would contend for each other's ownership.
+//
+// The name carries the Global\ prefix because that is the shape a deployment
+// descriptor holds, and OpenLock's whole job at this seam is to take it off. These
+// tests once passed a bare name, which meant every one of them exercised a shape
+// no descriptor ever produces: production names were rejected outright and no test
+// noticed. Keep the descriptor's shape here.
 func ownershipObject(t *testing.T) string {
 	t.Helper()
 	suffix := make([]byte, 8)
 	_, err := rand.Read(suffix)
 	require.NoError(t, err)
-	return "opdl-ownership-test." + hex.EncodeToString(suffix)
+	return `Global\opdl-ownership-test.` + hex.EncodeToString(suffix)
 }
 
 func openLock(t *testing.T, object string, role redundancy.InstanceRole) *redundancy.Lock {
@@ -46,6 +52,50 @@ func TestOpenLockRejectsAnEmptyObject(t *testing.T) {
 
 	_, err := redundancy.OpenLock("   ", redundancy.RolePrimary)
 	require.ErrorContains(t, err, "empty windows_mutex")
+}
+
+// TestOpenLockAcceptsTheDescriptorsQualifiedName is the regression test for a
+// defect that made every machine deploying a Standby Instance fail at startup.
+//
+// The builder requires an authored windows_mutex to begin with Global\, and the
+// descriptor carries it that way. utils/winmutex takes a bare name and rejects a
+// backslash, because it applies the namespace itself. OpenLock passed the
+// descriptor's name straight through, so the only names that ever worked were the
+// ones no descriptor produces.
+//
+// Nothing caught it. The compiler cannot; the embedded mock descriptor disables
+// its standby and therefore carries no lock at all, so the platform's own tests
+// never open one; and these tests generated bare names. Only a machine with a
+// standby actually deployed reaches the call, which is a scenario.
+func TestOpenLockAcceptsTheDescriptorsQualifiedName(t *testing.T) {
+	t.Parallel()
+
+	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
+	acquired, err := lock.TryAcquire()
+	require.NoError(t, err)
+	require.True(t, acquired.Held, "a descriptor-shaped name must open and acquire")
+	require.NoError(t, lock.Release())
+}
+
+// TestOpenLockRejectsAnUnqualifiedObject refuses a name the builder would never
+// emit. Ownership is machine-wide: an object in the session-scoped Local\
+// namespace, or one with no namespace authored at all, would let both instances
+// hold their own object and both be Active, with no error anywhere to say so.
+func TestOpenLockRejectsAnUnqualifiedObject(t *testing.T) {
+	t.Parallel()
+
+	for name, object := range map[string]string{
+		"no namespace":    "opdl-ownership-test.unqualified",
+		"session scoped":  `Local\opdl-ownership-test.session`,
+		"wrong namespace": `Session\1\opdl-ownership-test.other`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := redundancy.OpenLock(object, redundancy.RolePrimary)
+			require.ErrorContains(t, err, `must start with Global\`)
+		})
+	}
 }
 
 func TestOpenLockWithNilYieldsNilSafeLock(t *testing.T) {
@@ -77,7 +127,7 @@ func TestOwnershipAcquireReleaseCycle(t *testing.T) {
 	object := ownershipObject(t)
 	f := openLock(t, object, redundancy.RolePrimary)
 	require.Equal(t, redundancy.RolePrimary, f.Role())
-	require.Equal(t, `Global\`+object, f.Name(), "the ownership must live in the machine-wide namespace")
+	require.Equal(t, object, f.Name(), "the object opened is the descriptor's name, namespace included")
 	require.False(t, f.Held())
 
 	acquired, err := f.TryAcquire()
