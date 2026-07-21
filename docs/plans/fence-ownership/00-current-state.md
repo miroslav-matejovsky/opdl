@@ -31,11 +31,8 @@ externally visible.
 
 ### The lock primitive
 
-`utils/filelock/lock.go` wraps a per-platform implementation:
-
-- Windows: `LockFileEx` with `LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY`
-  over one byte (`lock_windows.go:14`).
-- Unix: `flock(LOCK_EX | LOCK_NB)` (`lock_unix.go:13`).
+`utils/filelock/lock.go` takes the lock through `LockFileEx` with
+`LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY` over one byte (`:123`).
 
 `Open` creates the parent directory and does not lock (`lock.go:24`). `TryAcquire`
 opens the file `O_CREATE|O_RDWR` and takes the lock (`lock.go:40`). `Release`
@@ -323,8 +320,7 @@ platform/cmd
   -> internal/app          (Run, runProcess, runActive, runStandby, startStatus)
        -> internal/redundancy   (Fence, ProcessRole, State, Status, Lag)
             -> utils/filelock       (Lock: TryAcquire, Acquire, Release, Held)
-                 -> lock_windows.go (LockFileEx)
-                 -> lock_unix.go    (flock)
+                 -> LockFileEx
             -> utils/atomicfile     (Status.Write)
        -> internal/config       (InstanceDir, Address, LagBound, timeouts)
        -> internal/operations   (fence_open_failed, fence_acquired, fence_waiting,

@@ -175,7 +175,6 @@ into the package documentation so a later change cannot quietly assume otherwise
 | [03-migration-plan.md](03-migration-plan.md) | 9 Migration Plan |
 | [04-backlog.md](04-backlog.md) | 10 Backlog |
 | [05-refactoring.md](05-refactoring.md) | 11 Refactoring Recommendations, 12 Implementation Order |
-| [06-windows-only.md](06-windows-only.md) | Linux removal |
 
 ## Migration at a glance
 
@@ -187,8 +186,7 @@ into the package documentation so a later change cannot quietly assume otherwise
 5 controlled switchover
 6 upgrade workflow               <- new capability, not a refactor
 7 lock-file retirement           <- gated on fleet state, not code
-8 windows-only consolidation
-9 validation and hardening       <- includes Windows Service integration
+8 validation and hardening       <- includes Windows Service integration
 ```
 
 Three gates rather than steps: the thread-affinity test (does the approach work at
@@ -205,17 +203,11 @@ The migration is feasible in this shape because that boundary was drawn correctl
 the first time. Most of the plan's risk is in the two new failure modes, not in
 the refactor.
 
-## Windows-only consolidation
+## The repository is Windows-only
 
-The repository already behaves as Windows-only everywhere except the source:
-there is no CI at all, and every file in `taskfile/` is PowerShell, so `task all`
-cannot run on Linux. The Unix code paths compile and are never executed.
+A premise of this plan, not work inside it. Every `go:build` directive and
+`runtime.GOOS` branch has been removed, the builder pins `GOOS=windows` rather
+than taking it from the host, and no documentation promises Linux validation.
 
-Two documents promise validation that cannot happen and should be corrected
-regardless: `docs/backlog/redundancy.md:29` and `docs/operations/monitoring.md:93`
-both make Linux CI a precondition for stating an SLO.
-
-Note the conflict to reconcile: `docs/plans/leadership/` recommends a portable
-notification channel specifically to preserve Linux coverage. That recommendation
-is void under a Windows-only decision. The two plans should be reconciled before
-either is implemented.
+This is what makes a Windows-native ownership primitive a consistent choice
+rather than a portability regression.

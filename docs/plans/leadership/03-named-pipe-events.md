@@ -119,12 +119,18 @@ beyond that belongs to the platform-wide authentication work, not here.
 - Killing the active platform process drops the pipe, and the promoted process
   serves it again on the same name.
 
-## Non-Windows
+## Windows only
 
-The repository builds and tests on both Windows and Linux, and `utils/filelock`
-already carries `lock_windows.go` and `lock_unix.go`. The pipe channel needs the
-same treatment: a platform-neutral interface with a Windows named-pipe
-implementation and a unix-domain-socket implementation, so scenarios and CI keep
-running on Linux. Deciding to be Windows-only would take Linux CI coverage away
-from this feature, which is the coverage most likely to catch a logic error in the
-delivery contract.
+Settled. The repository is Windows-only: every per-platform code path has been
+removed, and `taskfile/` is PowerShell, so nothing runs elsewhere.
+
+The pipe channel is therefore a single Windows named-pipe implementation with no
+neutral interface and no second transport. An earlier draft of this stage argued
+for a portable interface to keep Linux CI covering the delivery contract; that
+argument is void, because there is no CI and never was.
+
+The coverage it was protecting still matters, though. The delivery contract
+(snapshot, epoch filtering, backpressure, resync) is where a logic error is most
+likely, and it is transport-independent. Test it directly against a fake channel
+rather than through the pipe, so those tests stay fast and deterministic and do
+not depend on the transport at all.

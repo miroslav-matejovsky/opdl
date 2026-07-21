@@ -22,7 +22,7 @@ func fakePlatform(t *testing.T) string {
 }
 
 func TestNewFailsWithoutEmbeddedDescriptor(t *testing.T) {
-	_, err := New(t.TempDir(), t.TempDir(), "", "")
+	_, err := New(t.TempDir(), t.TempDir(), "")
 	require.ErrorContains(t, err, "find embedded deployment descriptor")
 }
 
@@ -30,7 +30,7 @@ func TestStageOverlayLeavesPlaceholderUnchanged(t *testing.T) {
 	platformDir := fakePlatform(t)
 	embedFile := filepath.Join(platformDir, "embedded", deploymentFile)
 
-	p, err := New(platformDir, t.TempDir(), "", "")
+	p, err := New(platformDir, t.TempDir(), "")
 	require.NoError(t, err)
 	overlayPath, err := p.stageOverlay(t.TempDir(), deployment.Descriptor{Project: "customer-a"})
 	require.NoError(t, err)
@@ -64,11 +64,6 @@ func TestWriteJSONRoundTrip(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(data), "\"k\": \"v\"")
-}
-
-func TestBinaryExtByTarget(t *testing.T) {
-	require.Equal(t, ".exe", (&Packer{goos: "windows"}).binaryExt())
-	require.Empty(t, (&Packer{goos: "linux"}).binaryExt())
 }
 
 func TestLaunches(t *testing.T) {

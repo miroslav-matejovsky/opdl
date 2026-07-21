@@ -99,36 +99,20 @@ Goal: the mutex is the only primitive. **Gated on fleet state.**
 
 ---
 
-## Epic 7: Windows-only
-
-Goal: remove unreachable Linux code. Detail in `06-windows-only.md`.
-
-| ID | Feature | Task | Cx | Depends | Acceptance criteria |
-| --- | --- | --- | ---: | --- | --- |
-| 7.1 | atomicfile | Remove `replace_unix.go`, fold the Windows path in | S | none | No build tag remains |
-| 7.2 | processinfo | Remove `resident_linux.go`, `resident_other.go`, and their tests | S | none | Windows implementation only |
-| 7.3 | processtree | Remove `owner_unix.go` | S | none | Windows implementation only |
-| 7.4 | Harness GOOS | Remove both `runtime.GOOS` branches in `scenarios/harness_test.go` | S | none | `.exe` is unconditional |
-| 7.5 | Builder GOOS | Pin `GOOS=windows`; remove `effectiveGOOS` branching | M | none | Cross-compilation surface removed; packages still build |
-| 7.6 | Unix dependency | Remove `golang.org/x/sys/unix` from the module graph | S | 6.3, 7.1 to 7.3 | `task tidy` produces no unix dependency |
-| 7.7 | Docs | Remove Linux CI promises | S | none | `docs/backlog/redundancy.md:29`, `docs/operations/monitoring.md:93` corrected |
-
----
-
-## Epic 8: Hardening
+## Epic 7: Hardening
 
 Goal: prove it, and close the Windows Service gap.
 
 | ID | Feature | Task | Cx | Depends | Acceptance criteria |
 | --- | --- | --- | ---: | --- | --- |
-| 8.1 | Failover matrix | Kill at every lifecycle state including mid-activation and mid-release | **L** | 6.5 | Deterministic; no state produces two actives |
-| 8.2 | Affinity under load | Assert affinity under sustained work | M | 2.7 | Ownership never abandoned while the process lives |
-| 8.3 | Squat scenario | Foreign process holds the name | M | 2.8 | Platform reports it diagnosably and does not become active |
-| 8.4 | Privilege scenario | `Global\` unavailable | S | 2.9 | Fails fast with a specific error |
-| 8.5 | **Windows Service integration** | SCM integration and graceful stop | **L** | none | Service stop produces a clean release, not an abandonment |
-| 8.6 | Percentiles | Measure on more than one host | M | 8.1 | Sample count and host stated; no SLO claimed |
+| 7.1 | Failover matrix | Kill at every lifecycle state including mid-activation and mid-release | **L** | 6.5 | Deterministic; no state produces two actives |
+| 7.2 | Affinity under load | Assert affinity under sustained work | M | 2.7 | Ownership never abandoned while the process lives |
+| 7.3 | Squat scenario | Foreign process holds the name | M | 2.8 | Platform reports it diagnosably and does not become active |
+| 7.4 | Privilege scenario | `Global\` unavailable | S | 2.9 | Fails fast with a specific error |
+| 7.5 | **Windows Service integration** | SCM integration and graceful stop | **L** | none | Service stop produces a clean release, not an abandonment |
+| 7.6 | Percentiles | Measure on more than one host | M | 7.1 | Sample count and host stated; no SLO claimed |
 
-**8.5 is a feature, not hardening.** It is listed here because this analysis
+**7.5 is a feature, not hardening.** It is listed here because this analysis
 discovered it, and it may warrant its own plan. `app.go:54` handles `os.Interrupt`
 and `syscall.SIGTERM` with no SCM integration anywhere in the repository. Do not
 let its size hide inside a hardening epic.
@@ -144,7 +128,7 @@ let its size hide inside a hardening epic.
 | P0 | 6.1 | The fleet gate; retiring early reintroduces split-brain |
 | P1 | 1.1 to 1.6, 2.2 to 2.10 | The implementation itself |
 | P1 | 4.1 to 4.4 | The latency benefit that motivates the change |
-| P1 | 8.5 | Production deployment model is absent |
+| P1 | 7.5 | Production deployment model is absent |
 | P2 | 5.1 to 5.6 | Upgrade capability, new and independently valuable |
-| P2 | 8.1 to 8.4, 8.6 | Hardening |
-| P3 | 6.2 to 6.5, 7.1 to 7.7 | Cleanup, after the gate |
+| P2 | 7.1 to 7.4, 7.6 | Hardening |
+| P3 | 6.2 to 6.5 | Cleanup, after the gate |

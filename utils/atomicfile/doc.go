@@ -21,10 +21,10 @@
 // crashes. Specifically, it does not invoke fsync (File.Sync) on the temporary
 // file or the parent directory before replacing the target.
 //
-// Windows sharing conflicts:
-// On Windows, if a concurrent reader holds a short-lived handle on the target
-// file during replacement, WriteFile retries for a bounded duration when it
-// encounters sharing violations (ERROR_SHARING_VIOLATION or ERROR_ACCESS_DENIED).
+// Sharing conflicts:
+// If a concurrent reader holds a short-lived handle on the target file during
+// replacement, WriteFile retries for a bounded duration when it encounters
+// sharing violations (ERROR_SHARING_VIOLATION or ERROR_ACCESS_DENIED).
 // Persistent failures or other errors return immediately with the failing path
 // and operation included in the error.
 package atomicfile

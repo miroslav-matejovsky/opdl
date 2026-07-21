@@ -171,9 +171,10 @@ measures it rather than assuming it.
    platform today; `BaseUrl` is set by the caller and the E2E tests get it from
    environment variables. The pipe name can be derived from deployment identity,
    the HTTP base URL cannot. See stage 02.
-5. **Windows-only or portable channel.** `utils/filelock` already carries
-   per-platform files. Recommendation: a neutral interface with a named-pipe and a
-   unix-socket implementation, so Linux CI keeps covering the delivery contract.
+5. ~~**Windows-only or portable channel.**~~ Settled: Windows-only. Every
+   per-platform code path has been removed from the repository, so the channel is
+   a single named-pipe implementation with no neutral interface. Test the delivery
+   contract against a fake channel instead. See stage 03.
 
 ## Unrelated defects found during analysis
 

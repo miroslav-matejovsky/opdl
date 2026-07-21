@@ -1,10 +1,12 @@
 # Phase 4: Migration strategy
 
-Section 9 of the required output. Nine phases. The suggested eight, plus the
-Windows-only consolidation, which is placed where it costs least.
+Section 9 of the required output. The eight suggested phases.
 
 Each phase carries goal, scope, components, risks, validation, rollback, and
 definition of done.
+
+The repository is already Windows-only: every per-platform code path has been
+removed, so no phase below carries portability work.
 
 ## Ordering constraint that shapes everything
 
@@ -252,8 +254,7 @@ mixed-version split-brain. Confirm fleet state before starting.
 **Scope.**
 
 - Remove file-lock acquisition and release from `Fence`.
-- Delete `utils/filelock` entirely, including `lock.go`, `lock_windows.go`,
-  `lock_unix.go`, `doc.go`, and tests.
+- Delete `utils/filelock` entirely: `lock.go`, `doc.go`, and tests.
 - Remove `FenceFileName` and the fence path derivation from `redundancy/fence.go`.
   `StatusPath` and the machine directory stay: status files are unaffected.
 - Remove the local-filesystem requirement for ownership from
@@ -285,24 +286,7 @@ mutex.
 
 ---
 
-## Phase 8: Windows-only consolidation
-
-**Goal.** Remove Linux and Unix-specific code, which is unreachable in a
-Windows-only product and is pure cognitive load.
-
-**Placed here deliberately.** After Phase 7, because retiring the file lock
-deletes `lock_unix.go` for free as part of deleting the package. Doing this phase
-earlier would mean touching a file that is about to be deleted anyway.
-
-Full inventory, scope, risks, and sequencing are in `06-windows-only.md`.
-
-**Done.** No `!windows`, `linux`, or `unix` build-tagged file remains. No `GOOS`
-branch remains. `golang.org/x/sys/unix` is gone from the dependency graph.
-Documentation no longer promises Linux CI.
-
----
-
-## Phase 9: Validation and hardening
+## Phase 8: Validation and hardening
 
 **Goal.** Prove the ownership model under adverse conditions, and close the
 Windows Service gap.
@@ -363,11 +347,8 @@ sample count and host stated, and no SLO is claimed, per
   |
 7 lock-file retirement   <-- gated on fleet state, not code
   |
-8 windows-only consolidation
-  |
-9 validation and hardening
+8 validation and hardening
 ```
 
 Phases 5 and 6 are documentation and tooling and can overlap with 4. Phase 7
-cannot start until the fleet gate is confirmed. Phase 8 depends on 7 only to avoid
-touching a file scheduled for deletion.
+cannot start until the fleet gate is confirmed.

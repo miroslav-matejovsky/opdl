@@ -10,13 +10,11 @@ Located by reading the code. Grouped by how much they change.
 
 | Path | Note |
 | --- | --- |
-| `utils/filelock/lock.go` | the poll loop lives here (`:12`, `:58`) |
-| `utils/filelock/lock_windows.go` | `LockFileEx` |
-| `utils/filelock/lock_unix.go` | `flock`; also removed by the Windows-only phase |
+| `utils/filelock/lock.go` | the poll loop (`:15`, `:61`) and the `LockFileEx` helpers (`:123`, `:139`) |
 | `utils/filelock/doc.go` | package documentation |
 | `utils/filelock/lock_test.go` | tests |
 
-The whole package. It has exactly one consumer.
+The whole package, which is now three files. It has exactly one consumer.
 
 ### Substantially changed
 
@@ -68,9 +66,6 @@ Worth naming, because the plan depends on them and none needs inventing.
 - **`Fence` is already the right seam.** Five methods, one consumer package, no
   leakage of the primitive. The migration is possible in this shape precisely
   because this boundary was drawn correctly the first time.
-- **The per-platform file split.** `lock_windows.go` and `lock_unix.go` are the
-  existing pattern for platform-specific implementation behind one API. The
-  Windows-only phase removes the second half rather than the pattern.
 - **`fence_process_test.go`.** A real multi-process exclusion test already exists.
   The hardest test infrastructure for Epic 2 is written.
 - **`internal/operations`.** Structured local events independent of the Event
@@ -116,7 +111,7 @@ invariant is optional.
 | `filelock.Open` call | `redundancy/fence.go:61` |
 | Poll interval | `utils/filelock/lock.go:12` |
 | Poll loop | `utils/filelock/lock.go:58` |
-| Unix dependency | `golang.org/x/sys/unix`, via `lock_unix.go` |
+| `LockFileEx` helpers | `utils/filelock/lock.go:123`, `:139` |
 | Local-filesystem requirement | `docs/operations/deployment.md:60`, `redundancy/fence.go:24` |
 | Operator instruction | `docs/operations/troubleshooting.md:104` |
 
@@ -144,10 +139,9 @@ Section 12 of the required output.
 14. FLEET GATE: confirm all machines run step 8                  Epic 6  <- P0 gate
 15. Remove dual acquisition; delete utils/filelock               Epic 6
 16. Documentation sweep                                          Epic 6
-17. Windows-only consolidation                                   Epic 7
-18. Failover matrix, squat, privilege, affinity under load       Epic 8
-19. Windows Service integration                                  Epic 8
-20. Percentiles                                                  Epic 8
+17. Failover matrix, squat, privilege, affinity under load       Epic 7
+18. Windows Service integration                                  Epic 7
+19. Percentiles                                                  Epic 7
 ```
 
 Three points are gates rather than steps. Step 4 decides whether the approach is

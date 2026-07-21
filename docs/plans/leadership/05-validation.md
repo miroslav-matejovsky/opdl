@@ -42,9 +42,9 @@ each machine eventually reports the right thing.
 Record failover and notification latency as measurements. Do not state an SLO.
 
 `docs/backlog/redundancy.md` is unambiguous about why: the existing warm-standby
-numbers are three samples on one developer machine, and the backlog explicitly
-requires Linux CI runs and percentiles before any SLO is stated. The same bar
-applies here, and the same trap is available. The earlier 29.9 second measurement
+numbers are three samples on one developer machine, and the backlog requires runs
+on more than one Windows host plus percentiles before any SLO is stated. The same
+bar applies here, and the same trap is available. The earlier 29.9 second measurement
 in that document was a symptom of a misconfiguration rather than a performance
 property, which is a good reason to treat any first number from this feature as a
 question rather than an answer.
@@ -98,7 +98,7 @@ reasoning about why connection and journal diagnostics do not go through NATS.
 ## Exit criteria
 
 - `task all` passes.
-- The no-overlap scenario passes repeatedly, on Windows and on Linux CI.
+- The no-overlap scenario passes repeatedly, on more than one Windows host.
 - Failover and notification latency are recorded as measurements with the sample
   count and host stated, and no SLO is claimed.
 - An operator can explain a leadership change from operational events alone,

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
@@ -51,7 +50,10 @@ func Run(args []string) (runErr error) {
 		"standby_enabled": !descriptor.Slots.Standby.Disabled,
 	})
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// os.Interrupt is the only signal Windows delivers: the runtime raises it for
+	// CTRL_C_EVENT and CTRL_BREAK_EVENT, which is how the service manager and the
+	// scenario harness ask for a graceful stop. SIGTERM is never raised here.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	ctx = operations.WithRecorder(ctx, recorder)
 

@@ -90,7 +90,7 @@ or a local collector:
 | Write availability | Registration POST result codes | Includes the brief leader-election rejection window |
 
 Do not state an availability or failover SLO from development samples. Establish
-percentiles in production-like Linux and Windows environments first.
+percentiles across multiple production-like Windows hosts first.
 
 ## Recommended alerts
 

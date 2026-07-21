@@ -1,14 +1,12 @@
 // Package filelock provides exclusive, crash-released, context-aware local file locks.
 //
-// A Lock represents an exclusive local file lock held through an operating-system
-// file lock (LockFileEx on Windows, flock on Unix). The lock is released explicitly
-// via Release or automatically when the holding process exits or crashes.
+// A Lock represents an exclusive local file lock held through LockFileEx. The
+// lock is released explicitly via Release or automatically when the holding
+// process exits or crashes.
 //
 // Invariants:
-//   - The lock path must reside on a local filesystem that supports the underlying
-//     operating-system file locking primitives.
-//   - On Unix systems, locks are advisory. All contending processes must use this
-//     package or flock directly.
+//   - The lock path must reside on a local filesystem that supports LockFileEx.
+//     A network filesystem such as SMB may not enforce it.
 //   - A held lock has no lease or expiration. It remains held until released or until
 //     the holding process exits.
 //   - Context cancellation during Acquire stops waiting but does not release a lock

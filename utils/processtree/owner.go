@@ -1,5 +1,3 @@
-//go:build windows
-
 package processtree
 
 import (
@@ -87,8 +85,8 @@ type Owner struct {
 	err     error
 }
 
-// Start launches cmd inside an OS process container (job object on Windows) and
-// returns an Owner to manage its lifecycle and containment.
+// Start launches cmd inside a job object and returns an Owner to manage its
+// lifecycle and containment.
 func Start(command *exec.Cmd) (*Owner, error) {
 	owner, err := newOwner()
 	if err != nil {
@@ -100,7 +98,7 @@ func Start(command *exec.Cmd) (*Owner, error) {
 	}
 	// createNewProcessGroup makes the child its own process group leader, which is
 	// what lets Stop target it with a console control event without hitting the
-	// parent. Unix Start sets Setpgid for the same reason.
+	// parent.
 	command.SysProcAttr.CreationFlags |= createSuspended | createNewProcessGroup
 	command.Cancel = owner.Kill
 	if err := command.Start(); err != nil {

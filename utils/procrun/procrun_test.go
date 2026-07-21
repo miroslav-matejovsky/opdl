@@ -79,10 +79,9 @@ func TestProcessKillAndRunning(t *testing.T) {
 	require.True(t, p.Running())
 
 	// Kill blocks until the child is gone and reports the exit result. The result
-	// itself is deliberately not asserted to be an error: on Unix the child dies
-	// from a signal, but on Windows the tree is torn down by closing the job
-	// handle with KILL_ON_JOB_CLOSE, which exits the child with code 0. What
-	// callers rely on is that the process is dead once Kill returns.
+	// itself is deliberately not asserted to be an error: the tree is torn down by
+	// closing the job handle with KILL_ON_JOB_CLOSE, which exits the child with
+	// code 0. What callers rely on is that the process is dead once Kill returns.
 	killErr := p.Kill()
 	require.False(t, p.Running())
 
