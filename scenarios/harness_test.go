@@ -119,48 +119,34 @@ type renderedProject struct {
 	Machines []renderedMachine
 }
 
-// natsPorts is one machine's reserved NATS ports and the addresses they resolve
-// to, kept so a scenario can assert what the deployment should have derived.
+// natsPorts is one machine's reserved NATS ports, kept so a scenario can assert
+// what the deployment should have derived.
 type natsPorts struct {
-	client  string
-	cluster string
+	client  int
+	cluster int
 }
 
-// stageBlueprint reserves each machine's NATS ports and renders the project's
-// blueprint into a temporary blueprint root.
-//
-// The reservations are held, not released. They stay open through rendering and
-// building so nothing else on the host can take a port while the blueprint that
-// names it is being compiled into a binary. The returned release is called
-// immediately before the first process that has to bind those ports starts.
-func stageBlueprint(t *testing.T, project string) (root string, ports map[string]natsPorts, release func()) {
+// stageBlueprint allocates each machine's NATS ports from the testnet pool and
+// renders the project's blueprint into a temporary blueprint root.
+func stageBlueprint(t *testing.T, project string) (root string, ports map[string]natsPorts) {
 	t.Helper()
 	fixtures, ok := projectFixtures[project]
 	require.Truef(t, ok, "no blueprint fixture for project %q", project)
 
 	data := renderedProject{Name: project, Site: scenarioSite}
 	ports = make(map[string]natsPorts, len(fixtures))
-	var reservations []*testnet.Reservation
-	t.Cleanup(func() {
-		for _, r := range reservations {
-			_ = r.Release()
-		}
-	})
 
 	for _, fixture := range fixtures {
-		// Reserve on this machine's own loopback address. A port is only free per
-		// interface, so reserving on 127.0.0.1 would say nothing about 127.0.0.2.
-		res, err := testnet.ReserveOn(t.Context(), fixture.ip, 2)
+		// Take from this machine's own loopback address. A port is only free per
+		// interface, so taking on 127.0.0.1 would say nothing about 127.0.0.2.
+		p, err := testnet.Take(fixture.ip, 2)
 		require.NoError(t, err)
-		reservations = append(reservations, res)
-
-		addrs := res.Addresses()
-		client, cluster := addrs[0], addrs[1]
+		client, cluster := p[0], p[1]
 		data.Machines = append(data.Machines, renderedMachine{
 			Name:            fixture.name,
 			IP:              fixture.ip,
-			ClientPort:      portOf(t, client),
-			ClusterPort:     portOf(t, cluster),
+			ClientPort:      client,
+			ClusterPort:     cluster,
 			StandbyDisabled: fixture.standbyDisabled,
 		})
 		ports[fixture.name] = natsPorts{client: client, cluster: cluster}
@@ -176,23 +162,7 @@ func stageBlueprint(t *testing.T, project string) (root string, ports map[string
 	require.NoError(t, tmpl.Execute(&rendered, data))
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "project.hcl"), rendered.Bytes(), 0o644))
 
-	// Release is idempotent, so the cleanup above remains a safety net for a
-	// scenario that fails before it gets this far.
-	return root, ports, func() {
-		for _, r := range reservations {
-			require.NoError(t, r.Release())
-		}
-	}
-}
-
-// portOf returns the numeric port of a host:port address.
-func portOf(t *testing.T, addr string) int {
-	t.Helper()
-	_, port, err := net.SplitHostPort(addr)
-	require.NoError(t, err)
-	number, err := strconv.Atoi(port)
-	require.NoError(t, err)
-	return number
+	return root, ports
 }
 
 // buildProject drives the builder CLI to build every machine of a blueprint into
@@ -291,7 +261,7 @@ type site struct {
 	machines []*machine
 }
 
-// deploySite renders the project's blueprint on reserved ports, builds every
+// deploySite renders the project's blueprint with allocated ports, builds every
 // machine from it, and prepares each one to run.
 //
 // It replaces the older split between building and preparing because the two are
@@ -302,32 +272,27 @@ type site struct {
 func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project string) *site {
 	t.Helper()
 
-	blueprints, ports, releasePorts := stageBlueprint(t, project)
+	blueprints, ports := stageBlueprint(t, project)
 	buildProject(ctx, t, blueprints, outDir, project)
 
 	s := &site{project: project, outDir: outDir, workDir: workDir}
 	// The API address stays a runtime setting: it is the machine's own public
 	// endpoint, not site topology, so a site may move it without a rebuild.
 	fixtures := projectFixtures[project]
-	api, err := testnet.Reserve(t.Context(), len(fixtures))
+	apiPorts, err := testnet.Take("127.0.0.1", len(fixtures))
 	require.NoError(t, err)
-	require.NoError(t, api.Release())
-	apiAddrs := api.Addresses()
 
 	for i, fixture := range fixtures {
 		s.machines = append(s.machines, prepareMachine(t, s, fixture.name, sockets{
-			api:         apiAddrs[i],
+			api:         net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPorts[i])),
 			dataDir:     filepath.Join(workDir, "nats-"+fixture.name),
 			instanceDir: filepath.Join(workDir, "instance-"+fixture.name),
 			eventDir:    filepath.Join(workDir, "operations-"+fixture.name),
-			client:      ports[fixture.name].client,
-			cluster:     ports[fixture.name].cluster,
+			client:      net.JoinHostPort(fixture.ip, strconv.Itoa(ports[fixture.name].client)),
+			cluster:     net.JoinHostPort(fixture.ip, strconv.Itoa(ports[fixture.name].cluster)),
 		}))
 	}
 
-	// The blueprint is built, so the ports it named are now the deployment's.
-	// Releasing them here is what lets the first machine bind them.
-	releasePorts()
 	return s
 }
 

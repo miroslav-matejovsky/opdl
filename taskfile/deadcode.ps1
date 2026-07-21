@@ -24,21 +24,22 @@ foreach ($m in $roots) {
     finally { Pop-Location }
 }
 
-# Layer 1: unreachable functions.
-# Starting from each module's commands and package test executables, report
-# functions that no execution or test path can reach. Test roots matter for
-# reusable packages whose public API is exercised outside command flow.
-Invoke-PerModule -Names $roots -Action {
+# Layer 1: unreachable functions across all command and scenario modules.
+# Starting from each root module's commands and package test executables, report
+# functions that no execution or test path can reach across the workspace.
+$rootPatterns = @($roots | ForEach-Object { "./$_/..." })
+Push-Location $RepoRoot
+try {
     # deadcode defaults to the module of the first package. Filter to the project
     # module prefix instead, so dead code in any workspace module reachable from a
     # command is reported while third-party dependencies are left out.
     # The filter is quoted: unquoted, PowerShell splits the argument at the dot in
     # "github.com", sending deadcode a bogus package path.
     if ($null -ne $deadcodeTool) {
-        $out = & $deadcodeTool.Source -test "-filter=github.com/miroslav-matejovsky/opdl" ./... 2>&1
+        $out = & $deadcodeTool.Source -test "-filter=github.com/miroslav-matejovsky/opdl" $rootPatterns 2>&1
     }
     else {
-        $out = go run golang.org/x/tools/cmd/deadcode@latest -test "-filter=github.com/miroslav-matejovsky/opdl" ./... 2>&1
+        $out = go run golang.org/x/tools/cmd/deadcode@latest -test "-filter=github.com/miroslav-matejovsky/opdl" $rootPatterns 2>&1
     }
     if ($LASTEXITCODE -ne 0) {
         $out | Out-String -Stream | ForEach-Object { Write-Host $_ }
@@ -49,6 +50,9 @@ Invoke-PerModule -Names $roots -Action {
         $out | Out-String -Stream | ForEach-Object { Write-Host $_ }
         throw "dead code found"
     }
+}
+finally {
+    Pop-Location
 }
 
 # Layer 2: packages not reachable from a command or scenario module.
