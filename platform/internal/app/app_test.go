@@ -81,45 +81,59 @@ func get(ctx context.Context, addr string) bool {
 // and coordination state under the test's own directory, so several tests can
 // run at once without colliding.
 //
-// It sets no socket topology. The Event Fabric's addresses are the deployment's,
-// not the site's, and this file cannot move them: a runtime that could would be
-// able to point a machine at a journal that is not its own. Tests that need free
-// ports move the descriptor instead, through descriptorOnFreePorts.
+// It sets no socket topology, no API address, and no runtime directory. Every one
+// of those is the deployment's rather than the site's, and this file cannot move
+// them: a runtime that could would be able to point a machine at a journal that
+// is not its own, or give a machine's two instances one endpoint. Tests that need
+// free ports move the descriptor instead, through descriptorOnFreePorts.
 func writeConfig(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "config.toml")
-	contents := fmt.Sprintf(`address = %q
-read_header_timeout = "5s"
+	contents := fmt.Sprintf(`read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = %q
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
 catch_up_timeout = "30s"
-`, freeAddress(t), filepath.ToSlash(filepath.Join(dir, "instance")),
-		filepath.ToSlash(filepath.Join(dir, "nats")))
+`, filepath.ToSlash(filepath.Join(dir, "nats")))
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 	return path
 }
 
-// descriptorOnFreePorts returns the embedded descriptor with its Event Fabric
-// addresses moved onto reserved loopback ports.
+// descriptorOnFreePorts returns the embedded descriptor with every endpoint moved
+// onto reserved loopback ports and every runtime directory into the test's own
+// space.
 //
-// The embedded mock names the deployment's real ports, which several tests
-// running at once cannot all bind. Moving them here rather than in the runtime
-// configuration keeps the contract intact: the descriptor is still the single
-// source of the machine's topology, and both processes of the machine still
-// derive the same endpoints from it.
+// The embedded mock names the deployment's real ports and paths, which several
+// tests running at once cannot all take. Moving them here rather than in the
+// runtime configuration keeps the contract intact: the descriptor is still the
+// single source of the machine's topology, and each instance still reads only its
+// own record.
+//
+// Both instances are filled in, whether or not a test deploys the standby. A test
+// that enables it then flips one bool rather than composing a second endpoint set
+// by hand, which is how a standby ends up on the primary's address.
 func descriptorOnFreePorts(t *testing.T, cfg *config.Config) deployment.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
-	client, cluster := freeAddress(t), freeAddress(t)
-	descriptor.Instances.Primary.Nats = &deployment.Nats{
-		ClientAddress:  client,
-		ClusterAddress: cluster,
-		Servers:        []string{client},
-		Routes:         []string{},
+	runtimeRoot := t.TempDir()
+	for _, standby := range []bool{false, true} {
+		instance := descriptor.Instances.Get(deployment.Role(standby))
+		client, cluster := freeAddress(t), freeAddress(t)
+		instance.Nats = &deployment.Nats{
+			ClientAddress:  client,
+			ClusterAddress: cluster,
+			Servers:        []string{client},
+			Routes:         []string{},
+		}
+		instance.APIAddress = freeAddress(t)
+		instance.RuntimeDir = filepath.Join(runtimeRoot, string(deployment.Role(standby)))
+		if standby {
+			descriptor.Instances.Standby = instance
+			continue
+		}
+		descriptor.Instances.Primary = instance
 	}
 	if descriptor.Lock == nil {
 		descriptor.Lock = &deployment.Lock{}
@@ -286,7 +300,7 @@ func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.toml")
-		contents := "address = \"127.0.0.1:8080\"\nread_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\ninstance_dir = \"/var/lib/opdl/instance\"\nlag_bound = \"30s\"\n[event_fabric.nats]\n" + nats
+		contents := "read_header_timeout = \"5s\"\nshutdown_timeout = \"11s\"\nlag_bound = \"30s\"\n[event_fabric.nats]\n" + nats
 		require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 		cfg, err := config.Load(path)
 		require.NoError(t, err)
@@ -539,44 +553,55 @@ func TestFailoverAndFailback(t *testing.T) {
 	// a NATS topology per instance, but the runtime has not yet been changed to
 	// start the standby's own server: it is still turned client-only and follows
 	// the address the Active instance is serving on. See nats.DefaultConfig.
-	descriptor.Instances.Standby = deployment.Instance{Disabled: false}
+	descriptor.Instances.Standby.Disabled = false
+
+	// Each instance has its own API address, so a transfer moves which address
+	// answers rather than moving one address between processes.
+	primaryAPI := descriptor.Instances.Primary.APIAddress
+	standbyAPI := descriptor.Instances.Standby.APIAddress
+	require.NotEqual(t, primaryAPI, standbyAPI)
 
 	primaryCtx, stopPrimary := context.WithCancel(t.Context())
 	primaryDone := make(chan error, 1)
 	go func() { primaryDone <- runProcess(primaryCtx, cfg, descriptor, redundancy.RolePrimary) }()
-	waitForProcessState(t, cfg, descriptor, redundancy.RolePrimary, redundancy.StateActive, primaryDone)
-	require.True(t, get(t.Context(), cfg.Address()), "the preferred primary did not serve")
+	waitForProcessState(t, descriptor, redundancy.RolePrimary, redundancy.StateActive, primaryDone)
+	require.True(t, get(t.Context(), primaryAPI), "the preferred primary did not serve")
+	require.False(t, get(t.Context(), standbyAPI), "a Passive instance serves nothing yet")
 
 	standbyCtx, stopStandby := context.WithCancel(t.Context())
 	standbyDone := make(chan error, 1)
 	go func() { standbyDone <- runProcess(standbyCtx, cfg, descriptor, redundancy.RoleStandby) }()
-	waitForFailoverReadyStandby(t, cfg, descriptor, redundancy.RoleStandby, standbyDone)
+	waitForFailoverReadyStandby(t, descriptor, redundancy.RoleStandby, standbyDone)
 
 	stopPrimary()
 	require.NoError(t, waitProcess(t, primaryDone), "the primary did not stop cleanly")
-	waitForProcessState(t, cfg, descriptor, redundancy.RoleStandby, redundancy.StateActive, standbyDone)
-	require.True(t, get(t.Context(), cfg.Address()), "the Standby Instance did not restore the API after failover")
+	waitForProcessState(t, descriptor, redundancy.RoleStandby, redundancy.StateActive, standbyDone)
+	// The Standby Instance serves on its own address, not the one the Primary
+	// Instance was on. Nothing binds the stopped instance's address.
+	require.True(t, get(t.Context(), standbyAPI), "the Standby Instance did not restore the API after failover")
+	require.False(t, get(t.Context(), primaryAPI), "the Standby Instance took over the Primary Instance's address")
 
 	failbackCtx, stopFailback := context.WithCancel(t.Context())
 	failbackDone := make(chan error, 1)
 	go func() { failbackDone <- runProcess(failbackCtx, cfg, descriptor, redundancy.RolePrimary) }()
-	waitForFailoverReadyStandby(t, cfg, descriptor, redundancy.RolePrimary, failbackDone)
+	waitForFailoverReadyStandby(t, descriptor, redundancy.RolePrimary, failbackDone)
 
 	// Failback is operator-initiated: deployment keeps the Primary Instance
 	// preferred by gracefully stopping the Active Standby, and only after the
 	// returning Primary Instance is caught up.
 	stopStandby()
 	require.NoError(t, waitProcess(t, standbyDone), "the Active Standby did not stop cleanly")
-	waitForProcessState(t, cfg, descriptor, redundancy.RolePrimary, redundancy.StateActive, failbackDone)
-	require.True(t, get(t.Context(), cfg.Address()), "the Primary Instance did not restore the API after failback")
+	waitForProcessState(t, descriptor, redundancy.RolePrimary, redundancy.StateActive, failbackDone)
+	require.True(t, get(t.Context(), primaryAPI), "the Primary Instance did not restore the API after failback")
+	require.False(t, get(t.Context(), standbyAPI), "the stopped Standby Instance's address is still answering")
 
 	stopFailback()
 	require.NoError(t, waitProcess(t, failbackDone), "the Primary Instance did not stop cleanly")
 }
 
-func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, state redundancy.State, done <-chan error) {
+func waitForProcessState(t *testing.T, descriptor deployment.Descriptor, role redundancy.InstanceRole, state redundancy.State, done <-chan error) {
 	t.Helper()
-	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
+	path := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
 	var processErr error
 	exited := false
 	require.Eventually(t, func() bool {
@@ -592,9 +617,9 @@ func waitForProcessState(t *testing.T, cfg *config.Config, descriptor deployment
 	require.Falsef(t, exited, "%s exited before reaching %s: %v", role, state, processErr)
 }
 
-func waitForFailoverReadyStandby(t *testing.T, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole, done <-chan error) {
+func waitForFailoverReadyStandby(t *testing.T, descriptor deployment.Descriptor, role redundancy.InstanceRole, done <-chan error) {
 	t.Helper()
-	path := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
+	path := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
 	var processErr error
 	exited := false
 	require.Eventually(t, func() bool {
@@ -640,16 +665,14 @@ func TestRunReportsUnusableJournalStorage(t *testing.T) {
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
 
 	path := filepath.Join(dir, "config.toml")
-	contents := fmt.Sprintf(`address = "127.0.0.1:8080"
-read_header_timeout = "5s"
+	contents := fmt.Sprintf(`read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = %q
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = %q
 startup_timeout = "30s"
 catch_up_timeout = "30s"
-`, filepath.ToSlash(filepath.Join(dir, "instance")), filepath.ToSlash(blocked))
+`, filepath.ToSlash(blocked))
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 
 	err := Run([]string{"-config", path, "-instance", "primary"})

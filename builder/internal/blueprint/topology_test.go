@@ -33,13 +33,15 @@ func validMachine() blueprint.Machine {
 		IP:             "10.0.1.10",
 		Services:       []string{"sensor-services"},
 		Platform: &blueprint.Platform{
-			API:        &blueprint.API{Port: 8080},
+			RuntimeDir: "C:/ProgramData/opdl/sensor/primary",
+			API:        &blueprint.API{LocalPort: 8080},
 			WinService: &blueprint.WinService{Name: "primary"},
 			Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
 			Standby: &blueprint.Standby{
 				Disabled:   false,
+				RuntimeDir: "C:/ProgramData/opdl/sensor/standby",
 				Lock:       &blueprint.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
-				API:        &blueprint.API{Port: 8081},
+				API:        &blueprint.API{LocalPort: 8081},
 				WinService: &blueprint.WinService{Name: "standby"},
 				Nats:       &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322},
 			},
@@ -176,6 +178,7 @@ func TestMachinePlatformStandby(t *testing.T) {
 		  }
 		  standby {
 		    disabled = false
+		    runtime_dir = "C:/ProgramData/opdl/m1/standby"
 		  }
 		}`)
 		require.NotNil(t, m.Platform)
@@ -355,8 +358,9 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			      platform {
+			        runtime_dir = "C:/ProgramData/opdl/node-1/primary"
 			        api {
-			          port = 8080
+			          local_port = 8080
 			        }
 			        winservice {
 			          name = "primary"
@@ -367,11 +371,12 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
+			          runtime_dir = "C:/ProgramData/opdl/node-1/standby"
 			          lock {
 			            windows_mutex = "Global\\dup-north-node-1"
 			          }
 			          api {
-			            port = 8081
+			            local_port = 8081
 			          }
 			          winservice {
 			            name = "standby"
@@ -390,8 +395,9 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.11"
 			      services = ["core-services"]
 			      platform {
+			        runtime_dir = "C:/ProgramData/opdl/node-1/primary"
 			        api {
-			          port = 8080
+			          local_port = 8080
 			        }
 			        winservice {
 			          name = "primary"
@@ -402,11 +408,12 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
+			          runtime_dir = "C:/ProgramData/opdl/node-1/standby"
 			          lock {
 			            windows_mutex = "Global\\dup-south-node-1"
 			          }
 			          api {
-			            port = 8081
+			            local_port = 8081
 			          }
 			          winservice {
 			            name = "standby"
@@ -438,6 +445,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 func disableStandby(p *blueprint.Project) {
 	standby := p.Sites[0].Machines[0].Platform.Standby
 	standby.Disabled = true
+	standby.RuntimeDir = ""
 	standby.Lock = nil
 	standby.API = nil
 	standby.WinService = nil
@@ -450,10 +458,11 @@ func disableStandby(p *blueprint.Project) {
 // take effect, and a reader could not tell it from one that does.
 func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 	tests := map[string]func(*blueprint.Standby){
-		"lock":       func(s *blueprint.Standby) { s.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-standby"} },
-		"api":        func(s *blueprint.Standby) { s.API = &blueprint.API{Port: 8081} },
-		"winservice": func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
-		"nats":       func(s *blueprint.Standby) { s.Nats = &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322} },
+		"lock":        func(s *blueprint.Standby) { s.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-standby"} },
+		"runtime_dir": func(s *blueprint.Standby) { s.RuntimeDir = "C:/ProgramData/opdl/sensor/standby" },
+		"api":         func(s *blueprint.Standby) { s.API = &blueprint.API{LocalPort: 8081} },
+		"winservice":  func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
+		"nats":        func(s *blueprint.Standby) { s.Nats = &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322} },
 	}
 	for label, author := range tests {
 		t.Run(label, func(t *testing.T) {
@@ -465,15 +474,56 @@ func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 	}
 }
 
+// TestRuntimeDirIsRequiredPerDeployedInstance checks each deployed instance
+// states where it writes its status file. An instance without one has nowhere to
+// record what it is doing, and unlike a missing port that is not a failure to
+// bind.
+func TestRuntimeDirIsRequiredPerDeployedInstance(t *testing.T) {
+	tests := map[string]struct {
+		clear func(*blueprint.Platform)
+		want  string
+	}{
+		"primary": {
+			clear: func(pl *blueprint.Platform) { pl.RuntimeDir = "" },
+			want:  "platform.runtime_dir is required",
+		},
+		"standby": {
+			clear: func(pl *blueprint.Platform) { pl.Standby.RuntimeDir = "" },
+			want:  "platform.standby.runtime_dir is required",
+		},
+		"primary is only whitespace": {
+			clear: func(pl *blueprint.Platform) { pl.RuntimeDir = "   " },
+			want:  "platform.runtime_dir is required",
+		},
+	}
+	for label, test := range tests {
+		t.Run(label, func(t *testing.T) {
+			p := validProject()
+			test.clear(p.Sites[0].Machines[0].Platform)
+			require.ErrorContains(t, p.Validate(), test.want)
+		})
+	}
+}
+
+// TestMachineInstancesMustNotShareARuntimeDir is the quiet half of the six-port
+// mistake. Two instances given one directory both start and both bind, and the
+// only symptom is that each keeps overwriting the other's status file.
+func TestMachineInstancesMustNotShareARuntimeDir(t *testing.T) {
+	p := validProject()
+	platform := p.Sites[0].Machines[0].Platform
+	platform.Standby.RuntimeDir = platform.RuntimeDir
+	require.ErrorContains(t, p.Validate(), "cannot share a runtime directory")
+}
+
 // TestMachineListenersMustNotShareAPort is the mistake the six-port shape
 // invites: the two instances run together on one host, so nothing makes any pair
 // of their listeners mutually exclusive.
 func TestMachineListenersMustNotSharePort(t *testing.T) {
 	tests := map[string]func(*blueprint.Platform){
-		"standby api copies primary api":       func(pl *blueprint.Platform) { pl.Standby.API.Port = pl.API.Port },
+		"standby api copies primary api":       func(pl *blueprint.Platform) { pl.Standby.API.LocalPort = pl.API.LocalPort },
 		"standby nats copies primary nats":     func(pl *blueprint.Platform) { pl.Standby.Nats.ClientPort = pl.Nats.ClientPort },
 		"standby cluster copies primary":       func(pl *blueprint.Platform) { pl.Standby.Nats.ClusterPort = pl.Nats.ClusterPort },
-		"api collides with this instance nats": func(pl *blueprint.Platform) { pl.API.Port = pl.Nats.ClientPort },
+		"api collides with this instance nats": func(pl *blueprint.Platform) { pl.API.LocalPort = pl.Nats.ClientPort },
 	}
 	for label, collide := range tests {
 		t.Run(label, func(t *testing.T) {

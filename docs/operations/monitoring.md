@@ -2,11 +2,17 @@
 
 ## Status files
 
-Status files are under:
+Each instance writes one status file inside its own runtime directory:
 
 ```text
-<instance_dir>/<project>-<environment>-<site>-<machine>/process-<role>.status
+<runtime_dir>/process.status
 ```
+
+`runtime_dir` is authored per instance in the project blueprint and resolved onto
+that instance's descriptor record, so a machine's two instances write two files in
+two directories. The path carries no project, machine, or role qualifier: those
+are in the authored directory itself. Read `deployment.json` to see the exact path
+each instance was built with.
 
 They are atomic JSON snapshots with these fields:
 

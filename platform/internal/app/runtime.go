@@ -35,6 +35,18 @@ const (
 	activationFailback activationKind = "failback"
 )
 
+// instanceOf returns the running instance's own record: the endpoint it binds and
+// the directory it writes.
+//
+// It reads the descriptor the process was given rather than asking the
+// configuration file, because everything a single instance binds or writes is
+// resolved onto that instance's record at build time. A machine's two instances
+// share one descriptor and one configuration file, so anything read from either
+// without a role is a value they would both take.
+func instanceOf(descriptor deployment.Descriptor, role redundancy.InstanceRole) deployment.Instance {
+	return descriptor.Instances.Get(deployment.Role(role == redundancy.RoleStandby))
+}
+
 // resolveRole validates the requested process role against the deployment policy.
 //
 // Every packaged launch has an explicit role. A machine that opted out rejects
@@ -61,7 +73,7 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 // opted out of warm standby rejects the standby role.
 func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.Descriptor, role redundancy.InstanceRole) (runErr error) {
 	observer := operations.FromContext(ctx)
-	statusPath := redundancy.StatusPath(cfg.InstanceDir(), descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine, role)
+	statusPath := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
 	if err := redundancy.PrepareStatusDir(statusPath); err != nil {
 		observer.Emit("platform.status_dir_failed", operations.LevelError, "platform.status", "status directory could not be created", map[string]any{operations.AttributeError: err.Error(), operations.AttributePath: statusPath})
 		return err
@@ -136,11 +148,14 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 		return err
 	}
 
+	// This instance's own address, from its own descriptor record. Neither
+	// instance can bind the other's, so a failover does not move the endpoint.
+	addr := instanceOf(descriptor, role).APIAddress
 	var listen net.ListenConfig
-	listener, err := listen.Listen(ctx, "tcp", cfg.Address())
+	listener, err := listen.Listen(ctx, "tcp", addr)
 	if err != nil {
-		observer.Emit("platform.api_listen_failed", operations.LevelError, "platform.http", "HTTP API listener failed", map[string]any{"address": cfg.Address(), operations.AttributeError: err.Error()})
-		return errors.Join(fmt.Errorf("listen on %s: %w", cfg.Address(), err), site.close(ctx))
+		observer.Emit("platform.api_listen_failed", operations.LevelError, "platform.http", "HTTP API listener failed", map[string]any{"address": addr, operations.AttributeError: err.Error()})
+		return errors.Join(fmt.Errorf("listen on %s: %w", addr, err), site.close(ctx))
 	}
 
 	// A projection that falls too far behind stops serving rather than answering
@@ -174,7 +189,6 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor deployment.De
 		return <-statusDone
 	}
 
-	addr := cfg.Address()
 	fmt.Printf("platform: %s active, listening on %s\n", role, addr)
 	observer.Emit("platform.api_listening", operations.LevelInfo, "platform.http", "HTTP API is accepting requests", map[string]any{"address": addr})
 	srv := &http.Server{

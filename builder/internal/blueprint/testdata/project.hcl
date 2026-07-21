@@ -19,8 +19,10 @@ project "customer-a" {
       # the Primary Instance's; standby is the Standby Instance's. This machine
       # opts out of a standby, so it states that and authors nothing further.
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -47,8 +49,10 @@ project "customer-a" {
       # every port below is distinct: nothing is shared between them except the
       # ownership object, which is not a port.
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -61,14 +65,15 @@ project "customer-a" {
         }
 
         standby {
-          disabled = false
+          disabled    = false
+          runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-north-local-server"
           }
 
           api {
-            port = 8081
+            local_port = 8081
           }
 
           winservice {
@@ -90,8 +95,10 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -104,14 +111,15 @@ project "customer-a" {
         }
 
         standby {
-          disabled = false
+          disabled    = false
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-master"
           }
 
           api {
-            port = 8081
+            local_port = 8081
           }
 
           winservice {
@@ -131,8 +139,10 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -145,14 +155,15 @@ project "customer-a" {
         }
 
         standby {
-          disabled = false
+          disabled    = false
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-slave"
           }
 
           api {
-            port = 8081
+            local_port = 8081
           }
 
           winservice {
@@ -172,8 +183,10 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -186,14 +199,15 @@ project "customer-a" {
         }
 
         standby {
-          disabled = false
+          disabled    = false
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-integration"
           }
 
           api {
-            port = 8081
+            local_port = 8081
           }
 
           winservice {

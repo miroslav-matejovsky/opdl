@@ -24,9 +24,16 @@ project "customer-a" {
       # Instance, which is why its blocks need no wrapper, and the Standby
       # Instance is the optional one.
       #
-      # api is the port this instance serves its local API on. Each instance has
-      # its own and binds it for its whole lifetime, not only while Active, so an
-      # operator can query a Standby Instance about itself.
+      # runtime_dir is where this instance writes its status file. Each instance
+      # has its own: two runtimes writing into one directory would overwrite each
+      # other's evidence, and nothing would report it.
+      #
+      # api is the port this instance serves its local API on. It is called
+      # local_port because the builder joins it with 127.0.0.1 and never with the
+      # machine's ip: the platform API is machine-local and is not exposed to the
+      # network. Each instance has its own and binds it for its whole lifetime,
+      # not only while Active, so an operator can query a Standby Instance about
+      # itself.
       #
       # winservice names the Windows Service that runs the instance. The platform
       # installs and manages no services and has no Service Control Manager
@@ -43,8 +50,10 @@ project "customer-a" {
       # site, so a second instance would add a process to operate without adding
       # site availability. Because it opts out, it states nothing further.
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -77,8 +86,10 @@ project "customer-a" {
       # ports is the mistake this shape invites. The builder rejects it and names
       # both listeners.
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -92,7 +103,8 @@ project "customer-a" {
         }
 
         standby {
-          disabled = false
+          disabled    = false
+          runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/standby"
 
           # lock is mandatory when standby is enabled (disabled = false).
           # The machine's two instances contend for this Windows named mutex
@@ -102,7 +114,7 @@ project "customer-a" {
           }
 
           api {
-            port = 8081
+            local_port = 8081
           }
 
           winservice {
@@ -125,8 +137,10 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -140,14 +154,15 @@ project "customer-a" {
         }
 
         standby {
-          disabled = false
+          disabled    = false
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-master"
           }
 
           api {
-            port = 8081
+            local_port = 8081
           }
 
           winservice {
@@ -168,8 +183,10 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -183,14 +200,15 @@ project "customer-a" {
         }
 
         standby {
-          disabled = false
+          disabled    = false
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-slave"
           }
 
           api {
-            port = 8081
+            local_port = 8081
           }
 
           winservice {
@@ -211,8 +229,10 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/primary"
+
         api {
-          port = 8080
+          local_port = 8080
         }
 
         winservice {
@@ -226,14 +246,15 @@ project "customer-a" {
         }
 
         standby {
-          disabled = false
+          disabled    = false
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-integration"
           }
 
           api {
-            port = 8081
+            local_port = 8081
           }
 
           winservice {

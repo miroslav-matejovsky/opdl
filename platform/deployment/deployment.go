@@ -232,8 +232,17 @@ type Instance struct {
 	// Service is the instance's Windows Service identity, present exactly when the
 	// instance is deployed.
 	Service *WinService `json:"service,omitempty"`
+	// RuntimeDir is the instance's own local runtime directory, holding its status
+	// file. It is the instance's rather than the machine's: two independent
+	// runtimes writing into one directory would overwrite each other's evidence.
+	// It takes no part in the ownership decision.
+	RuntimeDir string `json:"runtime_dir,omitempty"`
 	// APIAddress is where this instance serves its local API. Each instance has
 	// its own and binds it for its whole lifetime, not only while Active.
+	//
+	// It is always on loopback: the platform API is machine-local, authored as
+	// api.local_port and resolved onto 127.0.0.1, and no instance's API is
+	// reachable from the network.
 	APIAddress string `json:"api_address,omitempty"`
 	// Nats is this instance's own Event Fabric NATS topology.
 	Nats *Nats `json:"nats,omitempty"`
@@ -249,6 +258,10 @@ type Instance struct {
 // instances of a machine, so it carries the site's whole membership and each
 // running instance recognises itself by Machine and Role.
 //
+// A peer carries the Event Fabric addresses only. It has no api_address: the
+// platform API is bound on loopback, so another machine's API is not reachable
+// and an address stating otherwise would be one no process listens on.
+//
 // Peers are ordered by machine name, then Primary before Standby, so every
 // machine of a site sees the same list. The site is the boundary: instances of
 // another site, environment, or project are not peers.
@@ -262,8 +275,6 @@ type Peer struct {
 	// IP is the address the peer's machine is reached on. Two peers on one machine
 	// share it and differ by port.
 	IP string `json:"ip"`
-	// APIAddress is where the peer instance serves its local API.
-	APIAddress string `json:"api_address"`
 	// Nats are the peer instance's Event Fabric addresses.
 	Nats PeerNats `json:"nats"`
 }

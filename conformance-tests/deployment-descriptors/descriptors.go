@@ -50,19 +50,22 @@ const (
 	machine   = "sensor"
 	machineIP = "10.0.1.10"
 
-	apiAddr        = "10.0.1.10:8080"
-	clientAddr     = "10.0.1.10:4222"
-	clusterAddr    = "10.0.1.10:6222"
-	standbyAPIAddr = "10.0.1.10:8081"
-	standbyClient  = "10.0.1.10:4322"
-	standbyCluster = "10.0.1.10:6322"
+	// The api addresses are on loopback and the Event Fabric's are on the machine
+	// ip. That split is the contract: the platform API is machine-local, so it is
+	// resolved onto 127.0.0.1 and a peer carries no api address at all.
+	apiAddr           = "127.0.0.1:8080"
+	runtimeDir        = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
+	clientAddr        = "10.0.1.10:4222"
+	clusterAddr       = "10.0.1.10:6222"
+	standbyAPIAddr    = "127.0.0.1:8081"
+	standbyRuntimeDir = "C:/ProgramData/opdl/customer-a/north/sensor/standby"
+	standbyClient     = "10.0.1.10:4322"
+	standbyCluster    = "10.0.1.10:6322"
 
 	peerMachine        = "gateway"
 	peerIP             = "10.0.1.11"
-	peerAPIAddr        = "10.0.1.11:8080"
 	peerClientAddr     = "10.0.1.11:4222"
 	peerClusterAddr    = "10.0.1.11:6222"
-	peerStandbyAPI     = "10.0.1.11:8081"
 	peerStandbyClient  = "10.0.1.11:4322"
 	peerStandbyCluster = "10.0.1.11:6322"
 )
@@ -95,6 +98,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	if !standbyDisabled {
 		builtStandby = builderdeployment.Instance{
 			Disabled:   false,
+			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
 			Nats: &builderdeployment.Nats{
 				ClientAddress:  standbyClient,
@@ -105,6 +109,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		}
 		wantStandby = platformdeployment.Instance{
 			Disabled:   false,
+			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
 			Nats: &platformdeployment.Nats{
 				ClientAddress:  standbyClient,
@@ -120,28 +125,28 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	// Peers are ordered by machine name, then Primary before Standby, and include
 	// this machine's own instances.
 	builtPeers := []builderdeployment.Peer{
-		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP, APIAddress: peerAPIAddr,
+		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP,
 			Nats: builderdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
-		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP, APIAddress: peerStandbyAPI,
+		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP,
 			Nats: builderdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
-		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP, APIAddress: apiAddr,
+		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP,
 			Nats: builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
 	}
 	wantPeers := []platformdeployment.Peer{
-		{Site: site, Machine: peerMachine, Role: platformdeployment.RolePrimary, IP: peerIP, APIAddress: peerAPIAddr,
+		{Site: site, Machine: peerMachine, Role: platformdeployment.RolePrimary, IP: peerIP,
 			Nats: platformdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
-		{Site: site, Machine: peerMachine, Role: platformdeployment.RoleStandby, IP: peerIP, APIAddress: peerStandbyAPI,
+		{Site: site, Machine: peerMachine, Role: platformdeployment.RoleStandby, IP: peerIP,
 			Nats: platformdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
-		{Site: site, Machine: machine, Role: platformdeployment.RolePrimary, IP: machineIP, APIAddress: apiAddr,
+		{Site: site, Machine: machine, Role: platformdeployment.RolePrimary, IP: machineIP,
 			Nats: platformdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
 	}
 	if !standbyDisabled {
 		builtPeers = append(builtPeers, builderdeployment.Peer{
-			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP, APIAddress: standbyAPIAddr,
+			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP,
 			Nats: builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 		wantPeers = append(wantPeers, platformdeployment.Peer{
-			Site: site, Machine: machine, Role: platformdeployment.RoleStandby, IP: machineIP, APIAddress: standbyAPIAddr,
+			Site: site, Machine: machine, Role: platformdeployment.RoleStandby, IP: machineIP,
 			Nats: platformdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 	}
@@ -159,6 +164,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		Instances: builderdeployment.Instances{
 			Primary: builderdeployment.Instance{
 				Disabled:   false,
+				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
 				Nats: &builderdeployment.Nats{
 					ClientAddress:  clientAddr,
@@ -199,6 +205,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		Instances: platformdeployment.Instances{
 			Primary: platformdeployment.Instance{
 				Disabled:   false,
+				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
 				Nats: &platformdeployment.Nats{
 					ClientAddress:  clientAddr,
@@ -274,8 +281,29 @@ func checkWireShape(data []byte, standbyDisabled bool) error {
 	if err := verifyWireLock(wire, standbyDisabled); err != nil {
 		return err
 	}
-	if _, ok := wire["peers"]; !ok {
+	peers, ok := wire["peers"]
+	if !ok {
 		return fmt.Errorf("builder descriptor omitted peers")
+	}
+	return verifyWirePeers(peers)
+}
+
+// verifyWirePeers checks a peer carries no api address.
+//
+// The platform API is bound on loopback, so every peer's api address would be
+// 127.0.0.1 and would point a reader at itself rather than at the peer. Carrying
+// the machine ip instead would be worse: an address no process listens on, stated
+// in the descriptor as though one did. Either way the field cannot be right, so
+// the contract is that it does not exist.
+func verifyWirePeers(peers json.RawMessage) error {
+	var list []map[string]json.RawMessage
+	if err := json.Unmarshal(peers, &list); err != nil {
+		return err
+	}
+	for _, peer := range list {
+		if _, ok := peer["api_address"]; ok {
+			return fmt.Errorf("builder descriptor carries peers[].api_address: the platform API is machine-local and a peer's is not reachable")
+		}
 	}
 	return nil
 }

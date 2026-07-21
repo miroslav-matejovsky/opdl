@@ -52,16 +52,27 @@ be reassigned with runtime configuration.
 
 Use separate local paths for:
 
-- `instance_dir`: process status files;
+- `platform.runtime_dir` and `platform.standby.runtime_dir`: each instance's own
+  status file. These are authored in the project blueprint, not configured here;
+  the builder resolves them onto each instance's descriptor record.
 - `event_fabric.nats.data_dir`: durable JetStream journal data;
 - `operations.event_dir`: optional operational JSONL retention.
 
-The primary and standby must use the same configuration and the same machine
-package. `instance_dir` holds operational evidence only and is no longer part of
-the ownership decision: Primary Ownership is a kernel object named by the
-machine's compiled identity, so the two processes exclude each other even if their
-directories differ. Give them the same one anyway, so an operator reads one
-machine's status in one place.
+The primary and standby use the same configuration file and the same machine
+package, but **not** the same runtime directory. Each instance has its own,
+because two independent runtimes writing into one directory overwrite each
+other's status file and nothing reports it. The builder rejects a machine whose
+two instances are given the same path. Author them as siblings under one parent,
+so an operator still reads one machine's pair in one place:
+
+```text
+C:\ProgramData\opdl\customer-a\north\local-server\primary\process.status
+C:\ProgramData\opdl\customer-a\north\local-server\standby\process.status
+```
+
+A runtime directory holds operational evidence only and is no part of the
+ownership decision: Primary Ownership is a kernel object named in the blueprint,
+so the two processes exclude each other however their directories are placed.
 
 Ownership itself needs no provisioning. The account the platform runs as must be
 able to create objects in the `Global\` kernel namespace, which requires
@@ -89,10 +100,8 @@ boundary until TLS or mutual TLS is part of the deployment contract.
 Use the checked-in `platform/config.toml` as the schema reference:
 
 ```toml
-address = "10.0.1.10:8080"
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 
 [operations]
@@ -108,6 +117,30 @@ credentials_file = "/etc/opdl/nats-credentials.toml"
 `operations.event_dir` may be omitted or empty. Structured events still go to
 stderr. Unknown TOML keys fail startup. In particular, do not add client,
 cluster, monitor, route, or server overrides.
+
+There is no `address` and no `instance_dir` here, and both fail startup as
+unknown keys if a file left over from an earlier release still sets them.
+Everything a single instance binds or writes is authored in the blueprint and
+resolved onto that instance's descriptor record:
+
+- the API endpoint, authored as `api { local_port = 8080 }`;
+- the runtime directory, authored as `runtime_dir`.
+
+A machine's two instances read this one configuration file, so any endpoint
+stated here would be one they would both take.
+
+### The platform API is machine-local
+
+The API port is authored as `local_port` because the builder joins it with
+`127.0.0.1` and never with the machine's `ip`. **No instance's API is reachable
+from the network.** It is how an operator, or a service co-located on that host,
+asks an instance about itself; cross-machine traffic is the Event Fabric's, and
+those are the ports derived from the machine `ip`.
+
+Because it is loopback-only, the two instances of a machine may reuse a port
+number that an Event Fabric listener uses on the machine `ip` without either
+failing to bind. The builder rejects it anyway, so a machine's port map stays
+readable as one list.
 
 ## 5. Configure firewall rules
 

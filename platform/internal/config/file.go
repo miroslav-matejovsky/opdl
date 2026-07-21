@@ -12,15 +12,13 @@ import (
 
 // file is the schema of the platform's TOML configuration file. It carries the
 // settings a user may set without touching the embedded deployment descriptor.
+// Neither the API address nor the runtime directory is here. Both are an
+// instance's own, both are resolved onto the instance's descriptor record, and a
+// file that still sets either fails at rejectUnknownKeys rather than being
+// quietly ignored.
 type file struct {
-	Address           string `toml:"address"`
 	ReadHeaderTimeout string `toml:"read_header_timeout"`
 	ShutdownTimeout   string `toml:"shutdown_timeout"`
-	// InstanceDir is the local runtime directory holding this machine's
-	// active.lock file and runtime status files. It is required, is shared by both
-	// processes of a machine, and must be on a local filesystem. It is not the
-	// journal store: it carries local coordination and diagnostics, not site history.
-	InstanceDir string `toml:"instance_dir"`
 	// LagBound bounds how long a process's projection may lag the journal before it
 	// stops being ready to take over, and before an active process stops serving rather than
 	// answering from a stale view. It is required and must be positive.
@@ -102,13 +100,6 @@ func loadFile(path string) (file, error) {
 	if err := rejectUnknownKeys(path, meta); err != nil {
 		return file{}, err
 	}
-	f.Address = strings.TrimSpace(f.Address)
-	if f.Address == "" {
-		return file{}, fmt.Errorf("configuration file %s: address is required", path)
-	}
-	if err := validateAddress(f.Address); err != nil {
-		return file{}, fmt.Errorf("configuration file %s: %w", path, err)
-	}
 	f.ReadHeaderTimeout = strings.TrimSpace(f.ReadHeaderTimeout)
 	if f.ReadHeaderTimeout == "" {
 		return file{}, fmt.Errorf("configuration file %s: read_header_timeout is required", path)
@@ -116,10 +107,6 @@ func loadFile(path string) (file, error) {
 	f.ShutdownTimeout = strings.TrimSpace(f.ShutdownTimeout)
 	if f.ShutdownTimeout == "" {
 		return file{}, fmt.Errorf("configuration file %s: shutdown_timeout is required", path)
-	}
-	f.InstanceDir = strings.TrimSpace(f.InstanceDir)
-	if f.InstanceDir == "" {
-		return file{}, fmt.Errorf("configuration file %s: instance_dir is required", path)
 	}
 	f.LagBound = strings.TrimSpace(f.LagBound)
 	if f.LagBound == "" {

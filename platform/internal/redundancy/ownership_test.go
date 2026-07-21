@@ -33,17 +33,23 @@ func openLock(t *testing.T, object string, role redundancy.InstanceRole) *redund
 	return f
 }
 
-func TestStatusPathIsPerRole(t *testing.T) {
+// TestStatusPathIsInsideTheInstancesOwnDirectory checks the path is the instance's
+// runtime directory and nothing else.
+//
+// It used to qualify the file by project, machine, and role, because one shared
+// directory held every instance on the host. The directory is now authored per
+// instance, so two instances are separated by the directory they were given
+// rather than by a name the runtime composes.
+func TestStatusPathIsInsideTheInstancesOwnDirectory(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	a := redundancy.StatusPath(dir, "proj", "env", "site", "machine", redundancy.RolePrimary)
-	b := redundancy.StatusPath(dir, "proj", "env", "site", "machine", redundancy.RoleStandby)
+	primaryDir, standbyDir := t.TempDir(), t.TempDir()
+	a := redundancy.StatusPath(primaryDir)
+	b := redundancy.StatusPath(standbyDir)
 
-	// The processes share one machine directory but write separate status files.
-	require.Equal(t, filepath.Dir(a), filepath.Dir(b))
-	require.NotEqual(t, a, b)
-	require.Equal(t, filepath.Join(dir, "proj-env-site-machine", "process-primary.status"), a)
+	require.Equal(t, filepath.Join(primaryDir, "process.status"), a)
+	require.Equal(t, primaryDir, filepath.Dir(a))
+	require.NotEqual(t, a, b, "two instances given their own directories write two files")
 }
 
 func TestOpenLockRejectsInvalidRole(t *testing.T) {
@@ -182,8 +188,8 @@ func TestOwnershipIdentityIsIndependentOfTheStatusDirectory(t *testing.T) {
 
 	// Distinct status directories, which is what a misconfigured pair would have.
 	require.NotEqual(t,
-		redundancy.StatusPath(t.TempDir(), "p", "e", "s", "m", redundancy.RolePrimary),
-		redundancy.StatusPath(t.TempDir(), "p", "e", "s", "m", redundancy.RoleStandby))
+		redundancy.StatusPath(t.TempDir()),
+		redundancy.StatusPath(t.TempDir()))
 
 	acquired, err := a.TryAcquire()
 	require.NoError(t, err)

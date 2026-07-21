@@ -2,8 +2,6 @@ package config
 
 import (
 	"fmt"
-	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,12 +13,13 @@ import (
 // deployment descriptor (see package embedded, which the builder stages before
 // compiling) and the platform's TOML configuration file, which supplies settings
 // a user must explicitly specify without rebuilding the binary.
+// Everything an instance binds or writes on its own is read from the descriptor
+// by role, not held here: the configuration file is what a site decides for the
+// machine, and a machine's two instances read the same copy of it.
 type Config struct {
 	descriptor        deployment.Descriptor
-	address           string
 	readHeaderTimeout time.Duration
 	shutdownTimeout   time.Duration
-	instanceDir       string
 	lagBound          time.Duration
 	operations        Operations
 	eventFabric       EventFabric
@@ -61,10 +60,8 @@ func Load(configPath string) (*Config, error) {
 
 	cfg := &Config{
 		descriptor:        d,
-		address:           f.Address,
 		readHeaderTimeout: readHeaderTimeout,
 		shutdownTimeout:   shutdownTimeout,
-		instanceDir:       f.InstanceDir,
 		lagBound:          lagBound,
 		operations:        f.Operations,
 		eventFabric:       f.EventFabric,
@@ -108,28 +105,14 @@ func validateLagBound(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// validateAddress checks addr is a host:port the platform can listen on. The host
-// may be empty (all interfaces); the port must be a number in range.
-func validateAddress(addr string) error {
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("invalid address %q: %w", addr, err)
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil {
-		return fmt.Errorf("invalid address %q: port is not a number", addr)
-	}
-	if n < 1 || n > 65535 {
-		return fmt.Errorf("invalid address %q: port %d out of range 1-65535", addr, n)
-	}
-	return nil
-}
-
 // Descriptor returns the deployment descriptor the platform booted with.
 func (c *Config) Descriptor() deployment.Descriptor { return c.descriptor }
 
-// Address returns the host:port the platform's API listens on.
-func (c *Config) Address() string { return c.address }
+// Nothing here answers for a single instance. The API address and the runtime
+// directory are resolved onto each instance's record in the descriptor, and the
+// runtime reads its own from there; see app.instanceOf. A Config accessor taking
+// a role would be a second way to reach the same field, and the one the caller
+// picked would be the one that could be wrong.
 
 // ReadHeaderTimeout returns the maximum duration allowed for reading HTTP request headers.
 func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout }
@@ -137,11 +120,6 @@ func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout 
 // ShutdownTimeout returns the maximum duration allowed for graceful server and
 // Event Fabric shutdown.
 func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
-
-// InstanceDir returns the local runtime directory holding this machine's
-// per-instance status files. Both instances share it. It takes no part in the
-// ownership decision.
-func (c *Config) InstanceDir() string { return c.instanceDir }
 
 // LagBound returns the configured projection lag bound. A process lagging beyond
 // it is not ready to take over, and an active process beyond it stops serving.
@@ -165,7 +143,12 @@ func (c *Config) Credentials() (username, password string) { return c.username, 
 // Summary renders the effective configuration as a human-readable block for
 // logging at startup. It names the credentials file but never reads a secret
 // into the log.
-func (c *Config) Summary() string {
+//
+// It takes the running instance's role so a two-instance machine's two startup
+// blocks are told apart: both list the same descriptor and the same
+// configuration file, and the only thing that differs is which instance printed
+// it.
+func (c *Config) Summary(standby bool) string {
 	d := c.descriptor
 	var b strings.Builder
 	fmt.Fprintf(&b, "platform configuration (machine=%s):\n", d.Machine)
@@ -179,27 +162,28 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
-	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances))
+	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, deployment.Role(standby)))
 	// A machine's primary and standby processes contend for one Windows named
 	// mutex, so printing it at startup is how an operator finds which object they
 	// contend for.
 	fmt.Fprintf(&b, "    lock         %s\n", lockSummary(d.Lock))
 	fmt.Fprintf(&b, "    peers        %s\n", peersSummary(d.Peers))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
-	fmt.Fprintf(&b, "    address             %s\n", c.address)
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
-	fmt.Fprintf(&b, "    instance_dir        %s\n", c.instanceDir)
 	fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
 	fmt.Fprintf(&b, "    operations.event_dir %s\n", optionalPathSummary(c.operations.EventDir))
 	fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
 	return b.String()
 }
 
-// instancesSummary renders which of the machine's two instances are deployed and
-// where each serves its API, so a startup block states both endpoints whichever
-// instance printed it.
-func instancesSummary(instances deployment.Instances) string {
+// instancesSummary renders which of the machine's two instances are deployed,
+// where each serves its API, and which one is reading this block.
+//
+// Both endpoints are stated whichever instance printed it, because an operator
+// looking at one instance's log is usually trying to find the other. The marker
+// on self is what keeps the two logs of one machine from being identical.
+func instancesSummary(instances deployment.Instances, self deployment.PlatformInstanceRole) string {
 	parts := make([]string, 0, 2)
 	for _, role := range []deployment.PlatformInstanceRole{deployment.RolePrimary, deployment.RoleStandby} {
 		instance := instances.Get(role)
@@ -207,7 +191,11 @@ func instancesSummary(instances deployment.Instances) string {
 			parts = append(parts, fmt.Sprintf("%s=(not deployed)", role))
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s=%s", role, instance.APIAddress))
+		marker := ""
+		if role == self {
+			marker = " (this instance)"
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s%s", role, instance.APIAddress, marker))
 	}
 	return strings.Join(parts, " ")
 }

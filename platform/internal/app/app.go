@@ -44,7 +44,7 @@ func Run(args []string) (runErr error) {
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, recorder.Close()) }()
-	fmt.Println(cfg.Summary())
+	fmt.Println(cfg.Summary(role == redundancy.RoleStandby))
 	// The service name lets an operator match this process to an entry in the
 	// services list. The platform manages no services; it only reports which one
 	// the package says should be running this instance.

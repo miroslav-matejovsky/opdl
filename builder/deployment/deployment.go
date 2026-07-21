@@ -114,8 +114,17 @@ type Instance struct {
 	// whoever installs the services; the runtime does not read it and the platform
 	// manages no services.
 	Service *WinService `json:"service,omitempty"`
-	// APIAddress is where this instance serves its local API, derived from the
-	// machine ip and the instance's authored api port.
+	// RuntimeDir is the instance's own local runtime directory, holding its status
+	// file. It is the instance's rather than the machine's: two independent
+	// runtimes writing into one directory would overwrite each other's evidence,
+	// and nothing would report it. It takes no part in the ownership decision.
+	RuntimeDir string `json:"runtime_dir,omitempty"`
+	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
+	// the instance's authored api local_port.
+	//
+	// It is always on loopback. The platform API is machine-local, so this address
+	// is never derived from the machine ip and no instance's API is reachable from
+	// the network. Validate enforces that.
 	//
 	// Each instance has its own, and binds it for its whole lifetime rather than
 	// only while Active. A caller that needs the Active instance resolves which
@@ -158,6 +167,10 @@ type WinService struct {
 // The builder fills them from the site portion of the project topology, so an
 // instance boots knowing every member without discovering anything at runtime.
 //
+// Those addresses are the Event Fabric's only. A peer has no api_address: the
+// platform API is bound on loopback, so another machine's API is not reachable
+// and an address stating otherwise would be one no process listens on.
+//
 // Peers are ordered by machine name, then Primary before Standby, so every
 // machine of a site derives the same list however the blueprint was authored. The
 // site is the boundary: instances of another site, environment, or project are
@@ -173,8 +186,6 @@ type Peer struct {
 	// IP is the address the peer's machine is reached on. Two peers on one machine
 	// share it and differ by port.
 	IP string `json:"ip"`
-	// APIAddress is where the peer instance serves its local API.
-	APIAddress string `json:"api_address"`
 	// Nats are the peer instance's Event Fabric addresses.
 	Nats PeerNats `json:"nats"`
 }
@@ -316,6 +327,9 @@ func (d Descriptor) validateEndpoints() error {
 		if d.Instances.Standby.APIAddress != "" {
 			return fmt.Errorf("instances.standby.api_address is set but the standby is disabled")
 		}
+		if d.Instances.Standby.RuntimeDir != "" {
+			return fmt.Errorf("instances.standby.runtime_dir is set but the standby is disabled")
+		}
 		if d.Instances.Standby.Nats != nil {
 			return fmt.Errorf("instances.standby.nats is set but the standby is disabled")
 		}
@@ -323,6 +337,13 @@ func (d Descriptor) validateEndpoints() error {
 	}
 	if err := validateInstanceEndpoints("instances.standby", d.Instances.Standby); err != nil {
 		return err
+	}
+	// The two instances write their status files into their own directories. One
+	// directory for both would have them overwriting each other's evidence, and
+	// unlike a shared listener nothing would report it.
+	if d.Instances.Primary.RuntimeDir == d.Instances.Standby.RuntimeDir {
+		return fmt.Errorf("instances.primary.runtime_dir and instances.standby.runtime_dir are both %q; the two instances run together and cannot share a runtime directory",
+			d.Instances.Primary.RuntimeDir)
 	}
 	bound := []struct {
 		where   string
@@ -346,10 +367,22 @@ func (d Descriptor) validateEndpoints() error {
 	return nil
 }
 
-// validateInstanceEndpoints checks one deployed instance's own addresses.
+// validateInstanceEndpoints checks one deployed instance's own addresses and its
+// runtime directory.
 func validateInstanceEndpoints(prefix string, instance Instance) error {
 	if err := requireAddress(prefix+".api_address", instance.APIAddress); err != nil {
 		return err
+	}
+	// The platform API is machine-local by design, authored as api.local_port and
+	// resolved onto 127.0.0.1. Checking it here is what makes that a property of
+	// the deployment contract rather than a convention the resolver happens to
+	// follow: a descriptor that would expose an instance's API to the network
+	// cannot be built.
+	if err := requireLoopback(prefix+".api_address", instance.APIAddress); err != nil {
+		return err
+	}
+	if strings.TrimSpace(instance.RuntimeDir) == "" {
+		return fmt.Errorf("%s.runtime_dir is required", prefix)
 	}
 	if instance.Nats == nil {
 		return fmt.Errorf("%s.nats is required", prefix)
@@ -386,20 +419,16 @@ func (d Descriptor) validatePeers() error {
 		if net.ParseIP(peer.IP) == nil {
 			return fmt.Errorf("peer %s: ip %q is not a valid IP address", peer, peer.IP)
 		}
-		if err := requireAddress(fmt.Sprintf("peer %s: api_address", peer), peer.APIAddress); err != nil {
-			return err
-		}
 		if err := requireAddress(fmt.Sprintf("peer %s: nats.client_address", peer), peer.NatsClient()); err != nil {
 			return err
 		}
 		if err := requireAddress(fmt.Sprintf("peer %s: nats.cluster_address", peer), peer.NatsCluster()); err != nil {
 			return err
 		}
-		// Every listener in the site is distinct. Two peers on one machine differ
-		// by port, and two machines differ by ip, so a repeat means an instance
-		// would fail to bind or would silently answer for another.
+		// Every Event Fabric listener in the site is distinct. Two peers on one
+		// machine differ by port, and two machines differ by ip, so a repeat means
+		// an instance would fail to bind or would silently answer for another.
 		for _, listener := range []struct{ what, address string }{
-			{"api_address", peer.APIAddress},
 			{"nats.client_address", peer.NatsClient()},
 			{"nats.cluster_address", peer.NatsCluster()},
 		} {
@@ -591,6 +620,20 @@ func requireAddress(where, addr string) error {
 	}
 	if err := validateAddress(addr); err != nil {
 		return fmt.Errorf("%s: %w", where, err)
+	}
+	return nil
+}
+
+// requireLoopback checks a host:port field is bound on the loopback interface, so
+// nothing outside the machine can reach it.
+func requireLoopback(where, addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%s: %q must be host:port: %w", where, addr, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("%s %q is not on the loopback interface; the platform API is machine-local and is never exposed to the network", where, addr)
 	}
 	return nil
 }

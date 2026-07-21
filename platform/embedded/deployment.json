@@ -19,6 +19,7 @@
         "name": "opdl-mock-local-mock-primary",
         "display_name": "OPDL mock local mock (Primary Instance)"
       },
+      "runtime_dir": ".data/instance/primary",
       "api_address": "127.0.0.1:8080",
       "nats": {
         "client_address": "127.0.0.1:4222",
@@ -39,7 +40,6 @@
       "machine": "mock",
       "role": "primary",
       "ip": "127.0.0.1",
-      "api_address": "127.0.0.1:8080",
       "nats": {
         "client_address": "127.0.0.1:4222",
         "cluster_address": "127.0.0.1:6222"

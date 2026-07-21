@@ -10,11 +10,15 @@ one machine is involved.
 1. Find `platform.process_stopped` and its `attributes.error`.
 2. Confirm the package identity in `manifest.json` and `deployment.json` matches
    the host.
-3. Check TOML syntax and unknown-key errors. Remove old NATS socket overrides.
-4. Verify `instance_dir`, journal data, credentials, and operations directories
-   are writable by the service identity.
-5. Check the configured API address and resolved NATS addresses are assigned to
-   the host and not already bound.
+3. Check TOML syntax and unknown-key errors. Remove old NATS socket overrides,
+   and any leftover `address` or `instance_dir`: both are an instance's own now,
+   both come from the descriptor, and a file that sets either fails to load.
+4. Verify this instance's `runtime_dir`, and the journal data, credentials, and
+   operations directories, are writable by the service identity. Read the exact
+   runtime directory from the instance's record in `deployment.json`.
+5. Check the resolved NATS addresses are assigned to the host and not already
+   bound. The API address is on `127.0.0.1` by construction, so only its port can
+   conflict, and only with something else on loopback.
 
 If no operational event exists, configuration loading or role validation failed
 before the recorder opened. Use the plain stderr error.

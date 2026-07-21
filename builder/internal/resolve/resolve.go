@@ -100,7 +100,8 @@ func instance(site blueprint.Site, machine blueprint.Machine, role deployment.Pl
 	return deployment.Instance{
 		Disabled:   false,
 		Service:    winService(machine, role == deployment.RoleStandby),
-		APIAddress: address(machine.IP, endpoints.APIPort),
+		RuntimeDir: machine.RuntimeDir(role == deployment.RoleStandby),
+		APIAddress: loopbackAddress(endpoints.APILocalPort),
 		Nats:       &nats,
 	}
 }
@@ -149,11 +150,10 @@ func peers(site blueprint.Site) []deployment.Peer {
 				continue
 			}
 			peers = append(peers, deployment.Peer{
-				Site:       site.Name,
-				Machine:    machine.Name,
-				Role:       role,
-				IP:         machine.IP,
-				APIAddress: address(machine.IP, endpoints.APIPort),
+				Site:    site.Name,
+				Machine: machine.Name,
+				Role:    role,
+				IP:      machine.IP,
 				Nats: deployment.PeerNats{
 					ClientAddress:  address(machine.IP, endpoints.ClientPort),
 					ClusterAddress: address(machine.IP, endpoints.ClusterPort),
@@ -255,4 +255,15 @@ const smallSiteMax = 2
 // address joins a machine's ip with one of its instances' authored ports.
 func address(ip string, port int) string {
 	return net.JoinHostPort(ip, strconv.Itoa(port))
+}
+
+// loopbackAddress joins an instance's authored api local_port with 127.0.0.1.
+//
+// The platform API is machine-local: it answers for the instance running on that
+// host, to an operator or a co-located service. It is never joined with the
+// machine's ip, so no deployment can reach another machine's API and none of
+// these ports is exposed to the network. Cross-machine traffic is the Event
+// Fabric's, and those addresses are the ones derived from the machine ip.
+func loopbackAddress(port int) string {
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 }

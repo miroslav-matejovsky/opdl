@@ -149,14 +149,16 @@ var projectFixtures = map[string][]machineFixture{
 type renderedMachine struct {
 	Name string
 	IP   string
-	// The Primary Instance's ports.
+	// The Primary Instance's ports and its own runtime directory.
 	APIPort     int
+	RuntimeDir  string
 	ClientPort  int
 	ClusterPort int
-	// The Standby Instance's ports, zero when the machine deploys none. The two
-	// instances run together on one host, so every one of these is its own
-	// listener and none may repeat.
+	// The Standby Instance's, empty or zero when the machine deploys none. The
+	// two instances run together on one host, so every one of these is its own
+	// listener or directory and none may repeat.
 	StandbyAPIPort     int
+	StandbyRuntimeDir  string
 	StandbyClientPort  int
 	StandbyClusterPort int
 	StandbyDisabled    bool
@@ -189,9 +191,14 @@ func runToken(t *testing.T) string {
 	return "opdl-scenario-" + hex.EncodeToString(token)
 }
 
-// natsPorts is one machine's reserved NATS ports, kept so a scenario can assert
-// what the deployment should have derived.
-type natsPorts struct {
+// reservedEndpoints is one machine's reserved ports and directories, kept so a
+// scenario can assert what the deployment should have derived from the blueprint
+// it was rendered into.
+type reservedEndpoints struct {
+	// apiPort is the Primary Instance's loopback API port. The builder joins it
+	// with 127.0.0.1, never with the machine's ip, so these are reserved on
+	// 127.0.0.1 for every machine however many loopback addresses the site uses.
+	apiPort int
 	client  int
 	cluster int
 }
@@ -243,26 +250,64 @@ func scenarioDir(t *testing.T) string {
 	return dir
 }
 
-// stageBlueprint allocates each machine's NATS ports from the testnet pool and
-// renders the project's blueprint into a temporary blueprint root.
-func stageBlueprint(t *testing.T, project string) (root string, ports map[string]natsPorts) {
+// apiPortsWanted counts the API ports a project's instances need: one per
+// deployed instance.
+func apiPortsWanted(fixtures []machineFixture) int {
+	wanted := 0
+	for _, fixture := range fixtures {
+		wanted++
+		if !fixture.standbyDisabled {
+			wanted++
+		}
+	}
+	return wanted
+}
+
+// runtimeDirFor is one instance's own local runtime directory.
+//
+// It is per instance and per machine because several machines share this host, so
+// the isolation the deployed shape gets from two hosts has to be rendered in
+// here, exactly as the per-run mutex name is.
+func runtimeDirFor(workDir, machine, role string) string {
+	return filepath.ToSlash(filepath.Join(workDir, "instance-"+machine, role))
+}
+
+// stageBlueprint allocates each machine's ports from the testnet pool, names each
+// instance's runtime directory, and renders the project's blueprint into a
+// temporary blueprint root.
+func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoints map[string]reservedEndpoints) {
 	t.Helper()
 	fixtures, ok := projectFixtures[project]
 	require.Truef(t, ok, "no blueprint fixture for project %q", project)
 
 	data := renderedProject{Name: project, Site: scenarioSite, RunToken: runToken(t)}
-	ports = make(map[string]natsPorts, len(fixtures))
+	endpoints = make(map[string]reservedEndpoints, len(fixtures))
+
+	// Every instance's API port comes from one reservation on 127.0.0.1, because
+	// that is the only interface any of them is resolved onto. Reserving them per
+	// machine ip the way the NATS ports are would say nothing about whether two
+	// machines had been given the same loopback port, and the collision would only
+	// appear as the second machine failing to bind.
+	apiPorts, err := testnet.Take("127.0.0.1", apiPortsWanted(fixtures))
+	require.NoError(t, err)
+	nextAPIPort := 0
+	takeAPIPort := func() int {
+		port := apiPorts[nextAPIPort]
+		nextAPIPort++
+		return port
+	}
 
 	for _, fixture := range fixtures {
-		// Take from this machine's own loopback address. A port is only free per
-		// interface, so taking on 127.0.0.1 would say nothing about 127.0.0.2.
+		// Take the Event Fabric's ports from this machine's own loopback address.
+		// A port is only free per interface, so taking on 127.0.0.1 would say
+		// nothing about 127.0.0.2.
 		//
-		// A machine that deploys both instances needs six: each instance serves
-		// its own API and runs its own Event Fabric server. Reserving them all in
-		// one call is what keeps them distinct, which the builder requires.
-		wanted := 3
+		// A machine that deploys both instances needs four: each instance runs its
+		// own Event Fabric server. Reserving them in one call is what keeps them
+		// distinct, which the builder requires.
+		wanted := 2
 		if !fixture.standbyDisabled {
-			wanted = 6
+			wanted = 4
 		}
 		p, err := testnet.Take(fixture.ip, wanted)
 		require.NoError(t, err)
@@ -270,18 +315,24 @@ func stageBlueprint(t *testing.T, project string) (root string, ports map[string
 		machine := renderedMachine{
 			Name:            fixture.name,
 			IP:              fixture.ip,
-			APIPort:         p[0],
-			ClientPort:      p[1],
-			ClusterPort:     p[2],
+			APIPort:         takeAPIPort(),
+			RuntimeDir:      runtimeDirFor(workDir, fixture.name, "primary"),
+			ClientPort:      p[0],
+			ClusterPort:     p[1],
 			StandbyDisabled: fixture.standbyDisabled,
 		}
 		if !fixture.standbyDisabled {
-			machine.StandbyAPIPort = p[3]
-			machine.StandbyClientPort = p[4]
-			machine.StandbyClusterPort = p[5]
+			machine.StandbyAPIPort = takeAPIPort()
+			machine.StandbyRuntimeDir = runtimeDirFor(workDir, fixture.name, "standby")
+			machine.StandbyClientPort = p[2]
+			machine.StandbyClusterPort = p[3]
 		}
 		data.Machines = append(data.Machines, machine)
-		ports[fixture.name] = natsPorts{client: machine.ClientPort, cluster: machine.ClusterPort}
+		endpoints[fixture.name] = reservedEndpoints{
+			apiPort: machine.APIPort,
+			client:  machine.ClientPort,
+			cluster: machine.ClusterPort,
+		}
 	}
 
 	root = filepath.Join(scenarioDir(t), "blueprints")
@@ -294,7 +345,7 @@ func stageBlueprint(t *testing.T, project string) (root string, ports map[string
 	require.NoError(t, tmpl.Execute(&rendered, data))
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "project.hcl"), rendered.Bytes(), 0o644))
 
-	return root, ports
+	return root, endpoints
 }
 
 // buildProject drives the builder CLI to build every machine of a blueprint into
@@ -348,22 +399,26 @@ func readManifest(t *testing.T, binaryPath string) packageManifest {
 
 // sockets are one machine's addresses and its local directories.
 //
-// Only api, dataDir, and instanceDir are runtime settings: they are the
-// machine's own concerns, and a site owns them. The client and cluster addresses
-// are not settings at all here. They were rendered into the blueprint before the
-// build and are carried only so a scenario can assert what the deployment should
-// have derived from them.
+// Only dataDir and eventDir are runtime settings: they are the machine's own
+// concerns, and a site owns them. Everything else was rendered into the blueprint
+// before the build and is carried only so a scenario can reach a machine and
+// assert what the deployment should have derived.
+//
+// The API address moved into that second group in stage 04, along with each
+// instance's runtime directory. Both are an instance's rather than a machine's,
+// so the descriptor resolves them per instance and the configuration file cannot
+// state either. The runtime directories are not carried here at all: they are
+// derived per role by machine.statusPath.
 //
 // There is no monitor address. The platform runs no NATS monitoring listener;
 // its status files are the local operational surface.
 type sockets struct {
-	api         string
-	dataDir     string
-	instanceDir string
-	eventDir    string
+	dataDir  string
+	eventDir string
 
-	// client and cluster are the addresses the blueprint was rendered with, for
-	// diagnostics and assertions only. Nothing writes them to a config file.
+	// api, client, and cluster are the blueprint's, for reaching a machine and
+	// for assertions. Nothing writes them to a config file.
+	api     string
 	client  string
 	cluster string
 }
@@ -400,23 +455,21 @@ func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 		budget.Release(nMachines)
 	})
 
-	blueprints, ports := stageBlueprint(t, project)
+	blueprints, endpoints := stageBlueprint(t, project, workDir)
 	buildProject(ctx, t, blueprints, outDir, project)
 
 	s := &site{project: project, outDir: outDir, workDir: workDir}
-	// The API address stays a runtime setting: it is the machine's own public
-	// endpoint, not site topology, so a site may move it without a rebuild.
-	apiPorts, err := testnet.Take("127.0.0.1", len(fixtures))
-	require.NoError(t, err)
-
-	for i, fixture := range fixtures {
+	for _, fixture := range fixtures {
+		reserved := endpoints[fixture.name]
 		s.machines = append(s.machines, prepareMachine(t, s, fixture.name, sockets{
-			api:         net.JoinHostPort("127.0.0.1", strconv.Itoa(apiPorts[i])),
-			dataDir:     filepath.Join(workDir, "nats-"+fixture.name),
-			instanceDir: filepath.Join(workDir, "instance-"+fixture.name),
-			eventDir:    filepath.Join(workDir, "operations-"+fixture.name),
-			client:      net.JoinHostPort(fixture.ip, strconv.Itoa(ports[fixture.name].client)),
-			cluster:     net.JoinHostPort(fixture.ip, strconv.Itoa(ports[fixture.name].cluster)),
+			dataDir:  filepath.Join(workDir, "nats-"+fixture.name),
+			eventDir: filepath.Join(workDir, "operations-"+fixture.name),
+			// The API address the builder resolved: this machine's authored
+			// local_port on 127.0.0.1. A scenario reaches a machine here rather
+			// than at an address it chose, because it no longer chooses one.
+			api:     net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
+			client:  net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.client)),
+			cluster: net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.cluster)),
 		}))
 	}
 
@@ -503,6 +556,10 @@ type machine struct {
 	project string
 	// name is the deployment machine identity.
 	name string
+	// workDir is the site's scratch space, and the root the blueprint's runtime
+	// directories were rendered under. It is how a scenario finds either
+	// instance's status file; see statusPath.
+	workDir string
 	// url is the base URL of its registration API, known from the moment it is
 	// prepared, whether or not it is running.
 	url string
@@ -592,9 +649,14 @@ func (p *managedProcess) stopGracefully(t *testing.T) {
 	require.NoError(t, exitErr, "%s did not stop cleanly:\n%s", p.role, p.Logs())
 }
 
+// statusPath is where one of this machine's instances writes its status file.
+//
+// It composes nothing the runtime does not: each instance's runtime directory was
+// authored in the blueprint by runtimeDirFor, and the runtime writes
+// process.status inside the directory it was given. The project, site, and role
+// qualifiers this path used to carry now live in the authored directory itself.
 func (m *machine) statusPath(role string) string {
-	machineDir := strings.Join([]string{m.project, "development", scenarioSite, m.name}, "-")
-	return filepath.Join(m.sockets.instanceDir, machineDir, "process-"+role+".status")
+	return filepath.Join(runtimeDirFor(m.workDir, m.name, role), "process.status")
 }
 
 func (m *machine) readStatus(role string) (processStatus, error) {
@@ -735,6 +797,7 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 	m := &machine{
 		project:    s.project,
 		name:       name,
+		workDir:    s.workDir,
 		url:        "http://" + reserved.api,
 		sockets:    reserved,
 		binaryPath: binaryPath,
@@ -746,8 +809,14 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 }
 
 // platformConfig renders a platform configuration holding only what a site
-// owns: where this machine answers, where its journal and coordination state
-// live, and its timeouts.
+// owns: where this machine's journal and operational events live, and its
+// timeouts.
+//
+// It carries no API address and no runtime directory. Both are an instance's
+// own, both were authored in the blueprint and resolved onto that instance's
+// descriptor record, and the runtime rejects a configuration file that sets
+// either. A machine's two instances read this one file, so anything an instance
+// binds or writes that appeared here would be a value they would both take.
 //
 // The three tolerances are deliberately looser than platform/config.toml's 30s.
 // They bound how long a machine puts up with a slow environment before giving
@@ -766,10 +835,8 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 // that could still override them would be exercising a path no deployment has,
 // which is what let the warm standby defect stay hidden.
 func platformConfig(reserved sockets) []byte {
-	return fmt.Appendf(nil, `address = %q
-read_header_timeout = "5s"
+	return fmt.Appendf(nil, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = %q
 lag_bound = "2m"
 [operations]
 event_dir = %q
@@ -777,7 +844,7 @@ event_dir = %q
 data_dir = %q
 startup_timeout = "60s"
 catch_up_timeout = "60s"
-`, reserved.api, filepath.ToSlash(reserved.instanceDir), filepath.ToSlash(reserved.eventDir), filepath.ToSlash(reserved.dataDir))
+`, filepath.ToSlash(reserved.eventDir), filepath.ToSlash(reserved.dataDir))
 }
 
 // start runs a prepared machine.

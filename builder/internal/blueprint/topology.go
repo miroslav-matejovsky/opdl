@@ -74,6 +74,8 @@ type Machine struct {
 // machine is shared between them except the ownership object, which is not a
 // port.
 type Platform struct {
+	// RuntimeDir is the Primary Instance's local runtime directory. Required.
+	RuntimeDir string `hcl:"runtime_dir,optional"`
 	// API is the Primary Instance's local API endpoint policy.
 	API *API `hcl:"api,block"`
 	// WinService is the Primary Instance's Windows Service identity.
@@ -81,24 +83,32 @@ type Platform struct {
 	// Nats is the Primary Instance's Event Fabric NATS port policy.
 	Nats *Nats `hcl:"nats,block"`
 	// Standby is the machine's local redundancy policy, and where a deployed
-	// Standby Instance states its own lock, api, winservice, and nats.
+	// Standby Instance states its own lock, runtime_dir, api, winservice, and nats.
 	Standby *Standby `hcl:"standby,block"`
 }
 
 // API is one instance's local API endpoint policy.
 //
-// Only the port is authored. The builder joins it with the machine's ip to derive
-// the address the instance serves on, the same split the nats block follows: a
-// blueprint states what a machine needs open, and the builder derives what
-// reaches it.
+// # The API is machine-local
+//
+// Only the port is authored, and it is named local_port because the builder joins
+// it with 127.0.0.1 and never with the machine's ip. The platform API is how an
+// operator, or a service co-located on that host, asks this instance about
+// itself; it is not how machines reach each other. Cross-machine traffic is the
+// Event Fabric's, and the nats block is where the ports derived from the machine
+// ip are authored.
+//
+// The name carries the constraint so a blueprint cannot be authored in the belief
+// that this port will be reachable from the network. Nothing binds it off
+// loopback, and the resolved descriptor is validated to say so.
 //
 // Each instance has its own port because both bind theirs for their whole
 // lifetime, not only while Active. That is what lets an operator ask a Standby
 // Instance about itself, which a single endpoint owned by whoever is Active
 // cannot answer.
 type API struct {
-	// Port is the port this instance serves its local API on.
-	Port int `hcl:"port"`
+	// LocalPort is the loopback port this instance serves its local API on.
+	LocalPort int `hcl:"local_port"`
 }
 
 // maxWinServiceName bounds a Windows Service name. The Service Control Manager
@@ -177,6 +187,9 @@ type Standby struct {
 	// Disabled opts the machine out of a second local process. It is required, so
 	// omitting the attribute cannot silently enable or disable redundancy.
 	Disabled bool `hcl:"disabled"`
+	// RuntimeDir is the Standby Instance's local runtime directory. It is required
+	// when the Standby Instance is deployed and rejected when it is not.
+	RuntimeDir string `hcl:"runtime_dir,optional"`
 	// Lock is the machine's local ownership lock policy. It is required when the
 	// Standby Instance is deployed and rejected when it is not.
 	Lock *Lock `hcl:"lock,block"`
@@ -311,6 +324,9 @@ func validatePlatform(machine Machine) error {
 	if err := validateStandbyEndpoints(machine); err != nil {
 		return err
 	}
+	if err := validateRuntimeDirs(machine); err != nil {
+		return err
+	}
 	if err := validateMachinePorts(machine); err != nil {
 		return err
 	}
@@ -326,7 +342,7 @@ func validateInstanceEndpoints(machine Machine, block string, api *API, nats *Na
 	if api == nil {
 		return fmt.Errorf("machine %q: %s.api block is required", machine.Name, block)
 	}
-	if err := validatePort(machine.Name, block+".api.port", api.Port); err != nil {
+	if err := validatePort(machine.Name, block+".api.local_port", api.LocalPort); err != nil {
 		return err
 	}
 	if nats == nil {
@@ -346,6 +362,9 @@ func validateStandbyEndpoints(machine Machine) error {
 	if !standby.Disabled {
 		return validateInstanceEndpoints(machine, "platform.standby", standby.API, standby.Nats)
 	}
+	if strings.TrimSpace(standby.RuntimeDir) != "" {
+		return fmt.Errorf("machine %q: platform.standby.runtime_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	}
 	if standby.Lock != nil {
 		return fmt.Errorf("machine %q: platform.standby.lock is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
@@ -354,6 +373,37 @@ func validateStandbyEndpoints(machine Machine) error {
 	}
 	if standby.Nats != nil {
 		return fmt.Errorf("machine %q: platform.standby.nats is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	}
+	return nil
+}
+
+// validateRuntimeDirs checks each deployed instance states its own local runtime
+// directory, and that a machine's two instances do not state the same one.
+//
+// The directory holds the instance's status file, which is operational evidence
+// and takes no part in the ownership decision. It is per instance rather than per
+// machine because two independent runtimes writing into one directory is how one
+// instance's evidence overwrites the other's, and that failure is silent: no
+// listener fails to bind and nothing reports an error.
+//
+// Two machines authoring the same directory is not rejected, for the same reason
+// a duplicate windows_mutex across machines is not: two machines are two hosts. It
+// only collides when several machines share a host, which is the scenario
+// harness, and the harness renders a distinct directory per instance.
+func validateRuntimeDirs(machine Machine) error {
+	primary := strings.TrimSpace(machine.Platform.RuntimeDir)
+	if primary == "" {
+		return fmt.Errorf("machine %q: platform.runtime_dir is required; every machine deploys a Primary Instance", machine.Name)
+	}
+	if machine.Platform.Standby.Disabled {
+		return nil
+	}
+	standby := strings.TrimSpace(machine.Platform.Standby.RuntimeDir)
+	if standby == "" {
+		return fmt.Errorf("machine %q: platform.standby.runtime_dir is required when the standby is deployed", machine.Name)
+	}
+	if primary == standby {
+		return fmt.Errorf("machine %q: platform.runtime_dir and platform.standby.runtime_dir are both %q; the two instances run together and cannot share a runtime directory", machine.Name, primary)
 	}
 	return nil
 }
@@ -370,6 +420,13 @@ func validateStandbyEndpoints(machine Machine) error {
 // This is the authoring mistake the six-port shape invites, and copying the
 // primary's block into standby is how it happens, so the message names both
 // listeners rather than only reporting a duplicate.
+//
+// The api ports are held to the same rule even though they are bound on 127.0.0.1
+// while the nats ports are bound on the machine ip, which means an api port
+// repeating a nats port would in fact bind. Being over-strict here fails loudly
+// at build time, keeps a machine's port map readable as one list, and means
+// moving the api off loopback later cannot turn a latent collision into a runtime
+// failure.
 func validateMachinePorts(machine Machine) error {
 	type listener struct {
 		where string
@@ -377,13 +434,13 @@ func validateMachinePorts(machine Machine) error {
 	}
 	platform := machine.Platform
 	listeners := []listener{
-		{"platform.api.port", platform.API.Port},
+		{"platform.api.local_port", platform.API.LocalPort},
 		{"platform.nats.client_port", platform.Nats.ClientPort},
 		{"platform.nats.cluster_port", platform.Nats.ClusterPort},
 	}
 	if !platform.Standby.Disabled {
 		listeners = append(listeners,
-			listener{"platform.standby.api.port", platform.Standby.API.Port},
+			listener{"platform.standby.api.local_port", platform.Standby.API.LocalPort},
 			listener{"platform.standby.nats.client_port", platform.Standby.Nats.ClientPort},
 			listener{"platform.standby.nats.cluster_port", platform.Standby.Nats.ClusterPort},
 		)
@@ -529,12 +586,29 @@ func (m Machine) Endpoints(standby bool) *Endpoints {
 	if api == nil || nats == nil {
 		return nil
 	}
-	return &Endpoints{APIPort: api.Port, ClientPort: nats.ClientPort, ClusterPort: nats.ClusterPort}
+	return &Endpoints{APILocalPort: api.LocalPort, ClientPort: nats.ClientPort, ClusterPort: nats.ClusterPort}
 }
 
 // Endpoints are one instance's authored listener ports.
 type Endpoints struct {
-	APIPort     int
-	ClientPort  int
-	ClusterPort int
+	// APILocalPort is bound on loopback; the two nats ports are bound on the
+	// machine's ip.
+	APILocalPort int
+	ClientPort   int
+	ClusterPort  int
+}
+
+// RuntimeDir returns one instance's authored local runtime directory, or an empty
+// string when that instance is not deployed.
+func (m Machine) RuntimeDir(standby bool) string {
+	if m.Platform == nil {
+		return ""
+	}
+	if !standby {
+		return strings.TrimSpace(m.Platform.RuntimeDir)
+	}
+	if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
+		return ""
+	}
+	return strings.TrimSpace(m.Platform.Standby.RuntimeDir)
 }

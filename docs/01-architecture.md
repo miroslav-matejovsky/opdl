@@ -312,8 +312,10 @@ a path. Two processes excluded each other only if they had been configured with
 the same directory, so pointing them at different ones, installing the same
 package twice under different paths, or placing the directory on a network
 filesystem each produced two simultaneous actives, and nothing detected any of
-them. None of the three is expressible now, and `instance_dir` no longer takes
-part in ownership at all.
+them. None of the three is expressible now, and an instance's runtime directory
+takes no part in ownership at all. That is what makes it safe for each instance
+to have its own: the directories are operational evidence, so two of them are two
+places to read a status file rather than two ownership scopes.
 
 An instance that takes ownership also learns how it became free. The kernel reports
 a mutex whose owner died without releasing it as abandoned, so a failover caused

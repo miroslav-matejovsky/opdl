@@ -31,14 +31,16 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	standby := &blueprint.Standby{Disabled: standbyDisabled}
 	if !standbyDisabled {
 		standby.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-" + name}
-		standby.API = &blueprint.API{Port: standbyAPIPort}
+		standby.RuntimeDir = runtimeDir(name, "standby")
+		standby.API = &blueprint.API{LocalPort: standbyAPIPort}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 		standby.Nats = &blueprint.Nats{ClientPort: standbyClientPort, ClusterPort: standbyClusterPort}
 	}
 	return blueprint.Machine{
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
 		Platform: &blueprint.Platform{
-			API:        &blueprint.API{Port: apiPort},
+			RuntimeDir: runtimeDir(name, "primary"),
+			API:        &blueprint.API{LocalPort: apiPort},
 			WinService: &blueprint.WinService{Name: name + "-primary"},
 			Nats:       &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
 			Standby:    standby,
@@ -46,8 +48,17 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	}
 }
 
-// addr is the address a machine's instance is reached on.
+// runtimeDir is one instance's own local runtime directory.
+func runtimeDir(machine, role string) string {
+	return fmt.Sprintf("C:/ProgramData/opdl/%s/%s", machine, role)
+}
+
+// addr is the address a machine's Event Fabric listener is reached on.
 func addr(ip string, port int) string { return fmt.Sprintf("%s:%d", ip, port) }
+
+// localAddr is the loopback address an instance serves its API on. The platform
+// API is machine-local, so it is never joined with a machine's ip.
+func localAddr(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 
 // site builds a site of machinesCount machines named node-1..node-N with
 // sequential ips, declared in reverse name order so a test can tell derived
@@ -191,7 +202,6 @@ func TestBuildDerivesOneMemberSiteForSingleInstanceMachine(t *testing.T) {
 	// its own instances, so the list is not empty.
 	require.Equal(t, []deployment.Peer{{
 		Site: "north", Machine: "sensor", Role: deployment.RolePrimary, IP: "10.0.1.10",
-		APIAddress: addr("10.0.1.10", apiPort),
 		Nats: deployment.PeerNats{
 			ClientAddress:  addr("10.0.1.10", clientPort),
 			ClusterAddress: addr("10.0.1.10", clusterPort),
@@ -230,10 +240,14 @@ func TestBuildDerivesTwoStorageServersOnOneMachine(t *testing.T) {
 		Servers:        []string{standbyClient, primaryClient},
 	}, d.Instances.Standby.Nats, "and the standby back to the primary")
 
-	// Each instance serves its own API. Nothing on the machine is shared but the
-	// ownership object.
-	require.Equal(t, addr("10.0.1.10", apiPort), d.Instances.Primary.APIAddress)
-	require.Equal(t, addr("10.0.1.10", standbyAPIPort), d.Instances.Standby.APIAddress)
+	// Each instance serves its own API, on loopback and never on the machine's ip.
+	// Nothing on the machine is shared but the ownership object.
+	require.Equal(t, localAddr(apiPort), d.Instances.Primary.APIAddress)
+	require.Equal(t, localAddr(standbyAPIPort), d.Instances.Standby.APIAddress)
+
+	// And each writes its status file into its own directory.
+	require.Equal(t, runtimeDir("sensor", "primary"), d.Instances.Primary.RuntimeDir)
+	require.Equal(t, runtimeDir("sensor", "standby"), d.Instances.Standby.RuntimeDir)
 	require.Len(t, d.Peers, 2, "a machine that deploys both instances contributes two peers")
 }
 

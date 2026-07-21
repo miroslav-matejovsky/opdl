@@ -47,8 +47,8 @@ so each stage that touches the runtime lands on settled names.
 | --- | --- | --- | --- | --- |
 | [01](01-restore-the-gate.md) | Restore the deadcode gate | Small | Low | done |
 | [02](02-active-and-passive.md) | Active and Passive runtime states | Small | Low | done |
-| [03](03-ownership-contract.md) | The lock in the blueprint, ownership in the runtime | Medium | Medium | |
-| [04](04-instance-configuration.md) | Independent configuration per instance | Medium | High | |
+| [03](03-ownership-contract.md) | The lock in the blueprint, ownership in the runtime | Medium | Medium | done |
+| [04](04-instance-configuration.md) | Independent configuration per instance | Medium | High | done, less the Passive listener |
 | [05](05-instance-event-fabric.md) | Independent Event Fabric per instance | Large | High | |
 | [06](06-failback-policy.md) | Failback policy | Large | High | |
 | [07](07-service-notifications.md) | Platform-to-service notifications over Named Pipes | Large | Medium | |
@@ -172,9 +172,28 @@ stages that own them.
 | `task all` runs no scenarios, so nothing proves a package boots | 01, then 04 |
 | The runtime reads the Primary Instance's NATS topology whichever instance runs | 05 |
 | JetStream replica placement is unconstrained once a machine runs two servers | 05 |
-| The API address has two sources of truth: descriptor and TOML | 04 |
+| The API address has two sources of truth: descriptor and TOML | 04, closed |
 | Blind sed on prose compiles and produces plausible nonsense | 02, 03 |
 | `TestFourMachineStorageTopologyAndFailure` is flaky under full-suite load | 01 |
+| **The authored `Global\` mutex name is passed to a package that adds its own** | unowned; see below |
+| A Passive instance binds nothing, so it cannot be asked about itself | deferred from 04 |
+
+### The lock name defect stage 03 shipped
+
+Stage 03 made the blueprint author the whole mutex name, including its `Global\`
+prefix, and the runtime passes that string straight to `winmutex.Open`. That
+function takes a **bare** name and applies `Global\` itself, and rejects a name
+containing a backslash (`utils/winmutex/mutex.go:128`).
+
+So every machine that deploys a Standby Instance fails at startup with
+`winmutex: object name ... must not contain a backslash`. A machine with no
+standby has no lock and is unaffected, which is why nothing else caught it.
+
+It is only visible in the scenario suite, which `task all` does not run. The
+first scenario run after stage 04 found it immediately. Whoever restores the
+suite owns deciding which side gives: the blueprint authoring a bare name, or
+`winmutex` accepting an already-qualified one. The blueprint's stated intent is
+that an operator sees the exact kernel object name, which argues for the second.
 
 ## How to use this
 

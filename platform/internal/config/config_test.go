@@ -14,14 +14,17 @@ import (
 const validSections = `
 read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"
 `
-const validBaseConfig = `address = "127.0.0.1:9090"` + "\n" + validSections
+
+// validBaseConfig is a complete configuration file. It sets no API address and no
+// runtime directory: both are an instance's own, both come from the descriptor,
+// and a file that sets either is rejected. See TestLoadRejectsInstanceSettings.
+const validBaseConfig = validSections
 
 // writeFile writes contents into a temp dir under name and returns its path.
 func writeFile(t *testing.T, name, contents string) string {
@@ -46,14 +49,19 @@ func TestLoadComposesDescriptorAndAddress(t *testing.T) {
 	require.Equal(t, "opdl", d.Platform)
 	require.Equal(t, "mock", d.Machine)
 	require.Equal(t, []string{"core-services"}, d.Services)
-	require.Equal(t, "127.0.0.1:9090", cfg.Address())
+
+	// The address and the runtime directory are the instance's, carried on its own
+	// descriptor record. Config exposes neither: the runtime reads its own
+	// instance's record, so there is one way to reach either value.
+	require.Equal(t, "127.0.0.1:8080", d.Instances.Primary.APIAddress)
+	require.Equal(t, ".data/instance/primary", d.Instances.Primary.RuntimeDir)
+	require.Empty(t, d.Instances.Standby.APIAddress, "the mock machine deploys no standby")
+	require.Empty(t, d.Instances.Standby.RuntimeDir)
 }
 
 func TestLoadReadsEventFabricSettings(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"
-read_header_timeout = "5s"
+	cfg, err := config.Load(writeConfig(t, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = " /var/lib/opdl/nats "
@@ -69,10 +77,8 @@ catch_up_timeout = "25s"
 }
 
 func TestLoadReadsOptionalOperationsEventDirectory(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"
-read_header_timeout = "5s"
+	cfg, err := config.Load(writeConfig(t, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [operations]
 event_dir = " /var/log/opdl/events "
@@ -83,17 +89,15 @@ catch_up_timeout = "25s"
 `))
 	require.NoError(t, err)
 	require.Equal(t, "/var/log/opdl/events", cfg.OperationsEventDir())
-	require.Contains(t, cfg.Summary(), "operations.event_dir /var/log/opdl/events")
+	require.Contains(t, cfg.Summary(false), "operations.event_dir /var/log/opdl/events")
 }
 
 // TestLoadAcceptsUnusableDataDir documents that a configured path is not checked
 // here. Only writing to it proves it is usable, so the Event Fabric adapter
 // validates it by probing at startup, before it binds a listener.
 func TestLoadAcceptsUnusableDataDir(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"
-read_header_timeout = "5s"
+	cfg, err := config.Load(writeConfig(t, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "\\\\no-such-host\\share"
@@ -114,8 +118,8 @@ func TestLoadReadsCredentialsFromTheirOwnFile(t *testing.T) {
 	username, password := cfg.Credentials()
 	require.Equal(t, "opdl", username)
 	require.Equal(t, "s3cret", password)
-	require.NotContains(t, cfg.Summary(), "s3cret", "a secret never reaches the startup block")
-	require.Contains(t, cfg.Summary(), "credentials_file="+filepath.ToSlash(secrets),
+	require.NotContains(t, cfg.Summary(false), "s3cret", "a secret never reaches the startup block")
+	require.Contains(t, cfg.Summary(false), "credentials_file="+filepath.ToSlash(secrets),
 		"the block names the file instead")
 }
 
@@ -126,7 +130,7 @@ func TestLoadWithoutCredentialsFileIsUnauthenticated(t *testing.T) {
 	username, password := cfg.Credentials()
 	require.Empty(t, username)
 	require.Empty(t, password)
-	require.Contains(t, cfg.Summary(), "credentials_file=(none: loopback only)")
+	require.Contains(t, cfg.Summary(false), "credentials_file=(none: loopback only)")
 }
 
 // TestLoadRejectsAnUnusableCredentialsFile checks a configured secret that
@@ -171,22 +175,8 @@ func TestLoadMissingRequiredSettingsFails(t *testing.T) {
 		err      string
 	}{
 		{
-			name: "missing address",
-			contents: `read_header_timeout = "5s"
-shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
-lag_bound = "30s"
-[event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
-startup_timeout = "30s"
-catch_up_timeout = "25s"`,
-			err: "address is required",
-		},
-		{
 			name: "missing read_header_timeout",
-			contents: `address = "127.0.0.1:8080"
-shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
+			contents: `shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
@@ -196,8 +186,7 @@ catch_up_timeout = "25s"`,
 		},
 		{
 			name: "missing shutdown_timeout",
-			contents: `address = "127.0.0.1:8080"
-read_header_timeout = "5s"
+			contents: `read_header_timeout = "5s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
@@ -206,10 +195,8 @@ catch_up_timeout = "25s"`,
 		},
 		{
 			name: "missing lag_bound",
-			contents: `address = "127.0.0.1:8080"
-read_header_timeout = "5s"
+			contents: `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
 startup_timeout = "30s"
@@ -218,10 +205,8 @@ catch_up_timeout = "25s"`,
 		},
 		{
 			name: "missing data_dir",
-			contents: `address = "127.0.0.1:8080"
-read_header_timeout = "5s"
+			contents: `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [event_fabric.nats]
 startup_timeout = "30s"
@@ -230,10 +215,8 @@ catch_up_timeout = "25s"`,
 		},
 		{
 			name: "missing startup_timeout",
-			contents: `address = "127.0.0.1:8080"
-read_header_timeout = "5s"
+			contents: `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
@@ -242,10 +225,8 @@ catch_up_timeout = "25s"`,
 		},
 		{
 			name: "missing catch_up_timeout",
-			contents: `address = "127.0.0.1:8080"
-read_header_timeout = "5s"
+			contents: `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
@@ -254,23 +235,10 @@ startup_timeout = "30s"`,
 		},
 		{
 			name: "the whole event fabric section is missing",
-			contents: `address = "127.0.0.1:8080"
-read_header_timeout = "5s"
+			contents: `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"`,
 			err: "[event_fabric.nats] data_dir is required",
-		},
-		{
-			name: "missing instance_dir",
-			contents: `address = "127.0.0.1:8080"
-read_header_timeout = "5s"
-shutdown_timeout = "10s"
-[event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
-startup_timeout = "30s"
-catch_up_timeout = "25s"`,
-			err: "instance_dir is required",
 		},
 	}
 	for _, test := range tests {
@@ -282,10 +250,8 @@ catch_up_timeout = "25s"`,
 }
 
 func TestLoadRejectsUnusableDurations(t *testing.T) {
-	_, err := config.Load(writeConfig(t, `address = "127.0.0.1:9090"
-read_header_timeout = "5s"
+	_, err := config.Load(writeConfig(t, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
@@ -294,10 +260,8 @@ catch_up_timeout = "25s"
 `))
 	require.ErrorContains(t, err, `[event_fabric.nats] startup_timeout "soon"`)
 
-	_, err = config.Load(writeConfig(t, `address = "127.0.0.1:9090"
-read_header_timeout = "5s"
+	_, err = config.Load(writeConfig(t, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = "30s"
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
@@ -312,10 +276,8 @@ catch_up_timeout = "0s"
 func TestLoadReadsLagBound(t *testing.T) {
 	// withLagBound renders a valid config carrying the given top-level lag_bound.
 	withLagBound := func(bound string) string {
-		return `address = "127.0.0.1:9090"
-read_header_timeout = "5s"
+		return `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-instance_dir = "/var/lib/opdl/instance"
 lag_bound = ` + bound + `
 [event_fabric.nats]
 data_dir = "/var/lib/opdl/nats"
@@ -334,14 +296,6 @@ catch_up_timeout = "25s"
 
 	_, err = config.Load(writeConfig(t, withLagBound(`"0s"`)))
 	require.ErrorContains(t, err, "must be positive")
-}
-
-// TestLoadReadsInstanceDir checks the required local runtime directory is read
-// and trimmed.
-func TestLoadReadsInstanceDir(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, validBaseConfig))
-	require.NoError(t, err)
-	require.Equal(t, "/var/lib/opdl/instance", cfg.InstanceDir())
 }
 
 // TestLoadRejectsUnknownKeys checks a configuration file that sets something
@@ -404,33 +358,61 @@ func TestLoadRejectsMalformedFile(t *testing.T) {
 	require.ErrorContains(t, err, "invalid configuration file")
 }
 
-func TestLoadRejectsAddressWithoutPort(t *testing.T) {
-	_, err := config.Load(writeConfig(t, `address = "127.0.0.1"`+"\n"+validSections))
-	require.ErrorContains(t, err, "invalid address")
-}
-
-func TestLoadRejectsPortOutOfRange(t *testing.T) {
-	_, err := config.Load(writeConfig(t, `address = "127.0.0.1:70000"`+"\n"+validSections))
-	require.ErrorContains(t, err, "out of range")
+// TestLoadRejectsInstanceSettings checks a configuration file cannot state
+// anything a single instance binds or writes.
+//
+// Both settings used to live here, and both were read by a machine's two
+// instances from one file: an address here is one both of them would bind, and a
+// runtime directory here is one they would both write into. They now come from
+// each instance's own descriptor record, and the unknown-key rule is what turns a
+// stale file into a startup failure rather than a setting that is quietly
+// ignored while the platform reports a healthy start.
+func TestLoadRejectsInstanceSettings(t *testing.T) {
+	tests := map[string]string{
+		"address":      `address = "127.0.0.1:9090"` + "\n",
+		"instance_dir": `instance_dir = "/var/lib/opdl/instance"` + "\n",
+		"runtime_dir":  `runtime_dir = "/var/lib/opdl/instance/primary"` + "\n",
+	}
+	for key, setting := range tests {
+		t.Run(key, func(t *testing.T) {
+			_, err := config.Load(writeConfig(t, setting+validSections))
+			require.ErrorContains(t, err, "unknown key")
+			require.ErrorContains(t, err, key)
+		})
+	}
 }
 
 func TestSummaryShowsConfiguration(t *testing.T) {
 	cfg, err := config.Load(writeConfig(t, validBaseConfig))
 	require.NoError(t, err)
 
-	s := cfg.Summary()
+	s := cfg.Summary(false)
 	require.Contains(t, s, "platform configuration (machine=mock)")
 	require.Contains(t, s, "deployment descriptor")
 	require.Contains(t, s, "peers        mock/primary (127.0.0.1)")
 	require.Contains(t, s, "lock         (not deployed)")
-	require.Contains(t, s, "address             127.0.0.1:9090")
 	require.Contains(t, s, "read_header_timeout 5s")
 	require.Contains(t, s, "shutdown_timeout    10s")
-	require.Contains(t, s, "instance_dir        /var/lib/opdl/instance")
 	require.Contains(t, s, "lag_bound           30s")
 	require.Contains(t, s, "data_dir=/var/lib/opdl/nats")
 	require.Contains(t, s, "startup_timeout=30s")
 	require.Contains(t, s, "catch_up_timeout=25s")
+}
+
+// TestSummaryNamesBothInstancesAndMarksThisOne checks a startup block states
+// where each instance serves and which one printed it.
+//
+// A machine's two instances read one descriptor and one configuration file, so
+// without the marker their startup blocks would be identical and an operator
+// holding one log could not tell which process it came from.
+func TestSummaryNamesBothInstancesAndMarksThisOne(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, validBaseConfig))
+	require.NoError(t, err)
+
+	require.Contains(t, cfg.Summary(false), "primary=127.0.0.1:8080 (this instance)")
+	require.Contains(t, cfg.Summary(false), "standby=(not deployed)")
+	require.NotContains(t, cfg.Summary(true), "primary=127.0.0.1:8080 (this instance)",
+		"the marker follows the role the block was rendered for")
 }
 
 // quote renders a path as a TOML basic string. A Windows path is full of

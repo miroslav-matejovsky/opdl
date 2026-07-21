@@ -16,12 +16,16 @@ const (
 	gatewayIP   = "10.0.1.11"
 	historianIP = "10.0.1.12"
 
-	primaryAPI     = "10.0.1.10:8080"
-	primaryClient  = "10.0.1.10:4222"
-	primaryCluster = "10.0.1.10:6222"
-	standbyAPI     = "10.0.1.10:8081"
-	standbyClient  = "10.0.1.10:4322"
-	standbyCluster = "10.0.1.10:6322"
+	// The api addresses are on loopback; every Event Fabric address is on the
+	// machine ip. That split is what the descriptor is checked against.
+	primaryAPI        = "127.0.0.1:8080"
+	primaryRuntime    = "C:/ProgramData/opdl/sensor/primary"
+	primaryClient     = "10.0.1.10:4222"
+	primaryCluster    = "10.0.1.10:6222"
+	standbyAPI        = "127.0.0.1:8081"
+	standbyRuntimeDir = "C:/ProgramData/opdl/sensor/standby"
+	standbyClient     = "10.0.1.10:4322"
+	standbyCluster    = "10.0.1.10:6322"
 
 	gatewayClient    = "10.0.1.11:4222"
 	gatewayCluster   = "10.0.1.11:6222"
@@ -29,9 +33,9 @@ const (
 	historianCluster = "10.0.1.12:6222"
 )
 
-func peer(machine string, role deployment.PlatformInstanceRole, ip, api, client, cluster string) deployment.Peer {
+func peer(machine string, role deployment.PlatformInstanceRole, ip, client, cluster string) deployment.Peer {
 	return deployment.Peer{
-		Site: "north", Machine: machine, Role: role, IP: ip, APIAddress: api,
+		Site: "north", Machine: machine, Role: role, IP: ip,
 		Nats: deployment.PeerNats{ClientAddress: client, ClusterAddress: cluster},
 	}
 }
@@ -51,6 +55,7 @@ func validDescriptor() deployment.Descriptor {
 			Primary: deployment.Instance{
 				Disabled:   false,
 				Service:    &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
+				RuntimeDir: primaryRuntime,
 				APIAddress: primaryAPI,
 				Nats: &deployment.Nats{
 					ClientAddress:  primaryClient,
@@ -62,6 +67,7 @@ func validDescriptor() deployment.Descriptor {
 			Standby: deployment.Instance{
 				Disabled:   false,
 				Service:    &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
+				RuntimeDir: standbyRuntimeDir,
 				APIAddress: standbyAPI,
 				Nats: &deployment.Nats{
 					ClientAddress:  standbyClient,
@@ -73,10 +79,10 @@ func validDescriptor() deployment.Descriptor {
 		},
 		Lock: &deployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
 		Peers: []deployment.Peer{
-			peer("gateway", deployment.RolePrimary, gatewayIP, "10.0.1.11:8080", gatewayClient, gatewayCluster),
-			peer("historian", deployment.RolePrimary, historianIP, "10.0.1.12:8080", historianClient, historianCluster),
-			peer("sensor", deployment.RolePrimary, machineIP, primaryAPI, primaryClient, primaryCluster),
-			peer("sensor", deployment.RoleStandby, machineIP, standbyAPI, standbyClient, standbyCluster),
+			peer("gateway", deployment.RolePrimary, gatewayIP, gatewayClient, gatewayCluster),
+			peer("historian", deployment.RolePrimary, historianIP, historianClient, historianCluster),
+			peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
+			peer("sensor", deployment.RoleStandby, machineIP, standbyClient, standbyCluster),
 		},
 	}
 }
@@ -143,6 +149,31 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			func(d *deployment.Descriptor) { d.Instances.Primary.APIAddress = "no-port" },
 			"instances.primary.api_address:",
 		},
+		// The platform API is machine-local. A descriptor resolving it onto the
+		// machine's ip would expose every deployment's API to the network, which is
+		// exactly what authoring it as api.local_port exists to prevent.
+		{
+			"api address off loopback",
+			func(d *deployment.Descriptor) { d.Instances.Primary.APIAddress = "10.0.1.10:8080" },
+			"is not on the loopback interface",
+		},
+		{
+			"api address on a hostname rather than a loopback ip",
+			func(d *deployment.Descriptor) { d.Instances.Primary.APIAddress = "localhost:8080" },
+			"is not on the loopback interface",
+		},
+		{
+			"missing runtime dir",
+			func(d *deployment.Descriptor) { d.Instances.Primary.RuntimeDir = "" },
+			"instances.primary.runtime_dir is required",
+		},
+		{
+			"instances share a runtime dir",
+			func(d *deployment.Descriptor) {
+				d.Instances.Standby.RuntimeDir = d.Instances.Primary.RuntimeDir
+			},
+			"cannot share a runtime directory",
+		},
 		{
 			"missing nats",
 			func(d *deployment.Descriptor) { d.Instances.Primary.Nats = nil },
@@ -184,6 +215,17 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			},
 			"instances.standby.api_address is set but the standby is disabled",
 		},
+		{
+			"standby runtime dir while disabled",
+			func(d *deployment.Descriptor) {
+				d.Instances.Standby.Disabled = true
+				d.Lock = nil
+				d.Instances.Standby.Service = nil
+				d.Instances.Standby.APIAddress = ""
+				d.Instances.Standby.Nats = nil
+			},
+			"instances.standby.runtime_dir is set but the standby is disabled",
+		},
 
 		// Peers are instances, and every listener in the site is distinct.
 		{
@@ -208,7 +250,7 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		},
 		{
 			"two peers claim one address",
-			func(d *deployment.Descriptor) { d.Peers[1].APIAddress = d.Peers[0].APIAddress },
+			func(d *deployment.Descriptor) { d.Peers[1].Nats.ClientAddress = d.Peers[0].Nats.ClientAddress },
 			"is already used by",
 		},
 		{
@@ -298,7 +340,7 @@ func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
 	d.Instances.Standby = deployment.Instance{Disabled: true}
 	d.Lock = nil
 	d.Peers = []deployment.Peer{
-		peer("sensor", deployment.RolePrimary, machineIP, primaryAPI, primaryClient, primaryCluster),
+		peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
 	}
 	nats := d.Instances.Primary.Nats
 	nats.Routes = []string{}
@@ -313,8 +355,8 @@ func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
 func TestDescriptorValidateAcceptsTwoInstancesAsAOneMachineCluster(t *testing.T) {
 	d := validDescriptor()
 	d.Peers = []deployment.Peer{
-		peer("sensor", deployment.RolePrimary, machineIP, primaryAPI, primaryClient, primaryCluster),
-		peer("sensor", deployment.RoleStandby, machineIP, standbyAPI, standbyClient, standbyCluster),
+		peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
+		peer("sensor", deployment.RoleStandby, machineIP, standbyClient, standbyCluster),
 	}
 	d.Instances.Primary.Nats.Routes = []string{standbyCluster}
 	d.Instances.Primary.Nats.Servers = []string{primaryClient, standbyClient}
@@ -350,11 +392,13 @@ func TestDescriptorValidateAcceptsNonStorageMachine(t *testing.T) {
 // which it never binds.
 func nonStorageDescriptor() deployment.Descriptor {
 	const (
-		zuluIP             = "10.0.1.20"
-		zuluAPI            = "10.0.1.20:8080"
+		zuluIP = "10.0.1.20"
+		// The api addresses stay on loopback: they are this machine's own, and a
+		// machine's api is machine-local whether or not it stores the journal.
+		zuluAPI            = "127.0.0.1:8080"
 		zuluClient         = "10.0.1.20:4222"
 		zuluCluster        = "10.0.1.20:6222"
-		zuluStandbyAPI     = "10.0.1.20:8081"
+		zuluStandbyAPI     = "127.0.0.1:8081"
 		zuluStandbyClient  = "10.0.1.20:4322"
 		zuluStandbyCluster = "10.0.1.20:6322"
 	)
@@ -368,11 +412,11 @@ func nonStorageDescriptor() deployment.Descriptor {
 	d.Instances.Standby.Nats.ClientAddress = zuluStandbyClient
 	d.Instances.Standby.Nats.ClusterAddress = zuluStandbyCluster
 	d.Peers = []deployment.Peer{
-		peer("gateway", deployment.RolePrimary, gatewayIP, "10.0.1.11:8080", gatewayClient, gatewayCluster),
-		peer("historian", deployment.RolePrimary, historianIP, "10.0.1.12:8080", historianClient, historianCluster),
-		peer("sensor", deployment.RolePrimary, machineIP, primaryAPI, primaryClient, primaryCluster),
-		peer("zulu", deployment.RolePrimary, zuluIP, zuluAPI, zuluClient, zuluCluster),
-		peer("zulu", deployment.RoleStandby, zuluIP, zuluStandbyAPI, zuluStandbyClient, zuluStandbyCluster),
+		peer("gateway", deployment.RolePrimary, gatewayIP, gatewayClient, gatewayCluster),
+		peer("historian", deployment.RolePrimary, historianIP, historianClient, historianCluster),
+		peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
+		peer("zulu", deployment.RolePrimary, zuluIP, zuluClient, zuluCluster),
+		peer("zulu", deployment.RoleStandby, zuluIP, zuluStandbyClient, zuluStandbyCluster),
 	}
 	return d
 }
