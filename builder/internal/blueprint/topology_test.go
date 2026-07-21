@@ -38,6 +38,7 @@ func validMachine() blueprint.Machine {
 			Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
 			Standby: &blueprint.Standby{
 				Disabled:   false,
+				Lock:       &blueprint.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
 				API:        &blueprint.API{Port: 8081},
 				WinService: &blueprint.WinService{Name: "standby"},
 				Nats:       &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322},
@@ -366,6 +367,9 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
+			          lock {
+			            windows_mutex = "Global\\dup-north-node-1"
+			          }
 			          api {
 			            port = 8081
 			          }
@@ -398,6 +402,9 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
+			          lock {
+			            windows_mutex = "Global\\dup-south-node-1"
+			          }
 			          api {
 			            port = 8081
 			          }
@@ -431,6 +438,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 func disableStandby(p *blueprint.Project) {
 	standby := p.Sites[0].Machines[0].Platform.Standby
 	standby.Disabled = true
+	standby.Lock = nil
 	standby.API = nil
 	standby.WinService = nil
 	standby.Nats = nil
@@ -442,6 +450,7 @@ func disableStandby(p *blueprint.Project) {
 // take effect, and a reader could not tell it from one that does.
 func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 	tests := map[string]func(*blueprint.Standby){
+		"lock":       func(s *blueprint.Standby) { s.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-standby"} },
 		"api":        func(s *blueprint.Standby) { s.API = &blueprint.API{Port: 8081} },
 		"winservice": func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
 		"nats":       func(s *blueprint.Standby) { s.Nats = &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322} },
@@ -484,6 +493,7 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, `machine "sensor": platform block is required`},
 		{"missing nats block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats = nil }, `machine "sensor": platform.nats block is required`},
 		{"missing standby block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby = nil }, `machine "sensor": platform.standby block is required`},
+		{"missing standby lock when deployed", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby.Lock = nil }, `machine "sensor": platform.standby.lock block is required when the standby is deployed`},
 		{"zero client port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = 0 }, `platform.nats.client_port must be in range 1-65535, got 0`},
 		{"negative client port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = -1 }, `platform.nats.client_port must be in range 1-65535, got -1`},
 		{"client port above range", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = 65536 }, `platform.nats.client_port must be in range 1-65535, got 65536`},
@@ -503,42 +513,35 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 	}
 }
 
-// TestMachineFenceNamespaceDefaults checks a machine that authors no fence block
-// still resolves a namespace. Unlike the standby decision, defaulting here is safe:
-// the machine's identity is hashed into the object name regardless, so a default
-// cannot make two machines share a fence.
-func TestMachineFenceNamespaceDefaults(t *testing.T) {
+// TestMachineLock checks Lock returns nil when standby is disabled or omitted,
+// and returns the authored Lock when deployed.
+func TestMachineLock(t *testing.T) {
 	p := validProject()
 	machine := p.Sites[0].Machines[0]
-	require.Nil(t, machine.Platform.Fence)
-	require.Equal(t, blueprint.DefaultFenceNamespace, machine.FenceNamespace())
-	require.NoError(t, p.Validate())
+	require.Equal(t, &blueprint.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}, machine.Lock())
+
+	disableStandby(p)
+	require.Nil(t, p.Sites[0].Machines[0].Lock())
 }
 
-func TestMachineFenceNamespaceIsAuthored(t *testing.T) {
-	p := validProject()
-	p.Sites[0].Machines[0].Platform.Fence = &blueprint.Fence{Namespace: "rig-b"}
-	require.NoError(t, p.Validate())
-	require.Equal(t, "rig-b", p.Sites[0].Machines[0].FenceNamespace())
-}
-
-// TestProjectValidateFenceFailures checks an authored namespace that cannot be
+// TestProjectValidateLockFailures checks an authored lock windows_mutex that cannot be
 // used in a kernel object name is refused at build time rather than at startup.
-func TestProjectValidateFenceFailures(t *testing.T) {
+func TestProjectValidateLockFailures(t *testing.T) {
 	tests := map[string]struct {
-		namespace string
-		errText   string
+		windowsMutex string
+		errText      string
 	}{
-		"blank":             {namespace: "   ", errText: "must not be blank"},
-		"padded":            {namespace: " rig ", errText: "leading or trailing whitespace"},
-		"backslash":         {namespace: `rig\b`, errText: "slash or backslash"},
-		"forward slash":     {namespace: "rig/b", errText: "slash or backslash"},
-		"longer than limit": {namespace: string(make([]byte, 65)), errText: "longer than"},
+		"blank":             {windowsMutex: "   ", errText: "windows_mutex is required"},
+		"padded":            {windowsMutex: " Global\\opdl ", errText: "leading or trailing whitespace"},
+		"no prefix":         {windowsMutex: "opdl-mutex", errText: `must start with Global\`},
+		"backslash":         {windowsMutex: `Global\opdl\b`, errText: "slashes or backslashes after Global\\"},
+		"forward slash":     {windowsMutex: "Global\\opdl/b", errText: "slashes or backslashes after Global\\"},
+		"longer than limit": {windowsMutex: "Global\\" + string(make([]byte, 261)), errText: "longer than"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			p := validProject()
-			p.Sites[0].Machines[0].Platform.Fence = &blueprint.Fence{Namespace: test.namespace}
+			p.Sites[0].Machines[0].Platform.Standby.Lock = &blueprint.Lock{WindowsMutex: test.windowsMutex}
 			require.ErrorContains(t, p.Validate(), test.errText)
 		})
 	}

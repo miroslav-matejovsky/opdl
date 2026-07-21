@@ -106,7 +106,7 @@
 // registration state every machine answers from, and the fact that a machine
 // answers at all. Process lifecycle is checked through each role's local atomic
 // status file, which is the deployment-tooling contract but never an ownership
-// fence. The API signal is real rather than a liveness check, since
+// lock. The API signal is real rather than a liveness check, since
 // the platform does not serve until its Event Fabric has connected, its
 // projection has replayed the retained journal, and its handlers have worked
 // through what was waiting for them.

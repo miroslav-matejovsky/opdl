@@ -61,7 +61,7 @@ type Mutex struct {
 
 	// held is atomic rather than guarded by mu because Acquire holds mu for the
 	// whole of a blocking kernel wait. A caller that polls Held while another
-	// goroutine waits for the fence, which is exactly what a standby does, would
+	// goroutine waits for the lock, which is exactly what a standby does, would
 	// otherwise block until the wait it is asking about had already finished.
 	held atomic.Bool
 

@@ -15,19 +15,19 @@ import (
 )
 
 const (
-	ownershipHelperMode   = "OPDL_FENCE_HELPER_MODE"
-	ownershipHelperObject = "OPDL_FENCE_HELPER_OBJECT"
+	lockHelperMode   = "OPDL_LOCK_HELPER_MODE"
+	lockHelperObject = "OPDL_LOCK_HELPER_OBJECT"
 )
 
 // TestOwnershipProcessHelper is re-executed by the subprocess tests below. Stdin is
 // the deterministic service-manager control channel: EOF releases a holder or
 // cancels a waiter.
 func TestOwnershipProcessHelper(t *testing.T) {
-	mode := os.Getenv(ownershipHelperMode)
+	mode := os.Getenv(lockHelperMode)
 	if mode == "" {
 		return
 	}
-	ownership, err := redundancy.OpenOwnership(os.Getenv(ownershipHelperObject), redundancy.RoleStandby)
+	ownership, err := redundancy.OpenLock(os.Getenv(lockHelperObject), redundancy.RoleStandby)
 	require.NoError(t, err)
 
 	switch mode {
@@ -64,8 +64,7 @@ func TestOwnershipProcessHelper(t *testing.T) {
 func TestOwnershipReleasesAcrossProcessesAfterGracefulClose(t *testing.T) {
 	object := ownershipObject(t)
 	holder := startOwnershipHelper(t, object, "hold", "held")
-
-	contender := openOwnership(t, object, redundancy.RolePrimary)
+	contender := openLock(t, object, redundancy.RolePrimary)
 	acquired, err := contender.TryAcquire()
 	require.NoError(t, err)
 	require.False(t, acquired.Held, "two processes held the ownership")
@@ -92,7 +91,7 @@ func TestOwnershipReleasesAcrossProcessesAfterGracefulClose(t *testing.T) {
 func TestOwnershipReleasesAcrossProcessesAfterForcedDeath(t *testing.T) {
 	object := ownershipObject(t)
 	holder := startOwnershipHelper(t, object, "hold", "held")
-	contender := openOwnership(t, object, redundancy.RolePrimary)
+	contender := openLock(t, object, redundancy.RolePrimary)
 
 	holder.kill(t)
 
@@ -108,7 +107,7 @@ func TestOwnershipReleasesAcrossProcessesAfterForcedDeath(t *testing.T) {
 func TestOwnershipReportsAbandonmentWhenAHolderExitsWithoutReleasing(t *testing.T) {
 	object := ownershipObject(t)
 	holder := startOwnershipHelper(t, object, "abandon", "held")
-	contender := openOwnership(t, object, redundancy.RolePrimary)
+	contender := openLock(t, object, redundancy.RolePrimary)
 
 	holder.closeInput(t)
 	holder.wait(t)
@@ -132,7 +131,7 @@ func TestOwnershipAfterEveryProcessIsGoneReportsNoAbandonment(t *testing.T) {
 	holder.closeInput(t)
 	holder.wait(t)
 
-	contender := openOwnership(t, object, redundancy.RolePrimary)
+	contender := openLock(t, object, redundancy.RolePrimary)
 	acquired, err := contender.Acquire(t.Context())
 	require.NoError(t, err)
 	require.True(t, acquired.Held)
@@ -148,7 +147,7 @@ func TestOwnershipWaitCancellationAcrossProcesses(t *testing.T) {
 	require.Equal(t, "cancelled", waiter.readLine(t))
 	waiter.wait(t)
 
-	contender := openOwnership(t, object, redundancy.RolePrimary)
+	contender := openLock(t, object, redundancy.RolePrimary)
 	acquired, err := contender.TryAcquire()
 	require.NoError(t, err)
 	require.False(t, acquired.Held, "canceling the waiter disturbed the holder")
@@ -167,7 +166,7 @@ type ownershipHelper struct {
 func startOwnershipHelper(t *testing.T, object, mode, ready string) *ownershipHelper {
 	t.Helper()
 	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestOwnershipProcessHelper$")
-	command.Env = append(os.Environ(), ownershipHelperMode+"="+mode, ownershipHelperObject+"="+object)
+	command.Env = append(os.Environ(), lockHelperMode+"="+mode, lockHelperObject+"="+object)
 	input, err := command.StdinPipe()
 	require.NoError(t, err)
 	stdout, err := command.StdoutPipe()

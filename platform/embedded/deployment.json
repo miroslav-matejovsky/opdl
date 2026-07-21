@@ -33,9 +33,6 @@
       "disabled": true
     }
   },
-  "fence": {
-    "object": "opdl.fence.6d6f636b6d6f636b6d6f636b6d6f636b"
-  },
   "peers": [
     {
       "site": "local",

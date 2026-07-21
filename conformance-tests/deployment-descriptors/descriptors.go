@@ -90,6 +90,8 @@ func checkRoundTripFor(standbyDisabled bool) error {
 
 	builtStandby := builderdeployment.Instance{Disabled: true}
 	wantStandby := platformdeployment.Instance{Disabled: true}
+	var builtLock *builderdeployment.Lock
+	var wantLock *platformdeployment.Lock
 	if !standbyDisabled {
 		builtStandby = builderdeployment.Instance{
 			Disabled:   false,
@@ -111,6 +113,8 @@ func checkRoundTripFor(standbyDisabled bool) error {
 				Servers:        servers,
 			},
 		}
+		builtLock = &builderdeployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
+		wantLock = &platformdeployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
 	}
 
 	// Peers are ordered by machine name, then Primary before Standby, and include
@@ -165,6 +169,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			},
 			Standby: builtStandby,
 		},
+		Lock:  builtLock,
 		Peers: builtPeers,
 	}
 
@@ -172,7 +177,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	if err != nil {
 		return err
 	}
-	if err := checkWireShape(data); err != nil {
+	if err := checkWireShape(data, standbyDisabled); err != nil {
 		return err
 	}
 
@@ -204,6 +209,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			},
 			Standby: wantStandby,
 		},
+		Lock:  wantLock,
 		Peers: wantPeers,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -219,7 +225,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 // that is where the distinction exists: once decoded, an omitted "disabled" and
 // an explicit false are the same Go value, and the platform's requirement that
 // the field be stated can only be proven against the bytes.
-func checkWireShape(data []byte) error {
+func checkWireShape(data []byte, standbyDisabled bool) error {
 	var wire map[string]json.RawMessage
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
@@ -265,8 +271,32 @@ func checkWireShape(data []byte) error {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints belong to an instance", field)
 		}
 	}
+	if err := verifyWireLock(wire, standbyDisabled); err != nil {
+		return err
+	}
 	if _, ok := wire["peers"]; !ok {
 		return fmt.Errorf("builder descriptor omitted peers")
+	}
+	return nil
+}
+
+func verifyWireLock(wire map[string]json.RawMessage, standbyDisabled bool) error {
+	if standbyDisabled {
+		if _, ok := wire["lock"]; ok {
+			return fmt.Errorf("builder descriptor carries lock when standby is disabled")
+		}
+		return nil
+	}
+	lockRaw, ok := wire["lock"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted lock when standby is deployed")
+	}
+	var lockFields map[string]json.RawMessage
+	if err := json.Unmarshal(lockRaw, &lockFields); err != nil {
+		return err
+	}
+	if _, ok := lockFields["windows_mutex"]; !ok {
+		return fmt.Errorf("builder descriptor omitted lock.windows_mutex")
 	}
 	return nil
 }

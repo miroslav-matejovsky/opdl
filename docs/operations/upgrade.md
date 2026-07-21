@@ -8,6 +8,10 @@ active resources have closed, so the process that next acquires it binds the sam
 endpoints with no overlap. Nothing here seizes ownership; the platform has no
 mechanism to.
 
+> [!WARNING]
+> **Full restart required when migrating from legacy fence nomenclature to lock nomenclature.**
+> Upgrading across this change requires a full restart of every machine that deploys a standby instance. Because the mutex name format changed and is now authored in full rather than derived (`opdl.fence.<digest>`), an old primary and a new standby would contend for different named mutexes. Therefore, both existing processes on the machine must be stopped before starting the upgraded primary or standby.
+
 ## Controlled switchover
 
 Moves active ownership from the current holder to the machine's other process.
@@ -23,7 +27,7 @@ Check all of them. Each is machine-readable from the target's status file.
 | Target has no `last_error` | status file |
 | Target's `updated_at` is advancing | status file, written every second |
 | Target's PID is live | status file plus the service manager |
-| Both processes report the same `fence.object` | `platform.fence_opened` |
+| Both processes report the same `lock.windows_mutex` | `platform.lock_opened` |
 
 A stale status file is the trap. Its `updated_at` stops advancing when the
 process dies, but the file remains, so a PID check alone is not enough.
@@ -41,7 +45,7 @@ process dies, but the file remains, so a PID check alone is not enough.
 5. Start the stopped process again if the machine should keep a warm standby. It
    finds ownership held and waits.
 
-Expect `platform.fence_acquired` with `abandoned=false`. A planned switchover that
+Expect `platform.ownership_acquired` with `abandoned=false`. A planned switchover that
 reports `abandoned=true` means the holder died rather than released, and step 2
 did not do what it appeared to.
 
@@ -72,10 +76,10 @@ Upgrades a machine's binary with interruption bounded by one switchover.
 6. Optionally switch back so the preferred primary holds again.
 
 Both processes must run the same machine package before the upgrade is complete.
-They share one set of endpoints and one ownership object, and a package built from a
-different blueprint may derive a different `fence.object`, which would leave them
-failing to exclude each other. Confirm `platform.fence_opened` reports the same
-object from both after step 5.
+They share one set of endpoints and one ownership lock, and a package built from a
+different blueprint may author a different `lock.windows_mutex`, which would leave them
+failing to exclude each other. Confirm `platform.lock_opened` reports the same
+mutex from both after step 5.
 
 ### Machines without a standby
 
@@ -110,4 +114,4 @@ The platform has no Service Control Manager integration. It handles
 `CTRL_BREAK_EVENT`, and a service manager that terminates the process instead
 produces abandoned ownership rather than a clean release. Both are safe, and only
 the first is a planned switchover. Closing that gap is tracked in
-`docs/plans/fence-ownership/`.
+`docs/plans/redundancy/`.

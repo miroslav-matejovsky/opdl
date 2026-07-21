@@ -71,7 +71,7 @@ project "customer-a" {
 
       # This machine deploys both instances. They are independent runtimes that
       # run together on one host, so every port below is distinct: nothing is
-      # shared between them except the ownership object, which is not a port.
+      # shared between them except the ownership lock, which is not a port.
       #
       # Copying the primary's blocks into standby and forgetting to change the
       # ports is the mistake this shape invites. The builder rejects it and names
@@ -94,6 +94,13 @@ project "customer-a" {
         standby {
           disabled = false
 
+          # lock is mandatory when standby is enabled (disabled = false).
+          # The machine's two instances contend for this Windows named mutex
+          # in the machine-wide kernel namespace to coordinate Primary Ownership.
+          lock {
+            windows_mutex = "Global\\opdl-customer-a-north-local-server"
+          }
+
           api {
             port = 8081
           }
@@ -107,18 +114,6 @@ project "customer-a" {
             client_port  = 4322
             cluster_port = 6322
           }
-        }
-
-        # fence is optional and almost always omitted. The machine's two instances
-        # contend for one Windows named mutex, and this is the only part of its
-        # name a blueprint states: the builder derives the rest from the machine's
-        # full identity, so two machines can never be given the same object.
-        #
-        # Author it only when two deployments of the same project, environment,
-        # site, and machine must run on one host without sharing ownership, such as
-        # a test rig running two copies side by side. Omitting it uses "opdl".
-        fence {
-          namespace = "opdl"
         }
       }
     }
@@ -146,6 +141,10 @@ project "customer-a" {
 
         standby {
           disabled = false
+
+          lock {
+            windows_mutex = "Global\\opdl-customer-a-control-room-master"
+          }
 
           api {
             port = 8081
@@ -186,6 +185,10 @@ project "customer-a" {
         standby {
           disabled = false
 
+          lock {
+            windows_mutex = "Global\\opdl-customer-a-control-room-slave"
+          }
+
           api {
             port = 8081
           }
@@ -224,6 +227,10 @@ project "customer-a" {
 
         standby {
           disabled = false
+
+          lock {
+            windows_mutex = "Global\\opdl-customer-a-control-room-integration"
+          }
 
           api {
             port = 8081

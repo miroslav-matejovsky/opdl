@@ -129,7 +129,7 @@ func TestAcquireWaitsUntilTheHolderReleases(t *testing.T) {
 // Acquire parks the owner thread in a kernel wait for as long as another process
 // holds the mutex. A Held that shared Acquire's lock would therefore block until
 // the wait it is being asked about had already finished. The standby does exactly
-// this: one goroutine waits for the fence while another polls Held to decide
+// this: one goroutine waits for the lock while another polls Held to decide
 // whether to keep composing, so the deadlock is on the real promotion path.
 func TestHeldDoesNotBlockBehindABlockingAcquire(t *testing.T) {
 	t.Parallel()

@@ -29,7 +29,6 @@ const completeDescriptor = `{
     },
     "standby": {"disabled": true}
   },
-  "fence": {"object": "opdl.fence.0123456789abcdef0123456789abcdef"},
   "peers": [
     {
       "site": "north",
@@ -85,15 +84,28 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			json: `{"instances":{"primary":{"disabled":false},"standby":{}}}`,
 			err:  "instances.standby.disabled is required",
 		},
-		"missing fence":        {json: `{` + instances + `}`, err: "fence is required"},
-		"null fence":           {json: `{` + instances + `,"fence":null}`, err: "fence is required"},
-		"missing fence object": {json: `{` + instances + `,"fence":{}}`, err: "fence.object is required"},
+		"lock when standby disabled": {
+			json: `{` + instances + `,"lock":{"windows_mutex":"Global\\opdl-test"}}`,
+			err:  "lock is set but instances.standby.disabled is true",
+		},
+		"missing lock when standby enabled": {
+			json: `{"instances":{"primary":{"disabled":false},"standby":{"disabled":false}}}`,
+			err:  "lock is required",
+		},
+		"null lock when standby enabled": {
+			json: `{"instances":{"primary":{"disabled":false},"standby":{"disabled":false}},"lock":null}`,
+			err:  "lock is required",
+		},
+		"missing lock windows_mutex when standby enabled": {
+			json: `{"instances":{"primary":{"disabled":false},"standby":{"disabled":false}},"lock":{}}`,
+			err:  "lock.windows_mutex is required",
+		},
 		"missing peers": {
-			json: `{` + instances + `,"fence":{"object":"opdl.fence.abc"}}`,
+			json: `{` + instances + `}`,
 			err:  "peers is required",
 		},
 		"null peers": {
-			json: `{` + instances + `,"fence":{"object":"opdl.fence.abc"},"peers":null}`,
+			json: `{` + instances + `,"peers":null}`,
 			err:  "peers is required",
 		},
 		"complete": {json: completeDescriptor},
@@ -158,7 +170,7 @@ func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
 	      "nats": {"client_address": "127.0.0.1:4322", "cluster_address": "127.0.0.1:6322", "routes": ["127.0.0.1:6222"], "servers": ["127.0.0.1:4322", "127.0.0.1:4222"]}
 	    }
 	  },
-	  "fence": {"object": "opdl.fence.0123456789abcdef0123456789abcdef"},
+	  "lock": {"windows_mutex": "Global\\opdl-customer-a-north-sensor"},
 	  "peers": [
 	    {"site":"north","machine":"node","role":"primary","ip":"127.0.0.1","api_address":"127.0.0.1:8080","nats":{"client_address":"127.0.0.1:4222","cluster_address":"127.0.0.1:6222"}},
 	    {"site":"north","machine":"node","role":"standby","ip":"127.0.0.1","api_address":"127.0.0.1:8081","nats":{"client_address":"127.0.0.1:4322","cluster_address":"127.0.0.1:6322"}}

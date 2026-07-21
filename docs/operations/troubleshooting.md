@@ -95,7 +95,7 @@ The standby should emit `platform.standby_ready` and
 - Confirm the standby binds no API, NATS listener, or journal storage.
 - Inspect connection and projection catch-up events.
 - Confirm both processes were built from the same machine package, so they carry
-  the same `fence.object`.
+  the same `lock.windows_mutex`.
 
 Never start a standby with a separate client port. Both roles share one
 machine-level Event Fabric endpoint and ownership controls who binds it.
@@ -120,11 +120,11 @@ broken.
 Status files are not ownership evidence. Start from the operational events, not
 from the filesystem: ownership is a kernel object and has no path.
 
-- `platform.fence_opened` reports the object each process opened. Both processes
-  of a machine must report the same one. Two different objects means they were
+- `platform.lock_opened` reports the mutex each process opened. Both processes
+  of a machine must report the same one. Two different mutexes means they were
   built from different packages, or from blueprints with different
-  `platform.fence.namespace` values.
-- `platform.fence_acquired` reports which process took it, and whether it was
+  `lock.windows_mutex` values.
+- `platform.ownership_acquired` reports which process took it, and whether it was
   `abandoned`. An abandoned acquisition means the previous holder died rather than
   handed over.
 - The startup summary prints the ownership object alongside the rest of the

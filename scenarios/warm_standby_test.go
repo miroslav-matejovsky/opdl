@@ -95,8 +95,8 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	node.waitStatus(t, primarySecond, "active", false)
 	waitForManagedAPI(ctx, t, node, primarySecond)
 
-	// Terminating a caught-up fence waiter must stop only that process. Context
-	// cancellation of Fence.Acquire is covered by the platform contract tests.
+	// Terminating a caught-up lock waiter must stop only that process. Context
+	// cancellation of Lock.Acquire is covered by the platform contract tests.
 	cancelledStandby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
 	node.waitStatus(t, cancelledStandby, "passive", true)
 	_ = cancelledStandby.Kill()
@@ -146,7 +146,7 @@ func assertSharedEndpoints(t *testing.T, primary, standby *managedProcess) {
 	require.True(t, active.binds, "the primary binds the machine's NATS listener:\n%s", primary.Logs())
 	require.NotEmpty(t, active.endpoint)
 
-	// The standby binds nothing while the primary holds the fence.
+	// The standby binds nothing while the primary holds Primary Ownership.
 	warm := standbyFabrics[0]
 	require.False(t, warm.storage, "the standby must not open the journal store:\n%s", standby.Logs())
 	require.False(t, warm.binds, "the standby must bind no NATS listener:\n%s", standby.Logs())

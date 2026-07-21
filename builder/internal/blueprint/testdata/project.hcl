@@ -63,6 +63,10 @@ project "customer-a" {
         standby {
           disabled = false
 
+          lock {
+            windows_mutex = "Global\\opdl-customer-a-north-local-server"
+          }
+
           api {
             port = 8081
           }
@@ -102,6 +106,10 @@ project "customer-a" {
         standby {
           disabled = false
 
+          lock {
+            windows_mutex = "Global\\opdl-customer-a-control-room-master"
+          }
+
           api {
             port = 8081
           }
@@ -139,6 +147,10 @@ project "customer-a" {
         standby {
           disabled = false
 
+          lock {
+            windows_mutex = "Global\\opdl-customer-a-control-room-slave"
+          }
+
           api {
             port = 8081
           }
@@ -175,6 +187,10 @@ project "customer-a" {
 
         standby {
           disabled = false
+
+          lock {
+            windows_mutex = "Global\\opdl-customer-a-control-room-integration"
+          }
 
           api {
             port = 8081

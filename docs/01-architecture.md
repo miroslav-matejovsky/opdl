@@ -301,14 +301,11 @@ activating, closes the client-only composition, opens the active Event Fabric,
 catches up again, drains retained handler work, publishes readiness, binds HTTP,
 and marks itself active.
 
-The object's name is derived, not authored. The builder joins a namespace with a
-digest of the machine's project, environment, site, and machine, and records the
-result in the descriptor as `fence.object`. Ownership is therefore a property of
-the machine's compiled identity rather than of a configuration value the two
-processes must agree on. A blueprint may set `platform.fence.namespace` to keep
-two deployments of the same identity on one host apart, and states nothing else:
-a blueprint that could name the object directly could give two machines the same
-one, and the resulting descriptor would look like a working one.
+When a machine deploys a Standby Instance (`standby.disabled = false`), its `standby`
+block must author the Windows named mutex in full under `lock.windows_mutex`, and the
+builder records it in the descriptor as `lock.windows_mutex`. Ownership is therefore a
+property of the machine's local `standby` block where the second instance is defined,
+and the descriptor omits `lock` when `standby` is disabled.
 
 This replaced an OS file lock under the local instance directory, whose scope was
 a path. Two processes excluded each other only if they had been configured with
@@ -321,7 +318,7 @@ part in ownership at all.
 An instance that takes ownership also learns how it became free. The kernel reports
 a mutex whose owner died without releasing it as abandoned, so a failover caused
 by a crash is distinguishable from a planned handover in
-`platform.fence_acquired`. The file lock reported both identically.
+`platform.ownership_acquired`. The file lock reported both identically.
 
 The mutex provides mutual exclusion, not a fencing token. What makes exclusion
 sufficient is two invariants around it: active resources close before ownership is

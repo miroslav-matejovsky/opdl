@@ -20,18 +20,18 @@ const (
 	StateStarting State = "starting"
 	// StatePassive is a process connected to the journal with caught-up local
 	// projections but no public listener, durable domain handlers, or embedded
-	// server. A passive instance waits for the machine fence and produces no domain
+	// server. A passive instance waits for Primary Ownership and produces no domain
 	// decision.
 	StatePassive State = "passive"
-	// StateActivating is a process that has acquired the fence and is composing its
+	// StateActivating is a process that has acquired Primary Ownership and is composing its
 	// active resources, but is not yet serving.
 	StateActivating State = "activating"
-	// StateActive is the process holding the machine's active fence. It owns the
+	// StateActive is the process holding Primary Ownership. It owns the
 	// public API, the durable domain handlers, readiness publication, and the
 	// embedded NATS server.
 	StateActive State = "active"
 	// StateStopping is a process releasing its resources during a clean shutdown,
-	// before it releases the fence.
+	// before it releases Primary Ownership.
 	StateStopping State = "stopping"
 	// StateFailed is a process that stopped on an error and is not active.
 	StateFailed State = "failed"

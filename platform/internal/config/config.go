@@ -180,9 +180,10 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances))
-	// A named kernel object has no path, so printing it at startup is how an
-	// operator finds which object a machine's processes contend for.
-	fmt.Fprintf(&b, "    fence        %s\n", d.Fence.Object)
+	// A machine's primary and standby processes contend for one Windows named
+	// mutex, so printing it at startup is how an operator finds which object they
+	// contend for.
+	fmt.Fprintf(&b, "    lock         %s\n", lockSummary(d.Lock))
 	fmt.Fprintf(&b, "    peers        %s\n", peersSummary(d.Peers))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    address             %s\n", c.address)
@@ -209,6 +210,14 @@ func instancesSummary(instances deployment.Instances) string {
 		parts = append(parts, fmt.Sprintf("%s=%s", role, instance.APIAddress))
 	}
 	return strings.Join(parts, " ")
+}
+
+// lockSummary renders the Windows named mutex when a standby is deployed.
+func lockSummary(lock *deployment.Lock) string {
+	if lock == nil {
+		return "(not deployed)"
+	}
+	return lock.WindowsMutex
 }
 
 // peersSummary renders the site's membership: the platform instances this

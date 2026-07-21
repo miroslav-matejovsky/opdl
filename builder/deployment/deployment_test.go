@@ -71,7 +71,7 @@ func validDescriptor() deployment.Descriptor {
 				},
 			},
 		},
-		Fence: deployment.Fence{Object: "opdl.fence.0123456789abcdef0123456789abcdef"},
+		Lock: &deployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
 		Peers: []deployment.Peer{
 			peer("gateway", deployment.RolePrimary, gatewayIP, "10.0.1.11:8080", gatewayClient, gatewayCluster),
 			peer("historian", deployment.RolePrimary, historianIP, "10.0.1.12:8080", historianClient, historianCluster),
@@ -100,7 +100,12 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing ip", func(d *deployment.Descriptor) { d.IP = "" }, `ip "" is not a valid IP address`},
 		{"invalid ip", func(d *deployment.Descriptor) { d.IP = "bad-ip" }, `ip "bad-ip" is not a valid IP address`},
 		{"missing services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
-		{"missing fence object", func(d *deployment.Descriptor) { d.Fence.Object = "" }, "fence object is required"},
+		{"missing lock when standby deployed", func(d *deployment.Descriptor) { d.Lock = nil }, "lock is required when instances.standby.disabled is false"},
+		{"missing lock windows_mutex", func(d *deployment.Descriptor) { d.Lock = &deployment.Lock{WindowsMutex: ""} }, "lock.windows_mutex is required"},
+		{"lock present when standby disabled", func(d *deployment.Descriptor) {
+			d.Instances.Standby.Disabled = true
+			d.Lock = &deployment.Lock{WindowsMutex: "Global\\opdl-sensor"}
+		}, "lock is set but instances.standby.disabled is true; omit lock when no standby is deployed"},
 		{
 			"disabled primary",
 			func(d *deployment.Descriptor) { d.Instances.Primary.Disabled = true },
@@ -163,6 +168,7 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"standby service while disabled",
 			func(d *deployment.Descriptor) {
 				d.Instances.Standby.Disabled = true
+				d.Lock = nil
 				d.Instances.Standby.APIAddress = ""
 				d.Instances.Standby.Nats = nil
 			},
@@ -172,6 +178,7 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"standby api address while disabled",
 			func(d *deployment.Descriptor) {
 				d.Instances.Standby.Disabled = true
+				d.Lock = nil
 				d.Instances.Standby.Service = nil
 				d.Instances.Standby.Nats = nil
 			},
@@ -275,6 +282,7 @@ func TestDescriptorValidateFailures(t *testing.T) {
 func TestDescriptorValidateAcceptsOneInstanceMachine(t *testing.T) {
 	d := validDescriptor()
 	d.Instances.Standby = deployment.Instance{Disabled: true}
+	d.Lock = nil
 	d.Peers = d.Peers[:3]
 	nats := d.Instances.Primary.Nats
 	nats.Routes = []string{gatewayCluster, historianCluster}
@@ -288,6 +296,7 @@ func TestDescriptorValidateAcceptsOneInstanceMachine(t *testing.T) {
 func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
 	d := validDescriptor()
 	d.Instances.Standby = deployment.Instance{Disabled: true}
+	d.Lock = nil
 	d.Peers = []deployment.Peer{
 		peer("sensor", deployment.RolePrimary, machineIP, primaryAPI, primaryClient, primaryCluster),
 	}

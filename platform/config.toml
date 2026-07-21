@@ -14,7 +14,7 @@ read_header_timeout = "5s"
 # Maximum duration allowed for graceful server and Event Fabric shutdown when terminating in-flight requests.
 shutdown_timeout = "10s"
 
-# Local runtime directory holding this machine's fence and per-process status
+# Local runtime directory holding this machine's lock and per-process status
 # files. Required. The primary and standby share it, and it must be on a
 # local filesystem so the OS lock is dropped on process death and enforced
 # exclusively. It is not the journal store: it carries local coordination and

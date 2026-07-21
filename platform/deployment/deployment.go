@@ -35,8 +35,9 @@ type Descriptor struct {
 	// Instances is this machine's Primary and Standby Instances. Both records are
 	// always present.
 	Instances Instances `json:"instances"`
-	// Fence is the machine's resolved local ownership object.
-	Fence Fence `json:"fence"`
+	// Lock is the machine's resolved local ownership lock. Present only when the
+	// Standby Instance is deployed; omitted on a standby-less machine.
+	Lock *Lock `json:"lock,omitempty"`
 	// Peers are the platform instances that make up this machine's site,
 	// including this machine's own.
 	Peers []Peer `json:"peers"`
@@ -60,21 +61,20 @@ func Role(standby bool) PlatformInstanceRole {
 	return RolePrimary
 }
 
-// Fence is the machine's resolved local ownership object: the Windows named mutex
+// Lock is the machine's resolved local ownership lock: the Windows named mutex
 // its primary and standby processes contend for, and which exactly one of them
 // holds at a time.
 //
-// Object is fully derived by the builder from an authored namespace and a digest
+// Object is fully derived by the builder from an authored lock policy and a digest
 // of the machine's whole identity. The runtime trusts it as identity, exactly as
 // it trusts the rest of the descriptor, and never composes one of its own.
 //
 // It is carried in the descriptor rather than derived at runtime because a named
 // kernel object is not visible to ordinary tools the way a lock file is. An
 // operator reading deployment.json can see which object a machine contends for.
-type Fence struct {
-	// Object is the ownership object's name, without a kernel namespace prefix.
-	// The platform places it in Global\ itself.
-	Object string `json:"object"`
+type Lock struct {
+	// WindowsMutex is the ownership object's name, including its Global\ prefix.
+	WindowsMutex string `json:"windows_mutex"`
 }
 
 // UnmarshalJSON decodes a descriptor and requires every resolved decision it
@@ -84,9 +84,9 @@ type Fence struct {
 // struct, and all have a usable zero value. An omitted instances.standby.disabled
 // would decode as false and silently deploy redundancy nobody asked for; an
 // omitted peers list would decode as a site of one, so a registration would need
-// no confirmation but its own; an omitted fence.object would decode as an empty
-// ownership object name, and a machine whose two instances contend for nothing
-// has no ownership at all. Failing here turns a truncated or stale descriptor
+// no confirmation but its own; an omitted lock.windows_mutex would decode as an empty
+// ownership mutex name, and a machine whose two instances contend for nothing
+// has no ownership at all when standby is enabled. Failing here turns a truncated or stale descriptor
 // into a startup error instead of a running machine with the wrong topology.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
@@ -115,15 +115,13 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	fenceField, err := requiredField(fields, "fence")
-	if err != nil {
-		return err
+	var standbyPolicy struct {
+		Disabled bool `json:"disabled"`
 	}
-	var fenceFields map[string]json.RawMessage
-	if err := json.Unmarshal(fenceField, &fenceFields); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid fence: %w", err)
+	if err := json.Unmarshal(instanceFields[string(RoleStandby)], &standbyPolicy); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid instances.standby: %w", err)
 	}
-	if _, err := requiredField(fenceFields, "fence.object"); err != nil {
+	if err := validateLockField(fields, standbyPolicy.Disabled); err != nil {
 		return err
 	}
 
@@ -138,6 +136,26 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	}
 	*d = Descriptor(decoded)
 	return nil
+}
+
+// validateLockField verifies the lock block matches the standby status.
+func validateLockField(fields map[string]json.RawMessage, standbyDisabled bool) error {
+	if standbyDisabled {
+		if _, present := fields["lock"]; present {
+			return fmt.Errorf("deployment descriptor: lock is set but instances.standby.disabled is true; omit lock when no standby is deployed")
+		}
+		return nil
+	}
+	lockField, err := requiredField(fields, "lock")
+	if err != nil {
+		return err
+	}
+	var lockFields map[string]json.RawMessage
+	if err := json.Unmarshal(lockField, &lockFields); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid lock: %w", err)
+	}
+	_, err = requiredField(lockFields, "lock.windows_mutex")
+	return err
 }
 
 // requiredField returns fields[name]'s value, treating both an absent key and an

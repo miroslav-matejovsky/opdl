@@ -25,9 +25,9 @@ func ownershipObject(t *testing.T) string {
 	return "opdl-ownership-test." + hex.EncodeToString(suffix)
 }
 
-func openOwnership(t *testing.T, object string, role redundancy.InstanceRole) *redundancy.Ownership {
+func openLock(t *testing.T, object string, role redundancy.InstanceRole) *redundancy.Lock {
 	t.Helper()
-	f, err := redundancy.OpenOwnership(object, role)
+	f, err := redundancy.OpenLock(object, role)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = f.Close() })
 	return f
@@ -46,28 +46,50 @@ func TestStatusPathIsPerRole(t *testing.T) {
 	require.Equal(t, filepath.Join(dir, "proj-env-site-machine", "process-primary.status"), a)
 }
 
-func TestOpenOwnershipRejectsInvalidRole(t *testing.T) {
+func TestOpenLockRejectsInvalidRole(t *testing.T) {
 	t.Parallel()
 
-	_, err := redundancy.OpenOwnership(ownershipObject(t), redundancy.InstanceRole("other"))
+	_, err := redundancy.OpenLock(ownershipObject(t), redundancy.InstanceRole("other"))
 	require.Error(t, err)
 }
 
-// TestOpenOwnershipRejectsAnEmptyObject guards the descriptor contract: a machine
-// whose descriptor carries no ownership object has no ownership at all, and must fail to
-// start rather than run without one.
-func TestOpenOwnershipRejectsAnEmptyObject(t *testing.T) {
+// TestOpenLockRejectsAnEmptyObject guards the descriptor contract: a machine
+// whose descriptor carries an empty lock object fails to open.
+func TestOpenLockRejectsAnEmptyObject(t *testing.T) {
 	t.Parallel()
 
-	_, err := redundancy.OpenOwnership("   ", redundancy.RolePrimary)
-	require.ErrorContains(t, err, "no ownership object")
+	_, err := redundancy.OpenLock("   ", redundancy.RolePrimary)
+	require.ErrorContains(t, err, "empty windows_mutex")
+}
+
+func TestOpenLockWithNilYieldsNilSafeLock(t *testing.T) {
+	t.Parallel()
+
+	lock, err := redundancy.OpenLock("", redundancy.RolePrimary)
+	require.NoError(t, err)
+	require.Nil(t, lock)
+
+	acquired, err := lock.TryAcquire()
+	require.NoError(t, err)
+	require.True(t, acquired.Held)
+	require.False(t, acquired.Abandoned)
+
+	acquired, err = lock.Acquire(t.Context())
+	require.NoError(t, err)
+	require.True(t, acquired.Held)
+	require.NoError(t, lock.Release())
+	require.NoError(t, lock.Close())
+	require.True(t, lock.Held())
+	require.False(t, lock.Existed())
+	require.Equal(t, "", lock.Name())
+	require.Equal(t, redundancy.RolePrimary, lock.Role())
 }
 
 func TestOwnershipAcquireReleaseCycle(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
-	f := openOwnership(t, object, redundancy.RolePrimary)
+	f := openLock(t, object, redundancy.RolePrimary)
 	require.Equal(t, redundancy.RolePrimary, f.Role())
 	require.Equal(t, `Global\`+object, f.Name(), "the ownership must live in the machine-wide namespace")
 	require.False(t, f.Held())
@@ -97,8 +119,8 @@ func TestOwnershipIsExclusive(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
-	a := openOwnership(t, object, redundancy.RolePrimary)
-	b := openOwnership(t, object, redundancy.RoleStandby)
+	a := openLock(t, object, redundancy.RolePrimary)
+	b := openLock(t, object, redundancy.RoleStandby)
 
 	acquired, err := a.TryAcquire()
 	require.NoError(t, err)
@@ -131,13 +153,13 @@ func TestOwnershipAcquireStopsOnCanceledContext(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
-	holder := openOwnership(t, object, redundancy.RolePrimary)
+	holder := openLock(t, object, redundancy.RolePrimary)
 	acquired, err := holder.TryAcquire()
 	require.NoError(t, err)
 	require.True(t, acquired.Held)
 	defer func() { require.NoError(t, holder.Release()) }()
 
-	standby := openOwnership(t, object, redundancy.RoleStandby)
+	standby := openLock(t, object, redundancy.RoleStandby)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -155,8 +177,8 @@ func TestOwnershipIdentityIsIndependentOfTheStatusDirectory(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
-	a := openOwnership(t, object, redundancy.RolePrimary)
-	b := openOwnership(t, object, redundancy.RoleStandby)
+	a := openLock(t, object, redundancy.RolePrimary)
+	b := openLock(t, object, redundancy.RoleStandby)
 
 	// Distinct status directories, which is what a misconfigured pair would have.
 	require.NotEqual(t,

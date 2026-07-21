@@ -121,18 +121,21 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) deployment.Descript
 		Servers:        []string{client},
 		Routes:         []string{},
 	}
-	descriptor.Fence.Object = uniqueFenceObject(t)
+	if descriptor.Lock == nil {
+		descriptor.Lock = &deployment.Lock{}
+	}
+	descriptor.Lock.WindowsMutex = uniqueLockMutex(t)
 	return descriptor
 }
 
-// uniqueFenceObject returns an ownership object no other test or run shares.
+// uniqueLockMutex returns an ownership mutex name no other test or run shares.
 //
-// The embedded mock descriptor names one ownership object, and ownership is a
+// The embedded mock descriptor names one ownership mutex, and ownership is a
 // kernel object in a machine-wide namespace, so every test in this binary would
 // otherwise contend for the same ownership. The ports above are moved for the same
-// reason; the fence needs it more, because a lock file was isolated for free by
+// reason; the lock needs it more, because a lock file was isolated for free by
 // each test's temporary directory and a kernel object is not.
-func uniqueFenceObject(t *testing.T) string {
+func uniqueLockMutex(t *testing.T) string {
 	t.Helper()
 	token := make([]byte, 8)
 	_, err := rand.Read(token)

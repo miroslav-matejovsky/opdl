@@ -422,6 +422,7 @@ func TestSummaryShowsConfiguration(t *testing.T) {
 	require.Contains(t, s, "platform configuration (machine=mock)")
 	require.Contains(t, s, "deployment descriptor")
 	require.Contains(t, s, "peers        mock/primary (127.0.0.1)")
+	require.Contains(t, s, "lock         (not deployed)")
 	require.Contains(t, s, "address             127.0.0.1:9090")
 	require.Contains(t, s, "read_header_timeout 5s")
 	require.Contains(t, s, "shutdown_timeout    10s")

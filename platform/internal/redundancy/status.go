@@ -15,7 +15,7 @@ import (
 // its projection has applied of the journal, how long it has
 // been lagging, whether it is ready to take over, and its last error.
 //
-// It is not an active fence. The machine fence remains authoritative, and the
+// It is not an active lock. The machine lock remains authoritative, and the
 // runtime never grants active ownership from this file. Deployment tooling may
 // use a fresh status whose PID is still live to verify handover readiness. A
 // stale status after a crash is only historical diagnostics.
@@ -48,9 +48,9 @@ type Status struct {
 
 // PrepareStatusDir creates the directory a machine's status files live in.
 //
-// It exists because ownership no longer touches the filesystem. The file-lock
-// fence this replaced created this directory as a side effect of taking the lock,
-// so status writes silently depended on the fence having run first. Creating it
+// It exists because ownership no longer touches the filesystem. The file lock
+// this replaced created this directory as a side effect of taking the lock,
+// so status writes silently depended on the lock having run first. Creating it
 // explicitly keeps that dependency from being reintroduced by accident.
 func PrepareStatusDir(statusPath string) error {
 	if err := os.MkdirAll(filepath.Dir(statusPath), 0o755); err != nil {

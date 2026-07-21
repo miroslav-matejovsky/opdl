@@ -37,8 +37,9 @@ type Descriptor struct {
 	// Instances is this machine's Primary and Standby Instances. Both records are
 	// always present.
 	Instances Instances `json:"instances"`
-	// Fence is the machine's resolved local ownership object.
-	Fence Fence `json:"fence"`
+	// Lock is the machine's resolved local ownership lock. Present only when the
+	// Standby Instance is deployed; omitted on a standby-less machine.
+	Lock *Lock `json:"lock,omitempty"`
 	// Peers are the platform instances that make up this machine's site.
 	Peers []Peer `json:"peers"`
 }
@@ -56,23 +57,21 @@ const (
 	RoleStandby PlatformInstanceRole = "standby"
 )
 
-// Fence is the machine's resolved local ownership object: the Windows named mutex
+// Lock is the machine's resolved local ownership lock: the Windows named mutex
 // its two instances contend for, and which exactly one of them holds at a time.
-//
-// Object is fully derived. The blueprint authors only a namespace; the builder
-// joins it with a digest of the machine's whole identity, so two machines can
-// never be given the same object and a deployment cannot state one directly.
 //
 // It is recorded here rather than derived at runtime because a named kernel object
 // is not visible to ordinary tools the way a lock file is. An operator reading
 // deployment.json can see exactly which object a machine will contend for.
 //
 // It is the machine's, not an instance's: it is the one thing the two instances
-// share, and sharing it is what makes exactly one of them Active.
-type Fence struct {
-	// Object is the ownership object's name, without a kernel namespace prefix.
-	// The platform places it in Global\ itself.
-	Object string `json:"object"`
+// share, and sharing it is what makes exactly one of them Active. It is present
+// only when the Standby Instance is deployed (Instances.Standby.Disabled is false);
+// on a standby-less machine, there is no lock and no contention.
+type Lock struct {
+	// WindowsMutex is the machine-wide kernel object name, including its Global\
+	// namespace prefix.
+	WindowsMutex string `json:"windows_mutex"`
 }
 
 // Features are the capability switches carried from the project onto a machine.
@@ -243,8 +242,17 @@ func (d Descriptor) Validate() error {
 	if len(d.Services) == 0 {
 		return fmt.Errorf("at least one service is required")
 	}
-	if strings.TrimSpace(d.Fence.Object) == "" {
-		return fmt.Errorf("fence object is required")
+	if d.Instances.Standby.Disabled {
+		if d.Lock != nil {
+			return fmt.Errorf("lock is set but instances.standby.disabled is true; omit lock when no standby is deployed")
+		}
+	} else {
+		if d.Lock == nil {
+			return fmt.Errorf("lock is required when instances.standby.disabled is false")
+		}
+		if strings.TrimSpace(d.Lock.WindowsMutex) == "" {
+			return fmt.Errorf("lock.windows_mutex is required")
+		}
 	}
 	if d.Instances.Primary.Disabled {
 		return fmt.Errorf("instances.primary.disabled: a machine must deploy a Primary Instance")

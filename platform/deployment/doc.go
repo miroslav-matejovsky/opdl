@@ -30,7 +30,7 @@
 // and standby are mutually exclusive holders of Primary Ownership and therefore of
 // one set of endpoints. Both process roles compose the same configuration from
 // it; only client-only conversion distinguishes a process that does not hold the
-// fence, and it removes ownership rather than selecting a different endpoint.
+// lock, and it removes ownership rather than selecting a different endpoint.
 // There is no monitor address: the platform runs no NATS monitoring listener.
 //
 // # Why decoding is strict

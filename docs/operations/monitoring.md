@@ -70,7 +70,7 @@ Important event types:
 | Type | Operational meaning |
 | --- | --- |
 | `platform.process_started`, `platform.process_stopped` | Process lifetime and terminal error |
-| `platform.fence_opened`, `platform.fence_acquired`, `platform.fence_waiting` | Active ownership transition. `fence_opened` names the kernel object, which has no path; `fence_acquired` carries `abandoned`, distinguishing a crash failover from a planned handover |
+| `platform.lock_opened`, `platform.ownership_acquired`, `platform.ownership_waiting` | Active ownership transition. `lock_opened` names the kernel object, which has no path; `ownership_acquired` carries `abandoned`, distinguishing a crash failover from a planned handover |
 | `platform.activation_started`, `completed`, `failed` | Initial activation, failover, or failback with duration |
 | `event_fabric.server_starting`, `server_ready` | Embedded storage server lifecycle |
 | `event_fabric.client_connected`, `disconnected`, `reconnected`, `closed` | Selected NATS server and connection transitions |

@@ -36,7 +36,7 @@ type Acquisition struct {
 	Abandoned bool
 }
 
-// Ownership is a machine's Primary Ownership, held through a Windows named mutex.
+// Lock is a machine's Primary Ownership handle, held through a Windows named mutex.
 // Holding it is what makes an instance Active; nothing else does.
 //
 // Exactly one process holds it, and only the holder releasing it or exiting frees
@@ -48,30 +48,34 @@ type Acquisition struct {
 // See the package documentation for why ownership is a kernel object rather than
 // a lock file, and for the release ordering the shared endpoints depend on.
 //
-// An Ownership is safe for concurrent use.
-type Ownership struct {
+// A Lock is safe for concurrent use.
+type Lock struct {
 	mutex *winmutex.Mutex
 	role  InstanceRole
 }
 
-// OpenOwnership prepares this instance to contend for the ownership object named
-// by object, which comes from the machine's deployment descriptor. It opens or
-// creates the object but does not take it; call TryAcquire or Acquire to contend.
+// OpenLock prepares this instance to contend for the ownership object named
+// in the machine's deployment descriptor lock block. It opens or creates the
+// object but does not take it; call TryAcquire or Acquire to contend.
 //
-// object is the same for both instances of a machine, so role is carried only for
-// diagnostics.
-func OpenOwnership(object string, role InstanceRole) (*Ownership, error) {
+// When windowsMutex is empty (standby is disabled on the machine), OpenLock returns nil, nil,
+// and calling TryAcquire or Acquire on that nil Lock immediately succeeds because
+// a lone Primary Instance is Active by construction.
+func OpenLock(windowsMutex string, role InstanceRole) (*Lock, error) {
 	if !role.Valid() {
-		return nil, fmt.Errorf("redundancy: open ownership: invalid instance role %q", role)
+		return nil, fmt.Errorf("redundancy: open lock: invalid instance role %q", role)
 	}
-	if strings.TrimSpace(object) == "" {
-		return nil, fmt.Errorf("redundancy: open ownership: descriptor carries no ownership object")
+	if windowsMutex == "" {
+		return nil, nil //nolint:nilnil // returning nil Lock when standby is disabled is intentional and nil-safe by contract
 	}
-	mutex, err := winmutex.Open(object)
+	if strings.TrimSpace(windowsMutex) == "" {
+		return nil, fmt.Errorf("redundancy: open lock: descriptor carries empty windows_mutex")
+	}
+	mutex, err := winmutex.Open(windowsMutex)
 	if err != nil {
-		return nil, fmt.Errorf("redundancy: open ownership object: %w", err)
+		return nil, fmt.Errorf("redundancy: open lock object: %w", err)
 	}
-	return &Ownership{mutex: mutex, role: role}, nil
+	return &Lock{mutex: mutex, role: role}, nil
 }
 
 // TryAcquire takes Primary Ownership without blocking. It reports the outcome,
@@ -79,10 +83,13 @@ func OpenOwnership(object string, role InstanceRole) (*Ownership, error) {
 // instance legitimately holds.
 //
 // The instance that takes it becomes Active. The other remains Standby.
-func (o *Ownership) TryAcquire() (Acquisition, error) {
-	outcome, err := o.mutex.TryAcquire()
+func (l *Lock) TryAcquire() (Acquisition, error) {
+	if l == nil {
+		return Acquisition{Held: true, Abandoned: false}, nil
+	}
+	outcome, err := l.mutex.TryAcquire()
 	if err != nil {
-		return Acquisition{}, fmt.Errorf("redundancy: acquire ownership %s: %w", o.mutex.Name(), err)
+		return Acquisition{}, fmt.Errorf("redundancy: acquire ownership %s: %w", l.mutex.Name(), err)
 	}
 	return acquisition(outcome), nil
 }
@@ -96,13 +103,16 @@ func (o *Ownership) TryAcquire() (Acquisition, error) {
 // Acquire returning is not the moment an instance becomes Active. The caller
 // composes its active resources after Acquire returns, serves only then, and must
 // Release after those resources have closed.
-func (o *Ownership) Acquire(ctx context.Context) (Acquisition, error) {
-	outcome, err := o.mutex.Acquire(ctx)
+func (l *Lock) Acquire(ctx context.Context) (Acquisition, error) {
+	if l == nil {
+		return Acquisition{Held: true, Abandoned: false}, nil
+	}
+	outcome, err := l.mutex.Acquire(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return Acquisition{}, ctx.Err()
 		}
-		return Acquisition{}, fmt.Errorf("redundancy: acquire ownership %s: %w", o.mutex.Name(), err)
+		return Acquisition{}, fmt.Errorf("redundancy: acquire ownership %s: %w", l.mutex.Name(), err)
 	}
 	return acquisition(outcome), nil
 }
@@ -115,9 +125,12 @@ func acquisition(outcome winmutex.Outcome) Acquisition {
 // be called only after the caller's active resources have closed: releasing while a
 // listener, handler, or embedded server is still up would let a second process open
 // the same resources and overlap. Release is idempotent.
-func (o *Ownership) Release() error {
-	if err := o.mutex.Release(); err != nil {
-		return fmt.Errorf("redundancy: release ownership %s: %w", o.mutex.Name(), err)
+func (l *Lock) Release() error {
+	if l == nil {
+		return nil
+	}
+	if err := l.mutex.Release(); err != nil {
+		return fmt.Errorf("redundancy: release ownership %s: %w", l.mutex.Name(), err)
 	}
 	return nil
 }
@@ -126,19 +139,32 @@ func (o *Ownership) Release() error {
 // idempotent, and it releases ownership first if the caller still holds it, so an
 // instance that closes without releasing hands over cleanly rather than appearing
 // to have crashed.
-func (o *Ownership) Close() error {
-	if err := o.mutex.Close(); err != nil {
-		return fmt.Errorf("redundancy: close ownership %s: %w", o.mutex.Name(), err)
+func (l *Lock) Close() error {
+	if l == nil {
+		return nil
+	}
+	if err := l.mutex.Close(); err != nil {
+		return fmt.Errorf("redundancy: close ownership %s: %w", l.mutex.Name(), err)
 	}
 	return nil
 }
 
 // Held reports whether this instance currently holds Primary Ownership.
-func (o *Ownership) Held() bool { return o.mutex.Held() }
+func (l *Lock) Held() bool {
+	if l == nil {
+		return true
+	}
+	return l.mutex.Held()
+}
 
 // Name returns the fully qualified ownership object name. It is what an operator
 // needs to identify the object, which unlike a lock file has no path.
-func (o *Ownership) Name() string { return o.mutex.Name() }
+func (l *Lock) Name() string {
+	if l == nil {
+		return ""
+	}
+	return l.mutex.Name()
+}
 
 // Existed reports whether the ownership object already existed when this process
 // opened it, meaning a peer process on this machine is running.
@@ -147,7 +173,17 @@ func (o *Ownership) Name() string { return o.mutex.Name() }
 // standby, the second to start legitimately finds the object. A process that
 // expects a peer and does not find one, or finds one on a machine deployed
 // without a standby, is worth an operator's attention.
-func (o *Ownership) Existed() bool { return o.mutex.Existed() }
+func (l *Lock) Existed() bool {
+	if l == nil {
+		return false
+	}
+	return l.mutex.Existed()
+}
 
 // Role returns the instance role contending for ownership.
-func (o *Ownership) Role() InstanceRole { return o.role }
+func (l *Lock) Role() InstanceRole {
+	if l == nil {
+		return RolePrimary
+	}
+	return l.role
+}

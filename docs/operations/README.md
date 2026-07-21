@@ -25,7 +25,7 @@ Read in this order:
 | `operations.event_dir` JSONL | Append-only copy of structured events for local analysis and tests | Optional |
 | Per-role status file | Current lifecycle, PID, projection sequence, lag, failover readiness, and last error | Written once startup reaches status composition, then every second |
 | Public HTTP API | Service availability and registration behavior | Active instance only |
-| Primary Ownership | Which local process owns active capabilities | A `Global\` named mutex; observe through `platform.fence_opened` and `fence_acquired`, not the filesystem |
+| Primary Ownership | Which local process owns active capabilities | A `Global\` named mutex; observe through `platform.lock_opened` and `ownership_acquired`, not the filesystem |
 | Site event journal | Durable platform and registration facts | Internal Event Fabric contract |
 
 Operational events are local because they must describe loss of the Event
