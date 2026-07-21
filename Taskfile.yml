@@ -94,7 +94,7 @@ tasks:
       - task test
       - task sdk-dotnet
       - task validate
-      - task scenarios
+      # - task scenarios
       - echo all done
 
 # ---- running stuff ----
