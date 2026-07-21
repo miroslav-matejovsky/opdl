@@ -1,167 +1,149 @@
-# Fixed-Role Primary/Standby: naming and configuration alignment
+# Align platform redundancy with the goal architecture
 
-Align the platform's local high-availability architecture, its vocabulary, and
-its configuration with one intention. Staged so each part can be reviewed and
-settled on its own.
+Bring the running platform in line with [redundancy-goal.md](../redundancy-goal.md)
+and with the deployment contract the builder now produces.
 
-No stage changes runtime behavior. Stage 04, which would have, is deferred, so
-every remaining stage is naming, structure, or documentation.
+This plan replaces an earlier one that was about vocabulary. That work is done and
+is not repeated here. What remains is behavior: the builder describes two
+independent runtimes, and the platform still runs one runtime with a second
+process attached to it.
 
-## The intention
+## Where the gap is
 
-**Each local process has a fixed role. There are two, and they are named Primary
-Instance and Standby Instance. Everything else resolves around that.**
+The blueprint and the deployment descriptor already state the goal architecture.
+Each instance has its own API port, its own Event Fabric ports, its own Windows
+Service identity, and its own resolved NATS topology. A machine contributes one or
+two **peers** to its site, and peers are instances.
 
-The roles are static and intentional. They are decided at build time, carried in
-the package, and visible in the service that runs them. They are not assigned at
-runtime, not negotiated, and not exchanged. A Standby Instance that takes over
-does not become the Primary Instance; it operates in the Active state until
-ownership returns.
+The runtime does not read any of that. It composes one configuration per machine
+from a shared TOML file, binds one API address, and runs one NATS server that the
+Standby Instance is deliberately excluded from. The Standby Instance is not an
+independent runtime; it is a waiter that borrows the Active instance's endpoints.
 
-This is the part operations sees most, in service names, launch arguments, status
-files, startup output, and every operational event. It is therefore stage 01, and
-every later stage is downstream of it.
+So the descriptor is ahead of the runtime, and the two disagree today. That is the
+whole subject of this plan.
 
-The architecture is **Fixed-Role Primary/Standby operating under a Preferred
-Primary policy**. It is not a leader-election architecture, a distributed
-consensus system, or a peer-to-peer ownership model, and it must not be described
-as one.
+## What the goal requires that the platform does not do
 
-## Vocabulary
-
-| Category | Terms |
-| --- | --- |
-| Roles | Primary Instance, Standby Instance |
-| States | Active, Standby |
-| Ownership | Primary Ownership, Ownership Acquisition, Ownership Validation, Ownership Release, Ownership Transfer |
-| Transitions | Failover, Failback |
-| Pattern | Fixed-Role Primary/Standby |
-| Policy | Preferred Primary |
-
-The Preferred Primary policy: the Primary Instance normally holds Primary
-Ownership and operates Active; the Standby Instance operates Standby; the Standby
-Instance assumes responsibility only when Primary Ownership becomes unavailable;
-after recovery, upgrade, or maintenance, ownership returns to the Primary
-Instance.
-
-### Vocabulary to avoid
-
-Leader, follower, election, leadership, consensus, quorum, distributed lock,
-leadership token.
-
-## Cross-cutting rule: what the vocabulary rule does not govern
-
-This is the most important thing to fix before any stage is executed, because
-without it a later cleanup pass will "correct" text that is already right.
-
-A repository-wide search for the avoided vocabulary returns **no term that
-describes the platform's primary/standby architecture.** Every hit is one of:
-
-**NATS and JetStream internals.** `platform/internal/eventfabric/nats/*`,
-`builder/deployment/deployment.go:298`, `docs/01-architecture.md:178,200,207`,
-`docs/operations/troubleshooting.md:29,64,70`,
-`docs/operations/monitoring.md:64,90`, `docs/operations/upgrade.md:88`,
-`docs/backlog/event-fabric.md:19`.
-
-These describe the site journal's Raft replica group, which genuinely is a
-distributed consensus system with a metadata leader, elections, and quorum.
-Renaming them would make the documentation wrong.
-
-**The registration domain.** `docs/02-registration.md:69,92,162,165` uses the
-words to state that registration deliberately has no leader and no quorum.
-Describing an absence is not adopting the vocabulary.
-
-**The rule governs how the platform's own local high availability is described.
-It does not govern a third-party consensus protocol the platform depends on, nor
-a statement that some other part of the system does not use one.** Stage 07
-writes this down permanently.
-
-## What actually needs changing
-
-The banned-word search finds almost nothing. The real work is vocabulary the
-search does not catch, because the codebase invented its own words before this
-intention was stated.
-
-| Issue | Scale | Stage |
+| Goal | Reference | Today |
 | --- | --- | --- |
-| No Windows Service identity exists anywhere in the package contract | new capability | 01 |
-| `manifest.role` means the machine role while `-instance` means the instance role | 1 collision, high operator confusion | 01 |
-| `ProcessRole` is the type for what the vocabulary calls an Instance | ~40 references | 01 |
-| `standby` is both a role and a state, in the same status file | documentation | 02 |
-| `fence` is the codebase's word for Primary Ownership | ~180 code, ~40 doc references | 03 |
-| Failback is neither automatic nor configurable | behavior gap | 04, deferred |
-| `promotion` and `reclamation` are the words for Failover and Failback | ~114 references | 05 |
-| Event names are `platform.fence_*` | 4 events plus runbooks | 06 |
-| Ownership configuration sits beside `standby`, optional | schema | 07 |
-| `docs/drafts/requirements.md` section 6 is "Redundancy and Leader Election" | 1 section | 08 |
+| Independent network ports | goal:68 | One API address from TOML, one NATS server per machine |
+| Independent configuration context | goal:67 | One TOML file per machine, read by both instances |
+| Runtime states are Active and Passive | goal:20-22 | States are `active` and `standby`; `standby` is also a role |
+| Ownership is transferred back per a configured failback policy | goal:53-58 | No policy exists; failback is operator-only |
+| No lock files, marker files, or filesystem coordination | goal:44 | Ownership is a mutex and correct; status files need an explicit ruling |
+| Platform-to-service notifications use Named Pipes | goal:75 | No named pipe exists anywhere in the repo |
 
-### The one gap that is not naming
-
-The Preferred Primary policy says ownership returns to the Primary Instance after
-recovery "according to the configured failback policy". Verified against the code
-and the scenarios: **it does not, and there is no such policy.**
-
-A returning Primary Instance finds ownership held, runs as a waiter, and sits at
-`role=primary, state=standby` indefinitely. Ownership returns only when an
-operator or deployment tooling stops the Active Standby. That is deliberate and
-documented, but it is a hardcoded manual-only failback policy rather than a
-configured one.
-
-Stage 04 covered it and is deferred: the behavior stays as described. Stage 05
-therefore states failback's trigger wherever it uses the word.
+Two things the goal requires are already true and need no stage: ownership is a
+Windows Named Mutex and is the single source of truth, and the roles are fixed,
+build-time, and operator-visible.
 
 ## Stages
 
-Ordered so the intention lands first and each later stage inherits settled
-vocabulary. Stages 02 through 05 are mostly mechanical once 01 is agreed.
+Ordered so the validation gate is restored before anything changes behavior, and
+so each stage that touches the runtime lands on settled names.
 
-| Stage | Subject | Effort | Risk | State |
-| --- | --- | --- | --- | --- |
-| [01](01-fixed-roles.md) | Fixed roles and the operator-visible instance identity | Medium | Medium | done |
-| [02](02-states.md) | Active and Standby states, and the role/state collision | Small | Low | done |
-| [03](03-ownership.md) | Primary Ownership vocabulary in code | Medium | Low | done |
-| [04](04-failback-policy.md) | Failback policy: behavior, not naming | Large | High | **deferred** |
-| [05](05-transitions.md) | Failover and Failback vocabulary | Small | Low | |
-| [06](06-operational-contract.md) | Event names and runbooks | Small | Medium | |
-| [07](07-configuration.md) | Ownership configuration under standby, required | Medium | Medium | |
-| [08](08-scope-and-requirements.md) | Scope boundaries, requirements draft, adjacent plans | Small | Low | |
+| Stage | Subject | Effort | Complexity |
+| --- | --- | --- | --- |
+| [01](01-restore-the-gate.md) | Restore the validation gate | Small | Low |
+| [02](02-active-and-passive.md) | Active and Passive runtime states | Small | Low |
+| [03](03-ownership-contract.md) | Finish the ownership rename: blueprint, descriptor, events | Medium | Medium |
+| [04](04-instance-configuration.md) | Independent configuration per instance | Medium | High |
+| [05](05-instance-event-fabric.md) | Independent Event Fabric per instance | Large | High |
+| [06](06-failback-policy.md) | Failback policy | Large | High |
+| [07](07-service-notifications.md) | Platform-to-service notifications over Named Pipes | Large | Medium |
+| [08](08-documentation.md) | Documentation, requirements, and scope | Small | Low |
 
-Stage 04 is deferred: failback stays a manual operator procedure with no
-configuration. Stage 05 still adopts the word failback and states its trigger
-wherever it appears, so the vocabulary does not imply automation the platform does
-not have.
-
-Of what remains, stage 07 is the only one that changes a derived value, and stage
-06 the only one that breaks an existing operational contract.
+**Effort** is how much work it is. **Complexity** is how much can go wrong that a
+compiler will not catch. Stage 04 is Medium effort and High complexity for exactly
+that reason: the change is small and the failure mode is a machine that starts and
+serves the wrong thing.
 
 ### Dependencies
 
 ```text
-01 fixed roles     done   <- the intention; everything else assumes it
+01 restore the gate      <- nothing after this can be trusted without it
    |
-   +-- 02 states        done   (04 would have changed one state's meaning)
+   +-- 02 active/passive     (operator-visible names, no behavior)
    |
-   +-- 03 ownership     done ----+
-   |                             |
-   +-- 04 failback  DEFERRED     |
-   |                             |
-   +-- 05 transitions -----------+-- 06 operational contract
-   |                                 (events name roles, ownership, transitions)
+   +-- 03 ownership contract (operator-visible names, no behavior)
    |
-   +-- 07 configuration (schema names roles and ownership)
+   +-- 04 instance configuration  <- the first behavioral stage
+          |
+          +-- 05 instance event fabric   <- the largest, needs 04's config split
+                 |
+                 +-- 06 failback policy  <- needs a settled two-runtime model
+                        |
+                        +-- 07 service notifications
 
-08 scope and requirements  <- independent; settle its carve-out before 06 or 07
+08 documentation  <- last, so the runbooks are rewritten once
 ```
 
-Remaining order: 05, then 07, then 08, then 06 last so the runbooks are rewritten
-once against final names.
+Stages 01 through 03 can be done in any order and change no behavior. Stage 04 is
+the first that can break a deployment.
+
+### The one ordering rule that matters
+
+**Stage 05 must land as a single change.** Starting the Standby Instance's NATS
+server without taking its own resolved topology, or taking the topology without
+starting the server, both produce an instance pointed at an address nothing is
+listening on. That is a defect this codebase has already had once; see stage 05.
+
+## Vocabulary
+
+Set by [redundancy-goal.md](../redundancy-goal.md) and already applied to the
+code. Repeated here only as the check to apply when writing new text.
+
+| Category | Terms |
+| --- | --- |
+| Pattern | Fixed-Role Primary/Standby |
+| Policy | Preferred Primary |
+| Roles | Primary Instance, Standby Instance |
+| States | Active, Passive |
+| Ownership | Primary Ownership, Ownership Acquisition, Validation, Release, Transfer |
+| Transitions | Failover, Failback |
+| Mechanism | Windows Named Mutex |
+
+Avoid: leader, follower, election, leadership, consensus, quorum, slot,
+distributed lock, leadership token.
+
+### What the vocabulary rule does not govern
+
+Carry this into every stage, or a cleanup pass will "correct" text that is right.
+
+The banned words appear in two places where they are accurate and must stay:
+
+**NATS and JetStream internals** (`platform/internal/eventfabric/nats/*`,
+`docs/01-architecture.md`, the operations runbooks, `docs/backlog/event-fabric.md`).
+The site journal really is a Raft group with a metadata leader, elections, and
+quorum. Renaming that would make the documentation wrong.
+
+**The registration domain** (`docs/02-registration.md`), which uses the words to
+state that registration deliberately has **no** leader and no quorum. Describing an
+absence is not adopting the vocabulary.
+
+The rule governs how the platform's own local high availability is described. It
+does not govern a third-party consensus protocol the platform depends on, nor a
+statement that some other part of the system does not use one. Stage 08 writes this
+down permanently.
+
+## Carried findings
+
+These were found while the builder work landed and are not re-derived in the
+stages that own them.
+
+| Finding | Owned by |
+| --- | --- |
+| `task all` runs neither scenarios nor deadcode, so nothing proves a package boots | 01 |
+| The runtime reads the Primary Instance's NATS topology whichever instance runs | 05 |
+| JetStream replica placement is unconstrained once a machine runs two servers | 05 |
+| The API address has two sources of truth: descriptor and TOML | 04 |
+| Blind sed on prose compiles and produces plausible nonsense | 02, 03 |
+| `TestFourMachineStorageTopologyAndFailure` is flaky under full-suite load | 01 |
 
 ## How to use this
 
-Each stage file states its intent, the audited current state with file and line
-references, the target, the decisions that need an answer, the work, and how it
-is validated. Decisions are listed separately from work so a stage can be settled
-without reading the implementation detail.
-
-Open decisions are collected per stage rather than here, so they can be addressed
-one at a time.
+Each stage states its intent, the audited current state with file references, the
+target, the decisions that need an answer, the work, and how it is validated.
+Decisions are listed separately from work so a stage can be settled without reading
+the implementation detail.
