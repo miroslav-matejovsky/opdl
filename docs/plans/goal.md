@@ -110,6 +110,7 @@ Avoid using:
 - Leadership
 - Consensus
 - Quorum
+- Slot
 - Distributed Lock
 - Leadership Token
 

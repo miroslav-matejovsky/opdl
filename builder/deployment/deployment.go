@@ -27,13 +27,14 @@ type Descriptor struct {
 	Services []string `json:"services"`
 	// Features are the project capability switches carried onto the machine.
 	Features Features `json:"features"`
-	// Slots is the machine's resolved primary and standby slot decision. Both
-	// records are always present.
+	// Slots is the machine's resolved instance topology: the Primary and Standby
+	// Instances, and every endpoint each one binds. Both records are always
+	// present.
 	Slots Slots `json:"slots"`
 	// Fence is the machine's resolved local ownership object.
 	Fence Fence `json:"fence"`
-	// EventFabric is the resolved Event Fabric topology for this machine.
-	EventFabric EventFabric `json:"event_fabric"`
+	// Peers are the other machines of this machine's site.
+	Peers []Peer `json:"peers"`
 }
 
 // Fence is the machine's resolved local ownership object: the Windows named mutex
@@ -121,62 +122,63 @@ type WinService struct {
 	Description string `json:"description,omitempty"`
 }
 
-// EventFabric is this machine's resolved view of the site's Event Fabric: the
-// peers it forms that fabric with. The descriptor already carries this machine's
-// identity, so EventFabric contains only the additional topology. The builder
-// derives it from the site portion of the project topology, so a machine boots
-// knowing its membership without discovering anything at runtime.
+// Peer is one other machine of this machine's site.
 //
-// It is deliberately transport-neutral: it carries identities and addresses, and
-// no ports, adapter names, or protocol settings. The Event Fabric adapter derives
-// what it needs from these addresses, which is what keeps the transport
-// replaceable without changing what the builder produces.
-type EventFabric struct {
-	// Nats is the machine's one resolved NATS topology, shared by whichever
-	// instance holds Primary Ownership.
-	Nats EventFabricNats `json:"nats"`
-	// Peers are the other Event Fabric members of this machine's site, ordered by
-	// machine name so every machine derives the same list. A machine never lists
-	// itself, and the fabric spans exactly one site: machines of another site,
-	// environment, or project form their own fabric.
-	//
-	// A single-machine site has no peers and forms a one-member fabric.
-	Peers []EventFabricPeer `json:"peers"`
-}
-
-// EventFabricNats is the machine's resolved NATS topology: the addresses its own
-// server would bind, and the addresses it reaches the site's journal through.
+// Peers are the site's membership, not its wiring. They carry identities and no
+// ports, because what a reader wants from this list is machine-level: which
+// machines the site consists of. Two things need that and neither is a
+// connection. Storage selection picks machines because a machine is the failure
+// domain, and placing two journal replicas behind one power supply is not
+// redundancy. A registration needs one confirmation per machine, because exactly
+// one instance of a machine is Active and it answers for the machine.
 //
-// There is exactly one of these per machine. The primary and standby processes
-// are mutually exclusive holders of Primary Ownership, so they share it: a
-// transfer does not change the address other machines were told to connect to.
-type EventFabricNats struct {
-	// ClientAddress is where this machine's server serves the client protocol,
-	// derived from the machine ip and the authored client port. It is present on
-	// every machine; only a storage node binds it.
-	ClientAddress string `json:"client_address"`
-	// ClusterAddress is where this machine's server routes to the site's other
-	// storage nodes, derived from the machine ip and the authored cluster port.
-	// It is present on every machine; it is bound only when Routes is non-empty.
-	ClusterAddress string `json:"cluster_address"`
-	// Routes are the cluster addresses of the site's other storage nodes. It is
-	// empty for a non-storage machine and for a site with one storage node, which
-	// has no peer server to route to.
-	Routes []string `json:"routes"`
-	// Servers are the client addresses this machine reaches the journal through,
-	// ordered so a storage node lists its own address first.
-	Servers []string `json:"servers"`
-}
-
-// EventFabricPeer is one other Event Fabric member this machine expects to meet.
-type EventFabricPeer struct {
+// The wiring is per-instance and resolved onto the slots. Nothing derives a
+// connection from this list.
+//
+// The builder fills it from the site portion of the project topology, so a
+// machine boots knowing its membership without discovering anything at runtime.
+// A machine never lists itself, and the site is the boundary: machines of another
+// site, environment, or project are not peers and form their own fabric. A
+// single-machine site has no peers.
+//
+// Peers are ordered by machine name, so every machine derives the same list
+// however the blueprint was authored.
+type Peer struct {
 	// Site is the peer's site. It always equals this machine's site; it is
 	// carried so a reader can check that without the rest of the topology.
 	Site string `json:"site"`
 	// Machine is the peer's machine identity.
 	Machine string `json:"machine"`
-	// IP is the address the peer's Event Fabric member is reached on.
+	// IP is the address the peer's machine is reached on.
 	IP string `json:"ip"`
+}
+
+// EventFabricNats is one instance's resolved NATS topology: the addresses its own
+// server binds, and the addresses it reaches the site's journal through.
+//
+// There is one of these per deployed instance, not one per machine. Each instance
+// runs its own server, so on a storage machine that runs a standby there are two
+// cluster members on one host and each routes to the other. That is why the
+// record lives on the slot: an instance's endpoints are its own, and no instance
+// inherits or takes over another's.
+type EventFabricNats struct {
+	// ClientAddress is where this instance's server serves the client protocol,
+	// derived from the machine ip and the instance's authored client port. It is
+	// present on every instance; only one on a storage machine binds it.
+	ClientAddress string `json:"client_address"`
+	// ClusterAddress is where this instance's server routes to the site's other
+	// storage servers, derived from the machine ip and the instance's authored
+	// cluster port. It is present on every instance; it is bound only when Routes
+	// is non-empty.
+	ClusterAddress string `json:"cluster_address"`
+	// Routes are the cluster addresses of the site's other storage servers,
+	// including the other instance of this machine when both store the journal. It
+	// is empty for an instance on a non-storage machine, and for a site with one
+	// storage server, which has no peer to route to.
+	Routes []string `json:"routes"`
+	// Servers are the client addresses this instance reaches the journal through,
+	// ordered so an instance on a storage machine lists its own address first.
+	Servers []string `json:"servers"`
 }
 
 // Validate checks a descriptor is complete enough to deploy. resolve calls it
@@ -213,6 +215,9 @@ func (d Descriptor) Validate() error {
 	if err := d.validateSlotServices(); err != nil {
 		return err
 	}
+	if err := d.validateSlotEndpoints(); err != nil {
+		return err
+	}
 	return d.validateEventFabric()
 }
 
@@ -242,6 +247,67 @@ func (d Descriptor) validateSlotServices() error {
 	}
 	if d.Slots.Primary.Service.Name == d.Slots.Standby.Service.Name {
 		return fmt.Errorf("the primary and standby instances share service name %q", d.Slots.Primary.Service.Name)
+	}
+	return nil
+}
+
+// validateSlotEndpoints checks each deployed instance carries the endpoints it
+// binds, that a disabled standby carries none, and that no two listeners on the
+// machine were resolved onto the same address.
+//
+// The addresses are checked against each other rather than only for validity
+// because both instances run at once on one host. Two listeners resolved to one
+// address is a machine where the second process cannot start, and every address
+// here is derived from the same machine ip, so a repeated port is a repeated
+// address.
+func (d Descriptor) validateSlotEndpoints() error {
+	if err := d.validateInstanceEndpoints("slots.primary", d.Slots.Primary); err != nil {
+		return err
+	}
+	if d.Slots.Standby.Disabled {
+		if d.Slots.Standby.APIAddress != "" {
+			return fmt.Errorf("slots.standby.api_address is set but the standby is disabled")
+		}
+		if d.Slots.Standby.Nats != nil {
+			return fmt.Errorf("slots.standby.nats is set but the standby is disabled")
+		}
+		return nil
+	}
+	if err := d.validateInstanceEndpoints("slots.standby", d.Slots.Standby); err != nil {
+		return err
+	}
+	bound := []struct {
+		where   string
+		address string
+	}{
+		{"slots.primary.api_address", d.Slots.Primary.APIAddress},
+		{"slots.primary.nats.client_address", d.Slots.Primary.Nats.ClientAddress},
+		{"slots.primary.nats.cluster_address", d.Slots.Primary.Nats.ClusterAddress},
+		{"slots.standby.api_address", d.Slots.Standby.APIAddress},
+		{"slots.standby.nats.client_address", d.Slots.Standby.Nats.ClientAddress},
+		{"slots.standby.nats.cluster_address", d.Slots.Standby.Nats.ClusterAddress},
+	}
+	taken := make(map[string]string, len(bound))
+	for _, listener := range bound {
+		if owner, used := taken[listener.address]; used {
+			return fmt.Errorf("%s and %s are both %q; the two instances run together and cannot share a listener",
+				owner, listener.where, listener.address)
+		}
+		taken[listener.address] = listener.where
+	}
+	return nil
+}
+
+// validateInstanceEndpoints checks one deployed instance's own addresses.
+func (d Descriptor) validateInstanceEndpoints(prefix string, slot Slot) error {
+	if strings.TrimSpace(slot.APIAddress) == "" {
+		return fmt.Errorf("%s.api_address is required", prefix)
+	}
+	if err := validateAddress(slot.APIAddress); err != nil {
+		return fmt.Errorf("%s.api_address: %w", prefix, err)
+	}
+	if slot.Nats == nil {
+		return fmt.Errorf("%s.nats is required", prefix)
 	}
 	return nil
 }
@@ -280,17 +346,21 @@ func (d Descriptor) validateEventFabric() error {
 	if d.Slots.Primary.Disabled {
 		return fmt.Errorf("slots.primary.disabled: a machine must deploy a primary process")
 	}
-	return d.validateNats()
+	if err := d.validateNats("slots.primary.nats", d.Slots.Primary.Nats); err != nil {
+		return err
+	}
+	if d.Slots.Standby.Disabled {
+		return nil
+	}
+	return d.validateNats("slots.standby.nats", d.Slots.Standby.Nats)
 }
 
-// validateNats checks the resolved NATS topology matches the site's storage
-// selection. The resolver derives all of it, so a violation here is a resolver
-// defect rather than an authoring mistake: it means a machine would boot
-// pointing at the wrong journal, binding a route it must not bind, or with no
-// server to connect to at all.
-func (d Descriptor) validateNats() error {
-	const prefix = "event_fabric.nats"
-	nats := d.EventFabric.Nats
+// validateNats checks one instance's resolved NATS topology matches the site's
+// storage selection. The resolver derives all of it, so a violation here is a
+// resolver defect rather than an authoring mistake: it means an instance would
+// boot pointing at the wrong journal, binding a route it must not bind, or with
+// no server to connect to at all.
+func (d Descriptor) validateNats(prefix string, nats *EventFabricNats) error {
 	if strings.TrimSpace(nats.ClientAddress) == "" {
 		return fmt.Errorf("%s.client_address is required", prefix)
 	}
@@ -325,33 +395,44 @@ func (d Descriptor) validateNats() error {
 	if duplicate, found := firstDuplicate(nats.Routes); found {
 		return fmt.Errorf("%s.routes: %q is listed twice", prefix, duplicate)
 	}
-	return d.validateStorageTopology(prefix)
+	return d.validateStorageTopology(prefix, nats)
 }
 
-// validateStorageTopology checks the machine's listener ownership against the
-// storage selection the descriptor implies. The selection is derived from the
-// site membership the descriptor already carries, so the check needs nothing the
-// runtime does not also have.
-func (d Descriptor) validateStorageTopology(prefix string) error {
-	nats := d.EventFabric.Nats
-	storage := StorageMachines(d.siteMachines())
-	hostsStorage := slices.Contains(storage, d.Machine)
-
-	if hostsStorage {
-		// A storage node answers its own clients. Listing its own address first
-		// keeps its client on the local server while that server is up, so a
-		// instance that becomes Active does not route its own traffic through a peer.
-		if nats.Servers[0] != nats.ClientAddress {
-			return fmt.Errorf("%s.servers: a storage machine must list its own client address %q first, got %q",
-				prefix, nats.ClientAddress, nats.Servers[0])
+// validateStorageTopology checks one instance's listener ownership against the
+// storage selection the descriptor implies.
+//
+// The selection is by machine, and the descriptor carries its site's machines, so
+// whether this machine stores the journal needs nothing the runtime does not also
+// have. How many storage *servers* the site has does not: that depends on which
+// peers deploy a standby, which is each peer's own decision and appears nowhere
+// here. The peer list stays machine-level deliberately, so rather than teach it
+// about instances the check uses the relation between the two lists.
+//
+// For an instance on a storage machine, every other storage server contributes
+// exactly one route and one server entry, and the instance contributes its own
+// client address to the servers only. So routes are always one shorter than
+// servers, whatever the site's shape, and a resolver that dropped or doubled a
+// server breaks the relation.
+func (d Descriptor) validateStorageTopology(prefix string, nats *EventFabricNats) error {
+	if !slices.Contains(StorageMachines(d.siteMachines()), d.Machine) {
+		if len(nats.Routes) > 0 {
+			return fmt.Errorf("%s.routes: an instance on a machine that does not store the journal has no cluster to route to", prefix)
 		}
-	} else if len(nats.Routes) > 0 {
-		return fmt.Errorf("%s.routes: a machine that does not store the journal has no cluster to route to", prefix)
+		if slices.Contains(nats.Servers, nats.ClientAddress) {
+			return fmt.Errorf("%s.servers: lists this instance's own client address %q, which it does not bind", prefix, nats.ClientAddress)
+		}
+		return nil
 	}
-	// A site with one storage node has no peer server to route to, so binding a
-	// cluster listener there would open a port nothing can connect to.
-	if len(storage) < 2 && len(nats.Routes) > 0 {
-		return fmt.Errorf("%s.routes: a site with %d storage machine(s) has no routes", prefix, len(storage))
+	// A storage server answers its own clients. Listing its own address first
+	// keeps its client on the local server while that server is up, so an
+	// instance does not route its own traffic through a peer.
+	if nats.Servers[0] != nats.ClientAddress {
+		return fmt.Errorf("%s.servers: an instance on a storage machine must list its own client address %q first, got %q",
+			prefix, nats.ClientAddress, nats.Servers[0])
+	}
+	if len(nats.Routes) != len(nats.Servers)-1 {
+		return fmt.Errorf("%s: %d route(s) for %d server(s); an instance routes to every storage server but its own",
+			prefix, len(nats.Routes), len(nats.Servers))
 	}
 	return nil
 }

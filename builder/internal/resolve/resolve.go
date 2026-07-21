@@ -60,7 +60,7 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		Features: deployment.Features{
 			Chaos: p.Features.Chaos,
 		},
-		Slots:       slots(machine),
+		Slots:       slots(site, machine),
 		Fence:       fence(p, site, machine),
 		EventFabric: eventFabric(site, machine),
 	}
@@ -86,20 +86,32 @@ func fence(p *blueprint.Project, site blueprint.Site, machine blueprint.Machine)
 	}
 }
 
-// slots resolves a machine's slot decision. The primary is never disabled: a
-// machine with no primary process would deploy nothing that can serve. The
-// standby decision is the blueprint's, copied through unchanged so the
+// slots resolves a machine's instance topology: which instances are deployed,
+// what runs them, and every endpoint each one binds. The primary is never
+// disabled: a machine with no primary process would deploy nothing that can
+// serve. The standby decision is the blueprint's, copied through unchanged so the
 // descriptor states it rather than implying it.
-func slots(machine blueprint.Machine) deployment.Slots {
+func slots(site blueprint.Site, machine blueprint.Machine) deployment.Slots {
 	return deployment.Slots{
-		Primary: deployment.Slot{
-			Disabled: false,
-			Service:  winService(machine, false),
-		},
-		Standby: deployment.Slot{
-			Disabled: machine.Platform.Standby.Disabled,
-			Service:  winService(machine, true),
-		},
+		Primary: slot(site, machine, false),
+		Standby: slot(site, machine, true),
+	}
+}
+
+// slot resolves one instance. An instance that is not deployed resolves to the
+// disabled record and nothing else: an endpoint no process will bind would read
+// exactly like one that will.
+func slot(site blueprint.Site, machine blueprint.Machine, standby bool) deployment.Slot {
+	endpoints := machine.Endpoints(standby)
+	if endpoints == nil {
+		return deployment.Slot{Disabled: true}
+	}
+	nats := instanceNats(site, machine, standby)
+	return deployment.Slot{
+		Disabled:   false,
+		Service:    winService(machine, standby),
+		APIAddress: net.JoinHostPort(machine.IP, strconv.Itoa(endpoints.APIPort)),
+		Nats:       &nats,
 	}
 }
 
