@@ -15,15 +15,15 @@ import (
 
 // Manifest is the deployment manifest shipped in a package.
 type Manifest struct {
-	// Project, Site, Machine, MachineRole are the package's place in the topology.
+	// Project, Site, Machine, MachineProfile are the package's place in the topology.
 	//
-	// MachineRole is the machine's purpose, such as "sensor-node". It is
+	// MachineProfile is the machine's purpose, such as "sensor-node". It is
 	// deliberately not called role: the two launches below carry the other kind of
 	// role, the instance role, and one word for both axes reads as one decision.
-	Project     string `json:"project"`
-	Site        string `json:"site"`
-	Machine     string `json:"machine"`
-	MachineRole string `json:"machine_role"`
+	Project        string `json:"project"`
+	Site           string `json:"site"`
+	Machine        string `json:"machine"`
+	MachineProfile string `json:"machine_profile"`
 	// Platform identifies the product line the binary is from.
 	Platform string `json:"platform"`
 	// Binary is the runtime binary filename in the package.
@@ -62,26 +62,21 @@ type WinService struct {
 // instanceFlag selects an instance role.
 const instanceFlag = "-instance"
 
-const (
-	primaryInstance = "primary"
-	standbyInstance = "standby"
-)
-
-// launches builds one launch record per deployed instance. The descriptor's slots
-// already state which instances are deployed and what their services are called,
-// so the manifest restates that in the form an installer needs rather than
-// deciding anything.
-func launches(slots deployment.Slots) (primary Launch, standby *Launch) {
+// launches builds one launch record per deployed instance. The descriptor already
+// states which instances are deployed and what their services are called, so the
+// manifest restates that in the form an installer needs rather than deciding
+// anything.
+func launches(instances deployment.Instances) (primary Launch, standby *Launch) {
 	primary = Launch{
-		Service: winService(slots.Primary.Service),
-		Args:    []string{instanceFlag, primaryInstance},
+		Service: winService(instances.Primary.Service),
+		Args:    []string{instanceFlag, string(deployment.RolePrimary)},
 	}
-	if slots.Standby.Disabled {
+	if instances.Standby.Disabled {
 		return primary, nil
 	}
 	standby = &Launch{
-		Service: winService(slots.Standby.Service),
-		Args:    []string{instanceFlag, standbyInstance},
+		Service: winService(instances.Standby.Service),
+		Args:    []string{instanceFlag, string(deployment.RoleStandby)},
 	}
 	return primary, standby
 }

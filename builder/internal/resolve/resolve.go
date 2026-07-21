@@ -49,20 +49,20 @@ func Build(p *blueprint.Project, platformName string) (*Plan, error) {
 // per-machine execution definition.
 func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Machine, platformName string) deployment.Descriptor {
 	return deployment.Descriptor{
-		Platform:    platformName,
-		Project:     p.Name,
-		Environment: p.Environment,
-		Site:        site.Name,
-		Machine:     machine.Name,
-		Role:        machine.Role,
-		IP:          machine.IP,
-		Services:    append([]string(nil), machine.Services...),
+		Platform:       platformName,
+		Project:        p.Name,
+		Environment:    p.Environment,
+		Site:           site.Name,
+		Machine:        machine.Name,
+		MachineProfile: machine.MachineProfile,
+		IP:             machine.IP,
+		Services:       append([]string(nil), machine.Services...),
 		Features: deployment.Features{
 			Chaos: p.Features.Chaos,
 		},
-		Slots:       slots(site, machine),
-		Fence:       fence(p, site, machine),
-		EventFabric: eventFabric(site, machine),
+		Instances: instances(site, machine),
+		Fence:     fence(p, site, machine),
+		Peers:     peers(site),
 	}
 }
 
@@ -75,10 +75,14 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 //
 // The digest covers project, environment, site, and machine, so no two machines
 // derive the same object, and the same machine derives the same object on every
-// build. It deliberately does not cover the machine's IP, role, or services: those
-// can change without the machine becoming a different deployment identity, and an
-// ownership object that moved when a machine was re-addressed would let an old
-// process and a new one both be active.
+// build. It deliberately does not cover the machine's IP, machine role, or
+// services: those can change without the machine becoming a different deployment
+// identity, and an ownership object that moved when a machine was re-addressed
+// would let an old process and a new one both be active.
+//
+// It does not cover the instance role either. The object is what the two
+// instances contend for, so a per-instance object would give each its own and
+// make both Active.
 func fence(p *blueprint.Project, site blueprint.Site, machine blueprint.Machine) deployment.Fence {
 	digest := stablehash.Sum256(p.Name, p.Environment, site.Name, machine.Name)
 	return deployment.Fence{
@@ -86,31 +90,31 @@ func fence(p *blueprint.Project, site blueprint.Site, machine blueprint.Machine)
 	}
 }
 
-// slots resolves a machine's instance topology: which instances are deployed,
-// what runs them, and every endpoint each one binds. The primary is never
-// disabled: a machine with no primary process would deploy nothing that can
+// instances resolves a machine's two platform instances. The primary is never
+// disabled: a machine with no Primary Instance would deploy nothing that can
 // serve. The standby decision is the blueprint's, copied through unchanged so the
 // descriptor states it rather than implying it.
-func slots(site blueprint.Site, machine blueprint.Machine) deployment.Slots {
-	return deployment.Slots{
-		Primary: slot(site, machine, false),
-		Standby: slot(site, machine, true),
+func instances(site blueprint.Site, machine blueprint.Machine) deployment.Instances {
+	return deployment.Instances{
+		Primary: instance(site, machine, deployment.RolePrimary),
+		Standby: instance(site, machine, deployment.RoleStandby),
 	}
 }
 
-// slot resolves one instance. An instance that is not deployed resolves to the
-// disabled record and nothing else: an endpoint no process will bind would read
-// exactly like one that will.
-func slot(site blueprint.Site, machine blueprint.Machine, standby bool) deployment.Slot {
-	endpoints := machine.Endpoints(standby)
+// instance resolves one platform instance: what runs it and every endpoint it
+// binds. An instance that is not deployed resolves to the disabled record and
+// nothing else, because an endpoint no process will bind would read exactly like
+// one that will.
+func instance(site blueprint.Site, machine blueprint.Machine, role deployment.PlatformInstanceRole) deployment.Instance {
+	endpoints := machine.Endpoints(role == deployment.RoleStandby)
 	if endpoints == nil {
-		return deployment.Slot{Disabled: true}
+		return deployment.Instance{Disabled: true}
 	}
-	nats := instanceNats(site, machine, standby)
-	return deployment.Slot{
+	nats := instanceNats(site, machine, role)
+	return deployment.Instance{
 		Disabled:   false,
-		Service:    winService(machine, standby),
-		APIAddress: net.JoinHostPort(machine.IP, strconv.Itoa(endpoints.APIPort)),
+		Service:    winService(machine, role == deployment.RoleStandby),
+		APIAddress: address(machine.IP, endpoints.APIPort),
 		Nats:       &nats,
 	}
 }
@@ -131,82 +135,118 @@ func winService(machine blueprint.Machine, standby bool) *deployment.WinService 
 	}
 }
 
-// eventFabric derives one machine's Event Fabric topology from its site. The
-// fabric spans exactly one site, so the peers are that site's other machines and
-// nothing else: a machine in another site, environment, or project is never a
-// peer and forms its own fabric.
+// peers derives a site's membership: every platform instance every machine of the
+// site deploys.
 //
-// Peers are ordered by machine name rather than by declaration, so the same
-// topology always derives the same descriptor no matter how the blueprint was
-// authored.
-func eventFabric(site blueprint.Site, machine blueprint.Machine) deployment.EventFabric {
-	peers := make([]deployment.EventFabricPeer, 0, len(site.Machines))
-	for _, peer := range site.Machines {
-		if peer.Name == machine.Name {
-			continue
-		}
-		peers = append(peers, deployment.EventFabricPeer{
-			Site:    site.Name,
-			Machine: peer.Name,
-			IP:      peer.IP,
-		})
-	}
-	slices.SortFunc(peers, func(a, b deployment.EventFabricPeer) int {
-		return strings.Compare(a.Machine, b.Machine)
+// The members are instances, not machines. A machine that deploys only a Primary
+// Instance contributes one peer; a machine that deploys a Standby Instance as
+// well contributes two, and those two are separate members with separate
+// endpoints rather than one member with a spare.
+//
+// The list is the same for every machine of the site, including this machine's
+// own instances. One descriptor is read by both instances of a machine, so a list
+// that left out its reader could not be written once for two readers; each
+// running instance recognises itself by machine and role.
+//
+// Ordering is by machine name, then Primary before Standby, so every machine of a
+// site derives the same list however the blueprint was authored.
+func peers(site blueprint.Site) []deployment.Peer {
+	machines := slices.Clone(site.Machines)
+	slices.SortFunc(machines, func(a, b blueprint.Machine) int {
+		return strings.Compare(a.Name, b.Name)
 	})
-	return deployment.EventFabric{
-		Nats:  eventFabricNats(site, machine),
-		Peers: peers,
+	peers := make([]deployment.Peer, 0, len(machines)*2)
+	for _, machine := range machines {
+		for _, role := range []deployment.PlatformInstanceRole{deployment.RolePrimary, deployment.RoleStandby} {
+			endpoints := machine.Endpoints(role == deployment.RoleStandby)
+			if endpoints == nil {
+				continue
+			}
+			peers = append(peers, deployment.Peer{
+				Site:       site.Name,
+				Machine:    machine.Name,
+				Role:       role,
+				IP:         machine.IP,
+				APIAddress: address(machine.IP, endpoints.APIPort),
+				Nats: deployment.PeerNats{
+					ClientAddress:  address(machine.IP, endpoints.ClientPort),
+					ClusterAddress: address(machine.IP, endpoints.ClusterPort),
+				},
+			})
+		}
 	}
+	return peers
 }
 
-// eventFabricNats derives a machine's one NATS topology from its site.
+// instanceNats derives one instance's NATS topology from its site.
 //
-// Nothing here is authored. The machine's own addresses are its blueprint ports
-// joined to its ip, and the route and server lists are consequences of which
-// machines the site selects to store the journal. Letting a blueprint state
-// those lists directly would let it split a site, drop a storage node, or point
-// a machine at a journal that is not its own, and none of that would be visible
+// Nothing here is authored. The instance's own addresses are its blueprint ports
+// joined to its machine's ip, and the route and server lists are consequences of
+// which machines the site selects to store the journal. Letting a blueprint state
+// those lists directly would let it split a site, drop a storage server, or point
+// an instance at a journal that is not its own, and none of that would be visible
 // in the descriptor as anything other than a working topology.
+//
+// Storage is selected by machine and served by instance: every instance a storage
+// machine deploys runs a server, and a machine's two servers route to each other
+// like any other pair. That is why a one-machine site with a standby still has a
+// cluster.
 //
 // Both lists are always non-nil, so an empty list serialises as [] and a
 // descriptor reader can tell "no routes" from "not resolved".
-func eventFabricNats(site blueprint.Site, machine blueprint.Machine) deployment.EventFabricNats {
-	storage := siteStorageMachines(site)
-	hostsStorage := slices.ContainsFunc(storage, func(m blueprint.Machine) bool {
-		return m.Name == machine.Name
-	})
-
-	out := deployment.EventFabricNats{
-		ClientAddress:  clientAddress(machine),
-		ClusterAddress: clusterAddress(machine),
+func instanceNats(site blueprint.Site, machine blueprint.Machine, role deployment.PlatformInstanceRole) deployment.Nats {
+	endpoints := machine.Endpoints(role == deployment.RoleStandby)
+	out := deployment.Nats{
+		ClientAddress:  address(machine.IP, endpoints.ClientPort),
+		ClusterAddress: address(machine.IP, endpoints.ClusterPort),
 		Routes:         []string{},
 		Servers:        []string{},
 	}
-	// A storage machine answers its own clients, so it connects to itself first
-	// and falls back to its peers. That ordering is what keeps a newly Active instance
-	// on its own server rather than routing its traffic through a peer.
+	storage := siteStorageServers(site)
+	hostsStorage := slices.ContainsFunc(storage, func(s deployment.Peer) bool {
+		return s.Machine == machine.Name
+	})
+	// A storage server answers its own clients, so it connects to itself first and
+	// falls back to the rest. That ordering is what keeps an Active instance on its
+	// own server rather than routing its traffic through a peer.
 	if hostsStorage {
 		out.Servers = append(out.Servers, out.ClientAddress)
 	}
-	for _, peer := range storage {
-		if peer.Name == machine.Name {
+	for _, server := range storage {
+		if server.Machine == machine.Name && server.Role == role {
 			continue
 		}
-		out.Servers = append(out.Servers, clientAddress(peer))
-		// Only storage machines route, and only to each other. A site with one
-		// storage machine has no peer to route to and binds no cluster listener.
+		out.Servers = append(out.Servers, server.Nats.ClientAddress)
+		// Only instances on storage machines route, and only to each other. A site
+		// with one storage server has no peer to route to and binds no cluster
+		// listener.
 		if hostsStorage {
-			out.Routes = append(out.Routes, clusterAddress(peer))
+			out.Routes = append(out.Routes, server.Nats.ClusterAddress)
 		}
 	}
 	return out
+}
+
+// siteStorageServers returns the platform instances that serve the site journal,
+// in peer order: the instances of the machines siteStorageMachines selects.
+func siteStorageServers(site blueprint.Site) []deployment.Peer {
+	storage := siteStorageMachines(site)
+	servers := make([]deployment.Peer, 0, len(storage)*2)
+	for _, peer := range peers(site) {
+		if slices.ContainsFunc(storage, func(m blueprint.Machine) bool { return m.Name == peer.Machine }) {
+			servers = append(servers, peer)
+		}
+	}
+	return servers
 }
 
 // siteStorageMachines returns the machines of a site that store the site
 // journal, sorted by name: one for a site smaller than three machines, the first
 // three otherwise. Selecting by sorted name makes every machine of the site
 // derive the same set without coordinating.
+//
+// The unit is the machine because that is the failure domain. A machine stores
+// one copy of the journal however many instances it deploys.
 func siteStorageMachines(site blueprint.Site) []blueprint.Machine {
 	sorted := slices.Clone(site.Machines)
 	slices.SortFunc(sorted, func(a, b blueprint.Machine) int {
@@ -226,13 +266,7 @@ func siteStorageMachines(site blueprint.Site) []blueprint.Machine {
 // platform adapter's rule; both derive the same set from the same site.
 const smallSiteMax = 2
 
-// clientAddress is where machine's server serves the NATS client protocol.
-func clientAddress(machine blueprint.Machine) string {
-	return net.JoinHostPort(machine.IP, strconv.Itoa(machine.Platform.Nats.ClientPort))
-}
-
-// clusterAddress is where machine's server routes to the site's other storage
-// machines.
-func clusterAddress(machine blueprint.Machine) string {
-	return net.JoinHostPort(machine.IP, strconv.Itoa(machine.Platform.Nats.ClusterPort))
+// address joins a machine's ip with one of its instances' authored ports.
+func address(ip string, port int) string {
+	return net.JoinHostPort(ip, strconv.Itoa(port))
 }

@@ -44,8 +44,8 @@ type Site struct {
 type Machine struct {
 	// Name is the machine identifier, unique within its project.
 	Name string `hcl:"name,label"`
-	// Role is the machine's role, e.g. "sensor-node".
-	Role string `hcl:"role"`
+	// MachineProfile is the machine's purpose, e.g. "sensor-node".
+	MachineProfile string `hcl:"profile"`
 	// IP is the machine's network address, e.g. "10.0.1.10".
 	IP string `hcl:"ip"`
 	// Services lists the service groups assigned to this machine.
@@ -289,8 +289,8 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 	}
 	machineNames[machine.Name] = true
 
-	if strings.TrimSpace(machine.Role) == "" {
-		return fmt.Errorf("machine %q: role is required", machine.Name)
+	if strings.TrimSpace(machine.MachineProfile) == "" {
+		return fmt.Errorf("machine %q: profile is required", machine.Name)
 	}
 	if strings.TrimSpace(machine.IP) == "" {
 		return fmt.Errorf("machine %q: ip is required", machine.Name)

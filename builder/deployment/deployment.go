@@ -11,35 +11,60 @@ import (
 // Descriptor is one machine's deployment definition: everything the platform
 // needs to run on that machine, projected from the project blueprint. It is the
 // builder's output contract; the platform runtime conforms to it.
+//
+// A machine deploys one or two platform instances, and each is an independent
+// runtime with its own endpoints. The descriptor is still per machine because one
+// binary is built per machine and both instances run from it, so it states the
+// machine's identity once and every instance's endpoints separately.
 type Descriptor struct {
 	// Platform identifies the product line the binary is built from. The builder
 	// supplies it; it is not part of the project blueprint.
 	Platform string `json:"platform"`
-	// Project, Environment, Site, Machine, Role place the machine in the topology.
-	Project     string `json:"project"`
-	Environment string `json:"environment"`
-	Site        string `json:"site"`
-	Machine     string `json:"machine"`
-	Role        string `json:"role"`
-	// IP is the machine's network address.
+	// Project, Environment, Site, Machine, MachineProfile place the machine in the
+	// topology. MachineProfile is the machine's purpose, such as "sensor-node".
+	Project        string `json:"project"`
+	Environment    string `json:"environment"`
+	Site           string `json:"site"`
+	Machine        string `json:"machine"`
+	MachineProfile string `json:"machine_profile"`
+	// IP is the machine's network address. Both of its instances are reached on
+	// it, on their own ports.
 	IP string `json:"ip"`
 	// Services are the service groups this machine hosts.
 	Services []string `json:"services"`
 	// Features are the project capability switches carried onto the machine.
 	Features Features `json:"features"`
-	// Slots is the machine's resolved instance topology: the Primary and Standby
-	// Instances, and every endpoint each one binds. Both records are always
-	// present.
-	Slots Slots `json:"slots"`
+	// Instances is this machine's Primary and Standby Instances. Both records are
+	// always present.
+	Instances Instances `json:"instances"`
 	// Fence is the machine's resolved local ownership object.
 	Fence Fence `json:"fence"`
-	// Peers are the other machines of this machine's site.
+	// Peers are the platform instances that make up this machine's site.
 	Peers []Peer `json:"peers"`
 }
 
+// PlatformInstanceRole is one of the two fixed platform instance roles.
+//
+// The roles are decided at build time and never assigned, negotiated, or
+// exchanged at runtime. An instance that takes over does not become the Primary
+// Instance; it operates Active until ownership returns.
+type PlatformInstanceRole string
+
+const (
+	RolePrimary PlatformInstanceRole = "primary"
+	RoleStandby PlatformInstanceRole = "standby"
+)
+
+// Role returns the instance role for a standby flag.
+func Role(standby bool) PlatformInstanceRole {
+	if standby {
+		return RoleStandby
+	}
+	return RolePrimary
+}
+
 // Fence is the machine's resolved local ownership object: the Windows named mutex
-// its primary and standby processes contend for, and which exactly one of them
-// holds at a time.
+// its two instances contend for, and which exactly one of them holds at a time.
 //
 // Object is fully derived. The blueprint authors only a namespace; the builder
 // joins it with a digest of the machine's whole identity, so two machines can
@@ -48,6 +73,9 @@ type Descriptor struct {
 // It is recorded here rather than derived at runtime because a named kernel object
 // is not visible to ordinary tools the way a lock file is. An operator reading
 // deployment.json can see exactly which object a machine will contend for.
+//
+// It is the machine's, not an instance's: it is the one thing the two instances
+// share, and sharing it is what makes exactly one of them Active.
 type Fence struct {
 	// Object is the ownership object's name, without a kernel namespace prefix.
 	// The platform places it in Global\ itself.
@@ -59,28 +87,36 @@ type Features struct {
 	Chaos bool `json:"chaos"`
 }
 
-// Slots is a machine's resolved instance topology. Both records are always
-// present and non-null, so a reader never infers a slot policy from an omitted
-// field.
+// Instances is a machine's two platform instances. Both records are always
+// present and non-null, so a reader never infers an instance's deployment from an
+// omitted field.
 //
-// Each slot is an independent runtime and owns its own endpoints, so everything
-// an instance binds is resolved onto its slot: its API address and its own NATS
-// server's topology. The machine holds no endpoint of its own.
-type Slots struct {
-	Primary Slot `json:"primary"`
-	Standby Slot `json:"standby"`
+// Each instance is an independent runtime and owns its own endpoints, so
+// everything an instance binds is resolved onto its own record. The machine holds
+// no endpoint of its own.
+type Instances struct {
+	Primary Instance `json:"primary"`
+	Standby Instance `json:"standby"`
 }
 
-// Slot is one instance's resolved decision: whether it is deployed, what the
-// service running it is called, and every endpoint it binds.
+// Get returns one instance by role.
+func (i Instances) Get(role PlatformInstanceRole) Instance {
+	if role == RoleStandby {
+		return i.Standby
+	}
+	return i.Primary
+}
+
+// Instance is one platform instance: whether it is deployed, what the service
+// running it is called, and every endpoint it binds.
 //
 // The endpoint fields are present exactly when the instance is deployed. A
 // disabled standby carries nothing but Disabled, so a reader cannot mistake a
 // resolved endpoint for one that will ever be bound.
-type Slot struct {
-	// Disabled reports that the slot's process is not deployed. It is always
-	// false for the primary: a machine with no primary process would deploy
-	// nothing that can serve.
+type Instance struct {
+	// Disabled reports that this instance is not deployed. It is always false for
+	// the primary: a machine with no Primary Instance would deploy nothing that
+	// can serve.
 	Disabled bool `json:"disabled"`
 	// Service is the instance's Windows Service identity. It is carried for
 	// whoever installs the services; the runtime does not read it and the platform
@@ -94,15 +130,7 @@ type Slot struct {
 	// one that is; it does not get there by an address that changes owner.
 	APIAddress string `json:"api_address,omitempty"`
 	// Nats is this instance's own Event Fabric NATS topology.
-	Nats *EventFabricNats `json:"nats,omitempty"`
-}
-
-// Instance returns one slot by instance role.
-func (s Slots) Instance(standby bool) Slot {
-	if standby {
-		return s.Standby
-	}
-	return s.Primary
+	Nats *Nats `json:"nats,omitempty"`
 }
 
 // WinService is one instance's resolved Windows Service identity.
@@ -122,59 +150,72 @@ type WinService struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Peer is one other machine of this machine's site.
+// Peer is one platform instance of a site.
 //
-// Peers are the site's membership, not its wiring. They carry identities and no
-// ports, because what a reader wants from this list is machine-level: which
-// machines the site consists of. Two things need that and neither is a
-// connection. Storage selection picks machines because a machine is the failure
-// domain, and placing two journal replicas behind one power supply is not
-// redundancy. A registration needs one confirmation per machine, because exactly
-// one instance of a machine is Active and it answers for the machine.
+// The site's members are instances, not machines: each instance is an independent
+// runtime with its own endpoints, and a machine contributes one peer when it
+// deploys only a Primary Instance and two when it deploys a Standby Instance as
+// well.
 //
-// The wiring is per-instance and resolved onto the slots. Nothing derives a
-// connection from this list.
+// The list includes this machine's own instances. The descriptor is per machine
+// and both instances read the same copy, so it states the site's whole membership
+// once and each running instance recognises itself by Machine and Role. A list
+// that excluded the reader could not be written once for two readers.
 //
-// The builder fills it from the site portion of the project topology, so a
-// machine boots knowing its membership without discovering anything at runtime.
-// A machine never lists itself, and the site is the boundary: machines of another
-// site, environment, or project are not peers and form their own fabric. A
-// single-machine site has no peers.
+// A peer carries its addresses because reaching it is what its identity is for.
+// The builder fills them from the site portion of the project topology, so an
+// instance boots knowing every member without discovering anything at runtime.
 //
-// Peers are ordered by machine name, so every machine derives the same list
-// however the blueprint was authored.
+// Peers are ordered by machine name, then Primary before Standby, so every
+// machine of a site derives the same list however the blueprint was authored. The
+// site is the boundary: instances of another site, environment, or project are
+// not peers and form their own fabric.
 type Peer struct {
 	// Site is the peer's site. It always equals this machine's site; it is
 	// carried so a reader can check that without the rest of the topology.
 	Site string `json:"site"`
-	// Machine is the peer's machine identity.
+	// Machine is the machine the peer instance runs on.
 	Machine string `json:"machine"`
-	// IP is the address the peer's machine is reached on.
+	// Role is which of the machine's two instances this peer is.
+	Role PlatformInstanceRole `json:"role"`
+	// IP is the address the peer's machine is reached on. Two peers on one machine
+	// share it and differ by port.
 	IP string `json:"ip"`
+	// APIAddress is where the peer instance serves its local API.
+	APIAddress string `json:"api_address"`
+	// Nats are the peer instance's Event Fabric addresses.
+	Nats PeerNats `json:"nats"`
 }
 
-// EventFabricNats is one instance's resolved NATS topology: the addresses its own
-// server binds, and the addresses it reaches the site's journal through.
+// PeerNats are one peer instance's Event Fabric addresses.
+type PeerNats struct {
+	// ClientAddress is where the peer's server serves the NATS client protocol.
+	ClientAddress string `json:"client_address"`
+	// ClusterAddress is where the peer's server accepts routes from the site's
+	// other storage servers.
+	ClusterAddress string `json:"cluster_address"`
+}
+
+// Nats is one instance's resolved NATS topology: the addresses its own server
+// binds, and the addresses it reaches the site's journal through.
 //
 // There is one of these per deployed instance, not one per machine. Each instance
-// runs its own server, so on a storage machine that runs a standby there are two
-// cluster members on one host and each routes to the other. That is why the
-// record lives on the slot: an instance's endpoints are its own, and no instance
-// inherits or takes over another's.
-type EventFabricNats struct {
+// runs its own server, so on a storage machine that deploys a standby there are
+// two cluster members on one host and each routes to the other.
+type Nats struct {
 	// ClientAddress is where this instance's server serves the client protocol,
 	// derived from the machine ip and the instance's authored client port. It is
-	// present on every instance; only one on a storage machine binds it.
+	// present on every instance; only an instance on a storage machine binds it.
 	ClientAddress string `json:"client_address"`
-	// ClusterAddress is where this instance's server routes to the site's other
-	// storage servers, derived from the machine ip and the instance's authored
-	// cluster port. It is present on every instance; it is bound only when Routes
-	// is non-empty.
+	// ClusterAddress is where this instance's server accepts routes from the
+	// site's other storage servers, derived from the machine ip and the instance's
+	// authored cluster port. It is present on every instance; it is bound only
+	// when Routes is non-empty.
 	ClusterAddress string `json:"cluster_address"`
 	// Routes are the cluster addresses of the site's other storage servers,
-	// including the other instance of this machine when both store the journal. It
-	// is empty for an instance on a non-storage machine, and for a site with one
-	// storage server, which has no peer to route to.
+	// including this machine's other instance when the machine stores the journal.
+	// It is empty for an instance on a non-storage machine, and for a site with
+	// one storage server, which has no peer to route to.
 	Routes []string `json:"routes"`
 	// Servers are the client addresses this instance reaches the journal through,
 	// ordered so an instance on a storage machine lists its own address first.
@@ -200,8 +241,8 @@ func (d Descriptor) Validate() error {
 	if strings.TrimSpace(d.Machine) == "" {
 		return fmt.Errorf("machine is required")
 	}
-	if strings.TrimSpace(d.Role) == "" {
-		return fmt.Errorf("role is required")
+	if strings.TrimSpace(d.MachineProfile) == "" {
+		return fmt.Errorf("profile is required")
 	}
 	if net.ParseIP(d.IP) == nil {
 		return fmt.Errorf("ip %q is not a valid IP address", d.IP)
@@ -212,80 +253,86 @@ func (d Descriptor) Validate() error {
 	if strings.TrimSpace(d.Fence.Object) == "" {
 		return fmt.Errorf("fence object is required")
 	}
-	if err := d.validateSlotServices(); err != nil {
+	if d.Instances.Primary.Disabled {
+		return fmt.Errorf("instances.primary.disabled: a machine must deploy a Primary Instance")
+	}
+	if err := d.validateServices(); err != nil {
 		return err
 	}
-	if err := d.validateSlotEndpoints(); err != nil {
+	if err := d.validateEndpoints(); err != nil {
 		return err
 	}
-	return d.validateEventFabric()
+	if err := d.validatePeers(); err != nil {
+		return err
+	}
+	return d.validateNats()
 }
 
-// validateSlotServices checks each instance's Windows Service identity is
-// present exactly when that instance is deployed, and that the two differ.
+// validateServices checks each instance's Windows Service identity is present
+// exactly when that instance is deployed, and that the two differ.
 //
 // The two instances run on one host, so identical names are the one service
 // collision Windows cannot refuse at install time for us.
-func (d Descriptor) validateSlotServices() error {
-	if d.Slots.Primary.Service == nil {
-		return fmt.Errorf("slots.primary.service is required")
+func (d Descriptor) validateServices() error {
+	if d.Instances.Primary.Service == nil {
+		return fmt.Errorf("instances.primary.service is required")
 	}
-	if strings.TrimSpace(d.Slots.Primary.Service.Name) == "" {
-		return fmt.Errorf("slots.primary.service.name is required")
+	if strings.TrimSpace(d.Instances.Primary.Service.Name) == "" {
+		return fmt.Errorf("instances.primary.service.name is required")
 	}
-	if d.Slots.Standby.Disabled {
-		if d.Slots.Standby.Service != nil {
-			return fmt.Errorf("slots.standby.service is set but the standby is disabled")
+	if d.Instances.Standby.Disabled {
+		if d.Instances.Standby.Service != nil {
+			return fmt.Errorf("instances.standby.service is set but the standby is disabled")
 		}
 		return nil
 	}
-	if d.Slots.Standby.Service == nil {
-		return fmt.Errorf("slots.standby.service is required when the standby is deployed")
+	if d.Instances.Standby.Service == nil {
+		return fmt.Errorf("instances.standby.service is required when the standby is deployed")
 	}
-	if strings.TrimSpace(d.Slots.Standby.Service.Name) == "" {
-		return fmt.Errorf("slots.standby.service.name is required")
+	if strings.TrimSpace(d.Instances.Standby.Service.Name) == "" {
+		return fmt.Errorf("instances.standby.service.name is required")
 	}
-	if d.Slots.Primary.Service.Name == d.Slots.Standby.Service.Name {
-		return fmt.Errorf("the primary and standby instances share service name %q", d.Slots.Primary.Service.Name)
+	if d.Instances.Primary.Service.Name == d.Instances.Standby.Service.Name {
+		return fmt.Errorf("the primary and standby instances share service name %q", d.Instances.Primary.Service.Name)
 	}
 	return nil
 }
 
-// validateSlotEndpoints checks each deployed instance carries the endpoints it
-// binds, that a disabled standby carries none, and that no two listeners on the
-// machine were resolved onto the same address.
+// validateEndpoints checks each deployed instance carries the endpoints it binds,
+// that a disabled standby carries none, and that no two listeners on the machine
+// were resolved onto the same address.
 //
 // The addresses are checked against each other rather than only for validity
 // because both instances run at once on one host. Two listeners resolved to one
 // address is a machine where the second process cannot start, and every address
-// here is derived from the same machine ip, so a repeated port is a repeated
+// here derives from the same machine ip, so a repeated port is a repeated
 // address.
-func (d Descriptor) validateSlotEndpoints() error {
-	if err := d.validateInstanceEndpoints("slots.primary", d.Slots.Primary); err != nil {
+func (d Descriptor) validateEndpoints() error {
+	if err := validateInstanceEndpoints("instances.primary", d.Instances.Primary); err != nil {
 		return err
 	}
-	if d.Slots.Standby.Disabled {
-		if d.Slots.Standby.APIAddress != "" {
-			return fmt.Errorf("slots.standby.api_address is set but the standby is disabled")
+	if d.Instances.Standby.Disabled {
+		if d.Instances.Standby.APIAddress != "" {
+			return fmt.Errorf("instances.standby.api_address is set but the standby is disabled")
 		}
-		if d.Slots.Standby.Nats != nil {
-			return fmt.Errorf("slots.standby.nats is set but the standby is disabled")
+		if d.Instances.Standby.Nats != nil {
+			return fmt.Errorf("instances.standby.nats is set but the standby is disabled")
 		}
 		return nil
 	}
-	if err := d.validateInstanceEndpoints("slots.standby", d.Slots.Standby); err != nil {
+	if err := validateInstanceEndpoints("instances.standby", d.Instances.Standby); err != nil {
 		return err
 	}
 	bound := []struct {
 		where   string
 		address string
 	}{
-		{"slots.primary.api_address", d.Slots.Primary.APIAddress},
-		{"slots.primary.nats.client_address", d.Slots.Primary.Nats.ClientAddress},
-		{"slots.primary.nats.cluster_address", d.Slots.Primary.Nats.ClusterAddress},
-		{"slots.standby.api_address", d.Slots.Standby.APIAddress},
-		{"slots.standby.nats.client_address", d.Slots.Standby.Nats.ClientAddress},
-		{"slots.standby.nats.cluster_address", d.Slots.Standby.Nats.ClusterAddress},
+		{"instances.primary.api_address", d.Instances.Primary.APIAddress},
+		{"instances.primary.nats.client_address", d.Instances.Primary.Nats.ClientAddress},
+		{"instances.primary.nats.cluster_address", d.Instances.Primary.Nats.ClusterAddress},
+		{"instances.standby.api_address", d.Instances.Standby.APIAddress},
+		{"instances.standby.nats.client_address", d.Instances.Standby.Nats.ClientAddress},
+		{"instances.standby.nats.cluster_address", d.Instances.Standby.Nats.ClusterAddress},
 	}
 	taken := make(map[string]string, len(bound))
 	for _, listener := range bound {
@@ -299,101 +346,147 @@ func (d Descriptor) validateSlotEndpoints() error {
 }
 
 // validateInstanceEndpoints checks one deployed instance's own addresses.
-func (d Descriptor) validateInstanceEndpoints(prefix string, slot Slot) error {
-	if strings.TrimSpace(slot.APIAddress) == "" {
-		return fmt.Errorf("%s.api_address is required", prefix)
+func validateInstanceEndpoints(prefix string, instance Instance) error {
+	if err := requireAddress(prefix+".api_address", instance.APIAddress); err != nil {
+		return err
 	}
-	if err := validateAddress(slot.APIAddress); err != nil {
-		return fmt.Errorf("%s.api_address: %w", prefix, err)
-	}
-	if slot.Nats == nil {
+	if instance.Nats == nil {
 		return fmt.Errorf("%s.nats is required", prefix)
+	}
+	if err := requireAddress(prefix+".nats.client_address", instance.Nats.ClientAddress); err != nil {
+		return err
+	}
+	return requireAddress(prefix+".nats.cluster_address", instance.Nats.ClusterAddress)
+}
+
+// validatePeers checks the site's membership is a usable instance list: every
+// peer is in this machine's site, no instance appears twice, this machine's own
+// deployed instances are present, and the order is the one every machine of the
+// site derives.
+func (d Descriptor) validatePeers() error {
+	seen := make(map[string]bool, len(d.Peers))
+	addresses := make(map[string]string, len(d.Peers)*3)
+	previous := ""
+	for _, peer := range d.Peers {
+		if peer.Site != d.Site {
+			return fmt.Errorf("peer %s is in site %q, not this machine's site %q", peer, peer.Site, d.Site)
+		}
+		if strings.TrimSpace(peer.Machine) == "" {
+			return fmt.Errorf("peer with empty machine")
+		}
+		if peer.Role != RolePrimary && peer.Role != RoleStandby {
+			return fmt.Errorf("peer on machine %q has role %q, want %q or %q", peer.Machine, peer.Role, RolePrimary, RoleStandby)
+		}
+		key := peer.key()
+		if seen[key] {
+			return fmt.Errorf("peer %s is listed twice", peer)
+		}
+		seen[key] = true
+		if net.ParseIP(peer.IP) == nil {
+			return fmt.Errorf("peer %s: ip %q is not a valid IP address", peer, peer.IP)
+		}
+		if err := requireAddress(fmt.Sprintf("peer %s: api_address", peer), peer.APIAddress); err != nil {
+			return err
+		}
+		if err := requireAddress(fmt.Sprintf("peer %s: nats.client_address", peer), peer.NatsClient()); err != nil {
+			return err
+		}
+		if err := requireAddress(fmt.Sprintf("peer %s: nats.cluster_address", peer), peer.NatsCluster()); err != nil {
+			return err
+		}
+		// Every listener in the site is distinct. Two peers on one machine differ
+		// by port, and two machines differ by ip, so a repeat means an instance
+		// would fail to bind or would silently answer for another.
+		for _, listener := range []struct{ what, address string }{
+			{"api_address", peer.APIAddress},
+			{"nats.client_address", peer.NatsClient()},
+			{"nats.cluster_address", peer.NatsCluster()},
+		} {
+			if owner, used := addresses[listener.address]; used {
+				return fmt.Errorf("peer %s: %s %q is already used by %s", peer, listener.what, listener.address, owner)
+			}
+			addresses[listener.address] = fmt.Sprintf("%s %s", peer, listener.what)
+		}
+		if key < previous {
+			return fmt.Errorf("peers are not ordered by machine then role: %s after %s", key, previous)
+		}
+		previous = key
+	}
+	return d.validateSelfIsPeer()
+}
+
+// validateSelfIsPeer checks this machine's own deployed instances appear in the
+// membership.
+//
+// The list is the site's whole membership rather than the reader's counterparts,
+// because one descriptor is read by both of a machine's instances. An instance
+// missing itself would be a member no peer expects to hear from, which is a
+// registration that can never be confirmed.
+func (d Descriptor) validateSelfIsPeer() error {
+	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
+		if d.Instances.Get(role).Disabled {
+			continue
+		}
+		if !slices.ContainsFunc(d.Peers, func(p Peer) bool {
+			return p.Machine == d.Machine && p.Role == role
+		}) {
+			return fmt.Errorf("peers do not include this machine's own %s instance", role)
+		}
 	}
 	return nil
 }
 
-// validateEventFabric checks the resolved Event Fabric topology is one this
-// machine can boot with. The rules exist because fixed addresses are derived
-// from it: a duplicate address or a peer from another site produces a fabric
-// that either fails to bind or silently spans a boundary it must not cross.
-func (d Descriptor) validateEventFabric() error {
-	machines := map[string]bool{d.Machine: true}
-	ips := map[string]bool{d.IP: true}
-	previous := ""
-	for _, peer := range d.EventFabric.Peers {
-		if peer.Site != d.Site {
-			return fmt.Errorf("event fabric peer %q is in site %q, not this machine's site %q", peer.Machine, peer.Site, d.Site)
-		}
-		if strings.TrimSpace(peer.Machine) == "" {
-			return fmt.Errorf("event fabric peer with empty machine")
-		}
-		if machines[peer.Machine] {
-			return fmt.Errorf("event fabric peer %q is duplicated or is this machine itself", peer.Machine)
-		}
-		if net.ParseIP(peer.IP) == nil {
-			return fmt.Errorf("event fabric peer %q: ip %q is not a valid IP address", peer.Machine, peer.IP)
-		}
-		if ips[peer.IP] {
-			return fmt.Errorf("event fabric peer %q: ip %q is already used by another member", peer.Machine, peer.IP)
-		}
-		if peer.Machine < previous {
-			return fmt.Errorf("event fabric peers are not ordered by machine: %q after %q", peer.Machine, previous)
-		}
-		machines[peer.Machine] = true
-		ips[peer.IP] = true
-		previous = peer.Machine
-	}
-	if d.Slots.Primary.Disabled {
-		return fmt.Errorf("slots.primary.disabled: a machine must deploy a primary process")
-	}
-	if err := d.validateNats("slots.primary.nats", d.Slots.Primary.Nats); err != nil {
+// NatsClient is the peer's NATS client address.
+func (p Peer) NatsClient() string { return p.Nats.ClientAddress }
+
+// NatsCluster is the peer's NATS cluster address.
+func (p Peer) NatsCluster() string { return p.Nats.ClusterAddress }
+
+// key orders and identifies a peer: machine first, then Primary before Standby.
+func (p Peer) key() string { return p.Machine + "\x00" + string(p.Role) }
+
+// String names a peer the way an operator would: the machine and which of its
+// instances.
+func (p Peer) String() string { return fmt.Sprintf("%s/%s", p.Machine, p.Role) }
+
+// validateNats checks each deployed instance's resolved NATS topology matches the
+// site's storage selection. The resolver derives all of it, so a violation here
+// is a resolver defect rather than an authoring mistake: it means an instance
+// would boot pointing at the wrong journal, binding a route it must not bind, or
+// with no server to connect to at all.
+func (d Descriptor) validateNats() error {
+	if err := d.validateInstanceNats("instances.primary", d.Instances.Primary); err != nil {
 		return err
 	}
-	if d.Slots.Standby.Disabled {
+	if d.Instances.Standby.Disabled {
 		return nil
 	}
-	return d.validateNats("slots.standby.nats", d.Slots.Standby.Nats)
+	return d.validateInstanceNats("instances.standby", d.Instances.Standby)
 }
 
-// validateNats checks one instance's resolved NATS topology matches the site's
-// storage selection. The resolver derives all of it, so a violation here is a
-// resolver defect rather than an authoring mistake: it means an instance would
-// boot pointing at the wrong journal, binding a route it must not bind, or with
-// no server to connect to at all.
-func (d Descriptor) validateNats(prefix string, nats *EventFabricNats) error {
-	if strings.TrimSpace(nats.ClientAddress) == "" {
-		return fmt.Errorf("%s.client_address is required", prefix)
-	}
-	if err := validateAddress(nats.ClientAddress); err != nil {
-		return fmt.Errorf("%s.client_address: %w", prefix, err)
-	}
-	if strings.TrimSpace(nats.ClusterAddress) == "" {
-		return fmt.Errorf("%s.cluster_address is required", prefix)
-	}
-	if err := validateAddress(nats.ClusterAddress); err != nil {
-		return fmt.Errorf("%s.cluster_address: %w", prefix, err)
-	}
+func (d Descriptor) validateInstanceNats(prefix string, instance Instance) error {
+	nats := instance.Nats
 	if len(nats.Servers) == 0 {
-		return fmt.Errorf("%s.servers: at least one server is required", prefix)
+		return fmt.Errorf("%s.nats.servers: at least one server is required", prefix)
 	}
 	for _, server := range nats.Servers {
 		if err := validateAddress(server); err != nil {
-			return fmt.Errorf("%s.servers: %w", prefix, err)
+			return fmt.Errorf("%s.nats.servers: %w", prefix, err)
 		}
 	}
 	if duplicate, found := firstDuplicate(nats.Servers); found {
-		return fmt.Errorf("%s.servers: %q is listed twice", prefix, duplicate)
+		return fmt.Errorf("%s.nats.servers: %q is listed twice", prefix, duplicate)
 	}
 	for _, route := range nats.Routes {
 		if err := validateAddress(route); err != nil {
-			return fmt.Errorf("%s.routes: %w", prefix, err)
+			return fmt.Errorf("%s.nats.routes: %w", prefix, err)
 		}
 		if route == nats.ClusterAddress {
-			return fmt.Errorf("%s.routes: %q is this machine itself", prefix, route)
+			return fmt.Errorf("%s.nats.routes: %q is this instance itself", prefix, route)
 		}
 	}
 	if duplicate, found := firstDuplicate(nats.Routes); found {
-		return fmt.Errorf("%s.routes: %q is listed twice", prefix, duplicate)
+		return fmt.Errorf("%s.nats.routes: %q is listed twice", prefix, duplicate)
 	}
 	return d.validateStorageTopology(prefix, nats)
 }
@@ -401,50 +494,51 @@ func (d Descriptor) validateNats(prefix string, nats *EventFabricNats) error {
 // validateStorageTopology checks one instance's listener ownership against the
 // storage selection the descriptor implies.
 //
-// The selection is by machine, and the descriptor carries its site's machines, so
-// whether this machine stores the journal needs nothing the runtime does not also
-// have. How many storage *servers* the site has does not: that depends on which
-// peers deploy a standby, which is each peer's own decision and appears nowhere
-// here. The peer list stays machine-level deliberately, so rather than teach it
-// about instances the check uses the relation between the two lists.
-//
-// For an instance on a storage machine, every other storage server contributes
-// exactly one route and one server entry, and the instance contributes its own
-// client address to the servers only. So routes are always one shorter than
-// servers, whatever the site's shape, and a resolver that dropped or doubled a
-// server breaks the relation.
-func (d Descriptor) validateStorageTopology(prefix string, nats *EventFabricNats) error {
-	if !slices.Contains(StorageMachines(d.siteMachines()), d.Machine) {
+// Storage is selected by machine, not by instance. A machine is the failure
+// domain: two of a site's journal replicas behind one power supply is not
+// redundancy, so a machine that stores the journal stores one copy however many
+// instances it deploys. Both of its instances run a server, and those two servers
+// route to each other.
+func (d Descriptor) validateStorageTopology(prefix string, nats *Nats) error {
+	storage := StorageMachines(d.siteMachines())
+	if !slices.Contains(storage, d.Machine) {
 		if len(nats.Routes) > 0 {
-			return fmt.Errorf("%s.routes: an instance on a machine that does not store the journal has no cluster to route to", prefix)
+			return fmt.Errorf("%s.nats.routes: an instance on a machine that does not store the journal has no cluster to route to", prefix)
 		}
 		if slices.Contains(nats.Servers, nats.ClientAddress) {
-			return fmt.Errorf("%s.servers: lists this instance's own client address %q, which it does not bind", prefix, nats.ClientAddress)
+			return fmt.Errorf("%s.nats.servers: lists this instance's own client address %q, which it does not bind", prefix, nats.ClientAddress)
 		}
 		return nil
 	}
 	// A storage server answers its own clients. Listing its own address first
-	// keeps its client on the local server while that server is up, so an
-	// instance does not route its own traffic through a peer.
+	// keeps its client on the local server while that server is up, so an instance
+	// does not route its own traffic through a peer.
 	if nats.Servers[0] != nats.ClientAddress {
-		return fmt.Errorf("%s.servers: an instance on a storage machine must list its own client address %q first, got %q",
+		return fmt.Errorf("%s.nats.servers: an instance on a storage machine must list its own client address %q first, got %q",
 			prefix, nats.ClientAddress, nats.Servers[0])
 	}
+	// Every other storage server contributes exactly one route and one server
+	// entry, and this instance contributes its own client address to the servers
+	// only. The relation holds whatever the site's shape, so a resolver that
+	// dropped or doubled a server breaks it.
 	if len(nats.Routes) != len(nats.Servers)-1 {
-		return fmt.Errorf("%s: %d route(s) for %d server(s); an instance routes to every storage server but its own",
+		return fmt.Errorf("%s.nats: %d route(s) for %d server(s); an instance routes to every storage server but its own",
 			prefix, len(nats.Routes), len(nats.Servers))
 	}
 	return nil
 }
 
 // siteMachines returns every machine of this machine's site, including itself.
+// Peers are instances, so a machine that deploys two of them contributes two
+// peers and one machine.
 func (d Descriptor) siteMachines() []string {
-	machines := make([]string, 0, len(d.EventFabric.Peers)+1)
+	machines := make([]string, 0, len(d.Peers)+1)
 	machines = append(machines, d.Machine)
-	for _, peer := range d.EventFabric.Peers {
+	for _, peer := range d.Peers {
 		machines = append(machines, peer.Machine)
 	}
-	return machines
+	slices.Sort(machines)
+	return slices.Compact(machines)
 }
 
 // StorageMachines returns the machines of a site that host the site journal,
@@ -454,6 +548,11 @@ func (d Descriptor) siteMachines() []string {
 // The rule is deterministic by name so every machine of the site derives the
 // same set without coordinating. Three rather than two is what keeps the
 // journal's metadata group able to hold quorum when one member is lost.
+//
+// The unit is the machine because that is the failure domain. Every instance a
+// storage machine deploys runs a server, so a site can have more storage servers
+// than storage machines, and replica placement must keep a machine's servers from
+// holding more than one copy.
 func StorageMachines(machines []string) []string {
 	sorted := slices.Clone(machines)
 	slices.Sort(sorted)
@@ -482,6 +581,17 @@ func firstDuplicate(values []string) (string, bool) {
 		seen[value] = true
 	}
 	return "", false
+}
+
+// requireAddress checks a required host:port field is present and usable.
+func requireAddress(where, addr string) error {
+	if strings.TrimSpace(addr) == "" {
+		return fmt.Errorf("%s is required", where)
+	}
+	if err := validateAddress(addr); err != nil {
+		return fmt.Errorf("%s: %w", where, err)
+	}
+	return nil
 }
 
 func validateAddress(addr string) error {

@@ -36,8 +36,8 @@ type Node struct {
 	Site string `json:"site"`
 	// Machine is the deployment machine identifier.
 	Machine string `json:"machine"`
-	// Role is the machine's role.
-	Role string `json:"role"`
+	// MachineProfile is the machine's purpose, such as "sensor-node".
+	MachineProfile string `json:"machine_profile"`
 }
 
 // NodeFromDescriptor derives the node identity from the deployment descriptor
@@ -45,11 +45,11 @@ type Node struct {
 // identity, so an event's node is never something a caller can claim to be.
 func NodeFromDescriptor(d deployment.Descriptor) Node {
 	return Node{
-		Project:     d.Project,
-		Environment: d.Environment,
-		Site:        d.Site,
-		Machine:     d.Machine,
-		Role:        d.Role,
+		Project:        d.Project,
+		Environment:    d.Environment,
+		Site:           d.Site,
+		Machine:        d.Machine,
+		MachineProfile: d.MachineProfile,
 	}
 }
 

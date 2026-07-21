@@ -310,7 +310,7 @@ type launch struct {
 }
 
 type packageManifest struct {
-	MachineRole string  `json:"machine_role"`
+	MachineProfile string  `json:"machine_profile"`
 	Primary     launch  `json:"primary"`
 	Standby     *launch `json:"standby"`
 }

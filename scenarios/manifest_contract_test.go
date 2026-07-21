@@ -20,9 +20,9 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 	require.NotNil(t, manifest.Standby)
 	require.Equal(t, []string{"-instance", "standby"}, manifest.Standby.Args)
 
-	// The machine's purpose is machine_role; the two launches carry the other kind
+	// The machine's purpose is profile; the two launches carry the other kind
 	// of role. One word for both axes is what the rename removed.
-	require.Equal(t, "all-in-one", manifest.MachineRole)
+	require.Equal(t, "all-in-one", manifest.Profile)
 
 	// Both fixed instances name the Windows Service that should run them, and the
 	// two differ: they share a host, so identical names would be an install

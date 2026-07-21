@@ -11,14 +11,14 @@ project "customer-a" {
 
   site "north" {
     machine "sensor" {
-      role     = "sensor-node"
+      profile  = "sensor-node"
       ip       = "10.0.1.10"
       services = ["sensor-services"]
 
-      # Both platform blocks are mandatory. This machine opts out of a local
-      # standby process; the others below opt in.
+      # Every platform block is mandatory. The blocks directly under platform are
+      # the Primary Instance's; standby is the Standby Instance's. This machine
+      # opts out of a standby, so it states that and authors nothing further.
       platform {
-
         api {
           port = 8080
         }
@@ -34,26 +34,23 @@ project "customer-a" {
 
         standby {
           disabled = true
-          OR
-          api {
-            port = 8080
-          }
-          winservice {
-            name = "opdl-customer-a-north-sensor-primary"
-          }
-          nats {
-            client_port  = 4222
-            cluster_port = 6222
-          }
         }
       }
     }
 
     machine "local-server" {
-      role     = "local-server"
+      profile  = "local-server"
       ip       = "10.0.1.11"
       services = ["core-services"]
+
+      # This machine deploys both instances. They run together on one host, so
+      # every port below is distinct: nothing is shared between them except the
+      # ownership object, which is not a port.
       platform {
+        api {
+          port = 8080
+        }
+
         winservice {
           name = "opdl-customer-a-north-local-server-primary"
         }
@@ -66,8 +63,17 @@ project "customer-a" {
         standby {
           disabled = false
 
+          api {
+            port = 8081
+          }
+
           winservice {
-            name = "opdl-customer-a-north-sensor-standby"
+            name = "opdl-customer-a-north-local-server-standby"
+          }
+
+          nats {
+            client_port  = 4322
+            cluster_port = 6322
           }
         }
       }
@@ -76,10 +82,14 @@ project "customer-a" {
 
   site "control-room" {
     machine "master" {
-      role     = "master-server"
+      profile  = "master-server"
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
+        api {
+          port = 8080
+        }
+
         winservice {
           name = "opdl-customer-a-control-room-master-primary"
         }
@@ -92,17 +102,31 @@ project "customer-a" {
         standby {
           disabled = false
 
+          api {
+            port = 8081
+          }
+
           winservice {
-            name = "opdl-customer-a-north-local-server-standby"
+            name = "opdl-customer-a-control-room-master-standby"
+          }
+
+          nats {
+            client_port  = 4322
+            cluster_port = 6322
           }
         }
       }
     }
+
     machine "slave" {
-      role     = "slave-server"
+      profile  = "slave-server"
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
+        api {
+          port = 8080
+        }
+
         winservice {
           name = "opdl-customer-a-control-room-slave-primary"
         }
@@ -115,17 +139,31 @@ project "customer-a" {
         standby {
           disabled = false
 
+          api {
+            port = 8081
+          }
+
           winservice {
-            name = "opdl-customer-a-control-room-master-standby"
+            name = "opdl-customer-a-control-room-slave-standby"
+          }
+
+          nats {
+            client_port  = 4322
+            cluster_port = 6322
           }
         }
       }
     }
+
     machine "integration" {
-      role     = "integration-server"
+      profile  = "integration-server"
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
+        api {
+          port = 8080
+        }
+
         winservice {
           name = "opdl-customer-a-control-room-integration-primary"
         }
@@ -138,8 +176,17 @@ project "customer-a" {
         standby {
           disabled = false
 
+          api {
+            port = 8081
+          }
+
           winservice {
-            name = "opdl-customer-a-control-room-slave-standby"
+            name = "opdl-customer-a-control-room-integration-standby"
+          }
+
+          nats {
+            client_port  = 4322
+            cluster_port = 6322
           }
         }
       }

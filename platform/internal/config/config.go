@@ -175,15 +175,15 @@ func (c *Config) Summary() string {
 	fmt.Fprintf(&b, "    environment  %s\n", d.Environment)
 	fmt.Fprintf(&b, "    site         %s\n", d.Site)
 	fmt.Fprintf(&b, "    machine      %s\n", d.Machine)
-	fmt.Fprintf(&b, "    role         %s\n", d.Role)
+	fmt.Fprintf(&b, "    profile      %s\n", d.MachineProfile)
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
-	fmt.Fprintf(&b, "    slots        primary=true standby=%t\n", !d.Slots.Standby.Disabled)
+	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances))
 	// A named kernel object has no path, so printing it at startup is how an
 	// operator finds which object a machine's processes contend for.
 	fmt.Fprintf(&b, "    fence        %s\n", d.Fence.Object)
-	fmt.Fprintf(&b, "    event_fabric %s\n", eventFabricSummary(d.EventFabric))
+	fmt.Fprintf(&b, "    peers        %s\n", peersSummary(d.Peers))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    address             %s\n", c.address)
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
@@ -195,17 +195,33 @@ func (c *Config) Summary() string {
 	return b.String()
 }
 
-// eventFabricSummary renders the derived Event Fabric membership: which peers
-// this machine expects to meet on the site's journal.
-func eventFabricSummary(f deployment.EventFabric) string {
-	if len(f.Peers) == 0 {
-		return "one-member site"
+// instancesSummary renders which of the machine's two instances are deployed and
+// where each serves its API, so a startup block states both endpoints whichever
+// instance printed it.
+func instancesSummary(instances deployment.Instances) string {
+	parts := make([]string, 0, 2)
+	for _, role := range []deployment.PlatformInstanceRole{deployment.RolePrimary, deployment.RoleStandby} {
+		instance := instances.Get(role)
+		if instance.Disabled {
+			parts = append(parts, fmt.Sprintf("%s=(not deployed)", role))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", role, instance.APIAddress))
 	}
-	peers := make([]string, 0, len(f.Peers))
-	for _, peer := range f.Peers {
-		peers = append(peers, fmt.Sprintf("%s (%s)", peer.Machine, peer.IP))
+	return strings.Join(parts, " ")
+}
+
+// peersSummary renders the site's membership: the platform instances this
+// machine expects to meet on the site's journal, its own included.
+func peersSummary(peers []deployment.Peer) string {
+	if len(peers) == 0 {
+		return "(none resolved)"
 	}
-	return fmt.Sprintf("peers: %s", strings.Join(peers, ", "))
+	names := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		names = append(names, fmt.Sprintf("%s/%s (%s)", peer.Machine, peer.Role, peer.IP))
+	}
+	return strings.Join(names, ", ")
 }
 
 // natsSummary renders the Event Fabric adapter's settings, so a startup log

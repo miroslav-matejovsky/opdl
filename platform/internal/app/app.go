@@ -35,7 +35,7 @@ func Run(args []string) (runErr error) {
 
 	// Validate the explicit role before opening sockets or storage. Primary-only
 	// machines reject standby.
-	role, err := resolveRole(*instance, !descriptor.Slots.Standby.Disabled)
+	role, err := resolveRole(*instance, !descriptor.Instances.Standby.Disabled)
 	if err != nil {
 		return err
 	}
@@ -49,13 +49,13 @@ func Run(args []string) (runErr error) {
 	// services list. The platform manages no services; it only reports which one
 	// the package says should be running this instance.
 	serviceName := "(none stated)"
-	if service := descriptor.Slots.Service(role == redundancy.RoleStandby); service != nil {
+	if service := descriptor.Instances.Service(role == redundancy.RoleStandby); service != nil {
 		serviceName = service.Name
 	}
-	fmt.Printf("    instance     role=%s standby=%t service=%s\n", role, !descriptor.Slots.Standby.Disabled, serviceName)
+	fmt.Printf("    instance     role=%s standby=%t service=%s\n", role, !descriptor.Instances.Standby.Disabled, serviceName)
 	recorder.Emit("platform.process_started", operations.LevelInfo, "platform", "platform process started", map[string]any{
 		"operations_file": recorder.Path(),
-		"standby_enabled": !descriptor.Slots.Standby.Disabled,
+		"standby_enabled": !descriptor.Instances.Standby.Disabled,
 	})
 
 	// os.Interrupt is the only signal Windows delivers: the runtime raises it for

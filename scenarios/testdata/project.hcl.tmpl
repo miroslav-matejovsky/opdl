@@ -20,15 +20,23 @@ project "{{ .Name }}" {
   site "{{ .Site }}" {
 {{- range .Machines }}
     machine "{{ .Name }}" {
-      role     = "all-in-one"
+      profile  = "all-in-one"
       ip       = "{{ .IP }}"
       services = ["core-services"]
 
       platform {
-        # Windows Service identities for the machine's two fixed instances. The
-        # platform installs and manages no services; these are carried into the
-        # manifest so the roles are named consistently. The namespace token keeps
-        # concurrent scenario runs from naming the same service twice.
+        # The blocks directly under platform are the Primary Instance's; standby
+        # carries the Standby Instance's. Every port is reserved separately by the
+        # harness, because the two instances run together on one host.
+        #
+        # The platform installs and manages no services; the winservice names are
+        # carried into the manifest so the roles are named consistently. The
+        # namespace token keeps concurrent scenario runs from naming the same
+        # service twice.
+        api {
+          port = {{ .APIPort }}
+        }
+
         winservice {
           name         = "{{ $.FenceNamespace }}-{{ $.Name }}-{{ .Name }}-primary"
           display_name = "OPDL {{ $.Name }} {{ .Name }} (Primary Instance)"
@@ -43,9 +51,18 @@ project "{{ .Name }}" {
           disabled = {{ .StandbyDisabled }}
 {{- if not .StandbyDisabled }}
 
+          api {
+            port = {{ .StandbyAPIPort }}
+          }
+
           winservice {
             name         = "{{ $.FenceNamespace }}-{{ $.Name }}-{{ .Name }}-standby"
             display_name = "OPDL {{ $.Name }} {{ .Name }} (Standby Instance)"
+          }
+
+          nats {
+            client_port  = {{ .StandbyClientPort }}
+            cluster_port = {{ .StandbyClusterPort }}
           }
 {{- end }}
         }

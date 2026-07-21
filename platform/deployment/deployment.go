@@ -8,8 +8,8 @@ import (
 )
 
 // Descriptor is one machine's deployment definition as the platform consumes it:
-// its identity (platform, project, environment, site, machine, role, ip), the
-// services it hosts, and the project features enabled on it.
+// its identity (platform, project, environment, site, machine, machine role, ip),
+// the services it hosts, and the project features enabled on it.
 //
 // It mirrors the builder's deployment descriptor field for field. The platform
 // keeps its own copy so the runtime does not depend on the build tool; the
@@ -17,25 +17,46 @@ import (
 type Descriptor struct {
 	// Platform identifies the product line the binary is built from.
 	Platform string `json:"platform"`
-	// Project, Environment, Site, Machine, Role place the machine in the topology.
-	Project     string `json:"project"`
-	Environment string `json:"environment"`
-	Site        string `json:"site"`
-	Machine     string `json:"machine"`
-	Role        string `json:"role"`
-	// IP is the machine's network address.
+	// Project, Environment, Site, Machine, MachineProfile place the machine in the
+	// topology. MachineProfile is the machine's purpose, such as "sensor-node"; an
+	// instance's role is a different axis and is never called role here.
+	Project        string `json:"project"`
+	Environment    string `json:"environment"`
+	Site           string `json:"site"`
+	Machine        string `json:"machine"`
+	MachineProfile string `json:"machine_profile"`
+	// IP is the machine's network address. Both of its instances are reached on
+	// it, on their own ports.
 	IP string `json:"ip"`
 	// Services are the service groups this machine hosts.
 	Services []string `json:"services"`
 	// Features are the project capability switches enabled on the machine.
 	Features Features `json:"features"`
-	// Slots is the machine's resolved primary and standby slot decision. Both
-	// records are always present.
-	Slots Slots `json:"slots"`
+	// Instances is this machine's Primary and Standby Instances. Both records are
+	// always present.
+	Instances Instances `json:"instances"`
 	// Fence is the machine's resolved local ownership object.
 	Fence Fence `json:"fence"`
-	// EventFabric is the resolved Event Fabric topology for this machine.
-	EventFabric EventFabric `json:"event_fabric"`
+	// Peers are the platform instances that make up this machine's site,
+	// including this machine's own.
+	Peers []Peer `json:"peers"`
+}
+
+// PlatformInstanceRole is one of the two fixed platform instance roles. The roles are
+// decided at build time and never assigned, negotiated, or exchanged at runtime.
+type PlatformInstanceRole string
+
+const (
+	RolePrimary PlatformInstanceRole = "primary"
+	RoleStandby PlatformInstanceRole = "standby"
+)
+
+// Role returns the instance role for a standby flag.
+func Role(standby bool) PlatformInstanceRole {
+	if standby {
+		return RoleStandby
+	}
+	return RolePrimary
 }
 
 // Fence is the machine's resolved local ownership object: the Windows named mutex
@@ -59,36 +80,36 @@ type Fence struct {
 // depends on to be present in the JSON.
 //
 // The checks exist because the fields they guard are a bool, a string, and a
-// struct, and all have a usable zero value. An omitted slots.standby.disabled
+// struct, and all have a usable zero value. An omitted instances.standby.disabled
 // would decode as false and silently deploy redundancy nobody asked for; an
-// omitted event_fabric.nats would decode as a machine with no journal to reach;
-// an omitted fence.object would decode as an empty ownership object name, and a
-// machine whose two instances contend for nothing has no ownership at all. Failing
-// here turns a truncated or stale descriptor into a startup error instead of a
-// running machine with the wrong topology.
+// omitted peers list would decode as a site of one, so a registration would need
+// no confirmation but its own; an omitted fence.object would decode as an empty
+// ownership object name, and a machine whose two instances contend for nothing
+// has no ownership at all. Failing here turns a truncated or stale descriptor
+// into a startup error instead of a running machine with the wrong topology.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	slots, err := requiredField(fields, "slots")
+	instances, err := requiredField(fields, "instances")
 	if err != nil {
 		return err
 	}
-	var slotFields map[string]json.RawMessage
-	if err := json.Unmarshal(slots, &slotFields); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid slots: %w", err)
+	var instanceFields map[string]json.RawMessage
+	if err := json.Unmarshal(instances, &instanceFields); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid instances: %w", err)
 	}
-	for _, slot := range []string{"primary", "standby"} {
-		raw, err := requiredField(slotFields, "slots."+slot)
+	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
+		raw, err := requiredField(instanceFields, "instances."+string(role))
 		if err != nil {
 			return err
 		}
-		var disabled map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &disabled); err != nil {
-			return fmt.Errorf("deployment descriptor: invalid slots.%s: %w", slot, err)
+		var instance map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &instance); err != nil {
+			return fmt.Errorf("deployment descriptor: invalid instances.%s: %w", role, err)
 		}
-		if _, err := requiredField(disabled, "slots."+slot+".disabled"); err != nil {
+		if _, err := requiredField(instance, "instances."+string(role)+".disabled"); err != nil {
 			return err
 		}
 	}
@@ -105,15 +126,7 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	fabric, err := requiredField(fields, "event_fabric")
-	if err != nil {
-		return err
-	}
-	var fabricFields map[string]json.RawMessage
-	if err := json.Unmarshal(fabric, &fabricFields); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid event_fabric: %w", err)
-	}
-	if _, err := requiredField(fabricFields, "event_fabric.nats"); err != nil {
+	if _, err := requiredField(fields, "peers"); err != nil {
 		return err
 	}
 
@@ -146,25 +159,30 @@ type Features struct {
 	Chaos bool `json:"chaos"`
 }
 
-// Slots is a machine's resolved slot topology. Both records are always present
-// and non-null, so the runtime never infers a slot policy from an omitted field.
+// Instances is a machine's two platform instances. Both records are always
+// present and non-null, so the runtime never infers an instance's deployment from
+// an omitted field.
 //
-// The slots are process roles, not endpoint owners: the primary and standby are
-// mutually exclusive owners of the machine's one set of Event Fabric endpoints,
-// which is why the resolved NATS topology lives on EventFabric rather than on a
-// slot.
-type Slots struct {
-	Primary Slot `json:"primary"`
-	Standby Slot `json:"standby"`
+// Each instance is an independent runtime and owns its own endpoints, so
+// everything an instance binds is carried on its own record. The machine holds no
+// endpoint of its own.
+type Instances struct {
+	Primary Instance `json:"primary"`
+	Standby Instance `json:"standby"`
+}
+
+// Get returns one instance by role.
+func (i Instances) Get(role PlatformInstanceRole) Instance {
+	if role == RoleStandby {
+		return i.Standby
+	}
+	return i.Primary
 }
 
 // Service returns one instance's Windows Service identity, or nil when that
 // instance is not deployed.
-func (s Slots) Service(standby bool) *WinService {
-	if standby {
-		return s.Standby.Service
-	}
-	return s.Primary.Service
+func (i Instances) Service(standby bool) *WinService {
+	return i.Get(Role(standby)).Service
 }
 
 // WinService is one instance's resolved Windows Service identity.
@@ -183,66 +201,84 @@ type WinService struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Slot is one instance's resolved decision.
-type Slot struct {
-	// Disabled reports that the slot's process is not deployed. It is always
-	// false for the primary.
+// Instance is one platform instance: whether it is deployed, what the service
+// running it is called, and every endpoint it binds.
+//
+// The endpoint fields are present exactly when the instance is deployed, so the
+// runtime cannot mistake a resolved endpoint for one that will ever be bound.
+type Instance struct {
+	// Disabled reports that this instance is not deployed. It is always false for
+	// the primary.
 	Disabled bool `json:"disabled"`
 	// Service is the instance's Windows Service identity, present exactly when the
 	// instance is deployed.
 	Service *WinService `json:"service,omitempty"`
+	// APIAddress is where this instance serves its local API. Each instance has
+	// its own and binds it for its whole lifetime, not only while Active.
+	APIAddress string `json:"api_address,omitempty"`
+	// Nats is this instance's own Event Fabric NATS topology.
+	Nats *Nats `json:"nats,omitempty"`
 }
 
-// EventFabric is this machine's resolved view of the site's Event Fabric: the
-// peers it forms that fabric with. The descriptor already carries this machine's
-// identity, so EventFabric contains only the additional topology. The builder
-// derives it from the project topology and stages it here, so the platform boots
-// knowing its membership and discovers nothing at runtime.
+// Peer is one platform instance of this machine's site.
 //
-// It is transport-neutral: identities and addresses only, with no ports, adapter
-// names, or protocol settings. The Event Fabric adapter derives what it needs
-// from these addresses, which is what lets the transport be replaced without
-// changing the deployment contract.
-type EventFabric struct {
-	// Nats is the machine's one resolved NATS topology, shared by whichever
-	// instance holds Primary Ownership.
-	Nats EventFabricNats `json:"nats"`
-	// Peers are the other Event Fabric members of this machine's site, ordered by
-	// machine name. A machine never lists itself, and the fabric spans exactly
-	// one site. A single-machine site has no peers and forms a one-member fabric.
-	Peers []EventFabricPeer `json:"peers"`
-}
-
-// EventFabricNats is the machine's resolved NATS topology: the addresses its own
-// server would bind, and the addresses it reaches the site's journal through.
+// The site's members are instances, not machines: each is an independent runtime
+// with its own endpoints, and a machine contributes one peer when it deploys only
+// a Primary Instance and two when it deploys a Standby Instance as well.
 //
-// There is exactly one of these per machine. The primary and standby processes
-// are mutually exclusive holders of Primary Ownership, so they share it: a
-// waiting instance connects to
-// the address the active process is serving on, and a transfer rebinds that same
-// address rather than moving the site to a second one.
-type EventFabricNats struct {
-	// ClientAddress is where this machine's server serves the NATS client
-	// protocol. It is present on every machine; only a storage node binds it.
-	ClientAddress string `json:"client_address"`
-	// ClusterAddress is where this machine's server routes to the site's other
-	// storage nodes. It is present on every machine; it is bound only when Routes
-	// is non-empty.
-	ClusterAddress string `json:"cluster_address"`
-	// Routes are the cluster addresses of the site's other storage nodes. It is
-	// empty for a non-storage machine and for a site with one storage node.
-	Routes []string `json:"routes"`
-	// Servers are the client addresses this machine reaches the journal through,
-	// ordered so a storage node lists its own address first.
-	Servers []string `json:"servers"`
-}
-
-// EventFabricPeer is one other Event Fabric member this machine expects to meet.
-type EventFabricPeer struct {
+// The list includes this machine's own instances. One descriptor is read by both
+// instances of a machine, so it carries the site's whole membership and each
+// running instance recognises itself by Machine and Role.
+//
+// Peers are ordered by machine name, then Primary before Standby, so every
+// machine of a site sees the same list. The site is the boundary: instances of
+// another site, environment, or project are not peers.
+type Peer struct {
 	// Site is the peer's site, always equal to this machine's site.
 	Site string `json:"site"`
-	// Machine is the peer's machine identity.
+	// Machine is the machine the peer instance runs on.
 	Machine string `json:"machine"`
-	// IP is the address the peer's Event Fabric member is reached on.
+	// Role is which of the machine's two instances this peer is.
+	Role PlatformInstanceRole `json:"role"`
+	// IP is the address the peer's machine is reached on. Two peers on one machine
+	// share it and differ by port.
 	IP string `json:"ip"`
+	// APIAddress is where the peer instance serves its local API.
+	APIAddress string `json:"api_address"`
+	// Nats are the peer instance's Event Fabric addresses.
+	Nats PeerNats `json:"nats"`
+}
+
+// PeerNats are one peer instance's Event Fabric addresses.
+type PeerNats struct {
+	// ClientAddress is where the peer's server serves the NATS client protocol.
+	ClientAddress string `json:"client_address"`
+	// ClusterAddress is where the peer's server accepts routes from the site's
+	// other storage servers.
+	ClusterAddress string `json:"cluster_address"`
+}
+
+// Nats is one instance's resolved NATS topology: the addresses its own server
+// binds, and the addresses it reaches the site's journal through.
+//
+// There is one per deployed instance, not one per machine. Each instance runs its
+// own server, so on a storage machine that deploys a standby there are two
+// cluster members on one host and each routes to the other.
+type Nats struct {
+	// ClientAddress is where this instance's server serves the NATS client
+	// protocol. It is present on every instance; only an instance on a storage
+	// machine binds it.
+	ClientAddress string `json:"client_address"`
+	// ClusterAddress is where this instance's server accepts routes from the
+	// site's other storage servers. It is present on every instance; it is bound
+	// only when Routes is non-empty.
+	ClusterAddress string `json:"cluster_address"`
+	// Routes are the cluster addresses of the site's other storage servers,
+	// including this machine's other instance when the machine stores the journal.
+	// It is empty for an instance on a non-storage machine, and for a site with
+	// one storage server.
+	Routes []string `json:"routes"`
+	// Servers are the client addresses this instance reaches the journal through,
+	// ordered so an instance on a storage machine lists its own address first.
+	Servers []string `json:"servers"`
 }

@@ -532,8 +532,12 @@ func logEffectiveFabric(descriptor deployment.Descriptor, cfg natsfabric.Config)
 	if len(cfg.Routes) > 0 {
 		routes = strings.Join(cfg.Routes, ",")
 	}
+	endpoint := "(unresolved)"
+	if nats := descriptor.Instances.Primary.Nats; nats != nil {
+		endpoint = nats.ClientAddress
+	}
 	fmt.Printf("platform: event fabric configuration endpoint=%s binds=%t cluster=%s servers=%s routes=%s storage=%t replicas=%d\n",
-		descriptor.EventFabric.Nats.ClientAddress, cfg.ClientAddress != "", cluster,
+		endpoint, cfg.ClientAddress != "", cluster,
 		strings.Join(cfg.Servers, ","), routes, cfg.HostsStorage, cfg.Replicas)
 }
 
@@ -557,11 +561,21 @@ func nodeDataDir(dataDir string, descriptor deployment.Descriptor) string {
 // machine, and every machine of its site including itself. A registration needs
 // every one of them to confirm, so the expected set is the site's static
 // membership and never the members that happen to be reachable.
+//
+// The descriptor's peers are instances, and a machine that deploys both
+// contributes two of them, so they collapse to machines here. A registration
+// wants one confirmation per machine: exactly one of a machine's instances is
+// Active, and it answers for the machine. Expecting one per instance would wait
+// forever on a Standby Instance that is not serving.
 func topology(descriptor deployment.Descriptor) (self registration.Location, expected []registration.Location) {
 	self = registration.Location{Machine: descriptor.Machine, IP: descriptor.IP}
-	expected = make([]registration.Location, 0, len(descriptor.EventFabric.Peers)+1)
 	expected = append(expected, self)
-	for _, peer := range descriptor.EventFabric.Peers {
+	seen := map[string]bool{descriptor.Machine: true}
+	for _, peer := range descriptor.Peers {
+		if seen[peer.Machine] {
+			continue
+		}
+		seen[peer.Machine] = true
 		expected = append(expected, registration.Location{Machine: peer.Machine, IP: peer.IP})
 	}
 	return self, expected

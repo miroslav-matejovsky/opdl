@@ -62,8 +62,8 @@ func validateNode(node events.Node) error {
 		missing = "site"
 	case node.Machine == "":
 		missing = "machine"
-	case node.Role == "":
-		missing = "role"
+	case node.MachineProfile == "":
+		missing = "machine_profile"
 	}
 	if missing != "" {
 		return fmt.Errorf("%w: node %s is required", ErrInvalidEnvelope, missing)

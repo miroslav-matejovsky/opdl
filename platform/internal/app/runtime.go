@@ -94,7 +94,7 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor deployment.D
 		return runAsOwner(ctx, cfg, descriptor, role, statusPath, ownership, activationInitial)
 	}
 	observer.Emit("platform.fence_waiting", operations.LevelInfo, "platform.redundancy", "Primary Ownership is held by the other instance", map[string]any{operations.AttributeObject: ownership.Name()})
-	if descriptor.Slots.Standby.Disabled {
+	if descriptor.Instances.Standby.Disabled {
 		return fmt.Errorf("another process already holds Primary Ownership for machine %q and this machine deploys no Standby Instance", descriptor.Machine)
 	}
 	return runStandby(ctx, cfg, descriptor, role, statusPath, ownership)

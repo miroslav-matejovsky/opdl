@@ -119,11 +119,19 @@ type Config struct {
 // servers it connects to. It leaves DataDir and credentials for the composer,
 // which knows the runtime data path and reads secrets from files.
 //
-// It takes no process role. The machine has one NATS topology, and the primary
-// and standby processes are mutually exclusive owners of it: a standby that
-// derived its own endpoint would connect to an address no server is listening
-// on, because the process that owns the fence is serving on the machine's.
-// Turning a client-only standby into one is the composer's job, not this one's.
+// It takes no instance role, and reads the Primary Instance's topology whichever
+// instance is running.
+//
+// That is deliberately behind the descriptor contract. The descriptor now
+// resolves a NATS topology per instance, because each instance is meant to run
+// its own server and cluster with the other. The runtime does not do that yet: a
+// standby is still turned client-only by the composer and follows the journal on
+// the address the Active instance is serving, which is the primary's. Reading the
+// standby's own topology here would point it at an address nothing is listening
+// on, which is the failure this shape was written to prevent.
+//
+// Take the per-instance topology only together with the runtime change that
+// starts the standby's server.
 func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	ips, err := siteIPs(descriptor)
 	if err != nil {
@@ -132,7 +140,10 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	storage := StorageNodes(slices.Sorted(maps.Keys(ips)))
 	hostsStorage := slices.Contains(storage, descriptor.Machine)
 
-	nats := descriptor.EventFabric.Nats
+	nats := descriptor.Instances.Primary.Nats
+	if nats == nil {
+		return Config{}, fmt.Errorf("nats: descriptor has no primary instance topology")
+	}
 
 	cfg := Config{
 		ClientName:      descriptor.Machine,
@@ -157,16 +168,20 @@ func DefaultConfig(descriptor deployment.Descriptor) (Config, error) {
 	return cfg, nil
 }
 
-// siteIPs maps every machine of the site to its address: this machine and its
-// peers.
+// siteIPs maps every machine of the site to its address.
+//
+// Peers are instances, and a machine that deploys both contributes two of them,
+// so the map collapses them back to machines. Storage selection and the replica
+// count are both per machine: a machine is the failure domain, and two copies of
+// the journal on one host is one copy as far as losing that host is concerned.
 func siteIPs(descriptor deployment.Descriptor) (map[string]string, error) {
 	if strings.TrimSpace(descriptor.Machine) == "" {
 		return nil, fmt.Errorf("nats: descriptor has no machine")
 	}
 	ips := map[string]string{descriptor.Machine: descriptor.IP}
-	for _, peer := range descriptor.EventFabric.Peers {
+	for _, peer := range descriptor.Peers {
 		if strings.TrimSpace(peer.Machine) == "" {
-			return nil, fmt.Errorf("nats: event fabric peer has no machine")
+			return nil, fmt.Errorf("nats: peer has no machine")
 		}
 		ips[peer.Machine] = peer.IP
 	}
