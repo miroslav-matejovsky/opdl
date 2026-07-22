@@ -14,7 +14,6 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 )
 
-// errBoom stands in for whatever made a loop give up.
 var errBoom = errors.New("boom")
 
 func TestAdapterEventsDeclareTheirContract(t *testing.T) {
@@ -29,11 +28,11 @@ func TestAdapterEventsDeclareTheirContract(t *testing.T) {
 			name: "server starting",
 			event: ServerStarting{
 				ClientAddress: "127.0.0.1:4222", ClusterAddress: "127.0.0.1:6222",
-				Routes: []string{"127.0.0.1:6223"}, DataDir: `C:\data`,
+				Routes: []string{"127.0.0.1:6223"}, JetStreamStoreDir: `C:\data`,
 			},
 			wantType: TypeServerStarting,
 			want:     events.SeverityInfo,
-			wantJSON: `{"client_address":"127.0.0.1:4222","cluster_address":"127.0.0.1:6222","routes":["127.0.0.1:6223"],"data_dir":"C:\\data"}`,
+			wantJSON: `{"client_address":"127.0.0.1:4222","cluster_address":"127.0.0.1:6222","routes":["127.0.0.1:6223"],"jetstream_store_dir":"C:\\data"}`,
 		},
 		{
 			name:     "server ready",
@@ -231,11 +230,6 @@ func TestAdapterEventsDeclareTheirContract(t *testing.T) {
 	}
 }
 
-// TestAdapterRecordsItsLifecycleLocally runs a real adapter through open and
-// close with a real recorder, so what an operator would read is what is
-// asserted. It also pins the reliability rule: the disconnect and close
-// callbacks fire while the connection is going away, and they still record,
-// because they record locally rather than through the journal they describe.
 func TestAdapterRecordsItsLifecycleLocally(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping NATS integration test in -short mode")
@@ -245,8 +239,6 @@ func TestAdapterRecordsItsLifecycleLocally(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close(ctx))
 
-	// The client's callbacks run on its own goroutines, so the closing pair
-	// arrives shortly after Close returns.
 	waitFor(t, func() bool {
 		for _, envelope := range recorded() {
 			if envelope.Type == TypeClientClosed {
@@ -287,8 +279,6 @@ func TestAdapterRecordsItsLifecycleLocally(t *testing.T) {
 	require.Equal(t, events.SeverityInfo, byType[TypeStopped].Severity, "a clean release is routine")
 }
 
-// recordingContext returns a context carrying a real recorder, and a function
-// that reads back the envelopes written so far.
 func recordingContext(t *testing.T) (ctx context.Context, recorded func() []events.Envelope) {
 	t.Helper()
 	factory, err := events.NewFactory(testDescriptor, "primary")

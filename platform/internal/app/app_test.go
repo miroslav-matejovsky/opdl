@@ -17,9 +17,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
+	natsbackend "github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
@@ -250,7 +250,7 @@ func TestOpenStatesReadyIntoTheJournal(t *testing.T) {
 	// the instance role: a machine runs one server per instance, and two servers
 	// in one cluster cannot share a name.
 	info := s.fabric.Info()
-	require.Equal(t, natsfabric.Name, info.Adapter)
+	require.Equal(t, natsbackend.Name, info.Adapter)
 	require.Equal(t, embeddedDescriptor(t).Machine+"-primary", info.Server)
 	require.NotEmpty(t, info.Journal)
 	require.True(t, info.HostsStorage, "the only machine of a one-machine site stores its journal")
@@ -436,7 +436,7 @@ func TestNatsConfigComposesEachInstanceSeparately(t *testing.T) {
 	// Each reads its own record: its own client name, and its own server list.
 	require.NotEqual(t, primary.ClientName, standby.ClientName,
 		"a machine opens two connections and they must be told apart")
-	require.NotEmpty(t, primary.DataDir, "the storage instance stores its journal somewhere")
+	require.NotEmpty(t, primary.JetStreamStoreDir, "the storage instance stores its journal somewhere")
 	require.NotEqual(t, descriptor.Instances.Primary.DataDir, descriptor.Instances.Standby.DataDir,
 		"the descriptor gives each instance its own store, whichever ends up opening one")
 

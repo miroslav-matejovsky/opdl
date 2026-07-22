@@ -59,7 +59,7 @@ const (
 	TypeClientDisconnected events.Type = "platform.nats.client_disconnected"
 	// TypeClientReconnected is stated when the client is back on a server.
 	TypeClientReconnected events.Type = "platform.nats.client_reconnected"
-	// TypeClientClosed is stated when the connection is closed for good.
+	// TypeClientClosed is stated when the connection was closed for good.
 	TypeClientClosed events.Type = "platform.nats.client_closed"
 	// TypeClientAsyncError is stated for an error no caller received.
 	TypeClientAsyncError events.Type = "platform.nats.client_async_error"
@@ -118,8 +118,8 @@ type ServerStarting struct {
 	ClusterAddress string `json:"cluster_address"`
 	// Routes are the cluster addresses of the site's other storage nodes.
 	Routes []string `json:"routes,omitempty"`
-	// DataDir is where this node keeps the journal it stores.
-	DataDir string `json:"data_dir"`
+	// JetStreamStoreDir is where this node keeps the journal it stores.
+	JetStreamStoreDir string `json:"jetstream_store_dir"`
 }
 
 // EventType returns the event's stable dotted kind.

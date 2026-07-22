@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
+	natsbackend "github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
@@ -37,7 +37,7 @@ const (
 // registration package is handed a Publisher, a Projector, and a Handler; the
 // HTTP boundary is handed the two services. Neither can reach the transport.
 type site struct {
-	fabric *natsfabric.Fabric
+	fabric *natsbackend.Backend
 	// publisher is the node's one way to state a fact: it stamps a typed payload
 	// with this process's envelope factory and appends it to the journal.
 	publisher  events.Publisher
@@ -103,7 +103,7 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 	// Open validates the configuration and probes the journal's storage before it
 	// binds a listener, so an unusable data directory or address fails here
 	// rather than half way through starting a server.
-	fabric, err := natsfabric.Open(ctx, descriptor, fabricCfg)
+	fabric, err := natsbackend.Open(ctx, descriptor, fabricCfg)
 	if err != nil {
 		observer.Record(ctx, SiteOpenFailed{Phase: PhaseEventFabric, Error: err.Error()})
 		return nil, err
@@ -456,10 +456,10 @@ func (r *runner) failure() error {
 // now that instance's own. Both instances of a machine run their own server, and
 // nothing about this composition is shared between them except the site they
 // join.
-func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundancy.InstanceRole) (natsfabric.Config, error) {
-	fabricCfg, err := natsfabric.DefaultConfig(descriptor, config.Role(role == redundancy.RoleStandby))
+func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundancy.InstanceRole) (natsbackend.Config, error) {
+	fabricCfg, err := natsbackend.DefaultConfig(descriptor, config.Role(role == redundancy.RoleStandby))
 	if err != nil {
-		return natsfabric.Config{}, err
+		return natsbackend.Config{}, err
 	}
 	settings := cfg.EventFabric().Nats
 
@@ -468,12 +468,12 @@ func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundanc
 
 	startupTimeout, err := time.ParseDuration(settings.StartupTimeout)
 	if err != nil {
-		return natsfabric.Config{}, fmt.Errorf("event fabric: startup timeout %q: %w", settings.StartupTimeout, err)
+		return natsbackend.Config{}, fmt.Errorf("event fabric: startup timeout %q: %w", settings.StartupTimeout, err)
 	}
 	fabricCfg.StartupTimeout = startupTimeout
 	catchUpTimeout, err := time.ParseDuration(settings.CatchUpTimeout)
 	if err != nil {
-		return natsfabric.Config{}, fmt.Errorf("event fabric: catch-up timeout %q: %w", settings.CatchUpTimeout, err)
+		return natsbackend.Config{}, fmt.Errorf("event fabric: catch-up timeout %q: %w", settings.CatchUpTimeout, err)
 	}
 	fabricCfg.CatchUpTimeout = catchUpTimeout
 
@@ -500,7 +500,7 @@ func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundanc
 //
 // Every value is a single token so the line can be parsed. No credential is
 // printed, and there is no monitor endpoint to print.
-func logEffectiveFabric(descriptor config.Descriptor, cfg natsfabric.Config, role redundancy.InstanceRole) {
+func logEffectiveFabric(descriptor config.Descriptor, cfg natsbackend.Config, role redundancy.InstanceRole) {
 	cluster := "none"
 	if len(cfg.Routes) > 0 {
 		cluster = cfg.ClusterAddress

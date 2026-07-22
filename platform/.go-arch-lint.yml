@@ -33,7 +33,7 @@ components:
   events-storage: { in: internal/events/storage }
   events-storage-jsonl: { in: internal/events/storage/jsonl }
   eventfabric: { in: internal/events/storage/eventfabric }
-  eventfabric-nats: { in: internal/eventfabric/nats }
+  events-storage-nats: { in: internal/events/storage/nats }
   httpapi: { in: internal/httpapi }
   operations: { in: internal/operations }
   redundancy: { in: internal/redundancy }
@@ -52,7 +52,7 @@ deps:
     # events is here because composition is also what knows which process this
     # is: it builds the one envelope factory that stamps every event this node
     # states, and hands out only the publisher composed from it.
-    mayDependOn: [api, config, eventfabric, eventfabric-nats, events, events-storage, events-storage-jsonl, httpapi, operations, redundancy, registration]
+    mayDependOn: [api, config, eventfabric, events-storage-nats, events, events-storage, events-storage-jsonl, httpapi, operations, redundancy, registration]
   redundancy:
     canUse: [sys, atomicfile, winmutex]
     # Ownership transitions are events in their own right: which instance became
@@ -76,7 +76,7 @@ deps:
   eventfabric:
     canUse: [stablehash]
     mayDependOn: [events, events-storage]
-  eventfabric-nats:
+  events-storage-nats:
     canUse: [nats-server, nats-client]
     mayDependOn: [config, events, events-storage, eventfabric, operations]
 

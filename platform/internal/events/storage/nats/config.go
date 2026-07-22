@@ -84,12 +84,12 @@ type Config struct {
 	// storage nodes run a NATS server at all; every other machine of the site is
 	// a client of theirs.
 	HostsStorage bool
-	// DataDir is the JetStream file store directory. It is required on a storage
+	// JetStreamStoreDir is the JetStream file store directory. It is required on a storage
 	// node and unused on a node that does not host storage.
 	//
 	// It is the running instance's own, taken from its descriptor record. Two
 	// servers cannot open one JetStream store, and a storage machine runs two.
-	DataDir string
+	JetStreamStoreDir string
 	// Replicas is the site journal's replica count.
 	Replicas int
 	// MaxBytes bounds the journal's total size.
@@ -121,19 +121,6 @@ type Config struct {
 // site journal, and therefore whether this one runs a server at all, which peers
 // it clusters with, and which servers it connects to. It leaves credentials for
 // the composer, which reads secrets from files.
-//
-// It reads that instance's own record and nothing else. Every instance a storage
-// machine deploys runs its own server on its own ports and joins the site's
-// cluster in its own right, so a machine deploying both contributes two cluster
-// members that route to each other like any other pair.
-//
-// The role is what makes that safe. Reading one instance's topology for both,
-// which is what this did while only the Active instance ran a server, would point
-// the standby at addresses it never binds; taking the per-instance topology
-// without starting the standby's server would point the primary's routes at an
-// address nothing listens on. Both are the same defect from opposite sides, and
-// neither has a working intermediate state, which is why the role and the
-// standby's server arrived together.
 func DefaultConfig(descriptor config.Descriptor, role config.PlatformInstanceRole) (Config, error) {
 	ips, err := siteIPs(descriptor)
 	if err != nil {
@@ -152,9 +139,6 @@ func DefaultConfig(descriptor config.Descriptor, role config.PlatformInstanceRol
 	}
 
 	cfg := Config{
-		// The client name identifies a connection in NATS diagnostics, and a
-		// machine now opens two. Naming both after the machine would make the two
-		// indistinguishable in exactly the place the name exists to help.
 		ClientName:      serverName(descriptor.Machine, role),
 		ClusterName:     string(eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)),
 		Servers:         append([]string(nil), nats.Servers...),
@@ -173,41 +157,19 @@ func DefaultConfig(descriptor config.Descriptor, role config.PlatformInstanceRol
 		cfg.ServerName = serverName(descriptor.Machine, role)
 		cfg.ClientAddress = nats.ClientAddress
 		cfg.ClusterAddress = nats.ClusterAddress
-		cfg.DataDir = nats.JetStreamStoreDir
+		cfg.JetStreamStoreDir = nats.JetStreamStoreDir
 	}
 	return cfg, nil
 }
 
-// serverName is one instance's name within the site cluster.
-//
-// Two servers in one cluster cannot share a name, and a storage machine now runs
-// two. The machine alone was unique while a machine meant a server; qualifying it
-// by role keeps the machine readable in the name, which is what an operator
-// matches against when reading cluster state.
 func serverName(machine string, role config.PlatformInstanceRole) string {
 	return machine + "-" + string(role)
 }
 
-// instanceKey names one platform instance within its site: the machine it runs
-// on and the role it runs as. It is the identity storage selection works in.
 func instanceKey(machine string, role config.PlatformInstanceRole) string {
 	return machine + "-" + string(role)
 }
 
-// siteIPs maps every instance of the site to its machine's address.
-//
-// The unit is the instance, not the machine. Each instance runs its own Event
-// Fabric server, so an instance is what a JetStream peer corresponds to, and
-// selecting storage or counting replicas by machine would describe a cluster the
-// site does not have: a two-machine site deploying both instances everywhere has
-// four servers, and calling that "two" leaves a two-member metadata group whose
-// quorum needs both processes of both machines.
-//
-// The cost is stated rather than hidden. A machine is still a real failure
-// domain, and nothing here constrains two of a stream's replicas to different
-// hosts, so losing one machine can cost two replicas. Instance-level granularity
-// is what makes a site of two machines able to form a cluster at all; machine
-// tolerance needs three machines, as it always did.
 func siteIPs(descriptor config.Descriptor) (map[string]string, error) {
 	if strings.TrimSpace(descriptor.Machine) == "" {
 		return nil, fmt.Errorf("nats: descriptor has no machine")
@@ -228,17 +190,6 @@ func siteIPs(descriptor config.Descriptor) (map[string]string, error) {
 // StorageNodes returns the platform instances that host JetStream storage for a
 // site, sorted by instance name: one storage node for a site smaller than three
 // instances, the first three for larger sites.
-//
-// The unit is the instance because an instance is what runs a server. A site of
-// two machines that each deploy a standby has four instances and therefore four
-// candidates, which is what lets it form a three-member metadata group at all;
-// counted by machine it would have two, and a two-member group loses quorum the
-// moment either member stops.
-//
-// Selecting a deterministic set by sorted name is what lets every instance of
-// the site derive the same set without coordinating. Selecting exactly three
-// rather than all of them keeps quorum at two, so the site survives losing one
-// storage instance whatever its size.
 func StorageNodes(instances []string) []string {
 	sorted := slices.Clone(instances)
 	slices.Sort(sorted)
@@ -255,13 +206,7 @@ func StorageNodes(instances []string) []string {
 
 // Replicas returns the site journal's replica count for a site of siteSize
 // platform instances: one replica for a site smaller than three instances, three
-// otherwise. It matches the storage-node count so every replica has a host.
-//
-// Instances, not machines, for the same reason StorageNodes counts them. A
-// consequence worth stating plainly: three replicas across three instances do
-// not have to sit on three machines, so a site of two machines tolerates the loss
-// of one instance but not necessarily of one machine. Machine tolerance needs
-// three machines.
+// otherwise.
 func Replicas(siteSize int) int {
 	if siteSize <= smallSiteMax {
 		return 1
@@ -269,9 +214,7 @@ func Replicas(siteSize int) int {
 	return 3
 }
 
-// Validate checks the composed configuration before any listener is opened, so a
-// bad address or an unwritable data directory fails at startup rather than half
-// way through binding sockets or creating a stream.
+// Validate checks the composed configuration before any listener is opened.
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.ClientName) == "" {
 		return fmt.Errorf("nats: client name is required")
@@ -287,9 +230,6 @@ func (c Config) Validate() error {
 	if duplicate, found := firstDuplicate(c.Servers); found {
 		return fmt.Errorf("nats: server %q is listed twice", duplicate)
 	}
-	// Only a storage node runs a server, so only a storage node has listeners to
-	// check or peers to route to. A machine that does not store the journal is a
-	// client of the ones that do, and has nothing to bind.
 	if c.HostsStorage {
 		if err := c.validateServer(); err != nil {
 			return err
@@ -315,8 +255,6 @@ func (c Config) Validate() error {
 	return c.validateCredentials()
 }
 
-// validateServer checks a storage node's listeners, its routes to the site's
-// other storage nodes, and the storage its journal needs.
 func (c Config) validateServer() error {
 	if strings.TrimSpace(c.ServerName) == "" {
 		return fmt.Errorf("nats: server name is required on a storage node")
@@ -352,13 +290,11 @@ func (c Config) validateServer() error {
 	return c.validateStorage()
 }
 
-// validateStorage checks a storage node has a writable data directory and
-// positive journal limits and replicas.
 func (c Config) validateStorage() error {
-	if strings.TrimSpace(c.DataDir) == "" {
+	if strings.TrimSpace(c.JetStreamStoreDir) == "" {
 		return fmt.Errorf("nats: data directory is required on a storage node")
 	}
-	if err := probeWritable(c.DataDir); err != nil {
+	if err := probeWritable(c.JetStreamStoreDir); err != nil {
 		return err
 	}
 	if c.MaxBytes <= 0 {
@@ -373,9 +309,6 @@ func (c Config) validateStorage() error {
 	return nil
 }
 
-// validateCredentials requires site credentials whenever any address this node
-// binds or reaches is non-loopback, and allows their absence only when
-// everything is loopback, which is the tests-and-development case.
 func (c Config) validateCredentials() error {
 	all := slices.Concat(c.Servers, c.Routes)
 	if c.HostsStorage {
@@ -398,7 +331,6 @@ func (c Config) validateCredentials() error {
 	return nil
 }
 
-// validateAddress checks addr is a usable host:port.
 func validateAddress(what, addr string) error {
 	if strings.TrimSpace(addr) == "" {
 		return fmt.Errorf("nats: %s is required", what)
@@ -420,7 +352,6 @@ func validateAddress(what, addr string) error {
 	return nil
 }
 
-// uniqueAddresses reports an error when two of the node's own addresses collide.
 func uniqueAddresses(addrs ...string) error {
 	seen := make(map[string]bool, len(addrs))
 	for _, addr := range addrs {
@@ -432,7 +363,6 @@ func uniqueAddresses(addrs ...string) error {
 	return nil
 }
 
-// firstDuplicate returns the first repeated value in values.
 func firstDuplicate(values []string) (string, bool) {
 	seen := make([]string, 0, len(values))
 	for _, value := range values {
@@ -444,9 +374,6 @@ func firstDuplicate(values []string) (string, bool) {
 	return "", false
 }
 
-// isLoopback reports whether addr's host is a loopback address. A host that is
-// not a bare IP is treated as non-loopback, so a named host requires
-// credentials.
 func isLoopback(addr string) (bool, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -459,8 +386,6 @@ func isLoopback(addr string) (bool, error) {
 	return ip.IsLoopback(), nil
 }
 
-// probeWritable creates dir if needed and confirms a file can be written and
-// removed there, so an unusable data directory fails at startup.
 func probeWritable(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("nats: create data directory %s: %w", dir, err)
