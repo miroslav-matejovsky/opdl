@@ -1,4 +1,4 @@
-package scenarios
+package registration
 
 import (
 	"net/http"
@@ -10,7 +10,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
 )
 
-// TestBuildAndRunMinimumSite is the bare-minimum end-to-end scenario: build the
+// BuildAndRunMinimumSite is the bare-minimum end-to-end scenario: build the
 // smallest site the platform accepts, then run the resulting platform binaries
 // and check they start their registration API, decide a proposal, and report
 // their configuration. Nothing here imports platform code.
@@ -20,7 +20,7 @@ import (
 // metadata group needs a quorum of its three members before any of them can
 // finish starting; node-b's Standby Instance is the third and is not needed for
 // that quorum, so it stays down here.
-func TestBuildAndRunMinimumSite(t *testing.T) {
+func BuildAndRunMinimumSite(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(harness.ScenarioDir(t), "out")

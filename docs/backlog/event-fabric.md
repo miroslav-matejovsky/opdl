@@ -3,7 +3,7 @@
 Focused follow-up work for the retained NATS site journal.
 
 The original three-storage-node item is now proven by
-`TestFourMachineStorageTopologyAndFailure`: three machines are selected by sorted
+`nats.FourMachineStorageTopologyAndFailure`: three machines are selected by sorted
 name, only those three bind a cluster listener, the fourth is client-only,
 publication and replay cross machines, the site keeps accepting and projecting
 after the client-only machine's selected storage server stops, and the stopped
@@ -31,7 +31,7 @@ contract.
 
 ### Observed as intermittent scenario failure
 
-`TestFourMachineStorageTopologyAndFailure` has been seen to fail under full-suite
+`nats.FourMachineStorageTopologyAndFailure` has been seen to fail under full-suite
 load, and to pass on the next run and when run alone. The failing run's client-only
 machine logged `event_fabric.projector_reset` and `handler_reset` after
 reconnecting to a surviving storage server, then

@@ -1,4 +1,4 @@
-package scenarios
+package registration
 
 import (
 	"net/http"
@@ -10,7 +10,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
 )
 
-// TestTwoMachineRegistration is the registration use case as a customer meets
+// TwoMachineRegistration is the registration use case as a customer meets
 // it: two real platform processes, built from one blueprint, coordinating only
 // through their site journal, driven only through REST.
 //
@@ -20,7 +20,7 @@ import (
 // them is not running: it waits, it says it is waiting, and it says which
 // machine it is waiting for. When that machine finally starts, nothing hands it
 // the backlog — it finds the proposal in the retained journal and answers.
-func TestTwoMachineRegistration(t *testing.T) {
+func TwoMachineRegistration(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(harness.ScenarioDir(t), "out")

@@ -6,19 +6,17 @@
 # separate because they fail for different reasons and take very different times:
 # a scenario failure means a packaged binary does not boot or does not recover,
 # which is not something a platform test can tell you.
+#
+# The suite is a program, not a test binary, so this script only launches it.
+# Parallelism, the timeout, selection, and caching are the command's own flags
+# and defaults; see scenarios/cmd/main.go. Keeping them there rather than here
+# means running the suite by hand behaves exactly like running it from the task.
 . (Join-Path $PSScriptRoot "modules.ps1")
 
 Write-Host "--- scenarios ---"
 Push-Location (Join-Path $RepoRoot "scenarios")
 try {
-    # Process failover must execute on every resilience gate. Cached results can
-    # hide changes to ownership, signals, listeners, or child-process cleanup.
-    #
-    # The timeout is raised from the 10 minute default because it bounds the whole
-    # binary, not one test. Scenarios run concurrently under a machine budget, so a
-    # loaded or small host serializes them behind the budget rather than failing,
-    # and the default leaves no room for that.
-    gotestsum --format testname -- -count=1 -timeout 30m ./...
+    go run ./cmd -v
     if ($LASTEXITCODE -ne 0) {
         throw "scenarios failed (exit $LASTEXITCODE)"
     }

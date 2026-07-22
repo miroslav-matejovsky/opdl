@@ -637,7 +637,7 @@ func TestRunReportsUnusableConfigFile(t *testing.T) {
 // instance's own and arrives from its descriptor record, so that is the only
 // place a broken path can now come from. The end-to-end form of this, sabotaging
 // what the blueprint authored and starting the built binary, is the scenario
-// suite's TestPlatformRefusesToStartWithoutItsJournalStorage.
+// suite's resilience.PlatformRefusesToStartWithoutItsJournalStorage.
 func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Event Fabric composition in -short mode")

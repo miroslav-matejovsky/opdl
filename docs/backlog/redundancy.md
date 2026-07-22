@@ -15,7 +15,7 @@ bounded by the same 30 second Event Fabric startup timeout, which is why the
 measurement sat within a rounding error of that bound. Sharing one machine-level
 endpoint between the two processes removed it.
 
-Three consecutive Windows runs of `TestWarmStandbyFailoverAndPreferredPrimary`
+Three consecutive Windows runs of `standby.WarmStandbyFailoverAndPreferredPrimary`
 after the change:
 
 | Run | Catch-up | Failover | Listener unavailable | Failback |

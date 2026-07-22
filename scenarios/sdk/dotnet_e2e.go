@@ -1,4 +1,4 @@
-package scenarios
+package sdk
 
 import (
 	"os"
@@ -21,7 +21,7 @@ import (
 // sdk-dotnet/tests/Opdl.Sdk.E2E/RegistrationTests.cs.
 const pendingObservedMarker = "pending-observed"
 
-// TestDotnetSDKEndToEnd is the first use case as a customer meets it, with
+// DotnetSDKEndToEnd is the first use case as a customer meets it, with
 // nothing simulated: the builder builds two machines from one blueprint, both
 // run as real processes over a real site journal, and a .NET consumer drives them
 // through the generated SDK.
@@ -40,7 +40,7 @@ const pendingObservedMarker = "pending-observed"
 //
 // Nothing here imports builder, platform, or SDK code. Both machines and the
 // .NET test are external processes, exactly as a user would run them.
-func TestDotnetSDKEndToEnd(t *testing.T) {
+func DotnetSDKEndToEnd(t *testing.T) {
 	dotnet, err := exec.LookPath("dotnet")
 	if err != nil {
 		t.Skip("dotnet not installed; skipping dotnet SDK end-to-end scenario")

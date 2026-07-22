@@ -176,14 +176,15 @@ var (
 // Layout:
 //
 //	scenarios/.tmp/
-//	  TestFourMachineStorageTopologyAndFailure/
-//	    blueprints/    rendered project.hcl
-//	    out/           built machine packages and manifests
-//	    work/          config-*.toml, nats-*, instance-*, operations-*
-//	    control/       marker files
+//	  nats/
+//	    FourMachineStorageTopologyAndFailure/
+//	      blueprints/    rendered project.hcl
+//	      out/           built machine packages and manifests
+//	      work/          config-*.toml, nats-*, instance-*, operations-*
+//	      control/       marker files
 func scenarioDir(t *testing.T) string {
 	t.Helper()
-	testName, _, _ := strings.Cut(t.Name(), "/")
+	testName := scenarioKey(t.Name())
 
 	scenarioDirsMu.Lock()
 	once, ok := scenarioDirs[testName]
@@ -210,6 +211,22 @@ func scenarioDir(t *testing.T) string {
 	})
 
 	return dir
+}
+
+// scenarioKey turns a running test's name into the scratch root that belongs to
+// it.
+//
+// The runner names a scenario "<category>/<Scenario>", and t.Run appends a
+// segment per subtest below that. The scratch root is the scenario's, not the
+// subtest's and not the category's, so this keeps the first two segments and
+// drops whatever a subtest added. A one-segment name is kept whole, so a
+// scenario driven directly from a Go test still gets its own root.
+func scenarioKey(name string) string {
+	parts := strings.Split(name, "/")
+	if len(parts) > 2 {
+		parts = parts[:2]
+	}
+	return filepath.Join(parts...)
 }
 
 // ScenarioDir returns this scenario's scratch root, the parent of its

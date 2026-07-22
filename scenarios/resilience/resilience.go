@@ -1,4 +1,4 @@
-package scenarios
+package resilience
 
 import (
 	"net/http"
@@ -17,14 +17,14 @@ import (
 // promise about restart and refusal is the only thing a customer can actually
 // rely on.
 
-// TestRestartRebuildsStateFromTheJournal is the promise durable storage exists
+// RestartRebuildsStateFromTheJournal is the promise durable storage exists
 // for: a platform's state is not in the process. Kill it, start it again, and it
 // answers the same questions the same way, because it rebuilt its projection by
 // replaying the journal it had already written.
 //
 // The kill is deliberate. An orderly shutdown proves less: what has to survive
 // is a machine that stopped without warning, which is the case a customer meets.
-func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
+func RestartRebuildsStateFromTheJournal(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(harness.ScenarioDir(t), "out")
@@ -61,14 +61,14 @@ func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
 		"a restart must not make a platform contend with its own history")
 }
 
-// TestPlatformRefusesToStartWithoutItsJournalStorage checks a node fails loudly
+// PlatformRefusesToStartWithoutItsJournalStorage checks a node fails loudly
 // and early rather than serving without the thing it answers from.
 //
 // The journal is the site's history. A platform that could not store it and
 // started anyway would answer every query with an empty projection and take
 // proposals it could never retain, which is worse than not starting: it would
 // look healthy while losing facts.
-func TestPlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
+func PlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(harness.ScenarioDir(t), "out")

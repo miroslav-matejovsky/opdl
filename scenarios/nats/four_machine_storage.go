@@ -1,4 +1,4 @@
-package scenarios
+package nats
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
 )
 
-// TestFourMachineStorageTopologyAndFailure is the proof the three-storage-node
+// FourMachineStorageTopologyAndFailure is the proof the three-storage-node
 // topology exists for.
 //
 // A site of three or more machines runs the site journal on three of them,
@@ -47,7 +47,7 @@ import (
 // outside what has been done here. Do not raise APIWaitTimeout to hide it:
 // that bound is shared by every scenario and is what makes the others fail
 // fast.
-func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
+func FourMachineStorageTopologyAndFailure(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(harness.ScenarioDir(t), "out")

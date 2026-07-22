@@ -1,4 +1,4 @@
-package scenarios
+package nats
 
 import (
 	"path/filepath"
@@ -11,7 +11,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/logscan"
 )
 
-// TestTwoMachineEventFabric is the smallest deployment that has to form a real
+// TwoMachineEventFabric is the smallest deployment that has to form a real
 // Event Fabric: two machines of one site, each built with nothing but its own
 // descriptor, sharing one site journal without being told about each other at
 // runtime.
@@ -23,8 +23,8 @@ import (
 // worth proving is that they behave as if they were: either can publish, and all
 // project the same site state from the one journal.
 //
-// What the site then decides is TestTwoMachineRegistration's subject.
-func TestTwoMachineEventFabric(t *testing.T) {
+// What the site then decides is registration.TwoMachineRegistration's subject.
+func TwoMachineEventFabric(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(harness.ScenarioDir(t), "out")

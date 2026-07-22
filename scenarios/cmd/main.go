@@ -30,12 +30,25 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/runner"
+	"github.com/miroslav-matejovsky/opdl/scenarios/nats"
+	"github.com/miroslav-matejovsky/opdl/scenarios/registration"
+	"github.com/miroslav-matejovsky/opdl/scenarios/resilience"
+	"github.com/miroslav-matejovsky/opdl/scenarios/sdk"
+	"github.com/miroslav-matejovsky/opdl/scenarios/standby"
 )
 
 func main() {
-	// testing.Init registers the test.* flags RunTests reads onto
-	// flag.CommandLine. It must run before the friendly flags are parsed.
+	// testing.Init registers the test.* flags the runner reads. It registers them
+	// wherever flag.CommandLine points, so pointing that at a private set for the
+	// call keeps three dozen implementation details out of this command's -h and
+	// out of its accepted arguments. The flag values themselves are variables
+	// inside the testing package, so setting them through this set is what the
+	// runner sees.
+	testFlags := flag.NewFlagSet("scenarios-testing", flag.ContinueOnError)
+	commandLine := flag.CommandLine
+	flag.CommandLine = testFlags
 	testing.Init()
+	flag.CommandLine = commandLine
 
 	parallel := flag.Int("parallel", runtime.GOMAXPROCS(0), "maximum scenarios to run at once")
 	timeout := flag.Duration("timeout", 30*time.Minute, "overall timeout for the whole run")
@@ -44,13 +57,13 @@ func main() {
 	verbose := flag.Bool("v", false, "report each scenario as it runs")
 	flag.Parse()
 
-	// Translate the friendly flags into the test.* flags the runner reads.
-	setTestFlag("test.parallel", strconv.Itoa(*parallel))
-	setTestFlag("test.timeout", timeout.String())
-	setTestFlag("test.run", *run)
-	setTestFlag("test.count", strconv.Itoa(*count))
+	// Translate this command's flags into the test.* flags the runner reads.
+	setTestFlag(testFlags, "test.parallel", strconv.Itoa(*parallel))
+	setTestFlag(testFlags, "test.timeout", timeout.String())
+	setTestFlag(testFlags, "test.run", *run)
+	setTestFlag(testFlags, "test.count", strconv.Itoa(*count))
 	if *verbose {
-		setTestFlag("test.v", "true")
+		setTestFlag(testFlags, "test.v", "true")
 	}
 
 	// Backstop timeout. RunTests honours test.timeout as a per-test deadline but
@@ -69,23 +82,29 @@ func main() {
 	os.Exit(runner.Run(scenarioSets()))
 }
 
-// scenarioSets returns the scenarios to run. Stage 05 wires the category
-// packages (registration, nats, resilience, standby, sdk) in here; until then
-// the set is empty and the command proves only the plumbing.
+// scenarioSets returns every category's scenarios. This list is the suite: a
+// category that is not here does not run, and adding one is an import and a
+// line.
+//
+// The order is the default run order, which matters only for the scenarios that
+// do not call t.Parallel. It runs from the smallest deployment outwards, so a
+// broken build fails on the smoke scenario rather than partway through a
+// four-machine one.
 func scenarioSets() []runner.Set {
-	return []runner.Set{{
-		Package: "selfcheck",
-		Scenarios: []runner.Scenario{
-			{Name: "AlphaParallel", Func: func(t *testing.T) { t.Parallel() }},
-			{Name: "BetaPlain", Func: func(t *testing.T) {}},
-			{Name: "GammaFails", Func: func(t *testing.T) { t.Fatal("intentional") }},
-		},
-	}}
+	return []runner.Set{
+		registration.Scenarios(),
+		nats.Scenarios(),
+		resilience.Scenarios(),
+		standby.Scenarios(),
+		sdk.Scenarios(),
+	}
 }
 
-// setTestFlag sets a registered flag by name, ignoring one that is not present.
-func setTestFlag(name, value string) {
-	if f := flag.Lookup(name); f != nil {
+// setTestFlag sets one of the runner's test.* flags. A flag that is not present
+// is ignored: the set is the standard library's and its contents move between Go
+// releases, and a missing knob must not stop a run.
+func setTestFlag(set *flag.FlagSet, name, value string) {
+	if f := set.Lookup(name); f != nil {
 		_ = f.Value.Set(value)
 	}
 }

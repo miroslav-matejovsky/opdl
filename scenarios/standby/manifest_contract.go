@@ -1,4 +1,4 @@
-package scenarios
+package standby
 
 import (
 	"path/filepath"
@@ -9,9 +9,9 @@ import (
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
 )
 
-// TestManifestArgumentsMatchRuntime consumes the packaged launch contract
+// ManifestArgumentsMatchRuntime consumes the packaged launch contract
 // without importing builder or platform internals.
-func TestManifestArgumentsMatchRuntime(t *testing.T) {
+func ManifestArgumentsMatchRuntime(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(harness.ScenarioDir(t), "out")
@@ -22,9 +22,9 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 	// journal.
 	deployment.StartSite(ctx, t, "node-b")
 	manifest := harness.ReadManifest(t, node.BinaryPath)
-	require.Equal(t, []string{"-instance", "primary"}, manifest.Primary.Args)
+	require.Equal(t, []string{"-instance", primaryInstance}, manifest.Primary.Args)
 	require.NotNil(t, manifest.Standby)
-	require.Equal(t, []string{"-instance", "standby"}, manifest.Standby.Args)
+	require.Equal(t, []string{"-instance", standbyInstance}, manifest.Standby.Args)
 
 	// The machine's purpose is profile; the two launches carry the other kind
 	// of role. One word for both axes is what the rename removed.
@@ -42,8 +42,8 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 		name   string
 		launch harness.Launch
 	}{
-		{name: "primary", launch: manifest.Primary},
-		{name: "standby", launch: *manifest.Standby},
+		{name: primaryInstance, launch: manifest.Primary},
+		{name: standbyInstance, launch: *manifest.Standby},
 	}
 	// These subtests share one machine instance and sequentially start/stop it
 	// with different arguments. They must never run concurrently with each other,

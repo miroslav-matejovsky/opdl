@@ -1,4 +1,4 @@
-package scenarios
+package standby
 
 import (
 	"context"
@@ -14,10 +14,10 @@ import (
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/processinfo"
 )
 
-// TestWarmStandbyFailoverAndPreferredPrimary drives the complete redundant
+// WarmStandbyFailoverAndPreferredPrimary drives the complete redundant
 // process lifecycle from a built package. Status files are operational evidence;
 // registration assertions stay on the public API.
-func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
+func WarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(harness.ScenarioDir(t), "out")
@@ -30,7 +30,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	manifest := harness.ReadManifest(t, node.BinaryPath)
 	require.NotNil(t, manifest.Standby, "default policy must package a standby launch")
 
-	primary := node.StartManaged(ctx, t, "primary", manifest.Primary.Args)
+	primary := node.StartManaged(ctx, t, primaryInstance, manifest.Primary.Args)
 	node.WaitStatus(t, primary, "active", false)
 	waitForManagedAPI(ctx, t, node, primary)
 
@@ -39,7 +39,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	stableView := harness.WaitForRegistrationStatus(ctx, t, node, stable.ProposalID, "accepted")
 
 	standbyStarted := time.Now()
-	standby := node.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+	standby := node.StartManaged(ctx, t, standbyInstance, manifest.Standby.Args)
 	standbyStatus := node.WaitStatus(t, standby, "passive", true)
 	catchUpTime := standbyStatus.UpdatedAt.Sub(standbyStarted)
 	standbyMemory, err := processinfo.ResidentBytes(ctx, standby.PID())
@@ -78,7 +78,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	require.Equal(t, aroundFailover.ProposalID, retry.ProposalID)
 	require.Len(t, harness.ListRegistrations(ctx, t, node), 2)
 
-	primaryReturned := node.StartManaged(ctx, t, "primary", manifest.Primary.Args)
+	primaryReturned := node.StartManaged(ctx, t, primaryInstance, manifest.Primary.Args)
 	node.WaitStatus(t, primaryReturned, "passive", true)
 	failbackStarted := time.Now()
 	standby.StopGracefully(t)
@@ -88,13 +88,13 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 
 	// Repeat failover and failback to expose stale status, ownership, listener, or
 	// storage ownership left behind by the first transfer.
-	standbySecond := node.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+	standbySecond := node.StartManaged(ctx, t, standbyInstance, manifest.Standby.Args)
 	node.WaitStatus(t, standbySecond, "passive", true)
 	_ = primaryReturned.Kill()
 	node.WaitStatus(t, standbySecond, "active", false)
 	waitForManagedAPI(ctx, t, node, standbySecond)
 
-	primarySecond := node.StartManaged(ctx, t, "primary", manifest.Primary.Args)
+	primarySecond := node.StartManaged(ctx, t, primaryInstance, manifest.Primary.Args)
 	node.WaitStatus(t, primarySecond, "passive", true)
 	standbySecond.StopGracefully(t)
 	node.WaitStatus(t, primarySecond, "active", false)
@@ -102,7 +102,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 
 	// Terminating a caught-up lock waiter must stop only that process. Context
 	// cancellation of Lock.Acquire is covered by the platform contract tests.
-	cancelledStandby := node.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+	cancelledStandby := node.StartManaged(ctx, t, standbyInstance, manifest.Standby.Args)
 	node.WaitStatus(t, cancelledStandby, "passive", true)
 	_ = cancelledStandby.Kill()
 	require.True(t, primarySecond.Running())
@@ -110,7 +110,7 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 
 	// Full machine shutdown is primary-service stop followed by standby-service
 	// stop. The standby may become Active in the bounded interval and must still stop.
-	shutdownStandby := node.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+	shutdownStandby := node.StartManaged(ctx, t, standbyInstance, manifest.Standby.Args)
 	node.WaitStatus(t, shutdownStandby, "passive", true)
 	primarySecond.StopGracefully(t)
 	node.WaitStatus(t, shutdownStandby, "active", false)

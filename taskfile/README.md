@@ -29,9 +29,11 @@ than once at the root.
   half of the resilience gate.
 - `scenarios.ps1`: runs the black-box scenario suite, which builds a deployment
   package and drives the built binary from outside. This is the out-of-process
-  half. It runs concurrently under a bounded load budget; when debugging, you can
-  serialize it by running `go test -parallel 1 ./...` directly inside
-  `scenarios/`.
+  half. The suite is a program rather than a test binary, so the script only
+  launches it and every knob is the command's: run `go run ./cmd -h` inside
+  `scenarios/` for the list. It runs concurrently under a bounded load budget;
+  when debugging, you can serialize it with `go run ./cmd -parallel 1` and narrow
+  it with `go run ./cmd -run nats`.
 
   The two halves are separate scripts and separate tasks because they fail for
   different reasons and take very different times. A scenario failure means a

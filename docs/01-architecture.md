@@ -198,7 +198,7 @@ tolerance. A deployment that must tolerate one journal node failure requires at
 least three machines with stable storage on the first three machines by sorted
 name. This protects event history, not service processes.
 
-`scenarios.TestFourMachineStorageTopologyAndFailure` is the evidence for the
+`scenarios/nats.FourMachineStorageTopologyAndFailure` is the evidence for the
 three-storage-node topology. It builds four machines from one blueprint, and
 proves that exactly the first three by sorted name store the journal and bind a
 cluster listener, that the fourth is client-only and binds nothing, that
