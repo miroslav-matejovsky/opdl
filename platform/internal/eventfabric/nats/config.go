@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 )
 
 const (

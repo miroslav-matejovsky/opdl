@@ -9,7 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 )
 
 // journalConfig is the site journal's required configuration. The journal is

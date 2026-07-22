@@ -106,15 +106,8 @@ components:
           description: Stable proposal identity and status key.
           example: c1a2b3
           type: string
-        sequence:
-          description: Proposal position in the site journal.
-          example: 12
-          format: int64
-          minimum: 0
-          type: integer
       required:
         - proposal_id
-        - sequence
       type: object
     Registration:
       additionalProperties: false

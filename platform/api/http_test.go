@@ -43,7 +43,7 @@ func (s *stubHandlers) handlers() api.Handlers {
 				Role:                   req.Role,
 				Status:                 api.RegistrationStatusPending,
 			}
-			return api.ProposalAccepted{ProposalID: id, Sequence: 1}, nil
+			return api.ProposalAccepted{ProposalID: id}, nil
 		},
 		List: func() []api.Registration {
 			out := make([]api.Registration, 0, len(s.proposals))
@@ -82,7 +82,6 @@ func TestServesRegistrationLifecycle(t *testing.T) {
 	var accepted api.ProposalAccepted
 	decode(t, response, &accepted)
 	require.Equal(t, "p-1", accepted.ProposalID)
-	require.EqualValues(t, 1, accepted.Sequence)
 
 	response = do(t, http.MethodGet, srv.URL+"/registrations", nil)
 	require.Equal(t, http.StatusOK, response.StatusCode)

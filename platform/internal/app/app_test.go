@@ -17,9 +17,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
@@ -618,11 +618,13 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 
 	// It follows new journal events: a fact published on the active reaches the
 	// standby's projection.
-	receipt, err := active.publisher.Publish(t.Context(), eventfabric.Ready{Info: active.fabric.Info()})
+	err = active.publisher.Publish(t.Context(), eventfabric.Ready{Info: active.fabric.Info()})
+	require.NoError(t, err)
+	high, err := active.fabric.HighWater(t.Context())
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		st, stateErr := standby.fabric.State(t.Context())
-		return stateErr == nil && st.Applied >= receipt.Sequence
+		return stateErr == nil && st.Applied >= high
 	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
 }
 

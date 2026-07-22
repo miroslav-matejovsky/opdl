@@ -16,8 +16,9 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
@@ -70,7 +71,6 @@ func TestHandlerServesAProposalFromPendingToAccepted(t *testing.T) {
 
 	accepted := propose(t, srv, `{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing", "role": "Master"}`)
 	require.NotEmpty(t, accepted.ProposalID, "202 hands back the handle the client polls with")
-	require.Positive(t, accepted.Sequence, "the proposal has a place in the site's history")
 
 	// node-b is expected and has not answered, so the site cannot accept this.
 	site.settle()
@@ -139,7 +139,6 @@ func TestHandlerProjectsAConflictRatherThanRefusingIt(t *testing.T) {
 	winner := propose(t, srv, `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`)
 	loser := propose(t, srv, `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Other"}`)
 	require.NotEqual(t, winner.ProposalID, loser.ProposalID, "a different claim is a different proposal")
-	require.Less(t, winner.Sequence, loser.Sequence, "the journal ordered them")
 	site.settle()
 
 	first, _ := status(t, srv, winner.ProposalID)
@@ -325,14 +324,16 @@ type node struct {
 // publisherFor is one node's narrow publishing capability: its own envelope
 // factory, stamping its trusted identity onto everything it states, over the
 // shared journal.
-func publisherFor(t *testing.T, j *journal, machine string) eventfabric.Publisher {
+func publisherFor(t *testing.T, j *journal, machine string) events.Publisher {
 	t.Helper()
 	factory, err := events.NewFactory(config.Descriptor{
 		Platform: "opdl", Project: "test", Environment: "development", Site: "local",
 		Machine: machine, MachineProfile: "all-in-one",
 	}, "primary")
 	require.NoError(t, err)
-	return eventfabric.NewPublisher(factory, j)
+	pub, err := storage.NewPublisher(factory, j)
+	require.NoError(t, err)
+	return pub
 }
 
 // newSite declares a site of machines and starts none of them. Machine i is at
@@ -398,13 +399,13 @@ func (j *journal) attach(ctx context.Context, n *node) {
 	j.nodes = append(j.nodes, n)
 }
 
-// Append orders one already stamped envelope and folds it into every node's
+// Store orders one already stamped envelope and folds it into every node's
 // projection, which is the whole of what a journal does to this site.
-func (j *journal) Append(ctx context.Context, envelope events.Envelope) (eventfabric.Receipt, error) {
+func (j *journal) Store(ctx context.Context, envelope events.Envelope) error {
 	j.mu.Lock()
 	if j.failure != nil {
 		defer j.mu.Unlock()
-		return eventfabric.Receipt{}, j.failure
+		return j.failure
 	}
 	require.NoError(j.t, envelope.Validate(), "the journal only stores complete envelopes")
 	j.sequence++
@@ -416,8 +417,10 @@ func (j *journal) Append(ctx context.Context, envelope events.Envelope) (eventfa
 	for _, n := range nodes {
 		require.NoError(j.t, n.projection.Apply(ctx, delivery))
 	}
-	return eventfabric.Receipt{ID: envelope.ID, Sequence: delivery.Sequence}, nil
+	return nil
 }
+
+func (j *journal) Close(_ context.Context) error { return nil }
 
 // breakWith makes the journal refuse writes, as an unreachable or full one does.
 func (j *journal) breakWith(err error) {

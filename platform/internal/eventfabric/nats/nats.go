@@ -15,9 +15,15 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
+)
+
+var (
+	_ eventfabric.Fabric = (*Fabric)(nil)
+	_ storage.Backend    = (*Fabric)(nil)
 )
 
 // Fabric is an Event Fabric backed by an embedded NATS server and its JetStream
@@ -244,25 +250,24 @@ func (f *Fabric) Info() eventfabric.Info {
 	}
 }
 
-// Append validates envelope and appends it to the site journal, returning a
-// receipt once JetStream has durably accepted it. It deduplicates by the event's
-// stable domain identity when it declares one, so a republished fact within the
-// window collapses onto its first acceptance.
+// Store validates envelope and stores it in the site journal. It deduplicates
+// by the event's stable domain identity when it declares one, so a republished
+// fact within the window collapses onto its first acceptance.
 //
 // It takes the envelope as given. The adapter mints no identity, reads no clock,
 // encodes no payload, and sets no causal link: by the time an event reaches
 // here, what happened is already decided, and only where to put it is not.
-func (f *Fabric) Append(ctx context.Context, envelope events.Envelope) (eventfabric.Receipt, error) {
+func (f *Fabric) Store(ctx context.Context, envelope events.Envelope) error {
 	if err := f.check(ctx); err != nil {
-		return eventfabric.Receipt{}, err
+		return err
 	}
 	route, err := eventfabric.NewRoute(f.scope, envelope.Type)
 	if err != nil {
-		return eventfabric.Receipt{}, err
+		return err
 	}
 	data, err := events.Encode(envelope)
 	if err != nil {
-		return eventfabric.Receipt{}, err
+		return err
 	}
 
 	// A fact that declares a stable identity deduplicates on it, so the same
@@ -270,27 +275,24 @@ func (f *Fabric) Append(ctx context.Context, envelope events.Envelope) (eventfab
 	// acceptance. A fact without one deduplicates only by its occurrence ID,
 	// which recognizes a repeated publish of one envelope but not a fact
 	// recomputed from scratch.
-	id := envelope.ID
-	dedupID := id
+	dedupID := envelope.ID
 	if envelope.StableID != "" {
 		dedupID = envelope.StableID
 	}
 	ack, err := f.js.Publish(ctx, route.Subject(), data, jetstream.WithMsgID(dedupID))
 	if err != nil {
-		return eventfabric.Receipt{}, fmt.Errorf("nats: publish %s: %w", route.Subject(), err)
+		return fmt.Errorf("nats: publish %s: %w", route.Subject(), err)
 	}
 	if ack.Duplicate {
 		stored, getErr := f.stream.GetMsg(ctx, ack.Sequence)
 		if getErr != nil {
-			return eventfabric.Receipt{}, fmt.Errorf("nats: read duplicate %s at %d: %w", route.Subject(), ack.Sequence, getErr)
+			return fmt.Errorf("nats: read duplicate %s at %d: %w", route.Subject(), ack.Sequence, getErr)
 		}
-		accepted, decodeErr := events.Decode(stored.Data)
-		if decodeErr != nil {
-			return eventfabric.Receipt{}, decodeErr
+		if _, decodeErr := events.Decode(stored.Data); decodeErr != nil {
+			return decodeErr
 		}
-		id = accepted.ID
 	}
-	return eventfabric.Receipt{ID: id, Sequence: ack.Sequence}, nil
+	return nil
 }
 
 // RunProjector replays the site journal in order from the first retained event

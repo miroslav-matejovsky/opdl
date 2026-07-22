@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 )
 
 // Projection is one node's registration read model, rebuilt by folding the site

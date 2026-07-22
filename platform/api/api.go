@@ -80,8 +80,6 @@ type RegistrationRequest struct {
 type ProposalAccepted struct {
 	// ProposalID is the proposal's stable identity and its status key.
 	ProposalID string `json:"proposal_id" doc:"Stable proposal identity and status key." example:"c1a2b3"`
-	// Sequence is the proposal's position in the site journal.
-	Sequence uint64 `json:"sequence" doc:"Proposal position in the site journal." example:"12"`
 }
 
 // Registration is the platform's immutable view of one registration request.

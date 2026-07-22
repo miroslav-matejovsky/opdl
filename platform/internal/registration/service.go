@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
 // Location is one trusted platform machine identity from the deployment
@@ -24,7 +24,7 @@ type Location struct {
 // CommandService validates registration commands and publishes proposals. It
 // does not read state or decide conflicts.
 type CommandService struct {
-	publisher        eventfabric.Publisher
+	publisher        events.Publisher
 	location         Location
 	expectedMachines []string
 }
@@ -34,8 +34,6 @@ type CommandService struct {
 type ProposalReceipt struct {
 	// ProposalID is the deterministic status key.
 	ProposalID string
-	// Sequence is the proposal's site journal position.
-	Sequence uint64
 }
 
 // QueryService answers registration queries from one node-local projection.
@@ -46,7 +44,7 @@ type QueryService struct {
 }
 
 // Open builds the command and query services for one platform node.
-func Open(publisher eventfabric.Publisher, projection *Projection, location Location, expected []Location) (*CommandService, *QueryService, error) {
+func Open(publisher events.Publisher, projection *Projection, location Location, expected []Location) (*CommandService, *QueryService, error) {
 	if publisher == nil {
 		return nil, nil, errors.New("registration: publisher is required")
 	}
@@ -76,11 +74,10 @@ func (s *CommandService) Create(ctx context.Context, request api.RegistrationReq
 		OriginIP:               s.location.IP,
 		ExpectedMachines:       s.expectedMachines,
 	})
-	receipt, err := s.publisher.Publish(ctx, proposed)
-	if err != nil {
+	if err := s.publisher.Publish(ctx, proposed); err != nil {
 		return ProposalReceipt{}, fmt.Errorf("%w: publish proposal %s: %w", api.ErrJournalUnavailable, proposed.ProposalID, err)
 	}
-	return ProposalReceipt{ProposalID: proposed.ProposalID, Sequence: receipt.Sequence}, nil
+	return ProposalReceipt{ProposalID: proposed.ProposalID}, nil
 }
 
 // Get returns one proposal by its canonical proposal ID.

@@ -12,8 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
@@ -42,11 +43,13 @@ func open(t *testing.T, cfg Config) *Fabric {
 
 // publisher composes the node's publisher the way the runtime does: one envelope
 // factory for this process stamps every event, and the fabric only appends it.
-func publisher(t *testing.T, f *Fabric) eventfabric.Publisher {
+func publisher(t *testing.T, f *Fabric) events.Publisher {
 	t.Helper()
 	factory, err := events.NewFactory(testDescriptor, "primary")
 	require.NoError(t, err)
-	return eventfabric.NewPublisher(factory, f)
+	pub, err := storage.NewPublisher(factory, f)
+	require.NoError(t, err)
+	return pub
 }
 
 // testConfig is a single-node loopback storage configuration on free ports with
@@ -222,10 +225,11 @@ func waitFor(t *testing.T, cond func() bool, message string) {
 func TestPublishReturnsAReceiptAndTheEventReplays(t *testing.T) {
 	f := open(t, testConfig(t))
 
-	receipt, err := publisher(t, f).Publish(context.Background(), probe{Fact: "started"})
+	err := publisher(t, f).Publish(context.Background(), probe{Fact: "started"})
 	require.NoError(t, err)
-	require.NotEmpty(t, receipt.ID)
-	require.Equal(t, uint64(1), receipt.Sequence,
+	high, err := f.HighWater(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), high,
 		"an open fabric has stated nothing, so the first published fact is first in the journal")
 
 	rec := &recorder{}
@@ -247,11 +251,11 @@ func TestPublishFailsWhenJournalByteLimitIsReached(t *testing.T) {
 	cfg.MaxMessageBytes = 2 << 10
 	f := open(t, cfg)
 
-	_, err := publisher(t, f).Publish(t.Context(), probe{Fact: strings.Repeat("x", 1024)})
+	err := publisher(t, f).Publish(t.Context(), probe{Fact: strings.Repeat("x", 1024)})
 	require.NoError(t, err, "the journal accepts data before reaching its limit")
 
 	for range 10 {
-		_, err = publisher(t, f).Publish(t.Context(), probe{Fact: strings.Repeat("x", 1024)})
+		err = publisher(t, f).Publish(t.Context(), probe{Fact: strings.Repeat("x", 1024)})
 		if err != nil {
 			break
 		}
@@ -299,15 +303,15 @@ func TestInfoDescribesTheNodesTransport(t *testing.T) {
 func TestPublishDeduplicatesByStableIdentity(t *testing.T) {
 	f := open(t, testConfig(t))
 
-	first, err := publisher(t, f).Publish(context.Background(), keyedProbe{Key: "unit-1"})
+	err := publisher(t, f).Publish(context.Background(), keyedProbe{Key: "unit-1"})
 	require.NoError(t, err)
-	second, err := publisher(t, f).Publish(context.Background(), keyedProbe{Key: "unit-1"})
+	err = publisher(t, f).Publish(context.Background(), keyedProbe{Key: "unit-1"})
 	require.NoError(t, err)
 
-	require.Equal(t, first.Sequence, second.Sequence,
+	high, err := f.HighWater(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), high,
 		"republishing the same identity collapses onto the first acceptance")
-	require.Equal(t, first.ID, second.ID,
-		"a duplicate receipt identifies the event that is actually retained")
 }
 
 // TestHandlerConsequencesRecordTheirCause proves the causal links are the
@@ -317,24 +321,28 @@ func TestPublishDeduplicatesByStableIdentity(t *testing.T) {
 func TestHandlerConsequencesRecordTheirCause(t *testing.T) {
 	f := open(t, testConfig(t))
 	pub := publisher(t, f)
-	cause, err := pub.Publish(context.Background(), probe{Fact: "cause"})
+	err := pub.Publish(context.Background(), probe{Fact: "cause"})
 	require.NoError(t, err)
 
-	handler := &consequenceHandler{routes: []eventfabric.Route{probeRoute(t)}, publisher: pub}
+	rec := &recorder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	projectorDone := make(chan error, 1)
+	go func() { projectorDone <- f.RunProjector(ctx, rec) }()
+	waitFor(t, func() bool { return rec.count("platform.probe.happened") == 1 }, "projector never replayed cause")
+	causeDelivery, found := rec.first("platform.probe.happened")
+	require.True(t, found)
+
+	handler := &consequenceHandler{routes: []eventfabric.Route{probeRoute(t)}, publisher: pub}
 	handlerDone := make(chan error, 1)
 	go func() { handlerDone <- f.RunHandler(ctx, handler) }()
 
-	rec := &recorder{}
-	projectorDone := make(chan error, 1)
-	go func() { projectorDone <- f.RunProjector(ctx, rec) }()
 	waitFor(t, func() bool { return rec.count("platform.probe.keyed") == 1 }, "projector never replayed the consequence")
 
 	delivery, found := rec.first("platform.probe.keyed")
 	require.True(t, found)
-	require.Equal(t, cause.ID, delivery.Envelope.CausationID, "the consequence names the delivery that caused it")
-	require.Equal(t, cause.ID, delivery.Envelope.CorrelationID, "the cause started the workflow, so it names it")
+	require.Equal(t, causeDelivery.Envelope.ID, delivery.Envelope.CausationID, "the consequence names the delivery that caused it")
+	require.Equal(t, causeDelivery.Envelope.ID, delivery.Envelope.CorrelationID, "the cause started the workflow, so it names it")
 
 	cancel()
 	require.NoError(t, <-handlerDone)
@@ -345,23 +353,22 @@ func TestHandlerConsequencesRecordTheirCause(t *testing.T) {
 // context it was given.
 type consequenceHandler struct {
 	routes    []eventfabric.Route
-	publisher eventfabric.Publisher
+	publisher events.Publisher
 }
 
 func (*consequenceHandler) Name() string                  { return "consequence" }
 func (h *consequenceHandler) Routes() []eventfabric.Route { return h.routes }
 func (h *consequenceHandler) Handle(ctx context.Context, _ eventfabric.Delivery) error {
-	_, err := h.publisher.Publish(ctx, keyedProbe{Key: "consequence"})
-	return err
+	return h.publisher.Publish(ctx, keyedProbe{Key: "consequence"})
 }
 
 func TestProjectorRebuildsFromDiskAfterRestart(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nats")
 
 	first := open(t, configForDir(t, dir))
-	_, err := publisher(t, first).Publish(context.Background(), probe{Fact: "a"})
+	err := publisher(t, first).Publish(context.Background(), probe{Fact: "a"})
 	require.NoError(t, err)
-	_, err = publisher(t, first).Publish(context.Background(), probe{Fact: "b"})
+	err = publisher(t, first).Publish(context.Background(), probe{Fact: "b"})
 	require.NoError(t, err)
 	require.NoError(t, first.Close(context.Background()))
 
@@ -383,9 +390,9 @@ func TestDurableHandlerReceivesEventsPublishedBeforeItStarted(t *testing.T) {
 	f := open(t, testConfig(t))
 
 	// Published before any handler exists: a durable handler still receives them.
-	_, err := publisher(t, f).Publish(context.Background(), probe{Fact: "a"})
+	err := publisher(t, f).Publish(context.Background(), probe{Fact: "a"})
 	require.NoError(t, err)
-	_, err = publisher(t, f).Publish(context.Background(), probe{Fact: "b"})
+	err = publisher(t, f).Publish(context.Background(), probe{Fact: "b"})
 	require.NoError(t, err)
 
 	handler := &recordHandler{name: "probe", routes: []eventfabric.Route{probeRoute(t)}}
@@ -403,7 +410,9 @@ func TestDurableHandlerReceivesEventsPublishedBeforeItStarted(t *testing.T) {
 func TestHandlerRedeliversUntilItSucceeds(t *testing.T) {
 	f := open(t, testConfig(t))
 
-	receipt, err := publisher(t, f).Publish(context.Background(), probe{Fact: "retry me"})
+	err := publisher(t, f).Publish(context.Background(), probe{Fact: "retry me"})
+	require.NoError(t, err)
+	high, err := f.HighWater(context.Background())
 	require.NoError(t, err)
 
 	// Fail the first attempt of each delivery; the second succeeds.
@@ -419,7 +428,7 @@ func TestHandlerRedeliversUntilItSucceeds(t *testing.T) {
 
 	waitFor(t, func() bool { return handler.handledCount() == 1 },
 		"the handler never succeeded after redelivery")
-	require.GreaterOrEqual(t, handler.attemptsFor(receipt.Sequence), 2, "the delivery was retried")
+	require.GreaterOrEqual(t, handler.attemptsFor(high), 2, "the delivery was retried")
 	cancel()
 	require.NoError(t, <-done)
 }
@@ -427,7 +436,7 @@ func TestHandlerRedeliversUntilItSucceeds(t *testing.T) {
 func TestHandlerExhaustsAfterMaxDeliver(t *testing.T) {
 	f := open(t, testConfig(t))
 
-	_, err := publisher(t, f).Publish(context.Background(), probe{Fact: "always fails"})
+	err := publisher(t, f).Publish(context.Background(), probe{Fact: "always fails"})
 	require.NoError(t, err)
 
 	handler := &recordHandler{
@@ -452,7 +461,7 @@ func TestHandlerExhaustsAfterMaxDeliver(t *testing.T) {
 func TestPublishRejectsAnInvalidEvent(t *testing.T) {
 	f := open(t, testConfig(t))
 
-	_, err := publisher(t, f).Publish(context.Background(), badEvent{})
+	err := publisher(t, f).Publish(context.Background(), badEvent{})
 	require.ErrorIs(t, err, events.ErrInvalidEventType, "stamping refuses it before the journal is involved")
 
 	high, err := f.HighWater(context.Background())
@@ -460,19 +469,18 @@ func TestPublishRejectsAnInvalidEvent(t *testing.T) {
 	require.Zero(t, high, "a fact that could not be stamped was never appended")
 }
 
-// TestAppendStoresTheEnvelopeUnchanged pins what the journal is for: it keeps
+// TestStoreStoresTheEnvelopeUnchanged pins what the journal is for: it keeps
 // the fact it was given. Nothing the adapter does may alter an occurrence, so
 // what a projector replays is what the factory stamped.
-func TestAppendStoresTheEnvelopeUnchanged(t *testing.T) {
+func TestStoreStoresTheEnvelopeUnchanged(t *testing.T) {
 	f := open(t, testConfig(t))
 	factory, err := events.NewFactory(testDescriptor, "primary")
 	require.NoError(t, err)
 	envelope, err := factory.Wrap(context.Background(), probe{Fact: "unchanged"})
 	require.NoError(t, err)
 
-	receipt, err := f.Append(context.Background(), envelope)
+	err = f.Store(context.Background(), envelope)
 	require.NoError(t, err)
-	require.Equal(t, envelope.ID, receipt.ID, "the receipt names the occurrence that was accepted")
 
 	rec := &recorder{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -486,13 +494,16 @@ func TestAppendStoresTheEnvelopeUnchanged(t *testing.T) {
 	require.True(t, envelope.OccurredAt.Equal(delivery.Envelope.OccurredAt))
 	delivery.Envelope.OccurredAt = envelope.OccurredAt
 	require.Equal(t, envelope, delivery.Envelope)
-	require.Equal(t, receipt.Sequence, delivery.Sequence, "the sequence is the journal's, not the envelope's")
+
+	high, err := f.HighWater(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, high, delivery.Sequence, "the sequence is the journal's, not the envelope's")
 
 	cancel()
 	require.NoError(t, <-done)
 }
 
-func TestAppendRefusesAnIncompleteEnvelope(t *testing.T) {
+func TestStoreRefusesAnIncompleteEnvelope(t *testing.T) {
 	f := open(t, testConfig(t))
 	factory, err := events.NewFactory(testDescriptor, "primary")
 	require.NoError(t, err)
@@ -500,7 +511,7 @@ func TestAppendRefusesAnIncompleteEnvelope(t *testing.T) {
 	require.NoError(t, err)
 	envelope.ID = ""
 
-	_, err = f.Append(context.Background(), envelope)
+	err = f.Store(context.Background(), envelope)
 	require.ErrorIs(t, err, events.ErrInvalidEnvelope)
 
 	high, err := f.HighWater(context.Background())
@@ -510,7 +521,7 @@ func TestAppendRefusesAnIncompleteEnvelope(t *testing.T) {
 
 func TestProjectorFailureStopsCatchUp(t *testing.T) {
 	f := open(t, testConfig(t))
-	_, err := publisher(t, f).Publish(context.Background(), probe{Fact: "a"})
+	err := publisher(t, f).Publish(context.Background(), probe{Fact: "a"})
 	require.NoError(t, err)
 
 	// A projector that cannot apply an event stops catch-up rather than skipping.
@@ -543,7 +554,7 @@ func TestHighWaterAndStateTrackCatchUp(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, base, "an empty journal has accepted nothing")
 
-	_, err = publisher(t, f).Publish(context.Background(), probe{Fact: "a"})
+	err = publisher(t, f).Publish(context.Background(), probe{Fact: "a"})
 	require.NoError(t, err)
 	high, err := f.HighWater(context.Background())
 	require.NoError(t, err)
@@ -577,7 +588,7 @@ func TestCloseIsIdempotentAndRefusesLaterCalls(t *testing.T) {
 	require.NoError(t, f.Close(context.Background()))
 	require.NoError(t, f.Close(context.Background()), "close is idempotent")
 
-	_, err = publisher(t, f).Publish(context.Background(), probe{Fact: "late"})
+	err = publisher(t, f).Publish(context.Background(), probe{Fact: "late"})
 	require.ErrorIs(t, err, eventfabric.ErrClosed)
 	_, err = f.HighWater(context.Background())
 	require.ErrorIs(t, err, eventfabric.ErrClosed)
@@ -601,7 +612,7 @@ func TestHandlerPendingReportsRetainedWork(t *testing.T) {
 
 	// Retain work for a handler that is not running yet.
 	for range 3 {
-		_, err := publisher(t, f).Publish(context.Background(), probe{Fact: "queued"})
+		err := publisher(t, f).Publish(context.Background(), probe{Fact: "queued"})
 		require.NoError(t, err)
 	}
 

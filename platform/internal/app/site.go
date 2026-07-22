@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
@@ -39,7 +40,7 @@ type site struct {
 	fabric *natsfabric.Fabric
 	// publisher is the node's one way to state a fact: it stamps a typed payload
 	// with this process's envelope factory and appends it to the journal.
-	publisher  eventfabric.Publisher
+	publisher  events.Publisher
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
@@ -112,9 +113,13 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 		info.Server, strings.Join(fabricCfg.Servers, ","), info.Journal,
 		info.HostsStorage, info.Replicas)
 
+	publisher, err := storage.NewPublisher(factory, fabric)
+	if err != nil {
+		return nil, errors.Join(err, fabric.Close(ctx))
+	}
 	s := &site{
 		fabric:          fabric,
-		publisher:       eventfabric.NewPublisher(factory, fabric),
+		publisher:       publisher,
 		projection:      registration.NewProjection(),
 		observer:        observer,
 		stopped:         make(chan struct{}),
@@ -196,11 +201,15 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 		return err
 	}
 
-	receipt, err := s.publisher.Publish(catchUpCtx, eventfabric.Ready{Info: s.fabric.Info(), HighWater: s.projection.Sequence()})
+	err := s.publisher.Publish(catchUpCtx, eventfabric.Ready{Info: s.fabric.Info(), HighWater: s.projection.Sequence()})
 	if err != nil {
 		return fmt.Errorf("state ready: %w", err)
 	}
-	if err := s.awaitApplied(catchUpCtx, receipt.Sequence, "its own readiness"); err != nil {
+	high, err := s.fabric.HighWater(catchUpCtx)
+	if err != nil {
+		return fmt.Errorf("read readiness high water: %w", err)
+	}
+	if err := s.awaitApplied(catchUpCtx, high, "its own readiness"); err != nil {
 		return err
 	}
 	s.ready = true
@@ -332,7 +341,7 @@ func (s *site) release(ctx context.Context) error {
 	// A node that never said it was ready has nothing to say about stopping. It
 	// would be stating the end of something the site never heard begin.
 	if s.ready {
-		if _, err := s.publisher.Publish(stopCtx, eventfabric.Stopping{Adapter: s.fabric.Info().Adapter}); err != nil {
+		if err := s.publisher.Publish(stopCtx, eventfabric.Stopping{Adapter: s.fabric.Info().Adapter}); err != nil {
 			errs = append(errs, fmt.Errorf("state stopping: %w", err))
 		}
 	}

@@ -32,7 +32,7 @@ components:
   events: { in: internal/events }
   events-storage: { in: internal/events/storage }
   events-storage-jsonl: { in: internal/events/storage/jsonl }
-  eventfabric: { in: internal/eventfabric }
+  eventfabric: { in: internal/events/storage/eventfabric }
   eventfabric-nats: { in: internal/eventfabric/nats }
   httpapi: { in: internal/httpapi }
   operations: { in: internal/operations }
@@ -75,10 +75,10 @@ deps:
     mayDependOn: [events, events-storage]
   eventfabric:
     canUse: [stablehash]
-    mayDependOn: [events]
+    mayDependOn: [events, events-storage]
   eventfabric-nats:
     canUse: [nats-server, nats-client]
-    mayDependOn: [config, events, eventfabric, operations]
+    mayDependOn: [config, events, events-storage, eventfabric, operations]
 
   # operations is the local event writer: it stamps typed payloads with the
   # process's envelope factory and serializes them. It owns no events.
@@ -89,4 +89,4 @@ deps:
     mayDependOn: [api, registration]
   registration:
     canUse: [stablehash]
-    mayDependOn: [api, events, eventfabric]
+    mayDependOn: [api, events, events-storage, eventfabric]

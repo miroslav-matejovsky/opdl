@@ -40,11 +40,8 @@ func TestParseEventTypeRejectsMalformedTypes(t *testing.T) {
 func TestNewSiteScopeIsStableAndSafe(t *testing.T) {
 	scope := NewSiteScope("customer-a", "production", "north")
 
-	// Stable: the same triple always derives the same scope.
 	require.Equal(t, scope, NewSiteScope("customer-a", "production", "north"))
 
-	// Transport-safe: a scope is a single lower-case base32 subject token, so it
-	// never carries a dot, space, or wildcard that would break a subject.
 	require.NotEmpty(t, scope)
 	for _, r := range string(scope) {
 		isLowerBase32 := (r >= 'a' && r <= 'z') || (r >= '2' && r <= '7')
@@ -55,7 +52,6 @@ func TestNewSiteScopeIsStableAndSafe(t *testing.T) {
 func TestSafeTokenIsStableAndDistinct(t *testing.T) {
 	require.Equal(t, SafeToken("node-a"), SafeToken("node-a"), "stable for the same value")
 	require.NotEqual(t, SafeToken("node-a"), SafeToken("node-b"), "distinct for different values")
-	// A safe token is a single lower-case base32 subject token.
 	for _, r := range SafeToken("odd/machine name") {
 		safe := (r >= 'a' && r <= 'z') || (r >= '2' && r <= '7')
 		require.True(t, safe, "token must be a safe subject token")
@@ -63,8 +59,6 @@ func TestSafeTokenIsStableAndDistinct(t *testing.T) {
 }
 
 func TestNewSiteScopeIsLengthPrefixedAgainstBoundaryCollisions(t *testing.T) {
-	// Without length prefixing these two different sites would hash identical
-	// bytes. The prefix makes the field boundaries part of the hash.
 	require.NotEqual(t,
 		NewSiteScope("ab", "c", "d"),
 		NewSiteScope("a", "bc", "d"),
@@ -76,8 +70,6 @@ func TestNewSiteScopeIsLengthPrefixedAgainstBoundaryCollisions(t *testing.T) {
 }
 
 func TestNewSiteScopeIsolatesSites(t *testing.T) {
-	// Two sites that differ in any one identity field derive different scopes, so
-	// otherwise identical events never share a journal or a route.
 	base := NewSiteScope("project", "environment", "site")
 	require.NotEqual(t, base, NewSiteScope("other", "environment", "site"))
 	require.NotEqual(t, base, NewSiteScope("project", "other", "site"))
@@ -105,8 +97,6 @@ func TestNewRouteRejectsMalformedEventTypes(t *testing.T) {
 }
 
 func TestRoutesOfOneSiteAreCapturedByItsJournalFilter(t *testing.T) {
-	// Every event route of a site is a leaf under its journal's subject filter,
-	// which is exactly what lets one stream bind the whole site and nothing else.
 	scope := NewSiteScope("customer-a", "production", "north")
 	route, err := NewRoute(scope, "platform.registration.accepted")
 	require.NoError(t, err)
@@ -116,8 +106,6 @@ func TestRoutesOfOneSiteAreCapturedByItsJournalFilter(t *testing.T) {
 	require.Equal(t, prefix+">", scope.SubjectFilter())
 }
 
-// upper uppercases an ASCII base32 scope for the stream-name assertion without
-// pulling strings into the test's own expectations.
 func upper(scope string) string {
 	out := []byte(scope)
 	for i, b := range out {

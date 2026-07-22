@@ -10,8 +10,8 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 )
 
 // testDescriptor is the deployment identity the tests' envelope factory stamps.
@@ -20,57 +20,62 @@ var testDescriptor = config.Descriptor{
 	Site: "north", Machine: "node-a", MachineProfile: "all-in-one", IP: "10.0.1.10",
 }
 
-// recordingAppender is the journal half of publication: it keeps the completed
-// envelopes a publisher hands it, which is exactly what a real journal receives.
-// Registration never sees it; it is given the publisher composed over it.
-type recordingAppender struct {
+// recordingBackend is the storage backend: it keeps the completed
+// envelopes a publisher hands it, which is exactly what a real backend receives.
+type recordingBackend struct {
 	appended []events.Envelope
 	err      error
 }
 
-func (a *recordingAppender) Append(_ context.Context, envelope events.Envelope) (eventfabric.Receipt, error) {
-	if a.err != nil {
-		return eventfabric.Receipt{}, a.err
+func (b *recordingBackend) Store(_ context.Context, envelope events.Envelope) error {
+	if b.err != nil {
+		return b.err
 	}
-	a.appended = append(a.appended, envelope)
-	return eventfabric.Receipt{ID: envelope.ID, Sequence: uint64(len(a.appended))}, nil
+	b.appended = append(b.appended, envelope)
+	return nil
 }
 
-// testPublisher composes the real publisher over a recording appender, so a test
-// exercises the same stamping the runtime does and can then read what the
-// journal would have stored.
-func testPublisher(t *testing.T) (eventfabric.Publisher, *recordingAppender) {
+func (b *recordingBackend) Close(_ context.Context) error {
+	return nil
+}
+
+// testPublisher composes the real publisher over a recording backend.
+func testPublisher(t *testing.T) (events.Publisher, *recordingBackend) {
 	t.Helper()
 	factory, err := events.NewFactory(testDescriptor, "primary")
 	require.NoError(t, err)
-	appender := &recordingAppender{}
-	return eventfabric.NewPublisher(factory, appender), appender
+	backend := &recordingBackend{}
+	pub, err := storage.NewPublisher(factory, backend)
+	require.NoError(t, err)
+	return pub, backend
 }
 
 // anyPublisher composes a working publisher for a test that never reads what
 // was published.
-func anyPublisher(t *testing.T) eventfabric.Publisher {
+func anyPublisher(t *testing.T) events.Publisher {
 	t.Helper()
 	publisher, _ := testPublisher(t)
 	return publisher
 }
 
-// failingPublisher composes a publisher whose journal always refuses.
-func failingPublisher(t *testing.T, cause error) eventfabric.Publisher {
+// failingPublisher composes a publisher whose backend always refuses.
+func failingPublisher(t *testing.T, cause error) events.Publisher {
 	t.Helper()
 	factory, err := events.NewFactory(testDescriptor, "primary")
 	require.NoError(t, err)
-	return eventfabric.NewPublisher(factory, &recordingAppender{err: cause})
+	pub, err := storage.NewPublisher(factory, &recordingBackend{err: cause})
+	require.NoError(t, err)
+	return pub
 }
 
 // payload decodes the payload of the index-th appended envelope, so a test reads
 // the fact the journal would have stored rather than the struct it passed in.
-func payload[T events.Event](t *testing.T, appender *recordingAppender, index int) T {
+func payload[T events.Event](t *testing.T, backend *recordingBackend, index int) T {
 	t.Helper()
-	require.Greater(t, len(appender.appended), index, "no event was published at index %d", index)
+	require.Greater(t, len(backend.appended), index, "no event was published at index %d", index)
 	var event T
-	require.NoError(t, json.Unmarshal(appender.appended[index].Data, &event))
-	require.Equal(t, event.EventType(), appender.appended[index].Type)
+	require.NoError(t, json.Unmarshal(backend.appended[index].Data, &event))
+	require.Equal(t, event.EventType(), backend.appended[index].Type)
 	return event
 }
 
@@ -79,7 +84,7 @@ func locations() []Location {
 }
 
 func TestCommandServicePublishesADurableProposal(t *testing.T) {
-	publisher, appender := testPublisher(t)
+	publisher, backend := testPublisher(t)
 	commands, _, err := Open(publisher, NewProjection(), locations()[1], locations())
 	require.NoError(t, err)
 
@@ -89,15 +94,14 @@ func TestCommandServicePublishesADurableProposal(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, result.ProposalID)
-	require.Equal(t, uint64(1), result.Sequence)
-	require.Len(t, appender.appended, 1)
+	require.Len(t, backend.appended, 1)
 
-	proposed := payload[Proposed](t, appender, 0)
+	proposed := payload[Proposed](t, backend, 0)
 	require.Equal(t, result.ProposalID, proposed.ProposalID)
 	require.Equal(t, []string{"node-a", "node-b"}, proposed.ExpectedMachines)
 	require.Equal(t, "node-a", proposed.OriginMachine)
 
-	stamped := appender.appended[0]
+	stamped := backend.appended[0]
 	require.NoError(t, stamped.Validate(), "the command service publishes a journal-valid envelope")
 	require.Equal(t, "node-a", stamped.Origin.Machine, "the origin is the process's, never the caller's")
 	require.Empty(t, stamped.CausationID, "a command begins a chain, so it has no cause")
@@ -105,13 +109,13 @@ func TestCommandServicePublishesADurableProposal(t *testing.T) {
 }
 
 func TestCommandServiceRejectsInvalidInputBeforePublishing(t *testing.T) {
-	publisher, appender := testPublisher(t)
+	publisher, backend := testPublisher(t)
 	commands, _, err := Open(publisher, NewProjection(), locations()[1], locations())
 	require.NoError(t, err)
 
 	_, err = commands.Create(t.Context(), api.RegistrationRequest{UnitTypeNameAdvertised: " "})
 	require.ErrorContains(t, err, "blank")
-	require.Empty(t, appender.appended)
+	require.Empty(t, backend.appended)
 }
 
 func TestCommandServiceClassifiesPublishFailure(t *testing.T) {
@@ -126,7 +130,7 @@ func TestCommandServiceClassifiesPublishFailure(t *testing.T) {
 
 func TestQueryServiceReadsOnlyTheLocalProjection(t *testing.T) {
 	projection := NewProjection()
-	publisher, appender := testPublisher(t)
+	publisher, backend := testPublisher(t)
 	_, queries, err := Open(publisher, projection, locations()[1], locations())
 	require.NoError(t, err)
 	proposed := proposal(42)
@@ -138,7 +142,7 @@ func TestQueryServiceReadsOnlyTheLocalProjection(t *testing.T) {
 	require.Equal(t, api.RegistrationStatusPending, view.Status)
 	require.Equal(t, api.RegistrationStatusAccepted, view.PlatformInstances[0].Status)
 	require.Equal(t, api.RegistrationStatusPending, view.PlatformInstances[1].Status)
-	require.Empty(t, appender.appended, "queries do not publish or call the Event Fabric")
+	require.Empty(t, backend.appended, "queries do not publish or call the Event Fabric")
 }
 
 func TestQueryServiceReportsProjectedConflicts(t *testing.T) {

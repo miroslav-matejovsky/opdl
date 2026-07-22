@@ -20,8 +20,6 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string ProposalId { get; set; }
 #endif
-        /// <summary>Proposal position in the site journal.</summary>
-        public long? Sequence { get; set; }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
@@ -41,7 +39,6 @@ namespace Opdl.Sdk.Client.Models
             return new Dictionary<string, Action<IParseNode>>
             {
                 { "proposal_id", n => { ProposalId = n.GetStringValue(); } },
-                { "sequence", n => { Sequence = n.GetLongValue(); } },
             };
         }
         /// <summary>
@@ -52,7 +49,6 @@ namespace Opdl.Sdk.Client.Models
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteStringValue("proposal_id", ProposalId);
-            writer.WriteLongValue("sequence", Sequence);
         }
     }
 }

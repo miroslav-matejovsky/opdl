@@ -10,8 +10,8 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"

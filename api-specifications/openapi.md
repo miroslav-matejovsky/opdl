@@ -106,15 +106,13 @@ Accepted
 
 ```json
 {
-   "proposal_id": "c1a2b3",
-   "sequence": 12
+   "proposal_id": "c1a2b3"
 }
 ```
 
 #### Field Definitions
 
 - `proposal_id` *(string, required)* Stable proposal identity and status key.
-- `sequence` *(integer, required)* Proposal position in the site journal.
 
 #### 400 Response
 
