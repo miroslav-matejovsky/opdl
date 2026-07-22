@@ -568,21 +568,6 @@ func (s *site) machine(t *testing.T, name string) *machine {
 	return nil
 }
 
-// startAll starts every machine of the site in declaration order and waits for
-// each to serve.
-//
-// Order is not incidental. A site smaller than three machines runs JetStream on
-// one deterministic storage node, and a node that only routes to it cannot reach
-// a journal that is not running yet, so the storage node starts first. Machine
-// order in a blueprint is the sorted name order storage selection uses.
-func (s *site) startAll(ctx context.Context, t *testing.T) {
-	t.Helper()
-	for _, m := range s.machines {
-		m.start(ctx, t)
-		waitForAPI(ctx, t, m)
-	}
-}
-
 // startSite starts every platform instance the site deploys, all at once, and
 // only then waits for each machine's Primary Instance to serve.
 //
@@ -658,7 +643,7 @@ type machine struct {
 	launchArgs []string
 	// standby is this machine's Standby Instance once startSite has started one.
 	standby *managedProcess
-	stopped    bool
+	stopped bool
 }
 
 // processStatus is the local operational contract deployment tooling reads.

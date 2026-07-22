@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
@@ -620,69 +618,6 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
 }
 
-// Failover and failback are not exercised here any more.
-//
-// They were, on one machine running both instances against one shared journal
-// store. That topology no longer exists: each instance has its own store, and the
-// platform's minimum site is two machines and three platform instances, because a
-// journal of fewer than three members cannot lose one and keep quorum. A lone
-// machine's standby therefore has no journal to take over, whatever the ownership
-// says.
-//
-// So the transfer can only be shown with four processes on a site that is a legal
-// size, which makes it a scenario rather than a composition test. See the
-// scenario suite's warm standby failover.
-//
-// The helpers below stay: they read the per-process status files, which is how a
-// scenario and an operator both ask an instance what state it reached.
-
-func waitForProcessState(t *testing.T, descriptor config.Descriptor, role redundancy.InstanceRole, state redundancy.State, done <-chan error) {
-	t.Helper()
-	path := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
-	var processErr error
-	exited := false
-	require.Eventually(t, func() bool {
-		select {
-		case err := <-done:
-			exited, processErr = true, err
-			return true
-		default:
-		}
-		status, err := redundancy.ReadStatus(path)
-		return err == nil && status.State == state
-	}, 30*time.Second, 20*time.Millisecond, "%s never reached %s", role, state)
-	require.Falsef(t, exited, "%s exited before reaching %s: %v", role, state, processErr)
-}
-
-func waitForFailoverReadyStandby(t *testing.T, descriptor config.Descriptor, role redundancy.InstanceRole, done <-chan error) {
-	t.Helper()
-	path := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
-	var processErr error
-	exited := false
-	require.Eventually(t, func() bool {
-		select {
-		case err := <-done:
-			exited, processErr = true, err
-			return true
-		default:
-		}
-		status, err := redundancy.ReadStatus(path)
-		return err == nil && status.State == redundancy.StatePassive && status.FailoverReady && status.LastError == ""
-	}, 30*time.Second, 20*time.Millisecond, "%s never became a caught-up standby", role)
-	require.Falsef(t, exited, "%s exited before becoming a caught-up standby: %v", role, processErr)
-}
-
-func waitProcess(t *testing.T, done <-chan error) error {
-	t.Helper()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(30 * time.Second):
-		t.Fatal("process did not stop")
-		return nil
-	}
-}
-
 func TestRunReportsMissingConfigFlag(t *testing.T) {
 	require.Error(t, Run([]string{"-unknown"}))
 }
@@ -721,42 +656,4 @@ func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	_, err = open(t.Context(), descriptor, cfg, true, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "data directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
-}
-
-// requireInstance checks the instance serving at addr reports the role and state
-// it should. It is how a test asks an instance what it is, which is the same
-// question an operator asks it.
-func requireInstance(t *testing.T, addr, role, state string) {
-	t.Helper()
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+api.PathInstance, http.NoBody)
-	require.NoError(t, err)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-
-	var instance api.Instance
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&instance))
-	require.Equal(t, role, instance.Role, "the role is fixed at build time")
-	require.Equal(t, state, instance.State)
-	require.Equal(t, addr, instance.Address)
-}
-
-// requirePassiveRefusal checks a Passive instance refuses a domain operation and
-// points at the instance that holds ownership, so a caller that reached the wrong
-// one can follow it rather than give up.
-func requirePassiveRefusal(t *testing.T, passiveAddr, activeAddr string) {
-	t.Helper()
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		"http://"+passiveAddr+api.PathRegistrations, http.NoBody)
-	require.NoError(t, err)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer func() { _ = response.Body.Close() }()
-
-	require.Equal(t, http.StatusServiceUnavailable, response.StatusCode,
-		"a Passive instance must not answer a domain query from a projection that is not authoritative")
-	body, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
-	require.Contains(t, string(body), activeAddr, "the refusal names where to go instead")
 }

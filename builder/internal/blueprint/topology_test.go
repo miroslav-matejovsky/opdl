@@ -149,7 +149,7 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 	t.Run("across sites", func(t *testing.T) {
 		p := validProject()
 		p.Sites = append(p.Sites, blueprint.Site{
-			Name:     "south",
+			Name: "south",
 			Machines: []blueprint.Machine{
 				namedMachine("south-node", "10.0.1.10"),
 				namedMachine("south-relay", "10.0.1.13"),

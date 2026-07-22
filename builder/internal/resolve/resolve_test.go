@@ -65,10 +65,6 @@ func dataDir(machine, role string) string {
 // addr is the address a machine's Event Fabric listener is reached on.
 func addr(ip string, port int) string { return fmt.Sprintf("%s:%d", ip, port) }
 
-// localAddr is the loopback address an instance serves its API on. The platform
-// API is machine-local, so it is never joined with a machine's ip.
-func localAddr(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
-
 // site builds a site of machinesCount machines named node-1..node-N with
 // sequential ips, declared in reverse name order so a test can tell derived
 // ordering from declaration order.
