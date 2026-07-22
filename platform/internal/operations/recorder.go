@@ -31,19 +31,6 @@ const (
 	AttributeError = "error"
 	// AttributeDurationMS contains elapsed wall-clock milliseconds.
 	AttributeDurationMS = "duration_ms"
-	// AttributeActivationKind identifies initial activation, failover, or failback.
-	AttributeActivationKind = "activation_kind"
-	// AttributeObject contains the kernel object name involved in an operation,
-	// such as the Primary Ownership mutex. A named kernel object has no
-	// path, so this is what identifies it to an operator.
-	AttributeObject = "object"
-	// AttributeAbandoned reports that ownership was taken over from a process that
-	// died without releasing it, rather than from one that handed it over. It is
-	// what distinguishes a crash failover from a planned handover.
-	AttributeAbandoned = "abandoned"
-	// AttributeExisted reports that a kernel object already existed when this
-	// process opened it, meaning a peer process on this machine is running.
-	AttributeExisted = "existed"
 )
 
 // Event is the temporary wrapper Emit writes, and the second event model this

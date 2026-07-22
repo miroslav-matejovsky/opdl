@@ -53,12 +53,12 @@ deps:
     mayDependOn: [api, config, eventfabric, eventfabric-nats, events, httpapi, operations, redundancy, registration]
   redundancy:
     canUse: [sys, atomicfile, winmutex]
-    # Ownership transitions are operational events in their own right: which
-    # instance became Active, when, and whether it took over from a process that
-    # died. The package that runs the transitions is the one that can report them
-    # accurately, so it emits them itself rather than returning them for a caller
-    # to describe.
-    mayDependOn: [operations]
+    # Ownership transitions are events in their own right: which instance became
+    # Active, when, and whether it took over from a process that died. The
+    # package that runs the transitions is the one that can report them
+    # accurately, so it declares and states them itself rather than returning
+    # them for a caller to describe.
+    mayDependOn: [events, operations]
   # config is a leaf. It carries both tiers of configuration — the deployment
   # descriptor compiled in at build time and the TOML file read at startup — so
   # the packages below depend on it for the machine's identity and topology, and

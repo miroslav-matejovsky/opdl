@@ -320,7 +320,8 @@ places to read a status file rather than two ownership scopes.
 An instance that takes ownership also learns how it became free. The kernel reports
 a mutex whose owner died without releasing it as abandoned, so a failover caused
 by a crash is distinguishable from a planned handover in
-`platform.ownership_acquired`. The file lock reported both identically.
+`platform.redundancy.ownership_acquired`. The file lock reported both
+identically.
 
 The mutex provides mutual exclusion, not a fencing token. What makes exclusion
 sufficient is two invariants around it: active resources close before ownership is

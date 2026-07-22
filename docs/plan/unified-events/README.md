@@ -1,8 +1,8 @@
 # Unified platform event model
 
-Status: option A selected. Stages 10 to 50 are implemented; stages 60 to 90 are
-pending. `operations.Event` and `Recorder.Emit` remain only for
-`internal/redundancy` and the NATS adapter, which stages 60 and 70 migrate.
+Status: option A selected. Stages 10 to 60 are implemented; stages 70 to 90 are
+pending. `operations.Event` and `Recorder.Emit` remain only for the NATS
+adapter, which stage 70 migrates.
 
 ## Goal
 
