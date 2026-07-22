@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -666,4 +668,121 @@ func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	_, err = openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "data directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
+}
+
+// TestOpenReportsUnusableJsonlDataDir checks a node fails at startup when the
+// JSONL backend's data directory cannot be created. JSONL is mandatory: every
+// event must reach the local record before NATS.
+func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Event Fabric composition in -short mode")
+	}
+	dir := t.TempDir()
+	cfg, err := config.Load(writeConfig(t, dir))
+	require.NoError(t, err)
+
+	blocked := filepath.Join(dir, "not-a-dir")
+	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
+	descriptor := descriptorOnFreePorts(t, cfg)
+	// Sabotage the DataDir: the JSONL backend will try to create a subdirectory
+	// under it, which will fail because blocked is a file, not a directory.
+	descriptor.Instances.Primary.DataDir = blocked
+
+	_, err = openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
+	require.ErrorContains(t, err, "jsonl:", "the failure identifies the JSONL backend")
+}
+
+// TestPublishedEventsReachBothJsonlAndNats verifies that the fan-out pipeline
+// writes each envelope to the JSONL file and to the NATS journal. Runtime
+// composition is the only place that knows the backend list; no producer
+// chooses backends.
+func TestPublishedEventsReachBothJsonlAndNats(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	desc := descriptorOnFreePorts(t, cfg)
+	jsonlPath := filepath.Join(desc.Instances.Primary.DataDir, "events", "events.jsonl")
+
+	s, err := openSite(t, desc, cfg, true, redundancy.RolePrimary)
+	require.NoError(t, err)
+
+	// Publish one extra event so the JSONL file contains at least our line.
+	err = s.publisher.Publish(t.Context(), SiteOpening{Active: true})
+	require.NoError(t, err)
+
+	// Close the site first: Close flushes JSONL.
+	require.NoError(t, s.close(t.Context()))
+
+	// The JSONL file must exist and contain valid JSON envelopes.
+	f, err := os.Open(jsonlPath)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	require.NoError(t, scanner.Err())
+	require.NotEmpty(t, lines, "JSONL file must contain at least one event line")
+	for _, line := range lines {
+		require.Contains(t, line, `"id"`, "every JSONL line must be a JSON envelope")
+	}
+
+	// The NATS journal also received the events: startup published SiteOpening,
+	// SiteReady, etc., and the projector replayed them into the projection.
+	// The site reached s.ready == true, so the journal is non-empty.
+	require.True(t, s.ready, "site reached readiness, confirming events reached NATS too")
+}
+
+// TestPrimaryAndStandbyWriteSeparateJsonlFiles verifies that each instance
+// writes to its own DataDir, so they never share a JSONL file.
+func TestPrimaryAndStandbyWriteSeparateJsonlFiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping redundant Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	descriptor := deployStandby(descriptorOnFreePorts(t, cfg))
+
+	require.NotEqual(t,
+		descriptor.Instances.Primary.DataDir,
+		descriptor.Instances.Standby.DataDir,
+		"descriptor gives each instance its own DataDir")
+
+	primaryJsonl := filepath.Join(descriptor.Instances.Primary.DataDir, "events", "events.jsonl")
+	standbyJsonl := filepath.Join(descriptor.Instances.Standby.DataDir, "events", "events.jsonl")
+	require.NotEqual(t, primaryJsonl, standbyJsonl,
+		"primary and standby must write to separate JSONL files")
+
+	active, err := openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = active.close(context.Background()) })
+
+	standby, err := openSite(t, descriptor, cfg, false, redundancy.RoleStandby)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = standby.close(context.Background()) })
+
+	// A standby never calls publisher.Publish during startup (no readiness, no
+	// handlers), so publish one explicit event to exercise its JSONL pipeline.
+	require.NoError(t, standby.publisher.Publish(t.Context(), SiteOpening{Active: false}))
+
+	// Close both to flush JSONL files.
+	require.NoError(t, active.close(t.Context()))
+	require.NoError(t, standby.close(t.Context()))
+
+	// Primary JSONL: non-empty because startup publishes a Ready event.
+	pInfo, err := os.Stat(primaryJsonl)
+	require.NoError(t, err)
+	require.Positive(t, pInfo.Size(), "primary JSONL file must contain events")
+
+	// Standby JSONL: exists and non-empty from the event we published above.
+	sInfo, err := os.Stat(standbyJsonl)
+	require.NoError(t, err)
+	require.Positive(t, sInfo.Size(), "standby JSONL file must contain the event published to it")
 }

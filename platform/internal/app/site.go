@@ -12,6 +12,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	natsbackend "github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
@@ -38,6 +39,10 @@ const (
 // HTTP boundary is handed the two services. Neither can reach the transport.
 type site struct {
 	fabric *natsbackend.Backend
+	// storagePublisher is the fan-out publisher this site closes on shutdown: it
+	// owns the JSONL and NATS backends and closes them in reverse construction
+	// order (NATS first, then JSONL). Nothing else closes those backends.
+	storagePublisher *storage.Publisher
 	// publisher is the node's one way to state a fact: it stamps a typed payload
 	// with this process's envelope factory and appends it to the journal.
 	publisher  events.Publisher
@@ -94,8 +99,20 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 	observer := operations.FromContext(ctx)
 	openedAt := time.Now()
 	observer.Record(ctx, SiteOpening{Active: active})
+
+	// Open the mandatory JSONL backend first. Failure here fails process startup:
+	// every event this node states must reach the local append-only record before
+	// the journal, so a node that cannot write it must not start.
+	instance := instanceOf(descriptor, role)
+	jsonlBackend, err := jsonl.New(instance.DataDir)
+	if err != nil {
+		observer.Record(ctx, SiteOpenFailed{Phase: PhaseConfiguration, Error: err.Error()})
+		return nil, fmt.Errorf("jsonl: %w", err)
+	}
+
 	fabricCfg, err := natsConfig(descriptor, cfg, role)
 	if err != nil {
+		_ = jsonlBackend.Close(ctx)
 		observer.Record(ctx, SiteOpenFailed{Phase: PhaseConfiguration, Error: err.Error()})
 		return nil, err
 	}
@@ -105,6 +122,7 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 	// rather than half way through starting a server.
 	fabric, err := natsbackend.Open(ctx, descriptor, fabricCfg)
 	if err != nil {
+		_ = jsonlBackend.Close(ctx)
 		observer.Record(ctx, SiteOpenFailed{Phase: PhaseEventFabric, Error: err.Error()})
 		return nil, err
 	}
@@ -113,18 +131,21 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 		info.Server, strings.Join(fabricCfg.Servers, ","), info.Journal,
 		info.HostsStorage, info.Replicas)
 
-	publisher, err := storage.NewPublisher(factory, fabric)
+	// Create the fan-out publisher with deterministic backend order: JSONL first,
+	// NATS second. Close reverses the order (NATS, then JSONL).
+	sp, err := storage.NewPublisher(factory, jsonlBackend, fabric)
 	if err != nil {
-		return nil, errors.Join(err, fabric.Close(ctx))
+		return nil, errors.Join(err, fabric.Close(ctx), jsonlBackend.Close(ctx))
 	}
 	s := &site{
-		fabric:          fabric,
-		publisher:       publisher,
-		projection:      registration.NewProjection(),
-		observer:        observer,
-		stopped:         make(chan struct{}),
-		catchUpTimeout:  fabricCfg.CatchUpTimeout,
-		shutdownTimeout: fabricCfg.ShutdownTimeout,
+		fabric:           fabric,
+		storagePublisher: sp,
+		publisher:        sp,
+		projection:       registration.NewProjection(),
+		observer:         observer,
+		stopped:          make(chan struct{}),
+		catchUpTimeout:   fabricCfg.CatchUpTimeout,
+		shutdownTimeout:  fabricCfg.ShutdownTimeout,
 	}
 
 	if !active {
@@ -345,7 +366,11 @@ func (s *site) release(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("state stopping: %w", err))
 		}
 	}
-	errs = append(errs, s.projector.stop(), s.fabric.Close(stopCtx))
+	// Stop the projector before closing storage: the projector reads from the
+	// NATS connection, and closing NATS underneath a running projector is a
+	// race. The fan-out publisher closes backends in reverse construction order
+	// (NATS first, then JSONL), so one Close covers everything.
+	errs = append(errs, s.projector.stop(), s.storagePublisher.Close(stopCtx))
 	err := errors.Join(errs...)
 	stopped := SiteStopped{}
 	if err != nil {
