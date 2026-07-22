@@ -114,12 +114,13 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
 	runtimeRoot := t.TempDir()
-	journalRoot := t.TempDir()
+	dataRoot := t.TempDir()
 	for _, standby := range []bool{false, true} {
 		instance := descriptor.Instances.Get(config.Role(standby))
 		client, cluster := freeAddress(t), freeAddress(t)
+		instanceDataDir := filepath.Join(dataRoot, string(config.Role(standby)))
 		instance.Nats = &config.Nats{
-			JetStreamStoreDir: filepath.Join(journalRoot, string(config.Role(standby))),
+			JetStreamStoreDir: filepath.Join(instanceDataDir, "eventfabric", "nats"),
 			ClientAddress:     client,
 			ClusterAddress:    cluster,
 			Servers:           []string{client},
@@ -127,7 +128,7 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 		}
 		instance.APIAddress = freeAddress(t)
 		instance.RuntimeDir = filepath.Join(runtimeRoot, string(config.Role(standby)))
-		instance.DataDir = filepath.Join(journalRoot, string(config.Role(standby)))
+		instance.DataDir = instanceDataDir
 		if standby {
 			descriptor.Instances.Standby = instance
 			continue
@@ -675,12 +676,11 @@ func TestRunReportsUnusableConfigFile(t *testing.T) {
 // than when its first event needs writing. The journal is the site's history: a
 // platform that cannot store it must not start and pretend otherwise.
 //
-// It sabotages the descriptor's data directory rather than the configuration
-// file's, because there is no longer one in the file. The store is the
-// instance's own and arrives from its descriptor record, so that is the only
-// place a broken path can now come from. The end-to-end form of this, sabotaging
-// what the blueprint authored and starting the built binary, is the scenario
-// suite's resilience.PlatformRefusesToStartWithoutItsJournalStorage.
+// It sabotages the descriptor's JetStream store directory rather than the
+// configuration file, because the path is authored per instance in the
+// blueprint. The end-to-end form of this, sabotaging what the blueprint authored
+// and starting the built binary, is the scenario suite's
+// resilience.PlatformRefusesToStartWithoutItsJournalStorage.
 func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Event Fabric composition in -short mode")
@@ -697,7 +697,7 @@ func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	descriptor.Instances.Primary.Nats.JetStreamStoreDir = blocked
 
 	_, err = openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
-	require.ErrorContains(t, err, "data directory")
+	require.ErrorContains(t, err, "JetStream store directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
 }
 

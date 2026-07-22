@@ -79,8 +79,8 @@ func PlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
 	// Put a file where the journal's directory has to be, so creating it cannot
 	// succeed. This is a stand-in for the real cases: no permission, or a full or
 	// unmounted disk.
-	require.NoError(t, os.MkdirAll(filepath.Dir(node.Sockets.DataDir), 0o755))
-	require.NoError(t, os.WriteFile(node.Sockets.DataDir, []byte("not a directory"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(node.Sockets.JetStreamStoreDir), 0o755))
+	require.NoError(t, os.WriteFile(node.Sockets.JetStreamStoreDir, []byte("not a directory"), 0o644))
 
 	node.Start(ctx, t)
 	output := node.AwaitExit(t)

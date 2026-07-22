@@ -26,9 +26,9 @@ var (
 )
 
 // Backend is an event storage and Event Fabric backend backed by an embedded NATS
-// server and its JetStream site journal. One runs per platform node. It stores
-// completed envelopes, replays and delivers them to projectors, and drives
-// durable per-service handlers.
+// server and its JetStream site journal. One runs per platform instance. It
+// stores completed envelopes, replays and delivers them to projectors, and
+// drives durable per-service handlers.
 type Backend struct {
 	cfg   Config
 	scope eventfabric.SiteScope

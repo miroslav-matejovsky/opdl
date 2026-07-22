@@ -198,7 +198,7 @@ func waitFor(t *testing.T, cond func() bool, message string) {
 	require.FailNow(t, "timed out", message)
 }
 
-func TestPublishReturnsAReceiptAndTheEventReplays(t *testing.T) {
+func TestPublishedEventReplays(t *testing.T) {
 	b := open(t, testConfig(t))
 
 	err := publisher(t, b).Publish(context.Background(), probe{Fact: "started"})

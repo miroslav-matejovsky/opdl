@@ -47,10 +47,10 @@ const (
 )
 
 // Config is one node's Event Fabric transport settings. DefaultConfig derives a
-// production one from the deployment descriptor; the fields exist so development
-// and scenarios can move sockets and the data directory without rebuilding a
-// machine. Nothing here is an identity: overriding an address changes where the
-// node listens or connects, never which machine it is.
+// production one from the deployment descriptor. The fields remain explicit so
+// tests and scenarios can supply isolated runtime settings. Nothing here is an
+// identity: overriding an address changes where the node listens or connects,
+// never which machine it is.
 type Config struct {
 	// ClientName identifies this machine's connection in NATS diagnostics. It is
 	// always set, including on a machine that does not host a server.
@@ -76,16 +76,15 @@ type Config struct {
 
 	// Servers are the client host:port addresses this node's Event Fabric client
 	// connects to. A storage node lists its own server first and then the other
-	// storage nodes, so its client-only standby can remain connected across local
-	// active loss when the site has another storage node.
+	// storage nodes, so it can remain connected when another node is lost.
 	Servers []string
 
 	// HostsStorage reports whether this node runs the site journal. Only the
 	// storage nodes run a NATS server at all; every other machine of the site is
 	// a client of theirs.
 	HostsStorage bool
-	// JetStreamStoreDir is the JetStream file store directory. It is required on a storage
-	// node and unused on a node that does not host storage.
+	// JetStreamStoreDir is the JetStream file store directory. It is required on
+	// a storage node and unused on a node that does not host storage.
 	//
 	// It is the running instance's own, taken from its descriptor record. Two
 	// servers cannot open one JetStream store, and a storage machine runs two.
@@ -292,7 +291,7 @@ func (c Config) validateServer() error {
 
 func (c Config) validateStorage() error {
 	if strings.TrimSpace(c.JetStreamStoreDir) == "" {
-		return fmt.Errorf("nats: data directory is required on a storage node")
+		return fmt.Errorf("nats: JetStream store directory is required on a storage node")
 	}
 	if err := probeWritable(c.JetStreamStoreDir); err != nil {
 		return err
@@ -388,14 +387,14 @@ func isLoopback(addr string) (bool, error) {
 
 func probeWritable(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("nats: create data directory %s: %w", dir, err)
+		return fmt.Errorf("nats: create JetStream store directory %s: %w", dir, err)
 	}
 	probe := filepath.Join(dir, ".write-probe")
 	if err := os.WriteFile(probe, []byte("opdl nats probe"), 0o600); err != nil {
-		return fmt.Errorf("nats: data directory %s is not writable: %w", dir, err)
+		return fmt.Errorf("nats: JetStream store directory %s is not writable: %w", dir, err)
 	}
 	if err := os.Remove(probe); err != nil {
-		return fmt.Errorf("nats: data directory %s probe cleanup: %w", dir, err)
+		return fmt.Errorf("nats: JetStream store directory %s probe cleanup: %w", dir, err)
 	}
 	return nil
 }

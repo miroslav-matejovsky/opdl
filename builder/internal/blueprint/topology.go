@@ -729,8 +729,8 @@ func (m Machine) RuntimeDir(standby bool) string {
 	return strings.TrimSpace(m.Platform.Standby.RuntimeDir)
 }
 
-// DataDir returns one instance's authored JetStream file store directory, or an
-// empty string when that instance is not deployed.
+// DataDir returns one instance's authored general platform data directory, or
+// an empty string when that instance is not deployed.
 func (m Machine) DataDir(standby bool) string {
 	if m.Platform == nil {
 		return ""

@@ -269,7 +269,7 @@ func TestValidateRejectsIncompleteConfigs(t *testing.T) {
 		{name: "colliding addresses", mutate: func(c *Config) { c.ClusterAddress = c.ClientAddress }, want: "used more than once"},
 		{name: "route points at self", mutate: func(c *Config) { c.Routes = []string{c.ClusterAddress} }, want: "is this node itself"},
 		{name: "duplicate routes", mutate: func(c *Config) { c.Routes = []string{"10.0.1.11:6222", "10.0.1.11:6222"} }, want: "listed twice"},
-		{name: "storage without data dir", mutate: func(c *Config) { c.JetStreamStoreDir = "" }, want: "data directory is required"},
+		{name: "storage without JetStream store dir", mutate: func(c *Config) { c.JetStreamStoreDir = "" }, want: "JetStream store directory is required"},
 		{name: "non-positive max bytes", mutate: func(c *Config) { c.MaxBytes = 0 }, want: "max bytes must be positive"},
 		{name: "non-positive max message bytes", mutate: func(c *Config) { c.MaxMessageBytes = 0 }, want: "max message bytes must be positive"},
 		{name: "non-positive replicas", mutate: func(c *Config) { c.Replicas = 0 }, want: "replicas must be positive"},
@@ -299,12 +299,12 @@ func TestValidateRequiresCredentialsOffLoopback(t *testing.T) {
 	require.NoError(t, cfg.Validate(), "credentials satisfy a non-loopback address")
 }
 
-func TestValidateRejectsAnUnwritableDataDir(t *testing.T) {
+func TestValidateRejectsAnUnwritableJetStreamStoreDir(t *testing.T) {
 	cfg := loopbackStorageConfig(t)
 	blocked := filepath.Join(t.TempDir(), "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
 	cfg.JetStreamStoreDir = filepath.Join(blocked, "nats")
-	require.ErrorContains(t, cfg.Validate(), "create data directory")
+	require.ErrorContains(t, cfg.Validate(), "create JetStream store directory")
 }
 
 func TestDefaultDurationsArePositive(t *testing.T) {

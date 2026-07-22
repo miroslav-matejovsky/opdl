@@ -70,17 +70,17 @@ tasks:
       - task tidy
       - task vet
       - task fmt
-      # - task deadcode
+      - task deadcode
       - task lint
       - task arch
       - task test
       - echo fast done
 
   all:
-    desc: Run all checks, tests and scenarios. This is the main task to run before considering work complete.
+    desc: Run all checks and tests except black-box scenarios.
     silent: true
     cmds:
-      - echo "Running all checks, tests and scenarios. This might take up to 15 minutes. Please be patient."
+      - echo "Running all checks and tests. Black-box scenarios are skipped."
       - task: clean
         # Set QUIET=1 to suppress output from clean since it can be very verbose and is not the main focus of this task.
         vars:
@@ -88,7 +88,7 @@ tasks:
       - task tidy
       - task vet
       - task fmt
-      # - task deadcode
+      - task deadcode
       - task lint
       - task arch
       - task test

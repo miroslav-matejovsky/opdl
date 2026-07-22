@@ -75,11 +75,11 @@ func runtimeDir(machine, role string) string {
 	return fmt.Sprintf("C:/ProgramData/opdl/%s/%s", machine, role)
 }
 
-// dataDir is one instance's own JetStream file store directory. It is separate
+// dataDir is one instance's general platform data root. It is separate
 // from runtimeDir because the two live on different volumes in a real
-// deployment: a status file is small and disposable, a journal is not.
+// deployment: runtime status is disposable, while platform data is retained.
 func dataDir(machine, role string) string {
-	return fmt.Sprintf("D:/opdl-journal/%s/%s", machine, role)
+	return fmt.Sprintf("D:/opdl-data/%s/%s", machine, role)
 }
 
 // addr is the address a machine's Event Fabric listener is reached on.

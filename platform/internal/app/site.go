@@ -94,11 +94,10 @@ type service struct {
 // not serve, because answering from a projection that has not seen the site's
 // history would be answering for a site this process has not caught up with.
 //
-// When active is false it composes a warm standby: a client-only transport and
-// the continuous projector, caught up to the journal, and nothing else. A standby
-// opens no durable handler, publishes no readiness, and binds no listener, so it
-// follows the site's history without producing a decision or holding an
-// active-only capability.
+// When active is false it composes a warm standby with a continuous projector
+// caught up to the journal. A standby may host its instance's authored NATS
+// server, but it opens no durable handler, publishes no readiness, and serves no
+// domain operation. Event Fabric membership is independent of Primary Ownership.
 func open(ctx context.Context, proc process, active bool) (*site, error) {
 	descriptor, cfg, role := proc.descriptor, proc.cfg, proc.role
 	openedAt := time.Now()
@@ -242,10 +241,9 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 // attaches the continuous projector and catches up to the journal's high-water
 // mark, and nothing else.
 //
-// It attaches no durable handler, publishes no readiness, and binds no listener,
-// so a standby follows the site's history without producing a decision. The same
-// projector stays attached for live events, so the standby keeps following after
-// it has caught up.
+// It attaches no durable handler and publishes no readiness, so a standby
+// follows the site's history without producing a decision. The same projector
+// stays attached for live events, so the standby keeps following after catch-up.
 func (s *site) startStandby(ctx context.Context) error {
 	catchUpCtx, cancel := context.WithTimeout(ctx, s.catchUpTimeout)
 	defer cancel()

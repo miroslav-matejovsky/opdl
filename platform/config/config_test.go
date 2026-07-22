@@ -89,7 +89,7 @@ func TestLoadRejectsADataDirectory(t *testing.T) {
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
+data_dir = "D:/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"
 `))

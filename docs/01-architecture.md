@@ -41,24 +41,27 @@ warm-standby policy, and Event Fabric peers.
 
 The runtime trusts the descriptor as its identity. Registration origins, event
 nodes, and Event Fabric members come from it. A client cannot claim a different
-machine or site. Runtime TOML configuration contains only site-adjustable
-settings: the HTTP listen address, timeouts, the local instance directory, the
-required projection lag bound, the journal's storage directory, a credentials
-file, and Event Fabric socket overrides.
+machine or site. Runtime TOML configuration contains only runtime-adjustable
+timeouts, the required projection lag bound, and a NATS credentials file.
+Endpoints, backend selection, the platform data root, and the JetStream store
+come from the embedded descriptor.
 
 ## Runtime boundaries
 
-The platform is composed around three boundaries:
+The platform is composed around these boundaries:
 
 | Boundary | Responsibility |
 | --- | --- |
 | `internal/httpapi` | Decodes and encodes the public HTTP contract. It does not decide registration state. |
 | `internal/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
-| `internal/eventfabric` | Publishes facts to the site's ordered journal, replays them, delivers them, and reports health. Runtime code does not depend on a transport. |
+| `internal/events` | Owns the event contract, envelope, factory, and producer-facing publisher interface. |
+| `internal/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
+| `internal/events/storage/jsonl` | Writes the mandatory process-local JSONL record under the instance data root. |
+| `internal/events/storage/eventfabric` | Defines ordered replay, delivery, projection, handler, and health capabilities without naming a transport. |
+| `internal/events/storage/nats` | Implements both event storage and Event Fabric with NATS JetStream. |
 | `internal/redundancy` | Owns process roles, lifecycle state, Primary Ownership, projection-lag state, and atomic status files. |
-| `internal/operations` | Writes canonical event envelopes to stderr and optional JSONL without depending on the Event Fabric. It owns no events. |
 
-The production adapter is `eventfabric/nats`. NATS is imported only by it.
+NATS libraries are imported only by `internal/events/storage/nats`.
 
 ## Event Fabric contract
 
@@ -71,9 +74,8 @@ stream, or consumer, or knows one exists.
 | --- | --- |
 | Journal | The site's ordered, retained event history. |
 | Route | A stable destination derived from deployment scope and event type. |
-| Publisher | Stamps a typed payload into an envelope and appends it. Business code is handed this and nothing else. |
-| Appender | Appends one already stamped envelope. The adapter half, so no transport decides what a fact says. |
-| Receipt | Proof the journal durably accepted and ordered an event. |
+| Publisher | Stamps a typed payload once and stores the envelope through its configured backends. Business code is handed this and nothing else. |
+| Backend | Stores one already stamped envelope without deciding what the fact says. |
 | Projector | Rebuilds one node-local query model by folding the journal in order. |
 | Handler | Reacts to selected routes for one service on one node, and may publish resulting facts. |
 | Delivery | One journal envelope and the sequence the journal gave it. |
@@ -87,8 +89,8 @@ to replay.
 
 The fabric promises:
 
-- publish returns only once the journal has durably accepted and ordered the
-  event, so a receipt means the fact is retained and replayable;
+- a successful site publication means both mandatory JSONL and the journal
+  accepted the same envelope;
 - one ordered journal per site, whose order is the common order every projection
   folds;
 - at-least-once delivery, so every projector and handler is idempotent by event
@@ -105,27 +107,46 @@ view with a hole in it.
 
 ### Site topology
 
-Topology is derived, not discovered. Each machine authors two NATS ports in its
-blueprint, and everything else is a consequence of the site:
+Topology is derived, not discovered. Each deployed instance authors its platform
+data root and its NATS ports and JetStream store. Everything else is a
+consequence of the site:
 
 ```hcl
 platform {
+  data_dir = "D:/opdl/customer-a/north/local-server/primary"
+
   winservice {
     name         = "opdl-customer-a-north-local-server-primary"
     display_name = "OPDL customer-a north local-server (Primary Instance)"
   }
 
-  nats {
-    client_port  = 4222
-    cluster_port = 6222
+  event_storage {
+    eventfabric {
+      nats {
+        client_port         = 4222
+        cluster_port        = 6222
+        jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
+      }
+    }
   }
 
   standby {
     disabled = false
+    data_dir = "D:/opdl/customer-a/north/local-server/standby"
 
     winservice {
       name         = "opdl-customer-a-north-local-server-standby"
       display_name = "OPDL customer-a north local-server (Standby Instance)"
+    }
+
+    event_storage {
+      eventfabric {
+        nats {
+          client_port         = 4223
+          cluster_port        = 6223
+          jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
+        }
+      }
     }
   }
 }
@@ -138,25 +159,20 @@ The builder joins each port with `machine.ip` and resolves the site's server and
 route lists into the deployment descriptor. Those lists are never authored. A
 blueprint that could state them directly could split a site, omit a storage node,
 or point a machine at another site's journal, and the resulting descriptor would
-look like a working one.
+look like a working one. The JSONL backend derives
+`<data_dir>/events/events.jsonl`; JetStream uses the explicit
+`jetstream_store_dir`, which may be on another volume.
 
-Runtime configuration carries no socket topology at all, and a configuration file
-that sets one is rejected at load time rather than ignored. Addresses are
-deployment data; a site owns where its journal is stored, not where the site's
-journal is.
+Runtime configuration carries no socket or storage topology. A configuration
+file that sets one is rejected at load time rather than ignored.
 
-#### One endpoint set per machine, shared by both processes
+#### One endpoint and storage set per instance
 
-A machine has one client port and at most one cluster port however many processes
-it runs. The two instances are mutually exclusive owners of them: Primary
-Ownership is released only after the active process has closed its
-embedded server, so the instance that next acquires ownership binds the same
-addresses.
-
-This is why a transfer does not change the address other machines were told to
-connect to, why a client-only standby reaches the journal on the address the
-active process is serving, and why the firewall inventory is one client port and
-at most one cluster port per storage machine.
+Primary and Standby Instances have distinct data roots, JetStream stores, and
+ports because they are separate processes on one host. Storage selection is per
+instance. A selected instance binds its server endpoints and opens its own
+JetStream store even while it is Passive; Primary Ownership controls domain
+handlers and serving, not Event Fabric membership.
 
 #### What actually listens
 
@@ -174,7 +190,7 @@ There is no NATS monitoring listener. `HTTPPort` and `HTTPSPort` are left at
 zero, which is what makes the embedded server start none. The runtime reads
 connection state, journal high-water, projection progress, and lag through the
 Event Fabric client API and writes them to per-process status files. It also
-writes local events to stderr and optional JSONL, in the same envelope the site
+writes process-local events to mandatory JSONL using the same envelope the site
 journal carries, so an operator decodes one shape wherever an event is read.
 Those events deliberately do not depend on NATS, so they remain available to
 explain a connection or journal outage. A second unauthenticated HTTP surface would add an
@@ -228,8 +244,8 @@ does, and does not start until it can reach it.
 ## Events
 
 Events are facts stated by the package that owns the state transition. They are
-not log messages. Publishing to the journal is synchronous: a fact is retained
-before the operation that caused it returns.
+not log messages. Publication is synchronous. Site facts are retained in local
+JSONL and the journal before the operation that caused them returns.
 
 The platform has one event model and one serialized wrapper. These invariants
 hold everywhere:
@@ -241,18 +257,18 @@ hold everywhere:
 - an event type is `platform.<source>.<fact>`, and the source is derived from it
   rather than restated;
 - transport order is delivery metadata, not part of the fact;
-- local event output stays usable while NATS is unavailable, because it does not
-  go through NATS;
+- process-local event output stays usable while NATS is unavailable, because it
+  uses the JSONL-only publisher;
 - storage and distribution do not define event shape; an adapter receives a
   completed envelope and decides only where it goes.
 
 | Package | Events | Written to |
 | --- | --- | --- |
-| `internal/registration` | `platform.registration.proposed`, `confirmed`, `rejected`, `accepted` | site journal |
-| `internal/eventfabric` | `platform.event_fabric.ready`, `stopping` | site journal |
-| `internal/app` | `platform.app.<fact>`: process, status, API, standby, projection, and site transitions | local |
-| `internal/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | local |
-| `internal/eventfabric/nats` | `platform.nats.<fact>`: server, client, journal, and consumer transitions | local |
+| `internal/registration` | `platform.registration.proposed`, `confirmed`, `rejected`, `accepted` | JSONL and site journal |
+| `internal/events/storage/eventfabric` | `platform.event_fabric.ready`, `stopping` | JSONL and site journal |
+| `internal/app` | `platform.app.<fact>`: process, status, API, standby, projection, and site transitions | JSONL |
+| `internal/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | JSONL |
+| `internal/events/storage/nats` | `platform.nats.<fact>`: server, client, journal, and consumer transitions | JSONL |
 
 `internal/events` owns the contract and the envelope and declares no events of
 its own. An event payload implements one method, `EventType`, and implements a
@@ -265,8 +281,7 @@ the severity, the origin that stated it, the optional causal links and stable
 identity, and the payload as JSON. Every envelope is validated before it leaves
 the process, so a stored event is always self-describing. It deliberately carries
 no transport ordering: the journal orders events when it accepts them, and that
-sequence belongs to the Event Fabric receipt and delivery, not to the immutable
-fact.
+sequence belongs to Event Fabric delivery metadata, not to the immutable fact.
 
 Causal links are infrastructure, not domain vocabulary. The Event Fabric attaches
 a delivery to the handler's context as the cause before invoking it, so a
@@ -302,32 +317,24 @@ otherwise be a lie:
    apply it.
 8. Serve the public HTTP API.
 
-A warm standby opens only a client Event Fabric connection and a distinct
-projector. It catches up and follows the journal, writes its local process status,
-and owns no public listener, durable handler, lifecycle readiness publication,
-embedded NATS server, or JetStream storage.
+A warm standby opens its own Event Fabric connection and projector. If topology
+selected that instance for storage, it also runs its authored NATS server and
+JetStream store. It catches up and follows the journal, writes its local process
+status, and owns no durable handler, lifecycle readiness publication, or domain
+operation. Its adapter configuration comes from its own instance record in the
+descriptor.
 
-It composes exactly the same adapter configuration as the active process from the
-same descriptor, and then drops what it must not own: server ownership, the local
-listener addresses, the routes, and the data directory. It keeps the resolved
-server list whole. That list is what it reaches the journal through, and on a
-storage machine its first entry is the address the active process is serving on
-right now. Deriving a separate standby endpoint is what previously left the
-standby retrying against an address nothing was listening on, so no process role
-selects a different server list or listener address.
-
-At startup each process prints the endpoints it actually composed, which is what
-distinguishes an active storage server from a client-only local standby, a
-client-only non-storage machine, and a storage node that has just become Active:
+At startup each process prints the endpoints it actually composed. This
+distinguishes an instance selected for storage from a client-only instance and
+makes its Event Fabric membership visible independently of Primary Ownership:
 
 ```text
 platform: event fabric configuration endpoint=10.0.1.10:4222 binds=true
   cluster=none servers=10.0.1.10:4222 routes=none storage=true replicas=1
 ```
 
-`endpoint` is the machine's own address from the descriptor and is printed
-whether or not this process binds it, so a standby and the active process it
-follows are visibly talking about the same endpoint.
+`endpoint` is the instance's own address from the descriptor. Primary and
+standby instances have separate endpoints and storage directories.
 
 The primary and standby contend for one non-expiring Windows named mutex in the
 machine-wide `Global\` namespace. Only its holder may compose active
@@ -335,9 +342,10 @@ capabilities. It is released after active resources close, or abandoned by the
 kernel when the holding process exits. A waiting instance waits for ownership
 independently of its projector, in a kernel wait rather than a poll, so it is
 woken the moment the holder releases or dies. After acquisition it marks itself
-activating, closes the client-only composition, opens the active Event Fabric,
-catches up again, drains retained handler work, publishes readiness, binds HTTP,
-and marks itself active.
+activating, closes its passive composition, opens the active composition over
+the same authored Event Fabric membership, catches up again, drains retained
+handler work, publishes readiness, switches its existing HTTP listener to the
+active handler, and marks itself active.
 
 When a machine deploys a Standby Instance (`standby.disabled = false`), its `standby`
 block must author the Windows named mutex in full under `lock.windows_mutex`, and the
@@ -460,10 +468,9 @@ both processes, kills and hands ownership over repeatedly, preserves
 registrations, checks storage ownership, fails back to the Primary Instance, and
 completes full machine shutdown. It records measurements without enforcing an SLO.
 
-It also asserts the endpoint contract directly: that the standby binds nothing
-while the primary holds ownership, that it nonetheless composes the same machine
-endpoint and the same server list as the active process, and that the newly Active
-process rebinds those same addresses rather than moving the site onto new ones.
+The scenario records each instance's effective endpoints, server list, and
+storage role. Those values are derived per instance and do not change when
+Primary Ownership changes.
 
 Three consecutive Windows development runs with the file lock, followed by
 one run after it was replaced with the named mutex:

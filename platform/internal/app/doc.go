@@ -1,9 +1,10 @@
 // Package app composes and runs the platform runtime.
 //
 // A machine's Primary and Standby Instances contend for one Primary Ownership.
-// Only the owner opens storage, attaches durable handlers, publishes readiness,
-// and serves domain operations. The other process runs a client-only projector in
-// the Passive state.
+// Both instances maintain their authored Event Fabric membership and projection.
+// Only the owner attaches durable handlers, publishes readiness, and serves
+// domain operations. The other process runs only its projector in the Passive
+// state.
 //
 // Both instances bind their own API address for their whole lifetime. A Passive
 // instance answers for itself — what it is, what it is doing, and where the other

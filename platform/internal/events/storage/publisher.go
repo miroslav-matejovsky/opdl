@@ -26,6 +26,7 @@ type Publisher struct {
 	backends []Backend
 	mu       sync.Mutex
 	closed   bool
+	inFlight sync.WaitGroup
 }
 
 // NewPublisher creates a new fan-out publisher from the given events.Factory and
@@ -57,7 +58,9 @@ func (p *Publisher) Publish(ctx context.Context, event events.Event) error {
 		p.mu.Unlock()
 		return ErrClosed
 	}
+	p.inFlight.Add(1)
 	p.mu.Unlock()
+	defer p.inFlight.Done()
 
 	envelope, err := p.factory.Wrap(ctx, event)
 	if err != nil {
@@ -76,7 +79,8 @@ func (p *Publisher) Publish(ctx context.Context, event events.Event) error {
 	return nil
 }
 
-// Close shuts down all backends in reverse construction order.
+// Close waits for active publications, then shuts down all backends in reverse
+// construction order.
 // Subsequent calls to Close are idempotent and return nil.
 func (p *Publisher) Close(ctx context.Context) error {
 	p.mu.Lock()
@@ -86,6 +90,7 @@ func (p *Publisher) Close(ctx context.Context) error {
 	}
 	p.closed = true
 	p.mu.Unlock()
+	p.inFlight.Wait()
 
 	var errs []error
 	for i := len(p.backends) - 1; i >= 0; i-- {

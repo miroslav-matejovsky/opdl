@@ -182,7 +182,7 @@ var (
 //	    FourMachineStorageTopologyAndFailure/
 //	      blueprints/    rendered project.hcl
 //	      out/           built machine packages and manifests
-//	      work/          config-*.toml, nats-*, instance-*, operations-*
+//	      work/          config-*.toml, nats-*, instance-*, data-*
 //	      control/       marker files
 func scenarioDir(t *testing.T) string {
 	t.Helper()
@@ -413,12 +413,10 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 
 // Sockets are one machine's addresses and its local directories.
 //
-// Only EventDir is a runtime setting now: it is the machine's own concern and a
-// site owns it. Everything else was rendered into the blueprint before the build
-// and is carried only so a scenario can reach a machine and assert what the
-// deployment should have derived. DataDir is in that second group since stage
-// 05: it is the Primary Instance's authored store, repeated here so a scenario
-// can find the directory rather than state it.
+// Every value was rendered into the blueprint before the build and is carried
+// only so a scenario can reach a machine, inspect its event record, and assert
+// what the deployment derived. The runtime configuration contains none of
+// these values.
 //
 // The API address moved into that second group in stage 04, along with each
 // instance's runtime directory. Both are an instance's rather than a machine's,
@@ -429,8 +427,9 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 // There is no monitor address. The platform runs no NATS monitoring listener;
 // its status files are the local operational surface.
 type Sockets struct {
-	DataDir  string
-	EventDir string
+	DataDir           string
+	StandbyDataDir    string
+	JetStreamStoreDir string
 
 	// API, Client, and Cluster are the blueprint's, for reaching a machine and
 	// for assertions. Nothing writes them to a config file.
@@ -477,20 +476,22 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	s := &Site{project: project, outDir: outDir, workDir: workDir}
 	for _, fixture := range fixtures {
 		reserved := endpoints[fixture.name]
-		s.Machines = append(s.Machines, prepareMachine(t, s, fixture.name, Sockets{
-			// The Primary Instance's own journal store, matching what the
-			// blueprint authored for it. A scenario that sabotages storage has to
-			// aim at the directory that instance actually opens, and since stage
-			// 05 that is per instance rather than per machine.
-			DataDir:  filepath.FromSlash(dataDirFor(workDir, fixture.name, "primary")),
-			EventDir: filepath.Join(workDir, "operations-"+fixture.name),
+		sockets := Sockets{
+			// The Primary Instance's general data root and explicit JetStream
+			// store, matching the paths authored in the blueprint.
+			DataDir:           filepath.FromSlash(dataDirFor(workDir, fixture.name, "primary")),
+			JetStreamStoreDir: filepath.FromSlash(jetstreamStoreDirFor(workDir, fixture.name, "primary")),
 			// The API address the builder resolved: this machine's authored
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
 			// than at an address it chose, because it no longer chooses one.
 			API:     net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
 			Client:  net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.client)),
 			Cluster: net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.cluster)),
-		}))
+		}
+		if !fixture.standbyDisabled {
+			sockets.StandbyDataDir = filepath.FromSlash(dataDirFor(workDir, fixture.name, "standby"))
+		}
+		s.Machines = append(s.Machines, prepareMachine(t, s, fixture.name, sockets))
 	}
 
 	return s
@@ -840,25 +841,27 @@ func statusDiagnostics(m *Machine, process *ManagedProcess, want string, last Pr
 	return b.String()
 }
 
-// operationEvents reads every retained JSONL stream for a machine. A restart or
-// warm standby creates another PID-specific file, so diagnostics include all of
-// them in filename order rather than guessing which process matters.
+// operationEvents reads each deployed instance's canonical JSONL event record.
+// Restarts append to the same per-instance file.
 func operationEvents(m *Machine) string {
-	paths, err := filepath.Glob(filepath.Join(m.Sockets.EventDir, "*.jsonl"))
-	if err != nil {
-		return fmt.Sprintf("glob %s: %v\n", m.Sockets.EventDir, err)
-	}
-	if len(paths) == 0 {
-		return "(none)\n"
+	paths := []string{filepath.Join(m.Sockets.DataDir, "events", "events.jsonl")}
+	if m.Sockets.StandbyDataDir != "" {
+		paths = append(paths, filepath.Join(m.Sockets.StandbyDataDir, "events", "events.jsonl"))
 	}
 	var b strings.Builder
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			fmt.Fprintf(&b, "--- %s: %v ---\n", path, err)
 			continue
 		}
-		fmt.Fprintf(&b, "--- %s ---\n%s", filepath.Base(path), data)
+		fmt.Fprintf(&b, "--- %s ---\n%s", path, data)
+	}
+	if b.Len() == 0 {
+		return "(none)\n"
 	}
 	return b.String()
 }
@@ -877,7 +880,7 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 	require.FileExists(t, binaryPath)
 
 	configPath := filepath.Join(s.workDir, "config-"+name+".toml")
-	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved), 0o644))
+	require.NoError(t, os.WriteFile(configPath, platformConfig(), 0o644))
 
 	m := &Machine{
 		project:    s.project,
@@ -893,15 +896,10 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 	return m
 }
 
-// platformConfig renders a platform configuration holding only what a site
-// owns: where this machine's journal and operational events live, and its
-// timeouts.
-//
-// It carries no API address and no runtime directory. Both are an instance's
-// own, both were authored in the blueprint and resolved onto that instance's
-// descriptor record, and the runtime rejects a configuration file that sets
-// either. A machine's two instances read this one file, so anything an instance
-// binds or writes that appeared here would be a value they would both take.
+// platformConfig renders runtime-only platform settings. Storage paths,
+// addresses, and backend selection are compiled from the blueprint into the
+// descriptor. A machine's two instances read this one file, so it cannot hold
+// per-instance values.
 //
 // The three tolerances are deliberately looser than platform/config.toml's 30s.
 // They bound how long a machine puts up with a slow environment before giving
@@ -913,27 +911,14 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 // harness created. No scenario asserts on these values, so raising them removes
 // a false failure without weakening anything: a machine that genuinely never
 // catches up still fails, on the assertion that was actually being made.
-//
-// It carries no NATS socket topology and, since stage 05, no data directory
-// either. Those addresses came from the blueprint and are compiled into the
-// machine's descriptor, and the runtime now rejects a configuration file that
-// sets them. That rejection is the point: a scenario that could still override
-// them would be exercising a path no deployment has, which is what let the warm
-// standby defect stay hidden.
-//
-// The journal's storage joined them when each instance gained its own server. A
-// machine's two instances open two stores, so one machine-level data_dir could
-// not name both, and it is now authored per instance in the blueprint.
-func platformConfig(reserved Sockets) []byte {
-	return fmt.Appendf(nil, `read_header_timeout = "5s"
+func platformConfig() []byte {
+	return []byte(`read_header_timeout = "5s"
 shutdown_timeout = "10s"
 lag_bound = "2m"
-[operations]
-event_dir = %q
 [event_fabric.nats]
 startup_timeout = "60s"
 catch_up_timeout = "60s"
-`, filepath.ToSlash(reserved.EventDir))
+`)
 }
 
 // Start runs a prepared machine.
@@ -1027,7 +1012,7 @@ func Diagnose(machines []*Machine) string {
 			state = "running"
 		}
 		fmt.Fprintf(&b, "\n--- machine %s (%s, api %s, journal %s) ---\n%s",
-			m.Name, state, m.URL, m.Sockets.DataDir, m.Output())
+			m.Name, state, m.URL, m.Sockets.JetStreamStoreDir, m.Output())
 		fmt.Fprintf(&b, "\n--- machine %s operational events ---\n%s", m.Name, operationEvents(m))
 	}
 	return b.String()

@@ -248,7 +248,7 @@ func credentialsSummary(path string) string {
 
 func optionalPathSummary(path string) string {
 	if path == "" {
-		return "(disabled; JSON events remain on stderr)"
+		return "(not configured)"
 	}
 	return path
 }

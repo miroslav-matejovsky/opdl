@@ -133,9 +133,9 @@
 // machine it is not, because it never states one at all.
 //
 // Wrap reports an error rather than stamping a partial envelope. The caller
-// decides what that means, because this package cannot: a required publication
-// fails the operation it belongs to, while a best-effort local record does not.
-// Nothing here logs.
+// decides what that means, because this package cannot. Required paths return or
+// join it; callbacks that cannot return use BestEffort to report it to stderr.
+// Nothing here logs by itself.
 //
 // # Causal links
 //

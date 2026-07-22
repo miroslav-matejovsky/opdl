@@ -35,7 +35,6 @@ components:
   eventfabric: { in: internal/events/storage/eventfabric }
   events-storage-nats: { in: internal/events/storage/nats }
   httpapi: { in: internal/httpapi }
-  operations: { in: internal/operations }
   redundancy: { in: internal/redundancy }
   registration: { in: internal/registration }
 
@@ -79,11 +78,6 @@ deps:
   events-storage-nats:
     canUse: [nats-server, nats-client]
     mayDependOn: [config, events, events-storage, eventfabric]
-
-  # operations is the local event writer: it stamps typed payloads with the
-  # process's envelope factory and serializes them. It owns no events.
-  operations:
-    mayDependOn: [events]
   httpapi:
     canUse: [huma]
     mayDependOn: [api, registration]

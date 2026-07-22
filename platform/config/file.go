@@ -45,10 +45,10 @@ type EventFabric struct {
 // descriptor when each instance gained its own Event Fabric server: a machine's
 // two instances need two stores, and a single machine-level setting cannot
 // express that without the runtime deriving per-instance paths from it. It is
-// authored per instance in the blueprint as data_dir. A configuration file that
-// still sets event_fabric.nats.data_dir fails at rejectUnknownKeys, which is the
-// intended outcome rather than an oversight: the path it names would not be the
-// path either instance opened.
+// authored per instance in the blueprint as jetstream_store_dir. A
+// configuration file that still sets event_fabric.nats.data_dir fails at
+// rejectUnknownKeys, which is the intended outcome rather than an oversight:
+// the path it names would not be the path either instance opened.
 //
 // None of these changes which machine this is: identity, and therefore a
 // registration's machine and IP, comes from the embedded descriptor alone and is

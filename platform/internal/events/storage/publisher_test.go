@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/stretchr/testify/require"
 
@@ -259,4 +261,46 @@ func TestPublishAfterClose(t *testing.T) {
 	err = pub.Publish(t.Context(), testEvent{Message: "after close"})
 	require.ErrorIs(t, err, storage.ErrClosed)
 	require.Len(t, b1.envelopes, 0)
+}
+
+func TestCloseWaitsForActivePublish(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		factory := testFactory()
+		storeStarted := make(chan struct{})
+		releaseStore := make(chan struct{})
+		var storing atomic.Bool
+		var closedDuringStore atomic.Bool
+
+		backend := &mockBackend{
+			name: "blocking",
+			storeFn: func(context.Context, events.Envelope) error {
+				storing.Store(true)
+				close(storeStarted)
+				<-releaseStore
+				storing.Store(false)
+				return nil
+			},
+			closeFn: func(context.Context) error {
+				closedDuringStore.Store(storing.Load())
+				return nil
+			},
+		}
+		pub, err := storage.NewPublisher(factory, backend)
+		require.NoError(t, err)
+
+		publishDone := make(chan error, 1)
+		go func() { publishDone <- pub.Publish(t.Context(), testEvent{Message: "in flight"}) }()
+		<-storeStarted
+
+		closeDone := make(chan error, 1)
+		go func() { closeDone <- pub.Close(t.Context()) }()
+		synctest.Wait()
+		require.False(t, closedDuringStore.Load(),
+			"Close must not close a backend while Publish is storing")
+
+		close(releaseStore)
+		require.NoError(t, <-publishDone)
+		require.NoError(t, <-closeDone)
+		require.False(t, closedDuringStore.Load())
+	})
 }

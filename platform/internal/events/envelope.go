@@ -23,8 +23,8 @@ var ErrInvalidEnvelope = errors.New("events: invalid envelope")
 // business call site handles identity, clocks, or encoding.
 //
 // The envelope deliberately carries no transport ordering. A shared journal
-// orders events when it accepts them, and that sequence belongs to the receipt
-// and the delivery, not to the immutable fact.
+// orders events when it accepts them, and that sequence belongs to delivery
+// metadata, not to the immutable fact.
 type Envelope struct {
 	// ID is unique per occurrence and sorts in occurrence order.
 	ID string `json:"id"`
