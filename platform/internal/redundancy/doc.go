@@ -97,7 +97,13 @@
 // runs the transition is the one that can report it accurately, so it states
 // them itself rather than returning them for a caller to describe.
 //
-// They are recorded locally, through operations.Recorder, and not published. A
-// machine contends for ownership before it has a journal to write to, and an
-// instance that never becomes active never gets one at all.
+// Contend is handed the events.Publisher it states them through, so this package
+// never reaches for one and never chooses where they are stored. Runtime
+// composition gives it the process-local publisher, whose only backend is the
+// local JSONL record: a machine contends for ownership before it has a journal to
+// write to, and an instance that never becomes active never gets one at all.
+//
+// Every statement here is on the startup path, where Contend can return an
+// error, so a failure to state one stops the instance. Ownership that moved with
+// no record that it did is not a state an operator can be asked to reason about.
 package redundancy

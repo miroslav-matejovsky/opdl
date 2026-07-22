@@ -15,9 +15,10 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //   - platform.redundancy.activation_failed: it did not complete.
 //   - platform.redundancy.activation_completed: it ran and gave ownership back.
 //
-// They are recorded locally rather than published: a machine contends for
-// ownership before it has a journal to write to, and an instance that never
-// becomes active never gets one at all.
+// They are stated through the events.Publisher Contend is given. Runtime
+// composition hands it the process-local one, whose only backend is the local
+// JSONL record: a machine contends for ownership before it has a journal to
+// write to, and an instance that never becomes active never gets one at all.
 
 const (
 	// TypeLockOpened is stated when this process opens the ownership object.

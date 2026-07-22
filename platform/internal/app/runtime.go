@@ -12,10 +12,37 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
+
+// process is everything one running instance was composed from and everything it
+// composes a site out of. It is assembled once in Run and passed down, so no
+// function below reaches for configuration, identity, or storage on its own.
+//
+// The two publishing members are deliberately different things. local states
+// what this process is doing; the site's fan-out publisher states what the site
+// is being told. Which one a component is given decides who hears it, and that
+// decision is made here and nowhere else.
+type process struct {
+	descriptor config.Descriptor
+	cfg        *config.Config
+	role       redundancy.InstanceRole
+	// factory stamps every envelope this process produces, local or journalled.
+	factory events.Factory
+	// local is the process-local publisher. Its only backend is record, so a fact
+	// stated through it reaches the local append-only file and nothing else. It is
+	// what composition, ownership, and the transport adapter state through: all
+	// three describe a process that may have no journal to write to, and the
+	// transport adapter must never describe itself through itself.
+	local events.Publisher
+	// record is the process's mandatory JSONL backend. A site borrows it as the
+	// first backend of its own fan-out publisher, so a journalled fact lands in
+	// the same local file in the same order as a local one. The process owns it
+	// and closes it; see storage.Borrowed.
+	record *jsonl.Backend
+}
 
 // statusInterval is how often a running process rewrites its local status file. It
 // is short enough to be useful to a watching deployment tool and long enough not
@@ -83,12 +110,11 @@ func instanceIdentity(descriptor config.Descriptor, role redundancy.InstanceRole
 // The order is deliberate. The listener opens first and stays open for the whole
 // process, so an instance is reachable in every state and a bind failure stops it
 // at startup rather than at a failover. Ownership decides only what it answers.
-func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, factory events.Factory) (runErr error) {
-	observer := operations.FromContext(ctx)
+func runProcess(ctx context.Context, proc process) (runErr error) {
+	descriptor, role := proc.descriptor, proc.role
 	statusPath := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
 	if err := redundancy.PrepareStatusDir(statusPath); err != nil {
-		observer.Record(ctx, StatusDirFailed{Path: statusPath, Error: err.Error()})
-		return err
+		return errors.Join(err, proc.local.Publish(ctx, StatusDirFailed{Path: statusPath, Error: err.Error()}))
 	}
 
 	var windowsMutex string
@@ -97,8 +123,7 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descr
 	}
 	lock, err := redundancy.OpenLock(windowsMutex, role)
 	if err != nil {
-		observer.Record(ctx, LockOpenFailed{Object: windowsMutex, Error: err.Error()})
-		return err
+		return errors.Join(err, proc.local.Publish(ctx, LockOpenFailed{Object: windowsMutex, Error: err.Error()}))
 	}
 	// The Lock owns kernel handles and a pinned OS thread when not nil. Closing it releases
 	// ownership if this process still holds it, so a process that leaves without a
@@ -109,25 +134,26 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descr
 	passive := httpapi.NewPassiveHandler(func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStatePassive)
 	})
-	server, err := openInstanceServer(ctx, address, cfg.ReadHeaderTimeout(), passive)
+	server, err := openInstanceServer(ctx, address, proc.cfg.ReadHeaderTimeout(), passive)
 	if err != nil {
-		observer.Record(ctx, APIListenFailed{Address: address, Error: err.Error()})
-		return err
+		return errors.Join(err, proc.local.Publish(ctx, APIListenFailed{Address: address, Error: err.Error()}))
 	}
 	// Whatever else happens, the listener drains before the process leaves.
-	defer func() { runErr = errors.Join(runErr, server.shutdown(cfg.ShutdownTimeout())) }()
+	defer func() { runErr = errors.Join(runErr, server.shutdown(proc.cfg.ShutdownTimeout())) }()
 
 	fmt.Printf("platform: %s listening on %s\n", role, address)
 	// A Passive instance is reachable too, and answers a different surface. Which
 	// one it is serving is the thing an operator is asking about.
-	observer.Record(ctx, APIListening{Address: address, InstanceState: api.InstanceStatePassive})
+	if err := proc.local.Publish(ctx, APIListening{Address: address, InstanceState: api.InstanceStatePassive}); err != nil {
+		return err
+	}
 
-	return redundancy.Contend(ctx, lock, redundancy.Runtime{
+	return redundancy.Contend(ctx, proc.local, lock, redundancy.Runtime{
 		Passive: func(passiveCtx context.Context) error {
-			return runPassive(passiveCtx, cfg, descriptor, role, statusPath, factory)
+			return runPassive(passiveCtx, proc, statusPath)
 		},
 		Active: func(activeCtx context.Context, kind redundancy.ActivationKind) error {
-			return runActive(activeCtx, cfg, descriptor, role, statusPath, server, kind, factory)
+			return runActive(activeCtx, proc, statusPath, server, kind)
 		},
 	})
 }
@@ -143,9 +169,9 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descr
 // A projection that will not open is not fatal here. An instance that cannot
 // follow the journal must still be able to take ownership when the other one
 // stops, so this retries until its context ends rather than giving up.
-func runPassive(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string, factory events.Factory) error {
-	observer := operations.FromContext(ctx)
-	site, err := openPassiveSite(ctx, cfg, descriptor, role, statusPath, factory)
+func runPassive(ctx context.Context, proc process, statusPath string) error {
+	cfg, role := proc.cfg, proc.role
+	site, err := openPassiveSite(ctx, proc, statusPath)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		// Ownership was won, or the process is stopping, before a projection ever
 		// opened. Either way there is nothing to run and nothing to close, and
@@ -164,7 +190,10 @@ func runPassive(ctx context.Context, cfg *config.Config, descriptor config.Descr
 	}
 
 	fmt.Printf("platform: %s caught up and waiting for Primary Ownership\n", role)
-	observer.Record(ctx, StandbyWaiting{})
+	if err := proc.local.Publish(ctx, StandbyWaiting{}); err != nil {
+		stopStatus()
+		return errors.Join(err, <-statusDone, site.close(context.WithoutCancel(ctx)))
+	}
 
 	// Wait for ownership or for the process to stop. Either arrives as a canceled
 	// context; which one it was is the ownership machine's business, not this
@@ -185,13 +214,13 @@ func runPassive(ctx context.Context, cfg *config.Config, descriptor config.Descr
 //
 // It returns ctx.Err() when the context ended first, which the caller reads as
 // "won ownership, or stopping" rather than as a failure.
-func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string, factory events.Factory) (*site, error) {
-	observer := operations.FromContext(ctx)
+func openPassiveSite(ctx context.Context, proc process, statusPath string) (*site, error) {
+	role := proc.role
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		opened, err := open(ctx, descriptor, cfg, false, role, factory)
+		opened, err := open(ctx, proc, false)
 		if err == nil {
 			return opened, nil
 		}
@@ -200,7 +229,9 @@ func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor config.
 		}
 		fmt.Fprintf(os.Stderr, "platform: %s standby projection unavailable: %v; waiting for Primary Ownership\n", role, err)
 		if attempt == 1 || attempt%10 == 0 {
-			observer.Record(ctx, StandbyOpenRetry{Attempt: attempt, Error: err.Error()})
+			if stateErr := proc.local.Publish(ctx, StandbyOpenRetry{Attempt: attempt, Error: err.Error()}); stateErr != nil {
+				return nil, errors.Join(err, stateErr)
+			}
 		}
 		if writeErr := writeUnavailableStatus(statusPath, role, err); writeErr != nil {
 			return nil, errors.Join(err, writeErr)
@@ -219,14 +250,14 @@ func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor config.
 // It does not open a listener. One is already bound and answering the Passive
 // surface, so activation swaps the handler rather than moving the endpoint, and
 // the address a caller uses never changes.
-func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string, server *instanceServer, kind redundancy.ActivationKind, factory events.Factory) error {
-	observer := operations.FromContext(ctx)
+func runActive(ctx context.Context, proc process, statusPath string, server *instanceServer, kind redundancy.ActivationKind) error {
+	cfg, descriptor, role := proc.cfg, proc.descriptor, proc.role
 	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
 		return err
 	}
 	fmt.Printf("platform: %s started for %s\n", kind, role)
 
-	site, err := open(ctx, descriptor, cfg, true, role, factory)
+	site, err := open(ctx, proc, true)
 	if err != nil {
 		return errors.Join(err, writeFailedStatus(statusPath, role, err))
 	}
@@ -236,15 +267,19 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descri
 	serveCtx, stopServing := context.WithCancel(ctx)
 	defer stopServing()
 	statusCtx, stopStatus := context.WithCancel(context.WithoutCancel(ctx))
+	// Both callbacks run on the status loop's own goroutine and stop serving; they
+	// have no caller to return a publication failure to, so it is reported to the
+	// process error stream and the instance still stops serving, which is the part
+	// that matters.
 	var lagEvent sync.Once
 	onLagExceeded := func() {
 		lagEvent.Do(func() {
-			observer.Record(ctx, ProjectionLagExceeded{LagBound: cfg.LagBound().String()})
+			events.BestEffort(proc.local).State(ctx, ProjectionLagExceeded{LagBound: cfg.LagBound().String()})
 		})
 		stopServing()
 	}
 	onStatusFailure := func() {
-		observer.Record(ctx, StatusWriteFailed{Path: statusPath})
+		events.BestEffort(proc.local).State(ctx, StatusWriteFailed{Path: statusPath})
 		stopServing()
 	}
 	statusDone, err := startStatus(statusCtx, site.fabric, role, redundancy.StateActive, statusPath, cfg.LagBound(), onLagExceeded, onStatusFailure)
@@ -270,9 +305,14 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descri
 		// api-specifications/openapi.yaml in git, not an endpoint on the runtime.
 		false))
 	fmt.Printf("platform: %s active, serving on %s\n", role, address)
-	observer.Record(ctx, APIActive{Address: address, InstanceState: api.InstanceStateActive})
-
-	serveErr := awaitStop(serveCtx, site, server)
+	// An instance that cannot state that it is serving does not stay serving. The
+	// failure takes the place of the reason it would otherwise have stopped, and
+	// the ordered shutdown below runs on it exactly as it does on a signal, so the
+	// site still releases in the right order.
+	serveErr := proc.local.Publish(ctx, APIActive{Address: address, InstanceState: api.InstanceStateActive})
+	if serveErr == nil {
+		serveErr = awaitStop(serveCtx, site, server)
+	}
 
 	// Reverse of startup: HTTP intake stops and in-flight requests drain before
 	// anything they could be holding is closed. Only then does the site release.
@@ -285,11 +325,14 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descri
 	if err != nil {
 		stopped.Error = err.Error()
 	}
-	observer.Record(ctx, stopped)
+	// This is a shutdown path with an error to return, so the failure to state
+	// that serving stopped is joined onto what actually went wrong rather than
+	// replacing it or being dropped.
+	stateErr := proc.local.Publish(ctx, stopped)
 	if err != nil {
-		return errors.Join(err, writeFailedStatus(statusPath, role, err))
+		return errors.Join(err, writeFailedStatus(statusPath, role, err), stateErr)
 	}
-	return nil
+	return stateErr
 }
 
 // awaitStop blocks until the Active instance should stop serving.

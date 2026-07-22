@@ -29,7 +29,7 @@ func handle(t *testing.T, handler *Handler, delivery eventfabric.Delivery) error
 
 func TestHandlerConfirmsAValidClaimingProposal(t *testing.T) {
 	projection := NewProjection()
-	publisher, appender := testPublisher(t)
+	publisher, backend := testPublisher(t)
 	handler, err := NewHandler(publisher, projection, locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	proposed := proposal(42)
@@ -37,17 +37,17 @@ func TestHandlerConfirmsAValidClaimingProposal(t *testing.T) {
 	applyDelivery(t, projection, input)
 
 	require.NoError(t, handle(t, handler, input))
-	require.Len(t, appender.appended, 1)
-	confirmed := payload[Confirmed](t, appender, 0)
+	require.Len(t, backend.stored, 1)
+	confirmed := payload[Confirmed](t, backend, 0)
 	require.Equal(t, proposed.ProposalID, confirmed.ProposalID)
 	require.Equal(t, "node-a", confirmed.DecidingMachine)
-	require.Equal(t, "proposal-event", appender.appended[0].CausationID)
-	require.Equal(t, "proposal-event", appender.appended[0].CorrelationID)
+	require.Equal(t, "proposal-event", backend.stored[0].CausationID)
+	require.Equal(t, "proposal-event", backend.stored[0].CorrelationID)
 }
 
 func TestHandlerRejectsAConflictingProposal(t *testing.T) {
 	projection := NewProjection()
-	publisher, appender := testPublisher(t)
+	publisher, backend := testPublisher(t)
 	handler, err := NewHandler(publisher, projection, locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	winner := proposal(42)
@@ -61,13 +61,13 @@ func TestHandlerRejectsAConflictingProposal(t *testing.T) {
 	applyDelivery(t, projection, input)
 
 	require.NoError(t, handle(t, handler, input))
-	rejected := payload[Rejected](t, appender, 0)
+	rejected := payload[Rejected](t, backend, 0)
 	require.Equal(t, ReasonKeyConflict, rejected.Reason)
 }
 
 func TestHandlerRejectsASemanticallyInvalidProposal(t *testing.T) {
 	projection := NewProjection()
-	publisher, appender := testPublisher(t)
+	publisher, backend := testPublisher(t)
 	handler, err := NewHandler(publisher, projection, locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	invalid := NewProposed(ProposalIdentity{
@@ -79,13 +79,13 @@ func TestHandlerRejectsASemanticallyInvalidProposal(t *testing.T) {
 	applyDelivery(t, projection, input)
 
 	require.NoError(t, handle(t, handler, input))
-	rejected := payload[Rejected](t, appender, 0)
+	rejected := payload[Rejected](t, backend, 0)
 	require.Equal(t, ReasonInvalidProposal, rejected.Reason)
 }
 
 func TestOriginHandlerAcceptsOnlyAfterEveryConfirmation(t *testing.T) {
 	projection := NewProjection()
-	publisher, appender := testPublisher(t)
+	publisher, backend := testPublisher(t)
 	handler, err := NewHandler(publisher, projection, locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	proposed := proposal(42)
@@ -94,16 +94,16 @@ func TestOriginHandlerAcceptsOnlyAfterEveryConfirmation(t *testing.T) {
 	first := delivery(t, 2, NewConfirmed(proposed.ProposalID, "node-a"), "node-a", "confirm-a")
 	applyDelivery(t, projection, first)
 	require.NoError(t, handle(t, handler, first))
-	require.Empty(t, appender.appended)
+	require.Empty(t, backend.stored)
 
 	second := delivery(t, 3, NewConfirmed(proposed.ProposalID, "node-b"), "node-b", "confirm-b")
 	applyDelivery(t, projection, second)
 	require.NoError(t, handle(t, handler, second))
-	require.Len(t, appender.appended, 1)
-	accepted := payload[Accepted](t, appender, 0)
+	require.Len(t, backend.stored, 1)
+	accepted := payload[Accepted](t, backend, 0)
 	require.Equal(t, proposed.ProposalID, accepted.ProposalID)
-	require.Equal(t, "confirm-b", appender.appended[0].CausationID)
-	require.Equal(t, "confirm-b", appender.appended[0].CorrelationID)
+	require.Equal(t, "confirm-b", backend.stored[0].CausationID)
+	require.Equal(t, "confirm-b", backend.stored[0].CorrelationID)
 }
 
 func TestHandlerDeclaresOnlyFiniteRegistrationRoutes(t *testing.T) {

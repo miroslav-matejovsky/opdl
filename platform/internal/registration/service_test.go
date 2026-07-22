@@ -23,15 +23,15 @@ var testDescriptor = config.Descriptor{
 // recordingBackend is the storage backend: it keeps the completed
 // envelopes a publisher hands it, which is exactly what a real backend receives.
 type recordingBackend struct {
-	appended []events.Envelope
-	err      error
+	stored []events.Envelope
+	err    error
 }
 
 func (b *recordingBackend) Store(_ context.Context, envelope events.Envelope) error {
 	if b.err != nil {
 		return b.err
 	}
-	b.appended = append(b.appended, envelope)
+	b.stored = append(b.stored, envelope)
 	return nil
 }
 
@@ -68,14 +68,14 @@ func failingPublisher(t *testing.T, cause error) events.Publisher {
 	return pub
 }
 
-// payload decodes the payload of the index-th appended envelope, so a test reads
+// payload decodes the payload of the index-th stored envelope, so a test reads
 // the fact the journal would have stored rather than the struct it passed in.
 func payload[T events.Event](t *testing.T, backend *recordingBackend, index int) T {
 	t.Helper()
-	require.Greater(t, len(backend.appended), index, "no event was published at index %d", index)
+	require.Greater(t, len(backend.stored), index, "no event was published at index %d", index)
 	var event T
-	require.NoError(t, json.Unmarshal(backend.appended[index].Data, &event))
-	require.Equal(t, event.EventType(), backend.appended[index].Type)
+	require.NoError(t, json.Unmarshal(backend.stored[index].Data, &event))
+	require.Equal(t, event.EventType(), backend.stored[index].Type)
 	return event
 }
 
@@ -94,14 +94,14 @@ func TestCommandServicePublishesADurableProposal(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, result.ProposalID)
-	require.Len(t, backend.appended, 1)
+	require.Len(t, backend.stored, 1)
 
 	proposed := payload[Proposed](t, backend, 0)
 	require.Equal(t, result.ProposalID, proposed.ProposalID)
 	require.Equal(t, []string{"node-a", "node-b"}, proposed.ExpectedMachines)
 	require.Equal(t, "node-a", proposed.OriginMachine)
 
-	stamped := backend.appended[0]
+	stamped := backend.stored[0]
 	require.NoError(t, stamped.Validate(), "the command service publishes a journal-valid envelope")
 	require.Equal(t, "node-a", stamped.Origin.Machine, "the origin is the process's, never the caller's")
 	require.Empty(t, stamped.CausationID, "a command begins a chain, so it has no cause")
@@ -115,7 +115,7 @@ func TestCommandServiceRejectsInvalidInputBeforePublishing(t *testing.T) {
 
 	_, err = commands.Create(t.Context(), api.RegistrationRequest{UnitTypeNameAdvertised: " "})
 	require.ErrorContains(t, err, "blank")
-	require.Empty(t, backend.appended)
+	require.Empty(t, backend.stored)
 }
 
 func TestCommandServiceClassifiesPublishFailure(t *testing.T) {
@@ -142,7 +142,7 @@ func TestQueryServiceReadsOnlyTheLocalProjection(t *testing.T) {
 	require.Equal(t, api.RegistrationStatusPending, view.Status)
 	require.Equal(t, api.RegistrationStatusAccepted, view.PlatformInstances[0].Status)
 	require.Equal(t, api.RegistrationStatusPending, view.PlatformInstances[1].Status)
-	require.Empty(t, backend.appended, "queries do not publish or call the Event Fabric")
+	require.Empty(t, backend.stored, "queries do not publish or call the Event Fabric")
 }
 
 func TestQueryServiceReportsProjectedConflicts(t *testing.T) {

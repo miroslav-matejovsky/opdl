@@ -111,4 +111,10 @@ func TestApplicationEventsAreStampedIntoValidEnvelopes(t *testing.T) {
 	require.JSONEq(t, `{}`, string(waiting.Data), "the fact is the whole of it; who it is about is the origin")
 	require.Equal(t, "node", waiting.Origin.Machine)
 	require.Equal(t, "primary", waiting.Origin.ProcessRole)
+
+	started, err := factory.Wrap(t.Context(), ProcessStarted{EventsFile: `D:\opdl\events\events.jsonl`})
+	require.NoError(t, err)
+	require.NoError(t, started.Validate())
+	require.JSONEq(t, `{"events_file":"D:\\opdl\\events\\events.jsonl","standby_enabled":false}`, string(started.Data),
+		"a started process names the local record an operator opens next")
 }

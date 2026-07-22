@@ -4,15 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"strings"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
 
@@ -99,18 +99,19 @@ func TestRedundancyEventsDeclareTheirContract(t *testing.T) {
 }
 
 // TestContendRecordsTheOwnershipLifecycle runs a real ownership lifecycle
-// through a real recorder, so what an operator would read is what is asserted:
-// the typed events, in order, as canonical envelopes.
+// through a real fan-out publisher over a capturing backend, so what an operator
+// would read is what is asserted: the typed events, in order, as canonical
+// envelopes.
 func TestContendRecordsTheOwnershipLifecycle(t *testing.T) {
 	t.Parallel()
 
 	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
 	runtime := newRecordingRuntime()
-	ctx, recorded := recording(t)
-	ctx, cancel := context.WithCancel(ctx)
+	publisher, recorded := recording(t)
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, lock, runtime.runtime()) }()
+	go func() { done <- redundancy.Contend(ctx, publisher, lock, runtime.runtime()) }()
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
 	cancel()
 	require.NoError(t, <-done)
@@ -146,9 +147,9 @@ func TestContendRecordsAFailedActivation(t *testing.T) {
 	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
 	runtime := newRecordingRuntime()
 	runtime.activeErr = notServing
-	ctx, recorded := recording(t)
+	publisher, recorded := recording(t)
 
-	require.ErrorIs(t, redundancy.Contend(ctx, lock, runtime.runtime()), notServing)
+	require.ErrorIs(t, redundancy.Contend(t.Context(), publisher, lock, runtime.runtime()), notServing)
 
 	envelopes := recorded()
 	require.Contains(t, types(envelopes), redundancy.TypeActivationFailed)
@@ -165,31 +166,98 @@ func TestContendRecordsAFailedActivation(t *testing.T) {
 	require.GreaterOrEqual(t, payload.DurationMS, int64(0))
 }
 
-// recording returns a context carrying a real recorder, and a function that
-// closes it and reads back the envelopes it wrote.
-func recording(t *testing.T) (ctx context.Context, recorded func() []events.Envelope) {
+// TestContendStopsWhenItCannotStateWhatItDid checks the error policy: ownership
+// is a startup path with an error to return, so a publication failure is
+// returned rather than swallowed. A machine whose ownership moved with no record
+// that it did is not a state an operator can be asked to reason about.
+func TestContendStopsWhenItCannotStateWhatItDid(t *testing.T) {
+	t.Parallel()
+
+	recordUnwritable := errors.New("jsonl: write events.jsonl: disk is full")
+	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
+	runtime := newRecordingRuntime()
+	publisher := failing(t, recordUnwritable)
+
+	err := redundancy.Contend(t.Context(), publisher, lock, runtime.runtime())
+
+	require.ErrorIs(t, err, recordUnwritable)
+	require.Empty(t, runtime.recorded(), "an instance that cannot state that it took ownership never activates")
+}
+
+func TestContendRequiresAPublisher(t *testing.T) {
+	t.Parallel()
+
+	err := redundancy.Contend(t.Context(), nil, nil, newRecordingRuntime().runtime())
+
+	require.ErrorContains(t, err, "publisher is required")
+}
+
+// captureBackend is the storage.Backend a test composes a real publisher over.
+// Testing at the backend rather than at events.Publisher is what keeps the
+// assertions honest: the events an operator reads are stamped envelopes, and
+// stamping is exactly what a fake publisher would skip.
+type captureBackend struct {
+	mu        sync.Mutex
+	err       error
+	envelopes []events.Envelope
+}
+
+// Store records the envelope, or refuses it when the test asked the local record
+// to fail.
+func (b *captureBackend) Store(_ context.Context, envelope events.Envelope) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err != nil {
+		return b.err
+	}
+	b.envelopes = append(b.envelopes, envelope)
+	return nil
+}
+
+// Close satisfies storage.Backend. There is nothing to release.
+func (b *captureBackend) Close(context.Context) error { return nil }
+
+// recorded returns what has been stored so far.
+func (b *captureBackend) recorded() []events.Envelope {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.envelopes)
+}
+
+// recording composes the process-local publisher a Contend call is given, and a
+// function that reads back the envelopes it stamped.
+func recording(t *testing.T) (local events.Publisher, recorded func() []events.Envelope) {
 	t.Helper()
 	factory, err := events.NewFactory(config.Descriptor{
 		Platform: "opdl", Project: "scenario", Environment: "development",
 		Site: "local", Machine: "node", MachineProfile: "all-in-one",
 	}, redundancy.RolePrimary.String())
 	require.NoError(t, err)
-	recorder, err := operations.Open(t.TempDir(), factory)
+	backend := &captureBackend{}
+	publisher, err := storage.NewPublisher(factory, backend)
 	require.NoError(t, err)
 
-	return operations.WithRecorder(t.Context(), recorder), func() []events.Envelope {
-		require.NoError(t, recorder.Close())
-		data, err := os.ReadFile(recorder.Path())
-		require.NoError(t, err)
-		var envelopes []events.Envelope
-		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
-			envelope, err := events.Decode([]byte(line))
-			require.NoError(t, err)
+	return publisher, func() []events.Envelope {
+		envelopes := backend.recorded()
+		for _, envelope := range envelopes {
 			require.NoError(t, envelope.Validate(), "a recorded event is a complete envelope")
-			envelopes = append(envelopes, envelope)
 		}
 		return envelopes
 	}
+}
+
+// failing composes a process-local publisher whose backend refuses everything,
+// which is what an unwritable local record looks like to a producer.
+func failing(t *testing.T, cause error) events.Publisher {
+	t.Helper()
+	factory, err := events.NewFactory(config.Descriptor{
+		Platform: "opdl", Project: "scenario", Environment: "development",
+		Site: "local", Machine: "node", MachineProfile: "all-in-one",
+	}, redundancy.RolePrimary.String())
+	require.NoError(t, err)
+	publisher, err := storage.NewPublisher(factory, &captureBackend{err: cause})
+	require.NoError(t, err)
+	return publisher
 }
 
 // types lists the kinds of a recorded run, which is what an assertion about

@@ -50,9 +50,17 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //   - platform.app.site_stopped: a site finished releasing.
 //   - platform.app.background_loop_stopped: a projector or handler loop ended.
 //
-// These are stated locally through operations.Recorder rather than published to
-// the site journal. They describe one process, and a process that is failing to
-// start is exactly the one that cannot write to a journal.
+// These are stated through the process-local publisher, whose only backend is
+// the mandatory local JSONL record, rather than through the site's fan-out
+// publisher. They describe one process, and a process that is failing to start
+// is exactly the one that cannot write to a journal.
+//
+// Where a failure to state one goes depends on what the stating code can do
+// about it. Startup and shutdown return or join it, because a process that could
+// not write its local record has not started or stopped cleanly. The background
+// loops and the status callbacks have no caller to return to, so theirs go
+// through an events.Diagnostic and reach the process error stream instead: a
+// diagnostic about a broken pipeline must not travel down that pipeline.
 
 const (
 	// TypeProcessStarted is stated once the process knows its role and identity.
@@ -129,9 +137,9 @@ func failureSeverity(err string) events.Severity {
 
 // ProcessStarted states that the platform process began running.
 type ProcessStarted struct {
-	// OperationsFile is the local JSONL path this process writes, empty when
-	// retention is disabled. It is what an operator opens next.
-	OperationsFile string `json:"operations_file,omitempty"`
+	// EventsFile is the mandatory local JSONL record this instance appends every
+	// event to. It is what an operator opens next.
+	EventsFile string `json:"events_file"`
 	// StandbyEnabled reports whether this machine deploys a warm standby.
 	StandbyEnabled bool `json:"standby_enabled"`
 }

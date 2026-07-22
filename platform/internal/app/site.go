@@ -12,9 +12,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	natsbackend "github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/nats"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
@@ -39,17 +37,23 @@ const (
 // HTTP boundary is handed the two services. Neither can reach the transport.
 type site struct {
 	fabric *natsbackend.Backend
-	// storagePublisher is the fan-out publisher this site closes on shutdown: it
-	// owns the JSONL and NATS backends and closes them in reverse construction
-	// order (NATS first, then JSONL). Nothing else closes those backends.
+	// storagePublisher is the fan-out publisher this site closes on shutdown. It
+	// writes to the process's local record first and this node's transport second,
+	// and closes them in reverse order. Only the transport is really closed: the
+	// record is borrowed from the process and outlives the site. See
+	// storage.Borrowed.
 	storagePublisher *storage.Publisher
-	// publisher is the node's one way to state a fact: it stamps a typed payload
-	// with this process's envelope factory and appends it to the journal.
+	// publisher is how the node states a fact the site is supposed to hear: it
+	// stamps a typed payload with this process's envelope factory, writes it to
+	// the local record, and appends it to the journal.
 	publisher  events.Publisher
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
-	observer   *operations.Recorder
+	// local states what this composition itself is doing. It reaches the local
+	// record and nothing else, because a site that is failing to open is exactly
+	// the one with no journal to describe itself in.
+	local events.Publisher
 
 	// projector is the node-wide ordered consumer: one loop, from the first
 	// retained event through live delivery, so nothing falls in a replay-to-live
@@ -95,54 +99,45 @@ type service struct {
 // opens no durable handler, publishes no readiness, and binds no listener, so it
 // follows the site's history without producing a decision or holding an
 // active-only capability.
-func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole, factory events.Factory) (*site, error) {
-	observer := operations.FromContext(ctx)
+func open(ctx context.Context, proc process, active bool) (*site, error) {
+	descriptor, cfg, role := proc.descriptor, proc.cfg, proc.role
 	openedAt := time.Now()
-	observer.Record(ctx, SiteOpening{Active: active})
-
-	// Open the mandatory JSONL backend first. Failure here fails process startup:
-	// every event this node states must reach the local append-only record before
-	// the journal, so a node that cannot write it must not start.
-	instance := instanceOf(descriptor, role)
-	jsonlBackend, err := jsonl.New(instance.DataDir)
-	if err != nil {
-		observer.Record(ctx, SiteOpenFailed{Phase: PhaseConfiguration, Error: err.Error()})
-		return nil, fmt.Errorf("jsonl: %w", err)
+	if err := proc.local.Publish(ctx, SiteOpening{Active: active}); err != nil {
+		return nil, err
 	}
 
 	fabricCfg, err := natsConfig(descriptor, cfg, role)
 	if err != nil {
-		_ = jsonlBackend.Close(ctx)
-		observer.Record(ctx, SiteOpenFailed{Phase: PhaseConfiguration, Error: err.Error()})
-		return nil, err
+		return nil, errors.Join(err, proc.local.Publish(ctx, SiteOpenFailed{Phase: PhaseConfiguration, Error: err.Error()}))
 	}
 	logEffectiveFabric(descriptor, fabricCfg, role)
 	// Open validates the configuration and probes the journal's storage before it
 	// binds a listener, so an unusable data directory or address fails here
-	// rather than half way through starting a server.
-	fabric, err := natsbackend.Open(ctx, descriptor, fabricCfg)
+	// rather than half way through starting a server. The adapter states its own
+	// facts through the process-local publisher, never through the fan-out one it
+	// is about to become part of.
+	fabric, err := natsbackend.Open(ctx, descriptor, fabricCfg, proc.local)
 	if err != nil {
-		_ = jsonlBackend.Close(ctx)
-		observer.Record(ctx, SiteOpenFailed{Phase: PhaseEventFabric, Error: err.Error()})
-		return nil, err
+		return nil, errors.Join(err, proc.local.Publish(ctx, SiteOpenFailed{Phase: PhaseEventFabric, Error: err.Error()}))
 	}
 	info := fabric.Info()
 	fmt.Printf("platform: event fabric %s on %s, journal %s (storage=%t replicas=%d)\n",
 		info.Server, strings.Join(fabricCfg.Servers, ","), info.Journal,
 		info.HostsStorage, info.Replicas)
 
-	// Create the fan-out publisher with deterministic backend order: JSONL first,
-	// NATS second. Close reverses the order (NATS, then JSONL).
-	sp, err := storage.NewPublisher(factory, jsonlBackend, fabric)
+	// Create the fan-out publisher with deterministic backend order: the local
+	// record first, this node's transport second. Close reverses the order, and
+	// closing the borrowed record is a no-op because the process owns it.
+	sp, err := storage.NewPublisher(proc.factory, storage.Borrowed(proc.record), fabric)
 	if err != nil {
-		return nil, errors.Join(err, fabric.Close(ctx), jsonlBackend.Close(ctx))
+		return nil, errors.Join(err, fabric.Close(ctx))
 	}
 	s := &site{
 		fabric:           fabric,
 		storagePublisher: sp,
 		publisher:        sp,
 		projection:       registration.NewProjection(),
-		observer:         observer,
+		local:            proc.local,
 		stopped:          make(chan struct{}),
 		catchUpTimeout:   fabricCfg.CatchUpTimeout,
 		shutdownTimeout:  fabricCfg.ShutdownTimeout,
@@ -150,13 +145,16 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 
 	if !active {
 		if err := s.startStandby(ctx); err != nil {
-			observer.Record(ctx, SiteOpenFailed{Phase: PhaseStandbyCatchUp, Error: err.Error()})
-			return nil, errors.Join(err, s.close(ctx))
+			return nil, errors.Join(err,
+				s.local.Publish(ctx, SiteOpenFailed{Phase: PhaseStandbyCatchUp, Error: err.Error()}),
+				s.close(ctx))
 		}
-		observer.Record(ctx, StandbyReady{
+		if err := s.local.Publish(ctx, StandbyReady{
 			AppliedSequence: s.projection.Sequence(),
 			DurationMS:      time.Since(openedAt).Milliseconds(),
-		})
+		}); err != nil {
+			return nil, errors.Join(err, s.close(ctx))
+		}
 		return s, nil
 	}
 
@@ -174,13 +172,16 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 	}
 
 	if err := s.start(ctx, handler); err != nil {
-		observer.Record(ctx, SiteOpenFailed{Phase: PhaseActiveReadiness, Error: err.Error()})
-		return nil, errors.Join(err, s.close(ctx))
+		return nil, errors.Join(err,
+			s.local.Publish(ctx, SiteOpenFailed{Phase: PhaseActiveReadiness, Error: err.Error()}),
+			s.close(ctx))
 	}
-	observer.Record(ctx, SiteReady{
+	if err := s.local.Publish(ctx, SiteReady{
 		AppliedSequence: s.projection.Sequence(),
 		DurationMS:      time.Since(openedAt).Milliseconds(),
-	})
+	}); err != nil {
+		return nil, errors.Join(err, s.close(ctx))
+	}
 	return s, nil
 }
 
@@ -268,13 +269,12 @@ func (s *site) catchUp(ctx context.Context, what string) error {
 	if err := s.awaitApplied(ctx, high, what); err != nil {
 		return err
 	}
-	s.observer.Record(ctx, ProjectionCaughtUp{
+	return s.local.Publish(ctx, ProjectionCaughtUp{
 		Phase:           what,
 		HighWater:       high,
 		AppliedSequence: s.projection.Sequence(),
 		DurationMS:      time.Since(started).Milliseconds(),
 	})
-	return nil
 }
 
 // awaitApplied waits for the projection to reach sequence, or for the projector
@@ -351,11 +351,13 @@ func (s *site) close(ctx context.Context) error {
 }
 
 func (s *site) release(ctx context.Context) error {
-	s.observer.Record(ctx, SiteStopping{Ready: s.ready})
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownTimeout)
 	defer cancel()
 
 	var errs []error
+	if err := s.local.Publish(ctx, SiteStopping{Ready: s.ready}); err != nil {
+		errs = append(errs, err)
+	}
 	for _, svc := range s.services {
 		errs = append(errs, svc.runner.stop())
 	}
@@ -368,16 +370,18 @@ func (s *site) release(ctx context.Context) error {
 	}
 	// Stop the projector before closing storage: the projector reads from the
 	// NATS connection, and closing NATS underneath a running projector is a
-	// race. The fan-out publisher closes backends in reverse construction order
-	// (NATS first, then JSONL), so one Close covers everything.
+	// race. The fan-out publisher closes its backends in reverse construction
+	// order, so the transport closes here and the process's borrowed record is
+	// left open for whatever this process still has to say.
 	errs = append(errs, s.projector.stop(), s.storagePublisher.Close(stopCtx))
 	err := errors.Join(errs...)
 	stopped := SiteStopped{}
 	if err != nil {
 		stopped.Error = err.Error()
 	}
-	s.observer.Record(ctx, stopped)
-	return err
+	// The release's own failures matter more than a failure to state that it
+	// happened, so the latter is joined onto them rather than replacing them.
+	return errors.Join(err, s.local.Publish(ctx, stopped))
 }
 
 // readinessError turns an expired readiness bound into the Event Fabric's
@@ -430,6 +434,11 @@ type runner struct {
 
 // run starts loop in the background and reports its stop to the site, so a
 // projector or handler that gives up takes the node's serving with it.
+//
+// The loop's own goroutine states that it stopped, and there is nobody to return
+// a publication failure to: the reason the loop ended is already held in the
+// runner for whoever waits on it. A failure to state it is reported to the
+// process error stream instead.
 func (s *site) run(ctx context.Context, name string, loop func(context.Context) error) *runner {
 	runCtx, cancel := context.WithCancel(ctx)
 	r := &runner{name: name, cancel: cancel, done: make(chan struct{})}
@@ -443,7 +452,7 @@ func (s *site) run(ctx context.Context, name string, loop func(context.Context) 
 		if r.err != nil {
 			stopped.Error = r.err.Error()
 		}
-		s.observer.Record(ctx, stopped)
+		events.BestEffort(s.local).State(ctx, stopped)
 	}()
 	return r
 }

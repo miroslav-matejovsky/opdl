@@ -42,24 +42,28 @@ func (b *Backend) ensureJournal(ctx context.Context) (jetstream.Stream, error) {
 		stream, err := b.attemptJournal(ctx, want)
 		if err == nil {
 			_, infoErr := stream.Info(ctx)
-			if infoErr == nil {
-				if attempt > 1 {
-					b.observer.Record(ctx, JournalRecovered{
-						Journal:    want.Name,
-						Attempts:   attempt,
-						DurationMS: time.Since(started).Milliseconds(),
-					})
-				}
+			switch {
+			case infoErr != nil:
+				err = fmt.Errorf("nats: verify journal %s locally: %w", want.Name, infoErr)
+			case attempt == 1:
+				// It worked first time, so nothing recovered from anything.
 				return stream, nil
+			default:
+				return stream, b.local.Publish(ctx, JournalRecovered{
+					Journal:    want.Name,
+					Attempts:   attempt,
+					DurationMS: time.Since(started).Milliseconds(),
+				})
 			}
-			err = fmt.Errorf("nats: verify journal %s locally: %w", want.Name, infoErr)
 		}
 		if !retryableJournalError(ctx, err) {
 			return nil, err
 		}
 		last = err
 		if attempt == 1 || attempt%10 == 0 {
-			b.observer.Record(ctx, JournalRetry{Journal: want.Name, Attempt: attempt, Error: err.Error()})
+			if stateErr := b.local.Publish(ctx, JournalRetry{Journal: want.Name, Attempt: attempt, Error: err.Error()}); stateErr != nil {
+				return nil, errors.Join(err, stateErr)
+			}
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("nats: wait for journal %s: %w", want.Name, ctxErr)

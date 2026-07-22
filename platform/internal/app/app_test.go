@@ -20,7 +20,9 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	natsbackend "github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
@@ -198,13 +200,42 @@ func embeddedDescriptor(t *testing.T) config.Descriptor {
 	return d
 }
 
-// openSite composes a site the way Run does: one envelope factory for the
-// process, stamping everything the node states.
-func openSite(t *testing.T, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
+// newTestProcess composes what Run composes before it opens anything: one
+// envelope factory for the process, the mandatory local record, and the
+// process-local publisher over it.
+//
+// It returns the composition error rather than failing the test, because the
+// local record failing to open is itself something a test asserts about.
+func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Config, role redundancy.InstanceRole) (process, error) {
 	t.Helper()
 	factory, err := events.NewFactory(descriptor, role.String())
 	require.NoError(t, err)
-	return open(t.Context(), descriptor, cfg, active, role, factory)
+	record, err := jsonl.New(instanceOf(descriptor, role).DataDir)
+	if err != nil {
+		return process{}, err
+	}
+	t.Cleanup(func() { _ = record.Close(context.Background()) })
+	local, err := storage.NewPublisher(factory, record)
+	require.NoError(t, err)
+	return process{
+		descriptor: descriptor,
+		cfg:        cfg,
+		role:       role,
+		factory:    factory,
+		local:      local,
+		record:     record,
+	}, nil
+}
+
+// openSite composes a site the way Run does: one process composition, and the
+// site built from it.
+func openSite(t *testing.T, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
+	t.Helper()
+	proc, err := newTestProcess(t, descriptor, cfg, role)
+	if err != nil {
+		return nil, err
+	}
+	return open(t.Context(), proc, active)
 }
 
 // openTestSite composes a real Event Fabric on loopback and returns it ready to
@@ -670,13 +701,11 @@ func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
 }
 
-// TestOpenReportsUnusableJsonlDataDir checks a node fails at startup when the
-// JSONL backend's data directory cannot be created. JSONL is mandatory: every
-// event must reach the local record before NATS.
+// TestOpenReportsUnusableJsonlDataDir checks a process fails at startup when the
+// local record's data directory cannot be created. The record is mandatory and
+// is opened before anything else, because every fact this process states has to
+// reach it, including the ones about failing to start.
 func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping Event Fabric composition in -short mode")
-	}
 	dir := t.TempDir()
 	cfg, err := config.Load(writeConfig(t, dir))
 	require.NoError(t, err)
@@ -688,7 +717,7 @@ func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
 	// under it, which will fail because blocked is a file, not a directory.
 	descriptor.Instances.Primary.DataDir = blocked
 
-	_, err = openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
+	_, err = newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "jsonl:", "the failure identifies the JSONL backend")
 }
 
@@ -712,7 +741,8 @@ func TestPublishedEventsReachBothJsonlAndNats(t *testing.T) {
 	err = s.publisher.Publish(t.Context(), SiteOpening{Active: true})
 	require.NoError(t, err)
 
-	// Close the site first: Close flushes JSONL.
+	// Releasing the site closes the transport. The local record is the process's
+	// and stays open; every Store synced it, so what it holds is already on disk.
 	require.NoError(t, s.close(t.Context()))
 
 	// The JSONL file must exist and contain valid JSON envelopes.
@@ -772,7 +802,8 @@ func TestPrimaryAndStandbyWriteSeparateJsonlFiles(t *testing.T) {
 	// handlers), so publish one explicit event to exercise its JSONL pipeline.
 	require.NoError(t, standby.publisher.Publish(t.Context(), SiteOpening{Active: false}))
 
-	// Close both to flush JSONL files.
+	// Release both. Each instance composed its own process record, so the two
+	// files were never one file at any point.
 	require.NoError(t, active.close(t.Context()))
 	require.NoError(t, standby.close(t.Context()))
 
@@ -785,4 +816,61 @@ func TestPrimaryAndStandbyWriteSeparateJsonlFiles(t *testing.T) {
 	sInfo, err := os.Stat(standbyJsonl)
 	require.NoError(t, err)
 	require.Positive(t, sInfo.Size(), "standby JSONL file must contain the event published to it")
+}
+
+// failingRecord is a storage.Backend that refuses everything, which is what an
+// unwritable local record looks like to a producer.
+type failingRecord struct{ err error }
+
+func (b failingRecord) Store(context.Context, events.Envelope) error { return b.err }
+
+func (b failingRecord) Close(context.Context) error { return nil }
+
+// TestSiteOpenReturnsAFailureToStateThatItIsOpening checks the error policy on a
+// startup path: a composition that cannot write its local record does not
+// quietly carry on composing.
+func TestSiteOpenReturnsAFailureToStateThatItIsOpening(t *testing.T) {
+	recordUnwritable := errors.New("jsonl: write events.jsonl: disk is full")
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	descriptor := descriptorOnFreePorts(t, cfg)
+
+	proc, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
+	require.NoError(t, err)
+	local, err := storage.NewPublisher(proc.factory, failingRecord{err: recordUnwritable})
+	require.NoError(t, err)
+	proc.local = local
+
+	_, err = open(t.Context(), proc, true)
+
+	require.ErrorIs(t, err, recordUnwritable,
+		"a site that cannot state that it is opening reports it rather than opening anyway")
+}
+
+// TestTheSiteStatesItsOwnCompositionLocallyAndTheSitesFactsToTheJournal pins
+// which publisher carries what. Composition facts describe one process and go to
+// the local record only; the facts the site is supposed to hear go to both
+// backends. Nothing decides this but runtime composition.
+func TestTheSiteStatesItsOwnCompositionLocallyAndTheSitesFactsToTheJournal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	s, err := openSite(t, descriptorOnFreePorts(t, cfg), cfg, true, redundancy.RolePrimary)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
+
+	high, err := s.fabric.HighWater(t.Context())
+	require.NoError(t, err)
+
+	require.NoError(t, s.local.Publish(t.Context(), SiteOpening{Active: true}))
+	afterLocal, err := s.fabric.HighWater(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, high, afterLocal, "a fact about this process alone never reaches the journal")
+
+	require.NoError(t, s.publisher.Publish(t.Context(), eventfabric.Stopping{Adapter: natsbackend.Name}))
+	afterJournal, err := s.fabric.HighWater(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, high+1, afterJournal, "a fact the site is supposed to hear reaches the journal")
 }

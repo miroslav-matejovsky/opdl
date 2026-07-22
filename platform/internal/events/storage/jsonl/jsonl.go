@@ -58,6 +58,10 @@ func New(dataDir string) (*Backend, error) {
 	}, nil
 }
 
+// Path returns the events file this backend appends to. It is what an operator
+// opens to read what one process stated, so the runtime reports it at startup.
+func (b *Backend) Path() string { return b.path }
+
 // Store encodes envelope into a canonical JSON object, appends it as a single
 // line, and syncs the file to disk.
 func (b *Backend) Store(ctx context.Context, envelope events.Envelope) error {

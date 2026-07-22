@@ -18,7 +18,6 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 )
 
 var (
@@ -36,7 +35,13 @@ type Backend struct {
 
 	machine      string
 	machineToken string
-	observer     *operations.Recorder
+	// local states this adapter's own facts: the server it started, the
+	// connection it lost, the consumer it reattached. It must not be a publisher
+	// that fans out to this backend. A transport describing its own failure
+	// through itself either fails again or, worse, appears to succeed, so runtime
+	// composition hands this adapter the process-local publisher and keeps the
+	// fan-out one for the facts the site is supposed to hear.
+	local events.Publisher
 
 	srv    *server.Server
 	nc     *nats.Conn
@@ -59,9 +64,15 @@ var errConsumerReconnect = errors.New("nats: consumer reset for client reconnect
 // New constructs a Backend from a machine descriptor and configuration. It
 // validates the configuration before returning. The returned backend is unstarted;
 // call Start to open servers and connections.
-func New(descriptor config.Descriptor, cfg Config) (*Backend, error) {
+//
+// local is where this adapter states its own facts. It must be a publisher that
+// does not fan out to this backend; see the field it is stored in.
+func New(descriptor config.Descriptor, cfg Config, local events.Publisher) (*Backend, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	if local == nil {
+		return nil, errors.New("nats: local publisher is required")
 	}
 	scope := eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)
 	return &Backend{
@@ -69,19 +80,23 @@ func New(descriptor config.Descriptor, cfg Config) (*Backend, error) {
 		scope:          scope,
 		machine:        descriptor.Machine,
 		machineToken:   eventfabric.SafeToken(descriptor.Machine),
+		local:          local,
 		activeHandlers: make(map[string]bool),
 	}, nil
 }
 
 // Start opens the embedded NATS server (if this node hosts storage), connects
 // to the site servers, and creates or validates the site journal.
+//
+// It is a startup path, so a failure to state one of its own facts is returned
+// rather than reported: a node that cannot write its local record has not
+// started successfully, whatever the transport managed to do.
 func (b *Backend) Start(ctx context.Context) error {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		return eventfabric.ErrClosed
 	}
-	b.observer = operations.FromContext(ctx)
 	b.mu.Unlock()
 
 	if err := ctx.Err(); err != nil {
@@ -93,27 +108,9 @@ func (b *Backend) Start(ctx context.Context) error {
 	}
 
 	if b.cfg.HostsStorage {
-		b.observer.Record(ctx, ServerStarting{
-			ClientAddress:     b.cfg.ClientAddress,
-			ClusterAddress:    b.cfg.ClusterAddress,
-			Routes:            b.cfg.Routes,
-			JetStreamStoreDir: b.cfg.JetStreamStoreDir,
-		})
-		opts, err := serverOptions(b.cfg)
-		if err != nil {
+		if err := b.startServer(ctx, fail); err != nil {
 			return err
 		}
-		srv, err := server.NewServer(opts)
-		if err != nil {
-			return fmt.Errorf("nats: create server %s: %w", b.cfg.ServerName, err)
-		}
-		b.srv = srv
-
-		srv.Start()
-		if !srv.ReadyForConnections(b.cfg.StartupTimeout) {
-			return fail(fmt.Errorf("server not ready within %s", b.cfg.StartupTimeout))
-		}
-		b.observer.Record(ctx, ServerReady{ClientAddress: b.cfg.ClientAddress})
 	}
 
 	nc, err := b.connect(ctx)
@@ -133,17 +130,54 @@ func (b *Backend) Start(ctx context.Context) error {
 		return fail(err)
 	}
 	b.stream = stream
-	b.observer.Record(ctx, JournalReady{
+	if err := b.local.Publish(ctx, JournalReady{
 		Journal:      b.scope.StreamName(),
 		HostsStorage: b.cfg.HostsStorage,
 		Replicas:     b.cfg.Replicas,
-	})
+	}); err != nil {
+		return fail(err)
+	}
 	return nil
 }
 
-// Open constructs and starts a Backend.
-func Open(ctx context.Context, descriptor config.Descriptor, cfg Config) (*Backend, error) {
-	b, err := New(descriptor, cfg)
+// startServer binds this node's embedded server and waits for it to accept
+// connections. Only a node that hosts storage runs one.
+//
+// fail is Start's shutdown-and-describe path: once a server has been started,
+// giving up has to take it back down, and every way out from here has to.
+func (b *Backend) startServer(ctx context.Context, fail func(error) error) error {
+	if err := b.local.Publish(ctx, ServerStarting{
+		ClientAddress:     b.cfg.ClientAddress,
+		ClusterAddress:    b.cfg.ClusterAddress,
+		Routes:            b.cfg.Routes,
+		JetStreamStoreDir: b.cfg.JetStreamStoreDir,
+	}); err != nil {
+		return err
+	}
+	opts, err := serverOptions(b.cfg)
+	if err != nil {
+		return err
+	}
+	srv, err := server.NewServer(opts)
+	if err != nil {
+		return fmt.Errorf("nats: create server %s: %w", b.cfg.ServerName, err)
+	}
+	b.srv = srv
+
+	srv.Start()
+	if !srv.ReadyForConnections(b.cfg.StartupTimeout) {
+		return fail(fmt.Errorf("server not ready within %s", b.cfg.StartupTimeout))
+	}
+	if err := b.local.Publish(ctx, ServerReady{ClientAddress: b.cfg.ClientAddress}); err != nil {
+		return fail(err)
+	}
+	return nil
+}
+
+// Open constructs and starts a Backend. local is where the adapter states its
+// own facts; see New.
+func Open(ctx context.Context, descriptor config.Descriptor, cfg Config, local events.Publisher) (*Backend, error) {
+	b, err := New(descriptor, cfg, local)
 	if err != nil {
 		return nil, err
 	}
@@ -168,15 +202,19 @@ func (b *Backend) connect(ctx context.Context) (*nats.Conn, error) {
 		nc, err := nats.Connect(target, natsOptions(b.cfg)...)
 		if err == nil {
 			b.observeConnection(nc)
-			b.observer.Record(ctx, ClientConnected{
+			if stateErr := b.local.Publish(ctx, ClientConnected{
 				Server:     nc.ConnectedUrlRedacted(),
 				Attempts:   attempt,
 				DurationMS: time.Since(started).Milliseconds(),
-			})
+			}); stateErr != nil {
+				return nil, stateErr
+			}
 			return nc, nil
 		}
 		if attempt == 1 || attempt%10 == 0 {
-			b.observer.Record(ctx, ClientConnectRetry{Servers: b.cfg.Servers, Attempt: attempt, Error: err.Error()})
+			if stateErr := b.local.Publish(ctx, ClientConnectRetry{Servers: b.cfg.Servers, Attempt: attempt, Error: err.Error()}); stateErr != nil {
+				return nil, errors.Join(err, stateErr)
+			}
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("connect to %s: %w", target, ctxErr)
@@ -188,6 +226,9 @@ func (b *Backend) connect(ctx context.Context) (*nats.Conn, error) {
 	}
 }
 
+// observeConnection states what the client connection does on its own. These are
+// asynchronous callbacks with no caller to return to, so a publication failure is
+// reported to the process error stream and goes no further.
 func (b *Backend) observeConnection(nc *nats.Conn) {
 	ctx := context.Background()
 	nc.SetDisconnectErrHandler(func(connection *nats.Conn, err error) {
@@ -195,24 +236,24 @@ func (b *Backend) observeConnection(nc *nats.Conn) {
 		if err != nil {
 			disconnected.Error = err.Error()
 		}
-		b.observer.Record(ctx, disconnected)
+		events.BestEffort(b.local).State(ctx, disconnected)
 	})
 	nc.SetReconnectHandler(func(connection *nats.Conn) {
-		b.observer.Record(ctx, ClientReconnected{Server: connection.ConnectedUrlRedacted()})
+		events.BestEffort(b.local).State(ctx, ClientReconnected{Server: connection.ConnectedUrlRedacted()})
 	})
 	nc.SetClosedHandler(func(connection *nats.Conn) {
 		closed := ClientClosed{}
 		if err := connection.LastError(); err != nil {
 			closed.Error = err.Error()
 		}
-		b.observer.Record(ctx, closed)
+		events.BestEffort(b.local).State(ctx, closed)
 	})
 	nc.SetErrorHandler(func(_ *nats.Conn, subscription *nats.Subscription, err error) {
 		asyncError := ClientAsyncError{Error: err.Error()}
 		if subscription != nil {
 			asyncError.Subject = subscription.Subject
 		}
-		b.observer.Record(ctx, asyncError)
+		events.BestEffort(b.local).State(ctx, asyncError)
 	})
 }
 
@@ -270,11 +311,17 @@ func (b *Backend) Store(ctx context.Context, envelope events.Envelope) error {
 
 // RunProjector replays the site journal in order from the first retained event
 // and continues with live events, applying each delivery to projector.
+//
+// It states its own progress best effort. This loop is what the node's whole
+// read model is built from, and a node that stopped folding the journal because
+// it could not write a line about itself would have turned a missing record into
+// an unserviceable node. The failure is reported to the process error stream, so
+// nothing is lost silently.
 func (b *Backend) RunProjector(ctx context.Context, projector eventfabric.Projector) error {
 	if err := b.check(ctx); err != nil {
 		return err
 	}
-	b.observer.Record(ctx, ProjectorStarted{})
+	events.BestEffort(b.local).State(ctx, ProjectorStarted{})
 	for {
 		next := b.applied.Load() + 1
 		consumer, err := b.attachProjector(ctx, next)
@@ -298,10 +345,10 @@ func (b *Backend) RunProjector(ctx context.Context, projector eventfabric.Projec
 				}
 				return fmt.Errorf("nats: projector wait for reconnect: %w", err)
 			}
-			b.observer.Record(ctx, ProjectorReset{NextSequence: b.applied.Load() + 1})
+			events.BestEffort(b.local).State(ctx, ProjectorReset{NextSequence: b.applied.Load() + 1})
 			continue
 		}
-		b.observer.Record(ctx, ProjectorStopped{Error: errorText(err)})
+		events.BestEffort(b.local).State(ctx, ProjectorStopped{Error: errorText(err)})
 		return err
 	}
 }
@@ -319,7 +366,7 @@ func (b *Backend) attachProjector(ctx context.Context, next uint64) (jetstream.C
 			return nil, err
 		}
 		if attempt == 1 || attempt%10 == 0 {
-			b.observer.Record(ctx, ProjectorAttachRetry{NextSequence: next, Attempt: attempt, Error: err.Error()})
+			events.BestEffort(b.local).State(ctx, ProjectorAttachRetry{NextSequence: next, Attempt: attempt, Error: err.Error()})
 		}
 		select {
 		case <-ctx.Done():
@@ -338,6 +385,10 @@ func orderedConsumerConfig(subject string, next uint64) jetstream.OrderedConsume
 }
 
 // RunHandler runs handler as a durable per-service, per-node reaction to its routes.
+//
+// Like RunProjector it states its own progress best effort, and for the same
+// reason: a durable consumer that abandoned its retained work over a local write
+// failure would leave the site owed decisions this node had already been given.
 func (b *Backend) RunHandler(ctx context.Context, handler eventfabric.Handler) error {
 	if err := b.check(ctx); err != nil {
 		return err
@@ -350,7 +401,7 @@ func (b *Backend) RunHandler(ctx context.Context, handler eventfabric.Handler) e
 	if err != nil {
 		return err
 	}
-	b.observer.Record(ctx, HandlerStarted{Handler: handler.Name()})
+	events.BestEffort(b.local).State(ctx, HandlerStarted{Handler: handler.Name()})
 	for {
 		consumer, err := b.attachHandler(ctx, name, subjects)
 		if err != nil {
@@ -370,10 +421,10 @@ func (b *Backend) RunHandler(ctx context.Context, handler eventfabric.Handler) e
 				}
 				return fmt.Errorf("nats: handler %s wait for reconnect: %w", name, err)
 			}
-			b.observer.Record(ctx, HandlerReset{Handler: handler.Name()})
+			events.BestEffort(b.local).State(ctx, HandlerReset{Handler: handler.Name()})
 			continue
 		}
-		b.observer.Record(ctx, HandlerStopped{Handler: handler.Name(), Error: errorText(err)})
+		events.BestEffort(b.local).State(ctx, HandlerStopped{Handler: handler.Name(), Error: errorText(err)})
 		return err
 	}
 }
@@ -399,7 +450,7 @@ func (b *Backend) attachHandler(ctx context.Context, name string, subjects []str
 			return nil, err
 		}
 		if attempt == 1 || attempt%10 == 0 {
-			b.observer.Record(ctx, HandlerAttachRetry{Handler: name, Attempt: attempt, Error: err.Error()})
+			events.BestEffort(b.local).State(ctx, HandlerAttachRetry{Handler: name, Attempt: attempt, Error: err.Error()})
 		}
 		select {
 		case <-ctx.Done():
@@ -508,7 +559,7 @@ func (b *Backend) consume(ctx context.Context, consumer jetstream.Consumer, appl
 				return nil
 			}
 			if recoverableConsumerReadError(err) {
-				b.observer.Record(ctx, ConsumerHeartbeatMissed{Stream: b.scope.StreamName(), Error: err.Error()})
+				events.BestEffort(b.local).State(ctx, ConsumerHeartbeatMissed{Stream: b.scope.StreamName(), Error: err.Error()})
 				continue
 			}
 			select {
@@ -590,8 +641,13 @@ func (b *Backend) State(ctx context.Context) (eventfabric.State, error) {
 }
 
 // Close closes the client and shuts the embedded server down within the
-// configured shutdown bound. It is idempotent. It emits no events through the
-// fan-out publisher.
+// configured shutdown bound. It is idempotent.
+//
+// It states its shutdown through the process-local publisher, never through the
+// fan-out one: an adapter that is closing cannot carry a fact about closing, and
+// a shutdown that appeared in the journal it just left would be a lie. This is a
+// shutdown path with an error to return, so a publication failure is joined with
+// whatever the shutdown itself reported rather than replacing it.
 func (b *Backend) Close(ctx context.Context) error {
 	b.mu.Lock()
 	if b.closed {
@@ -603,10 +659,10 @@ func (b *Backend) Close(ctx context.Context) error {
 
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.ShutdownTimeout)
 	defer cancel()
-	b.observer.Record(stopCtx, Stopping{})
+	stoppingErr := b.local.Publish(stopCtx, Stopping{})
 	err := b.shutdown(stopCtx)
-	b.observer.Record(stopCtx, Stopped{Error: errorText(err)})
-	return err
+	stoppedErr := b.local.Publish(stopCtx, Stopped{Error: errorText(err)})
+	return errors.Join(err, stoppingErr, stoppedErr)
 }
 
 func (b *Backend) abandon(ctx context.Context) error {

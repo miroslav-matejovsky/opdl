@@ -28,7 +28,8 @@ func open(t *testing.T, cfg Config) *Backend {
 	if testing.Short() {
 		t.Skip("skipping NATS integration test in -short mode")
 	}
-	b, err := Open(context.Background(), testDescriptor, cfg)
+	local, _ := localRecord(t)
+	b, err := Open(context.Background(), testDescriptor, cfg, local)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = b.Close(context.Background()) })
 	return b
@@ -487,13 +488,14 @@ func TestReopeningWithAnIncompatibleJournalIsRefused(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "nats")
 
-	first, err := Open(context.Background(), testDescriptor, configForDir(t, dir))
+	local, _ := localRecord(t)
+	first, err := Open(context.Background(), testDescriptor, configForDir(t, dir), local)
 	require.NoError(t, err)
 	require.NoError(t, first.Close(context.Background()))
 
 	incompatible := configForDir(t, dir)
 	incompatible.MaxBytes = DefaultMaxBytes / 2
-	_, err = Open(context.Background(), testDescriptor, incompatible)
+	_, err = Open(context.Background(), testDescriptor, incompatible, local)
 	require.ErrorIs(t, err, eventfabric.ErrIncompatibleJournal)
 }
 
@@ -529,7 +531,8 @@ func TestCloseIsIdempotentAndRefusesLaterCalls(t *testing.T) {
 		t.Skip("skipping NATS integration test in -short mode")
 	}
 	dir := filepath.Join(t.TempDir(), "nats")
-	b, err := Open(context.Background(), testDescriptor, configForDir(t, dir))
+	local, _ := localRecord(t)
+	b, err := Open(context.Background(), testDescriptor, configForDir(t, dir), local)
 	require.NoError(t, err)
 
 	require.NoError(t, b.Close(context.Background()))
@@ -574,7 +577,8 @@ func TestHandlerPendingReportsRetainedWork(t *testing.T) {
 
 func TestUnstartedBackendStoreReturnsErrorWithoutRecursiveEvent(t *testing.T) {
 	cfg := loopbackStorageConfig(t)
-	b, err := New(testDescriptor, cfg)
+	local, _ := localRecord(t)
+	b, err := New(testDescriptor, cfg, local)
 	require.NoError(t, err)
 
 	factory, err := events.NewFactory(testDescriptor, "primary")
