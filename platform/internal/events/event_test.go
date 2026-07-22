@@ -1,25 +1,21 @@
 package events
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/miroslav-matejovsky/opdl/platform/config"
 )
 
 // This package owns the event mechanism and declares no events of its own, so
 // its tests use their own doubles. That keeps them honest: the mechanism must
 // not know anything about the domains that use it.
 
-// plainEvent is an untagged event.
+// plainEvent implements nothing but Event, so it exercises every default.
 type plainEvent struct {
 	Detail string `json:"detail,omitempty"`
 }
 
 func (plainEvent) EventType() Type { return "platform.test.plain" }
-func (plainEvent) Source() string  { return "test" }
 
 // taggedEvent declares arbitrary tags, so tag normalization is tested without
 // depending on what a real domain happens to tag today.
@@ -28,47 +24,122 @@ type taggedEvent struct {
 }
 
 func (taggedEvent) EventType() Type  { return "platform.test.tagged" }
-func (taggedEvent) Source() string   { return "test" }
 func (e taggedEvent) Tags() []string { return e.tags }
 
-// versionedEvent declares its own payload schema version, so the recorder's
-// handling of the Versioned interface is tested without a real domain event.
+// versionedEvent declares its own payload schema version.
 type versionedEvent struct {
 	version int
 }
 
 func (versionedEvent) EventType() Type      { return "platform.test.versioned" }
-func (versionedEvent) Source() string       { return "test" }
 func (e versionedEvent) SchemaVersion() int { return e.version }
 
-// testNode is the deployment identity a test recorder stamps onto every record.
-var testNode = Node{
-	Project:        "scenario",
-	Environment:    "development",
-	Site:           "local",
-	Machine:        "node",
-	MachineProfile: "all-in-one",
+// severeEvent declares its own severity.
+type severeEvent struct {
+	severity Severity
 }
 
-func TestNodeFromDescriptorTakesDeploymentIdentity(t *testing.T) {
-	node := NodeFromDescriptor(config.Descriptor{
-		Platform:       "opdl",
-		Project:        "scenario",
-		Environment:    "development",
-		Site:           "local",
-		Machine:        "node",
-		MachineProfile: "all-in-one",
-		IP:             "127.0.0.1",
-		Services:       []string{"core-services"},
-	})
+func (severeEvent) EventType() Type      { return "platform.test.severe" }
+func (e severeEvent) Severity() Severity { return e.severity }
 
-	require.Equal(t, Node{
-		Project:        "scenario",
-		Environment:    "development",
-		Site:           "local",
-		Machine:        "node",
-		MachineProfile: "all-in-one",
-	}, node)
+// identifiedEvent declares a domain-stable identity.
+type identifiedEvent struct {
+	stableID string
+}
+
+func (identifiedEvent) EventType() Type    { return "platform.test.identified" }
+func (e identifiedEvent) StableID() string { return e.stableID }
+
+// brokenEvent carries a payload encoding/json cannot marshal.
+type brokenEvent struct {
+	Broken chan int `json:"broken"`
+}
+
+func (brokenEvent) EventType() Type { return "platform.test.broken" }
+
+func TestSchemaVersionDefaultsAndOverrides(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   Event
+		want    int
+		wantErr string
+	}{
+		{name: "undeclared defaults", event: plainEvent{}, want: DefaultSchemaVersion},
+		{name: "declared wins", event: versionedEvent{version: 3}, want: 3},
+		{name: "zero is rejected", event: versionedEvent{version: 0}, wantErr: "declares schema version 0"},
+		{name: "negative is rejected", event: versionedEvent{version: -1}, wantErr: "declares schema version -1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			version, err := schemaVersionOf(test.event)
+			if test.wantErr != "" {
+				require.ErrorIs(t, err, ErrInvalidEvent)
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, version)
+		})
+	}
+}
+
+func TestSeverityDefaultsAndOverrides(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   Event
+		want    Severity
+		wantErr string
+	}{
+		{name: "undeclared defaults to info", event: plainEvent{}, want: SeverityInfo},
+		{name: "declared warn wins", event: severeEvent{severity: SeverityWarn}, want: SeverityWarn},
+		{name: "declared error wins", event: severeEvent{severity: SeverityError}, want: SeverityError},
+		{name: "unknown is rejected", event: severeEvent{severity: "fatal"}, wantErr: `declares unknown severity "fatal"`},
+		{name: "empty is rejected", event: severeEvent{}, wantErr: `declares unknown severity ""`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			severity, err := severityOf(test.event)
+			if test.wantErr != "" {
+				require.ErrorIs(t, err, ErrInvalidEvent)
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, severity)
+		})
+	}
+}
+
+func TestStableIDIsAbsentUnlessDeclared(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   Event
+		want    string
+		wantErr string
+	}{
+		{name: "undeclared is absent", event: plainEvent{}},
+		{name: "declared wins", event: identifiedEvent{stableID: "proposal-1"}, want: "proposal-1"},
+		{name: "declared is trimmed", event: identifiedEvent{stableID: "  proposal-1 "}, want: "proposal-1"},
+		{name: "empty is rejected", event: identifiedEvent{}, wantErr: "declares an empty stable identity"},
+		{name: "blank is rejected", event: identifiedEvent{stableID: "   "}, wantErr: "declares an empty stable identity"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stableID, err := stableIDOf(test.event)
+			if test.wantErr != "" {
+				require.ErrorIs(t, err, ErrInvalidEvent)
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, stableID)
+		})
+	}
+}
+
+func TestTagsAreAbsentUnlessDeclared(t *testing.T) {
+	require.Nil(t, tagsOf(plainEvent{}))
+	require.Equal(t, []string{TagWarning}, tagsOf(taggedEvent{tags: []string{TagWarning}}))
 }
 
 func TestNormalizeTagsIsDeterministic(t *testing.T) {
@@ -92,87 +163,3 @@ func TestNormalizeTagsIsDeterministic(t *testing.T) {
 		})
 	}
 }
-
-func TestEventTagsIgnoresUntaggedEvents(t *testing.T) {
-	require.Nil(t, eventTags(plainEvent{}))
-	require.Equal(t, []string{"warning"}, eventTags(taggedEvent{tags: []string{"warning"}}))
-}
-
-func TestEventSchemaVersionDefaultsWhenUndeclaredOrUnusable(t *testing.T) {
-	require.Equal(t, DefaultSchemaVersion, eventSchemaVersion(plainEvent{}))
-	require.Equal(t, 3, eventSchemaVersion(versionedEvent{version: 3}))
-	require.Equal(t, DefaultSchemaVersion, eventSchemaVersion(versionedEvent{version: 0}),
-		"a non-positive declared version falls back to the default")
-	require.Equal(t, DefaultSchemaVersion, eventSchemaVersion(versionedEvent{version: -1}))
-}
-
-func TestRecordEncodesEnvelopeAndPayloadOnOneLevel(t *testing.T) {
-	record, err := newRecord(Meta{
-		ID:            "id-a",
-		Type:          "platform.test.tagged",
-		SchemaVersion: 1,
-		Source:        "test",
-		Node:          testNode,
-		Tags:          []string{"warning"},
-	}, plainEvent{Detail: "started"})
-	require.NoError(t, err)
-
-	encoded, err := json.Marshal(record)
-	require.NoError(t, err)
-	require.JSONEq(t, `{
-		"id": "id-a",
-		"type": "platform.test.tagged",
-		"schema_version": 1,
-		"occurred_at": "0001-01-01T00:00:00Z",
-		"source": "test",
-		"node": {
-			"project": "scenario",
-			"environment": "development",
-			"site": "local",
-			"machine": "node",
-			"machine_profile": "all-in-one"
-		},
-		"tags": ["warning"],
-		"data": {"detail": "started"}
-	}`, string(encoded))
-}
-
-func TestRecordOmitsUnsetCausalLinks(t *testing.T) {
-	record, err := newRecord(Meta{ID: "id-a", Type: "platform.test.plain", SchemaVersion: 1, Node: testNode}, plainEvent{})
-	require.NoError(t, err)
-
-	encoded, err := json.Marshal(record)
-	require.NoError(t, err)
-	require.NotContains(t, string(encoded), "causation_id")
-	require.NotContains(t, string(encoded), "correlation_id")
-}
-
-func TestRecordKeepsCausalLinksWhenSet(t *testing.T) {
-	record, err := newRecord(Meta{
-		ID:            "id-b",
-		Type:          "platform.test.plain",
-		SchemaVersion: 1,
-		Node:          testNode,
-		CausationID:   "id-a",
-		CorrelationID: "workflow-1",
-	}, plainEvent{})
-	require.NoError(t, err)
-
-	encoded, err := json.Marshal(record)
-	require.NoError(t, err)
-	require.Contains(t, string(encoded), `"causation_id":"id-a"`)
-	require.Contains(t, string(encoded), `"correlation_id":"workflow-1"`)
-}
-
-func TestNewRecordReportsUnencodablePayload(t *testing.T) {
-	_, err := newRecord(Meta{Type: "platform.test.broken"}, brokenEvent{})
-	require.ErrorContains(t, err, "encode platform.test.broken payload")
-}
-
-// brokenEvent carries a payload encoding/json cannot marshal.
-type brokenEvent struct {
-	Broken chan int `json:"broken"`
-}
-
-func (brokenEvent) EventType() Type { return "platform.test.broken" }
-func (brokenEvent) Source() string  { return "test" }

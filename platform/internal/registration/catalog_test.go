@@ -116,7 +116,7 @@ func TestConstructorsDeriveConsistentIdentities(t *testing.T) {
 func TestCatalogEventsDeclareTheirContract(t *testing.T) {
 	var proposed events.Event = Proposed{}
 	require.Equal(t, TypeProposed, proposed.EventType())
-	require.Equal(t, eventSource, proposed.Source())
+	require.Equal(t, eventSource, Proposed{}.Source())
 
 	require.Equal(t, TypeConfirmed, Confirmed{}.EventType())
 	require.Equal(t, TypeRejected, Rejected{}.EventType())

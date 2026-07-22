@@ -1,7 +1,6 @@
 # Unified platform event model
 
-Status: option A selected. Detailed plan ready for review. No implementation has
-started.
+Status: option A selected. Stage 10 is implemented; stages 20 to 90 are pending.
 
 ## Goal
 

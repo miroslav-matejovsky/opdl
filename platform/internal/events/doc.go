@@ -1,5 +1,6 @@
-// Package events is the platform's domain event mechanism: the envelope and its
-// stamping. It owns no events of its own.
+// Package events is the platform's domain event mechanism: the one event
+// contract, the one serialized wrapper, and the stamping that connects them. It
+// owns no events of its own.
 //
 // # Domain events, not logs
 //
@@ -20,70 +21,92 @@
 //     interpret it. Where that means repeating a few fields, they are repeated.
 //   - An event is immutable and complete when recorded. Nothing amends it later.
 //
-// Event names read as facts: platform.<area>.<fact>, past tense, e.g.
-// "platform.registration.accepted".
+// # Event types
 //
-// # Where the events are
+// Every event type is platform.<source>.<fact>: the fixed platform prefix, the
+// subsystem that owns the fact, and what happened, e.g.
+// "platform.registration.accepted". Type.Validate enforces the shape, and each
+// token is lower-case words joined by single underscores so one fact has
+// exactly one spelling for its whole life.
+//
+// The fact reads as something completed, not as something requested:
+// "accepted", not "accept"; "site_opened", not "open_site". No check can
+// enforce that, so it is a review rule.
+//
+// The type is the single declaration of both the kind and its source. Source is
+// derived from the middle token, so an event never restates it.
+//
+// # Declaring an event
 //
 // Each package that produces events declares them in its own events.go, with
 // the package's full list documented at the top of that file. There is no
 // central catalog: an event belongs to the domain that can state the fact, and
 // keeping the two together is what stops the catalog from drifting away from
-// the behavior it claims to describe. Today that is:
+// the behavior it claims to describe.
 //
-//   - internal/registration: proposed, confirmed, rejected, accepted.
-//   - internal/eventfabric: ready, stopping.
+// An event is a small struct of payload fields implementing Event, which is one
+// method. Everything else is derived or defaulted, so a normal informational
+// event is declared in full by:
 //
-// A package declares an event by implementing Event: a small struct of payload
-// fields that knows its own Type and the Source subsystem it comes from. An
-// event that marks an operational anomaly also implements Tagged, usually with
-// TagWarning.
+//	func (Accepted) EventType() events.Type { return TypeAccepted }
+//
+// The defaults are: schema version DefaultSchemaVersion, severity
+// DefaultSeverity, no tags, and no stable identity. An event that differs from
+// one of them implements the matching optional interface, and nothing more:
+//
+//   - Versioned declares a payload schema version other than the default,
+//     which an event does when its payload encoding evolves.
+//   - Severe declares a severity, which an event does when the fact deserves
+//     more than routine attention.
+//   - Tagged declares markers such as TagWarning.
+//   - Identified declares the fact's domain-stable identity, meaning the value
+//     that makes a restatement of the same fact the same fact.
 //
 // # Envelope
 //
-// Emitters supply only the payload. The Event Fabric publisher stamps the
-// envelope (Meta) and stores the two together as one Record:
+// Emitters supply only the payload. The envelope is stamped for them, and
+// Envelope is the platform's only serialized wrapper: local files, the site
+// journal, and any later distributor carry the same JSON shape, so a reader
+// never has to work out which writer produced an object before decoding it.
 //
-//   - ID: unique per occurrence and time-ordered.
-//   - Type: the event's stable dotted kind.
-//   - SchemaVersion: the version of the payload schema, positive on every
-//     record. An event declares its own with the Versioned interface, otherwise
-//     it is DefaultSchemaVersion. It lets a reader that replays a journal reject
-//     a payload encoding it does not understand.
-//   - OccurredAt: when the fact happened, in UTC.
-//   - Source: the subsystem that emitted the event.
-//   - Node: the deployment identity of the process that stated the fact.
-//   - CausationID and CorrelationID: the causal links between events, set by the
-//     Event Fabric when a handler's reaction produces a new event and empty on
-//     an event the plain recorder stamps.
-//   - Tags: optional sorted, duplicate-free markers, omitted when empty.
+// It carries the occurrence identity and time, the type, the derived source,
+// the schema version, the severity, the origin, the optional causal links,
+// tags, and stable identity, and the payload as raw JSON. Envelope.Validate
+// checks all of it before an event leaves the process.
 //
 // The envelope deliberately carries no transport ordering. A shared journal
 // orders events when it accepts them; that sequence is a property of the
 // delivery, not of the immutable fact, and lives on the Event Fabric's receipt
-// and delivery rather than in the record.
+// and delivery rather than in the envelope.
 //
-// # Node identity is on every record
+// # Origin is on every envelope
 //
-// Which process an event is about is a Node. It is constant for a whole process
-// run, so the Event Fabric is told this machine's Node once and stamps it onto
-// every record. Carrying it per record is what lets a shared journal pool the
-// events of every node in one ordered stream and still attribute each fact to
-// its origin.
+// Which process an event came from is an Origin: the deployment identity down
+// to the machine, plus the local process role and PID. It is constant for a
+// whole process run and is stamped onto every envelope. Carrying it per event
+// is what lets a shared journal pool the events of every node in one ordered
+// stream and still attribute each fact to its writer.
 //
-// A Node names a machine, which is a domain identity and stays machine-scoped. A
-// machine may run primary and standby processes, but the local process role is
-// operational identity only: it belongs in logs and in
-// an operational node label (see internal/redundancy.OperationalName), never in a
-// domain identity. Folding the role into a Node would turn one machine into two
-// registration voters, so it deliberately is not here.
+// The deployment fields name a machine, which is a domain identity. The process
+// role and PID are operational identity: they say which of that machine's
+// processes wrote the event and belong in an operator's view only. Domain
+// behavior stays machine-scoped, so registration counts one voter per machine
+// however many processes it runs. Folding the role into domain identity would
+// turn one machine into two voters, which is why the two halves are documented
+// apart even though they travel together.
 //
 // # Storage
 //
-// This package does not store events. StampRecord turns an event into a
-// complete, self-describing record, and the Event Fabric appends it to the site
+// This package does not store events. It turns an event into a complete,
+// self-describing envelope, and the Event Fabric appends it to the site
 // journal — synchronously, so a fact is retained before the operation that
-// caused it returns. The journal is the platform's only event storage.
+// caused it returns. The journal is the platform's only event storage, and a
+// running service has exactly one event source: the retained site journal.
 //
-// A running service has exactly one event source: the retained site journal.
+// # Migration
+//
+// legacy.go holds the previous wrapper (Node, Meta, Record, StampRecord) while
+// the pipelines are moved onto Envelope one at a time. It is temporary
+// scaffolding, not a compatibility surface: nothing new is built on it and it
+// is deleted once the migration completes. See docs/plan/unified-events.
 package events
