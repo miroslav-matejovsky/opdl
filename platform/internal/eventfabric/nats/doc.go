@@ -97,12 +97,16 @@
 // answer. An incompatible journal is still refused immediately, because waiting
 // cannot make it compatible.
 //
-// # Publishing and delivery
+// # Appending and delivery
 //
-// Publish stamps an event's envelope, validates it, and appends it to the
-// journal synchronously through JetStream, returning the assigned sequence in
-// the receipt. It sets the journal deduplication id from the event's stable
-// publication identity when it has one. A projector runs an ordered consumer
+// Append validates a completed envelope and writes it to the journal
+// synchronously through JetStream, returning the assigned sequence in the
+// receipt. It takes the envelope as given: the adapter mints no identity, reads
+// no clock, and sets no causal link, because a fact is already decided by the
+// time it arrives here. It sets the journal deduplication id from the envelope's
+// stable domain identity when it has one. Before a handler runs, the delivery is
+// attached to its context as the cause, so a handler's consequences record what
+// produced them. A projector runs an ordered consumer
 // from the first retained event and continues live; a handler runs a durable
 // pull consumer filtered by its routes with explicit acknowledgement and bounded
 // redelivery. A decode failure, an unsupported event, or exhausted delivery
@@ -110,6 +114,20 @@
 // dropping an event. A missed pull-consumer heartbeat is recoverable: the NATS
 // client issues another pull, the adapter records the degradation, and delivery
 // continues on the same iterator.
+//
+// # Its own events
+//
+// The adapter states what its transport is doing — server, client, journal,
+// consumers, and its own release — as typed events declared in events.go, under
+// platform.nats.<fact>. They stay adapter-shaped: server addresses, stream
+// names, consumer attempts. None of that belongs in the common envelope.
+//
+// They are recorded locally, through operations.Recorder, and never published.
+// A node that has lost its connection or cannot reach its journal is precisely
+// the one that cannot write an event about it, so the diagnosis must not depend
+// on the thing being diagnosed. The client's own callbacks record the same way,
+// on their own goroutines and under a background context, and keep working while
+// the connection is going away.
 //
 // # What the adapter does not decide
 //

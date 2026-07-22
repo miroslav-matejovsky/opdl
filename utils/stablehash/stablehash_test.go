@@ -38,7 +38,7 @@ func TestSum256VectorsAndEquivalence(t *testing.T) {
 
 // TestFormerFramingsEquivalence verifies that stablehash.Write and stablehash.Sum256
 // produce the exact same byte sequence as the two former private implementations:
-// writeLengthPrefixed (route.go) and writeField (catalog.go).
+// writeLengthPrefixed (route.go) and writeField (registration identifiers).
 func TestFormerFramingsEquivalence(t *testing.T) {
 	t.Parallel()
 

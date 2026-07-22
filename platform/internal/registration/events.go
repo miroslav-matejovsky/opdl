@@ -1,26 +1,36 @@
 package registration
 
 import (
-	"encoding/hex"
 	"slices"
-	"strconv"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/utils/stablehash"
 )
 
-// This file is the registration domain's event catalog in the event-sourced
-// model: the four facts a registration is expressed as, and the deterministic
-// identities that make retries and redeliveries idempotent. Each event is a
-// published contract, self-contained enough that a reader reconstructs a
-// registration from the journal alone.
+// This file is the registration domain's event catalog: every fact this package
+// can state, and nothing else. Each event is a published contract,
+// self-contained enough that a reader reconstructs a registration from the
+// journal alone.
+//
+//   - platform.registration.proposed: the origin proposes to register a unit.
+//   - platform.registration.confirmed: one expected node accepts the claiming
+//     proposal.
+//   - platform.registration.rejected: one expected node refuses a proposal, or
+//     a proposal loses its key to an earlier one.
+//   - platform.registration.accepted: the origin commits a fully confirmed
+//     proposal.
+//
+// The deterministic identities these payloads carry are derived in
+// identifiers.go.
 
-// eventSource is the subsystem every event in this catalog comes from.
+// eventSource is the subsystem every event in this catalog comes from. It is
+// the middle token of every type below, which is where a reader gets it: no
+// event restates it, and the projection asks the envelope rather than matching
+// a name.
 const eventSource = "registration"
 
-// schemaVersion is the payload schema version stamped into every proposal and
-// decision identity and reported by each event. It is part of an identity hash,
-// so proposals written by two encodings can never share one ID.
+// schemaVersion is the payload schema version every event in this catalog
+// reports. It is also stamped into a proposal identity, so proposals written by
+// two encodings can never share one ID.
 const schemaVersion = 1
 
 // ReasonKeyConflict is the bounded reason a proposal is rejected for losing a
@@ -31,7 +41,7 @@ const ReasonKeyConflict = "registration_key_conflict"
 // proposal that does not match the trusted topology or domain validation.
 const ReasonInvalidProposal = "registration_invalid_proposal"
 
-// Event type constants. Each reads as a fact: platform.<domain>.<fact>, past
+// Event type constants. Each reads as a fact: platform.<source>.<fact>, past
 // tense.
 const (
 	// TypeProposed is stated when the origin proposes a registration.
@@ -44,41 +54,6 @@ const (
 	// TypeAccepted is stated when the origin commits a fully confirmed proposal.
 	TypeAccepted events.Type = "platform.registration.accepted"
 )
-
-// DecisionKind is the kind of decision one node states about a proposal. It is
-// part of a decision identity, so a node's confirmation and its rejection of the
-// same proposal are distinct facts that never collapse into each other.
-type DecisionKind string
-
-const (
-	// DecisionConfirmed is a node's acceptance of a proposal.
-	DecisionConfirmed DecisionKind = "confirmed"
-	// DecisionRejected is a node's refusal of a proposal.
-	DecisionRejected DecisionKind = "rejected"
-)
-
-// ProposalIdentity is the canonical set of fields a proposal ID is derived from:
-// the versioned request, the trusted origin identity, and the ordered expected
-// machines. It is the input to NewProposalID and to NewProposed; it is not
-// itself an event.
-type ProposalIdentity struct {
-	// UnitType is the requested unit type identifier.
-	UnitType uint8
-	// UnitID is the requested unit identifier within UnitType.
-	UnitID uint16
-	// UnitTypeNameAdvertised is the unit's advertised type name.
-	UnitTypeNameAdvertised string
-	// Role is the unit's advertised role, empty when it advertised none.
-	Role string
-	// OriginMachine is the trusted descriptor machine the proposal originates on.
-	OriginMachine string
-	// OriginIP is the trusted descriptor IP of that machine.
-	OriginIP string
-	// ExpectedMachines is the set of machines whose confirmation the proposal
-	// needs. It is sorted before it is hashed and stored, so its order never
-	// changes a proposal's identity.
-	ExpectedMachines []string
-}
 
 // Proposed states the origin's proposal to register a unit. It carries the
 // complete request, the trusted origin, the ordered expected machines, and the
@@ -106,14 +81,11 @@ type Proposed struct {
 // EventType returns the event's stable dotted kind.
 func (Proposed) EventType() events.Type { return TypeProposed }
 
-// Source returns the subsystem that states the fact.
-func (Proposed) Source() string { return eventSource }
-
 // SchemaVersion returns the proposal payload schema version.
 func (Proposed) SchemaVersion() int { return schemaVersion }
 
-// DedupID returns the stable publication identity of this proposal.
-func (p Proposed) DedupID() string { return "registration.proposal." + p.ProposalID }
+// StableID returns the identity that makes a restated proposal the same fact.
+func (p Proposed) StableID() string { return "registration.proposal." + p.ProposalID }
 
 // Key is the unit key this proposal is for.
 func (p Proposed) Key() Key { return Key{UnitType: p.UnitType, UnitID: p.UnitID} }
@@ -131,14 +103,11 @@ type Confirmed struct {
 // EventType returns the event's stable dotted kind.
 func (Confirmed) EventType() events.Type { return TypeConfirmed }
 
-// Source returns the subsystem that states the fact.
-func (Confirmed) Source() string { return eventSource }
-
 // SchemaVersion returns the decision payload schema version.
 func (Confirmed) SchemaVersion() int { return schemaVersion }
 
-// DedupID returns the stable publication identity of this decision.
-func (c Confirmed) DedupID() string { return "registration.decision." + c.DecisionID }
+// StableID returns the identity that makes a restated decision the same fact.
+func (c Confirmed) StableID() string { return "registration.decision." + c.DecisionID }
 
 // Rejected states one expected node's refusal of a proposal, or a proposal
 // losing its key to an earlier one.
@@ -156,17 +125,15 @@ type Rejected struct {
 // EventType returns the event's stable dotted kind.
 func (Rejected) EventType() events.Type { return TypeRejected }
 
-// Source returns the subsystem that states the fact.
-func (Rejected) Source() string { return eventSource }
-
 // SchemaVersion returns the decision payload schema version.
 func (Rejected) SchemaVersion() int { return schemaVersion }
 
-// Tags marks the refusal as an operational anomaly.
-func (Rejected) Tags() []string { return []string{events.TagWarning} }
+// Severity marks the refusal as an operational anomaly rather than a routine
+// transition: a registration that does not happen is what an operator looks for.
+func (Rejected) Severity() events.Severity { return events.SeverityWarn }
 
-// DedupID returns the stable publication identity of this decision.
-func (r Rejected) DedupID() string { return "registration.decision." + r.DecisionID }
+// StableID returns the identity that makes a restated decision the same fact.
+func (r Rejected) StableID() string { return "registration.decision." + r.DecisionID }
 
 // Accepted states the origin's commit of a fully confirmed proposal. It repeats
 // the committed registration fields so the acceptance stands alone.
@@ -190,14 +157,11 @@ type Accepted struct {
 // EventType returns the event's stable dotted kind.
 func (Accepted) EventType() events.Type { return TypeAccepted }
 
-// Source returns the subsystem that states the fact.
-func (Accepted) Source() string { return eventSource }
-
 // SchemaVersion returns the acceptance payload schema version.
 func (Accepted) SchemaVersion() int { return schemaVersion }
 
-// DedupID returns the stable publication identity of this acceptance.
-func (a Accepted) DedupID() string { return "registration.acceptance." + a.ProposalID }
+// StableID returns the identity that makes a restated acceptance the same fact.
+func (a Accepted) StableID() string { return "registration.acceptance." + a.ProposalID }
 
 // NewProposed builds a proposal from its identity. It sorts the expected
 // machines so the same set always produces the same proposal, and stamps the
@@ -251,35 +215,4 @@ func NewAccepted(proposal Proposed) Accepted {
 		OriginMachine:          proposal.OriginMachine,
 		OriginIP:               proposal.OriginIP,
 	}
-}
-
-// NewProposalID derives a proposal's deterministic identity from its versioned
-// canonical fields, trusted origin, and ordered expected machines. Every field
-// is length-prefixed so no two different proposals can encode the same bytes.
-func NewProposalID(identity ProposalIdentity) string {
-	expected := slices.Clone(identity.ExpectedMachines)
-	slices.Sort(expected)
-
-	values := make([]string, 0, 8+len(expected))
-	values = append(values,
-		strconv.Itoa(schemaVersion),
-		strconv.FormatUint(uint64(identity.UnitType), 10),
-		strconv.FormatUint(uint64(identity.UnitID), 10),
-		identity.UnitTypeNameAdvertised,
-		identity.Role,
-		identity.OriginMachine,
-		identity.OriginIP,
-		strconv.Itoa(len(expected)),
-	)
-	values = append(values, expected...)
-	sum := stablehash.Sum256(values...)
-	return hex.EncodeToString(sum[:])
-}
-
-// NewDecisionID derives a decision's deterministic identity from the proposal it
-// is about, its kind, and the deciding machine. A node that republishes the same
-// decision produces the same ID, so redelivery never doubles a decision.
-func NewDecisionID(proposalID string, kind DecisionKind, decidingMachine string) string {
-	sum := stablehash.Sum256(proposalID, string(kind), decidingMachine)
-	return hex.EncodeToString(sum[:])
 }

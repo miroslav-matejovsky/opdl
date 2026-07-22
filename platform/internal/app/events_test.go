@@ -1,0 +1,114 @@
+package app
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+)
+
+func TestApplicationEventsDeclareTheirContract(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    events.Event
+		wantType events.Type
+		want     events.Severity
+	}{
+		{name: "process started", event: ProcessStarted{}, wantType: TypeProcessStarted, want: events.SeverityInfo},
+		{
+			name:     "process stopped cleanly",
+			event:    ProcessStopped{},
+			wantType: TypeProcessStopped,
+			want:     events.SeverityInfo,
+		},
+		{
+			name:     "process stopped failing",
+			event:    ProcessStopped{Error: "boom"},
+			wantType: TypeProcessStopped,
+			want:     events.SeverityError,
+		},
+		{name: "status dir failed", event: StatusDirFailed{}, wantType: TypeStatusDirFailed, want: events.SeverityError},
+		{name: "lock open failed", event: LockOpenFailed{}, wantType: TypeLockOpenFailed, want: events.SeverityError},
+		{name: "status write failed", event: StatusWriteFailed{}, wantType: TypeStatusWriteFailed, want: events.SeverityError},
+		{name: "api listen failed", event: APIListenFailed{}, wantType: TypeAPIListenFailed, want: events.SeverityError},
+		{name: "api listening", event: APIListening{}, wantType: TypeAPIListening, want: events.SeverityInfo},
+		{name: "api active", event: APIActive{}, wantType: TypeAPIActive, want: events.SeverityInfo},
+		{name: "api stopped cleanly", event: APIStopped{}, wantType: TypeAPIStopped, want: events.SeverityInfo},
+		{name: "api stopped failing", event: APIStopped{Error: "boom"}, wantType: TypeAPIStopped, want: events.SeverityError},
+		{name: "standby waiting", event: StandbyWaiting{}, wantType: TypeStandbyWaiting, want: events.SeverityInfo},
+		{name: "standby open retry", event: StandbyOpenRetry{}, wantType: TypeStandbyOpenRetry, want: events.SeverityWarn},
+		{name: "standby ready", event: StandbyReady{}, wantType: TypeStandbyReady, want: events.SeverityInfo},
+		{
+			name:     "projection caught up",
+			event:    ProjectionCaughtUp{},
+			wantType: TypeProjectionCaughtUp,
+			want:     events.SeverityInfo,
+		},
+		{
+			name:     "projection lag exceeded",
+			event:    ProjectionLagExceeded{},
+			wantType: TypeProjectionLagExceeded,
+			want:     events.SeverityError,
+		},
+		{name: "site opening", event: SiteOpening{}, wantType: TypeSiteOpening, want: events.SeverityInfo},
+		{name: "site open failed", event: SiteOpenFailed{}, wantType: TypeSiteOpenFailed, want: events.SeverityError},
+		{name: "site ready", event: SiteReady{}, wantType: TypeSiteReady, want: events.SeverityInfo},
+		{name: "site stopping", event: SiteStopping{}, wantType: TypeSiteStopping, want: events.SeverityInfo},
+		{name: "site stopped cleanly", event: SiteStopped{}, wantType: TypeSiteStopped, want: events.SeverityInfo},
+		{
+			name:     "site stopped failing",
+			event:    SiteStopped{Error: "boom"},
+			wantType: TypeSiteStopped,
+			want:     events.SeverityError,
+		},
+		{
+			name:     "background loop canceled",
+			event:    BackgroundLoopStopped{Loop: "projector"},
+			wantType: TypeBackgroundLoopStopped,
+			want:     events.SeverityInfo,
+		},
+		{
+			name:     "background loop failed",
+			event:    BackgroundLoopStopped{Loop: "projector", Error: "boom"},
+			wantType: TypeBackgroundLoopStopped,
+			want:     events.SeverityError,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.wantType, test.event.EventType())
+			require.NoError(t, test.event.EventType().Validate())
+			require.Equal(t, "app", test.event.EventType().Source(),
+				"every fact in this catalog is stated by the application runtime")
+
+			severity := events.SeverityInfo
+			if severe, ok := test.event.(events.Severe); ok {
+				severity = severe.Severity()
+			}
+			require.Equal(t, test.want, severity)
+		})
+	}
+}
+
+// TestApplicationEventsAreStampedIntoValidEnvelopes proves the catalog is
+// usable: every event in it stamps into an envelope a reader can replay, with
+// no metadata repeated in the payload.
+func TestApplicationEventsAreStampedIntoValidEnvelopes(t *testing.T) {
+	factory, err := events.NewFactory(testDescriptor, "primary")
+	require.NoError(t, err)
+
+	failure, err := factory.Wrap(t.Context(), SiteOpenFailed{Phase: PhaseEventFabric, Error: "journal unreachable"})
+	require.NoError(t, err)
+	require.NoError(t, failure.Validate())
+	require.Equal(t, events.SeverityError, failure.Severity)
+	require.JSONEq(t, `{"phase":"event_fabric","error":"journal unreachable"}`, string(failure.Data),
+		"a failure keeps its phase and its error, and repeats no envelope metadata")
+
+	waiting, err := factory.Wrap(t.Context(), StandbyWaiting{})
+	require.NoError(t, err)
+	require.NoError(t, waiting.Validate())
+	require.JSONEq(t, `{}`, string(waiting.Data), "the fact is the whole of it; who it is about is the origin")
+	require.Equal(t, "node", waiting.Origin.Machine)
+	require.Equal(t, "primary", waiting.Origin.ProcessRole)
+}

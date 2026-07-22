@@ -7,12 +7,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewIDIsUniqueAndTimeOrdered(t *testing.T) {
-	previous := NewID()
+func TestNewEventIDIsUniqueAndTimeOrdered(t *testing.T) {
+	previous, err := newEventID()
+	require.NoError(t, err)
 	require.Len(t, previous, 37)
 
 	for range 100 {
-		current := NewID()
+		current, err := newEventID()
+		require.NoError(t, err)
 		require.NotEqual(t, previous, current)
 		require.LessOrEqual(t, strings.Split(previous, "-")[0], strings.Split(current, "-")[0])
 		previous = current

@@ -9,6 +9,7 @@ import (
 	"os/signal"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
@@ -36,7 +37,14 @@ func Run(args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	recorder, err := operations.Open(cfg.OperationsEventDir(), descriptor, role.String())
+	// One factory per process stamps everything this process states, locally and
+	// into the site journal, so origin and occurrence identity are decided once
+	// and never by a caller.
+	factory, err := events.NewFactory(descriptor, role.String())
+	if err != nil {
+		return err
+	}
+	recorder, err := operations.Open(cfg.OperationsEventDir(), factory)
 	if err != nil {
 		return err
 	}
@@ -50,10 +58,6 @@ func Run(args []string) (runErr error) {
 		serviceName = service.Name
 	}
 	fmt.Printf("    instance     role=%s standby=%t service=%s\n", role, !descriptor.Instances.Standby.Disabled, serviceName)
-	recorder.Emit("platform.process_started", operations.LevelInfo, "platform", "platform process started", map[string]any{
-		"operations_file": recorder.Path(),
-		"standby_enabled": !descriptor.Instances.Standby.Disabled,
-	})
 
 	// os.Interrupt is the only signal Windows delivers: the runtime raises it for
 	// CTRL_C_EVENT and CTRL_BREAK_EVENT, which is how the service manager and the
@@ -62,16 +66,17 @@ func Run(args []string) (runErr error) {
 	defer stop()
 	ctx = operations.WithRecorder(ctx, recorder)
 
-	runErr = runProcess(ctx, cfg, descriptor, role)
-	level := operations.LevelInfo
-	message := "platform process stopped"
-	attributes := map[string]any{}
+	recorder.Record(ctx, ProcessStarted{
+		OperationsFile: recorder.Path(),
+		StandbyEnabled: !descriptor.Instances.Standby.Disabled,
+	})
+
+	runErr = runProcess(ctx, cfg, descriptor, role, factory)
+	stopped := ProcessStopped{}
 	if runErr != nil {
-		level = operations.LevelError
-		message = "platform process failed"
-		attributes[operations.AttributeError] = runErr.Error()
+		stopped.Error = runErr.Error()
 	}
-	recorder.Emit("platform.process_stopped", level, "platform", message, attributes)
+	recorder.Record(ctx, stopped)
 	return runErr
 }
 

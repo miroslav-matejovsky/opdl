@@ -83,13 +83,7 @@ func Contend(ctx context.Context, lock *Lock, runtime Runtime) error {
 	observer := operations.FromContext(ctx)
 
 	if lock != nil {
-		observer.Emit("platform.lock_opened", operations.LevelInfo, "platform.redundancy", "ownership object opened", map[string]any{
-			operations.AttributeObject: lock.Name(),
-			// Whether a peer process on this machine already had the object open. Both
-			// processes must report the same object; a machine whose two processes
-			// report different ones was built from mismatched packages.
-			operations.AttributeExisted: lock.Existed(),
-		})
+		observer.Record(ctx, LockOpened{Object: lock.Name(), Existed: lock.Existed()})
 	}
 
 	acquired, err := lock.TryAcquire()
@@ -97,18 +91,17 @@ func Contend(ctx context.Context, lock *Lock, runtime Runtime) error {
 		return err
 	}
 	if acquired.Held {
-		emitAcquired(observer, lock, acquired)
+		recordAcquired(ctx, observer, lock, acquired)
 		return activate(ctx, lock, runtime, ActivationInitial)
 	}
 
-	observer.Emit("platform.ownership_waiting", operations.LevelInfo, "platform.redundancy",
-		"Primary Ownership is held by the other instance", map[string]any{operations.AttributeObject: lock.Name()})
+	observer.Record(ctx, OwnershipWaiting{Object: lock.Name()})
 
 	acquired, err = waitWhilePassive(ctx, lock, runtime)
 	if err != nil || !acquired.Held {
 		return err
 	}
-	emitAcquired(observer, lock, acquired)
+	recordAcquired(ctx, observer, lock, acquired)
 	return activate(ctx, lock, runtime, activationKind(lock.Role()))
 }
 
@@ -177,46 +170,28 @@ func waitWhilePassive(ctx context.Context, lock *Lock, runtime Runtime) (Acquisi
 func activate(ctx context.Context, lock *Lock, runtime Runtime, kind ActivationKind) error {
 	observer := operations.FromContext(ctx)
 	started := time.Now()
-	observer.Emit("platform.activation_started", operations.LevelInfo, "platform.redundancy", "active runtime activation started",
-		map[string]any{operations.AttributeActivationKind: string(kind)})
+	observer.Record(ctx, ActivationStarted{Kind: kind})
 
 	err := runtime.Active(ctx, kind)
 	releaseErr := lock.Release()
 
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
-		observer.Emit("platform.activation_failed", operations.LevelError, "platform.redundancy", "active runtime activation failed",
-			map[string]any{
-				operations.AttributeActivationKind: string(kind),
-				operations.AttributeDurationMS:     elapsed,
-				operations.AttributeError:          err.Error(),
-			})
+		observer.Record(ctx, ActivationFailed{Kind: kind, DurationMS: elapsed, Error: err.Error()})
 		return errors.Join(err, releaseErr)
 	}
-	observer.Emit("platform.activation_completed", operations.LevelInfo, "platform.redundancy", "active runtime activation completed",
-		map[string]any{operations.AttributeActivationKind: string(kind), operations.AttributeDurationMS: elapsed})
+	observer.Record(ctx, ActivationCompleted{Kind: kind, DurationMS: elapsed})
 	return releaseErr
 }
 
-// emitAcquired reports ownership and, crucially, how it was obtained.
-//
-// An abandoned ownership means the previous owner died rather than handed over. The
-// file-lock ownership this replaced could not tell the two apart, so an operator had
-// to correlate logs to answer whether a failover was planned.
-func emitAcquired(observer *operations.Recorder, lock *Lock, acquired Acquisition) {
+// recordAcquired states ownership and how it was obtained. A machine with no
+// standby has no lock and nothing to state: it is active by construction, so
+// there was no ownership to take from anyone.
+func recordAcquired(ctx context.Context, observer *operations.Recorder, lock *Lock, acquired Acquisition) {
 	if lock == nil {
 		return
 	}
-	attributes := map[string]any{
-		operations.AttributeObject:    lock.Name(),
-		operations.AttributeAbandoned: acquired.Abandoned,
-	}
-	if acquired.Abandoned {
-		observer.Emit("platform.ownership_acquired", operations.LevelWarn, "platform.redundancy",
-			"Primary Ownership acquired from a process that died without releasing it", attributes)
-		return
-	}
-	observer.Emit("platform.ownership_acquired", operations.LevelInfo, "platform.redundancy", "Primary Ownership acquired", attributes)
+	observer.Record(ctx, OwnershipAcquired{Object: lock.Name(), Abandoned: acquired.Abandoned})
 }
 
 // There is no branch here for "another process holds ownership on a machine with

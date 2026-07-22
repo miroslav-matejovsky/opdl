@@ -19,12 +19,22 @@ type Publisher interface {
 	Publish(ctx context.Context, event events.Event) (Receipt, error)
 }
 
-// Fabric is the Event Fabric as runtime composition owns it: the publish side,
+// Appender is the adapter-facing half of publication: it durably appends one
+// already stamped envelope to the site journal. It is deliberately not the
+// business-facing role. An adapter receives a completed fact and decides where
+// it goes; it never decides what the fact says, when it happened, or which
+// process stated it.
+type Appender interface {
+	// Append durably appends envelope to the site journal and returns its Receipt.
+	Append(ctx context.Context, envelope events.Envelope) (Receipt, error)
+}
+
+// Fabric is the Event Fabric as runtime composition owns it: the append side,
 // the projector and handler runners, the journal high-water query, and the
 // health and lifecycle operations. A domain package is never handed a Fabric;
 // it receives the narrow Publisher, Projector, or Handler role it needs.
 type Fabric interface {
-	Publisher
+	Appender
 
 	// RunProjector attaches projector to one continuous ordered consumer, from
 	// the first retained event through live delivery. It returns when ctx is
@@ -60,6 +70,23 @@ type Fabric interface {
 	Close(ctx context.Context) error
 }
 
+// Info is a node's Event Fabric identity and storage disposition, as the
+// adapter knows it. It is operational metadata for whoever reads it, including
+// the node's ready event; no platform behavior depends on it.
+type Info struct {
+	// Adapter is the transport adapter's implementation name.
+	Adapter string `json:"adapter"`
+	// Server is this node's name within the site's transport cluster.
+	Server string `json:"server"`
+	// Journal is the site journal's name.
+	Journal string `json:"journal"`
+	// HostsStorage reports whether this node stores the journal, as opposed to
+	// routing to the nodes that do.
+	HostsStorage bool `json:"hosts_storage"`
+	// Replicas is the site journal's replica count.
+	Replicas int `json:"replicas"`
+}
+
 // Receipt is proof the journal durably accepted a published event. It is an
 // acknowledgement, not a source of truth: a lost Receipt after a durable write
 // is a redelivery to reconcile by identity, never a second fact to publish.
@@ -80,8 +107,9 @@ type Receipt struct {
 // journal's ordering and deliberately is not copied into the immutable record:
 // the fact does not depend on where the transport placed it.
 type Delivery struct {
-	// Record is the stored event: envelope plus payload.
-	Record events.Record
+	// Envelope is the stored event: its metadata and payload, exactly as the
+	// journal accepted it.
+	Envelope events.Envelope
 	// Sequence is the event's position in the site journal.
 	Sequence uint64
 }
@@ -134,16 +162,4 @@ type Handler interface {
 	// decides from a caught-up local view. Returning nil acknowledges the input;
 	// returning an error leaves it unacknowledged for redelivery.
 	Handle(ctx context.Context, delivery Delivery) error
-}
-
-// Identified is the optional interface an events.Event implements to supply a
-// stable publication identity. The Event Fabric uses it as the journal's
-// deduplication key, so a fact republished after a redelivery — a handler
-// restating a decision, for instance — is recognized as the same message inside
-// the deduplication window. An event that does not implement it is deduplicated
-// only by its unique envelope ID, which recognizes a repeated publish of one
-// record but not a fact recomputed from scratch.
-type Identified interface {
-	// DedupID returns the event's stable deduplication identity.
-	DedupID() string
 }

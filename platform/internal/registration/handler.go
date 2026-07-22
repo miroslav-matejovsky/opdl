@@ -60,23 +60,27 @@ func (h *Handler) Routes() []eventfabric.Route { return slices.Clone(h.routes) }
 
 // Handle waits for the input and its predecessors to be projected before it
 // decides. A publication failure is returned so the input remains unacknowledged.
+//
+// A consequence is published with the context Handle received. The Event Fabric
+// has already attached this delivery to it as the cause, so the causal links are
+// recorded without the decision logic knowing they exist.
 func (h *Handler) Handle(ctx context.Context, delivery eventfabric.Delivery) error {
 	if err := h.projection.WaitApplied(ctx, delivery.Sequence); err != nil {
 		return fmt.Errorf("registration: wait for projection sequence %d: %w", delivery.Sequence, err)
 	}
-	switch delivery.Record.Type {
+	switch delivery.Envelope.Type {
 	case TypeProposed:
 		return h.handleProposed(ctx, delivery)
 	case TypeConfirmed:
 		return h.handleConfirmed(ctx, delivery)
 	default:
-		return fmt.Errorf("registration: handler received unsupported event %q", delivery.Record.Type)
+		return fmt.Errorf("registration: handler received unsupported event %q", delivery.Envelope.Type)
 	}
 }
 
 func (h *Handler) handleProposed(ctx context.Context, delivery eventfabric.Delivery) error {
 	var proposed Proposed
-	if err := json.Unmarshal(delivery.Record.Data, &proposed); err != nil {
+	if err := json.Unmarshal(delivery.Envelope.Data, &proposed); err != nil {
 		return fmt.Errorf("registration: decode proposal at %d: %w", delivery.Sequence, err)
 	}
 	projected, found := h.projection.Proposal(proposed.ProposalID)
@@ -96,7 +100,7 @@ func (h *Handler) handleProposed(ctx context.Context, delivery eventfabric.Deliv
 	} else {
 		consequence = NewRejected(projected.ProposalID, h.location.Machine, reason)
 	}
-	if _, err := h.publisher.Publish(eventfabric.CausalContext(ctx, delivery), consequence); err != nil {
+	if _, err := h.publisher.Publish(ctx, consequence); err != nil {
 		return fmt.Errorf("registration: publish decision for proposal %s: %w", projected.ProposalID, err)
 	}
 	return nil
@@ -104,7 +108,7 @@ func (h *Handler) handleProposed(ctx context.Context, delivery eventfabric.Deliv
 
 func (h *Handler) handleConfirmed(ctx context.Context, delivery eventfabric.Delivery) error {
 	var confirmed Confirmed
-	if err := json.Unmarshal(delivery.Record.Data, &confirmed); err != nil {
+	if err := json.Unmarshal(delivery.Envelope.Data, &confirmed); err != nil {
 		return fmt.Errorf("registration: decode confirmation at %d: %w", delivery.Sequence, err)
 	}
 	proposed, found := h.projection.Proposal(confirmed.ProposalID)
@@ -115,7 +119,7 @@ func (h *Handler) handleConfirmed(ctx context.Context, delivery eventfabric.Deli
 	if status != StatusPending || !h.projection.AllExpectedConfirmed(proposed.ProposalID) {
 		return nil
 	}
-	if _, err := h.publisher.Publish(eventfabric.CausalContext(ctx, delivery), NewAccepted(proposed)); err != nil {
+	if _, err := h.publisher.Publish(ctx, NewAccepted(proposed)); err != nil {
 		return fmt.Errorf("registration: publish acceptance for proposal %s: %w", proposed.ProposalID, err)
 	}
 	return nil

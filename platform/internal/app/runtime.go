@@ -11,6 +11,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
@@ -82,11 +83,11 @@ func instanceIdentity(descriptor config.Descriptor, role redundancy.InstanceRole
 // The order is deliberate. The listener opens first and stays open for the whole
 // process, so an instance is reachable in every state and a bind failure stops it
 // at startup rather than at a failover. Ownership decides only what it answers.
-func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole) (runErr error) {
+func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, factory events.Factory) (runErr error) {
 	observer := operations.FromContext(ctx)
 	statusPath := redundancy.StatusPath(instanceOf(descriptor, role).RuntimeDir)
 	if err := redundancy.PrepareStatusDir(statusPath); err != nil {
-		observer.Emit("platform.status_dir_failed", operations.LevelError, "platform.status", "status directory could not be created", map[string]any{operations.AttributeError: err.Error(), operations.AttributePath: statusPath})
+		observer.Record(ctx, StatusDirFailed{Path: statusPath, Error: err.Error()})
 		return err
 	}
 
@@ -96,7 +97,7 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descr
 	}
 	lock, err := redundancy.OpenLock(windowsMutex, role)
 	if err != nil {
-		observer.Emit("platform.lock_open_failed", operations.LevelError, "platform.redundancy", "ownership object failed to open", map[string]any{operations.AttributeError: err.Error(), operations.AttributeObject: windowsMutex})
+		observer.Record(ctx, LockOpenFailed{Object: windowsMutex, Error: err.Error()})
 		return err
 	}
 	// The Lock owns kernel handles and a pinned OS thread when not nil. Closing it releases
@@ -110,26 +111,23 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descr
 	})
 	server, err := openInstanceServer(ctx, address, cfg.ReadHeaderTimeout(), passive)
 	if err != nil {
-		observer.Emit("platform.api_listen_failed", operations.LevelError, "platform.http", "HTTP API listener failed", map[string]any{operations.AttributeAddress: address, operations.AttributeError: err.Error()})
+		observer.Record(ctx, APIListenFailed{Address: address, Error: err.Error()})
 		return err
 	}
 	// Whatever else happens, the listener drains before the process leaves.
 	defer func() { runErr = errors.Join(runErr, server.shutdown(cfg.ShutdownTimeout())) }()
 
 	fmt.Printf("platform: %s listening on %s\n", role, address)
-	observer.Emit("platform.api_listening", operations.LevelInfo, "platform.http", "HTTP API is accepting requests", map[string]any{
-		operations.AttributeAddress: address,
-		// A Passive instance is reachable too, and answers a different surface.
-		// Which one it is serving is the thing an operator is asking about.
-		operations.AttributeInstanceState: api.InstanceStatePassive,
-	})
+	// A Passive instance is reachable too, and answers a different surface. Which
+	// one it is serving is the thing an operator is asking about.
+	observer.Record(ctx, APIListening{Address: address, InstanceState: api.InstanceStatePassive})
 
 	return redundancy.Contend(ctx, lock, redundancy.Runtime{
 		Passive: func(passiveCtx context.Context) error {
-			return runPassive(passiveCtx, cfg, descriptor, role, statusPath)
+			return runPassive(passiveCtx, cfg, descriptor, role, statusPath, factory)
 		},
 		Active: func(activeCtx context.Context, kind redundancy.ActivationKind) error {
-			return runActive(activeCtx, cfg, descriptor, role, statusPath, server, kind)
+			return runActive(activeCtx, cfg, descriptor, role, statusPath, server, kind, factory)
 		},
 	})
 }
@@ -145,9 +143,9 @@ func runProcess(ctx context.Context, cfg *config.Config, descriptor config.Descr
 // A projection that will not open is not fatal here. An instance that cannot
 // follow the journal must still be able to take ownership when the other one
 // stops, so this retries until its context ends rather than giving up.
-func runPassive(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string) error {
+func runPassive(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string, factory events.Factory) error {
 	observer := operations.FromContext(ctx)
-	site, err := openPassiveSite(ctx, cfg, descriptor, role, statusPath)
+	site, err := openPassiveSite(ctx, cfg, descriptor, role, statusPath, factory)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		// Ownership was won, or the process is stopping, before a projection ever
 		// opened. Either way there is nothing to run and nothing to close, and
@@ -166,7 +164,7 @@ func runPassive(ctx context.Context, cfg *config.Config, descriptor config.Descr
 	}
 
 	fmt.Printf("platform: %s caught up and waiting for Primary Ownership\n", role)
-	observer.Emit("platform.standby_waiting", operations.LevelInfo, "platform.redundancy", "standby projection caught up and is waiting for Primary Ownership", nil)
+	observer.Record(ctx, StandbyWaiting{})
 
 	// Wait for ownership or for the process to stop. Either arrives as a canceled
 	// context; which one it was is the ownership machine's business, not this
@@ -187,13 +185,13 @@ func runPassive(ctx context.Context, cfg *config.Config, descriptor config.Descr
 //
 // It returns ctx.Err() when the context ended first, which the caller reads as
 // "won ownership, or stopping" rather than as a failure.
-func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string) (*site, error) {
+func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string, factory events.Factory) (*site, error) {
 	observer := operations.FromContext(ctx)
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		opened, err := open(ctx, descriptor, cfg, false, role)
+		opened, err := open(ctx, descriptor, cfg, false, role, factory)
 		if err == nil {
 			return opened, nil
 		}
@@ -202,7 +200,7 @@ func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor config.
 		}
 		fmt.Fprintf(os.Stderr, "platform: %s standby projection unavailable: %v; waiting for Primary Ownership\n", role, err)
 		if attempt == 1 || attempt%10 == 0 {
-			observer.Emit("platform.standby_open_retry", operations.LevelWarn, "platform.redundancy", "standby projection unavailable; waiting for Primary Ownership", map[string]any{"attempt": attempt, operations.AttributeError: err.Error()})
+			observer.Record(ctx, StandbyOpenRetry{Attempt: attempt, Error: err.Error()})
 		}
 		if writeErr := writeUnavailableStatus(statusPath, role, err); writeErr != nil {
 			return nil, errors.Join(err, writeErr)
@@ -221,14 +219,14 @@ func openPassiveSite(ctx context.Context, cfg *config.Config, descriptor config.
 // It does not open a listener. One is already bound and answering the Passive
 // surface, so activation swaps the handler rather than moving the endpoint, and
 // the address a caller uses never changes.
-func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string, server *instanceServer, kind redundancy.ActivationKind) error {
+func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descriptor, role redundancy.InstanceRole, statusPath string, server *instanceServer, kind redundancy.ActivationKind, factory events.Factory) error {
 	observer := operations.FromContext(ctx)
 	if err := writeTransitionStatus(statusPath, role, redundancy.StateActivating); err != nil {
 		return err
 	}
 	fmt.Printf("platform: %s started for %s\n", kind, role)
 
-	site, err := open(ctx, descriptor, cfg, true, role)
+	site, err := open(ctx, descriptor, cfg, true, role, factory)
 	if err != nil {
 		return errors.Join(err, writeFailedStatus(statusPath, role, err))
 	}
@@ -241,12 +239,12 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descri
 	var lagEvent sync.Once
 	onLagExceeded := func() {
 		lagEvent.Do(func() {
-			observer.Emit("platform.projection_lag_exceeded", operations.LevelError, "platform.status", "projection lag exceeded the configured serving bound", map[string]any{"lag_bound": cfg.LagBound().String()})
+			observer.Record(ctx, ProjectionLagExceeded{LagBound: cfg.LagBound().String()})
 		})
 		stopServing()
 	}
 	onStatusFailure := func() {
-		observer.Emit("platform.status_write_failed", operations.LevelError, "platform.status", "runtime status file update failed", map[string]any{operations.AttributePath: statusPath})
+		observer.Record(ctx, StatusWriteFailed{Path: statusPath})
 		stopServing()
 	}
 	statusDone, err := startStatus(statusCtx, site.fabric, role, redundancy.StateActive, statusPath, cfg.LagBound(), onLagExceeded, onStatusFailure)
@@ -272,10 +270,7 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descri
 		// api-specifications/openapi.yaml in git, not an endpoint on the runtime.
 		false))
 	fmt.Printf("platform: %s active, serving on %s\n", role, address)
-	observer.Emit("platform.api_active", operations.LevelInfo, "platform.http", "HTTP API is serving domain operations", map[string]any{
-		operations.AttributeAddress:       address,
-		operations.AttributeInstanceState: api.InstanceStateActive,
-	})
+	observer.Record(ctx, APIActive{Address: address, InstanceState: api.InstanceStateActive})
 
 	serveErr := awaitStop(serveCtx, site, server)
 
@@ -286,13 +281,11 @@ func runActive(ctx context.Context, cfg *config.Config, descriptor config.Descri
 	closeErr := site.close(context.WithoutCancel(ctx))
 
 	err = errors.Join(serveErr, transitionErr, shutdownErr, closeErr)
-	level := operations.LevelInfo
-	attributes := map[string]any{}
+	stopped := APIStopped{}
 	if err != nil {
-		level = operations.LevelError
-		attributes[operations.AttributeError] = err.Error()
+		stopped.Error = err.Error()
 	}
-	observer.Emit("platform.api_stopped", level, "platform.http", "HTTP API stopped", attributes)
+	observer.Record(ctx, stopped)
 	if err != nil {
 		return errors.Join(err, writeFailedStatus(statusPath, role, err))
 	}

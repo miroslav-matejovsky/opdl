@@ -135,39 +135,42 @@ func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) e
 		return p.fail(errors.New("registration: delivery sequence must be positive"))
 	}
 
-	record := delivery.Record
-	if !strings.HasPrefix(string(record.Type), "platform.registration.") {
+	envelope := delivery.Envelope
+	// Another domain's fact advances the projection's position and nothing else.
+	// The source is derived from the event type, so this asks the envelope which
+	// domain stated it rather than matching a name.
+	if envelope.Type.Source() != eventSource {
 		p.advance(delivery.Sequence)
 		return nil
 	}
-	if record.SchemaVersion != schemaVersion {
-		return p.fail(fmt.Errorf("registration: unsupported schema version %d for %s at sequence %d", record.SchemaVersion, record.Type, delivery.Sequence))
+	if envelope.SchemaVersion != schemaVersion {
+		return p.fail(fmt.Errorf("registration: unsupported schema version %d for %s at sequence %d", envelope.SchemaVersion, envelope.Type, delivery.Sequence))
 	}
 
 	var err error
-	switch record.Type {
+	switch envelope.Type {
 	case TypeProposed:
 		var event Proposed
-		if err = decode(record, &event); err == nil {
+		if err = decode(envelope, &event); err == nil {
 			err = p.applyProposed(delivery, event)
 		}
 	case TypeConfirmed:
 		var event Confirmed
-		if err = decode(record, &event); err == nil {
+		if err = decode(envelope, &event); err == nil {
 			err = p.applyDecision(delivery, event.ProposalID, decision{machine: event.DecidingMachine, kind: DecisionConfirmed}, event.DecisionID)
 		}
 	case TypeRejected:
 		var event Rejected
-		if err = decode(record, &event); err == nil {
+		if err = decode(envelope, &event); err == nil {
 			err = p.applyDecision(delivery, event.ProposalID, decision{machine: event.DecidingMachine, kind: DecisionRejected, reason: event.Reason}, event.DecisionID)
 		}
 	case TypeAccepted:
 		var event Accepted
-		if err = decode(record, &event); err == nil {
+		if err = decode(envelope, &event); err == nil {
 			err = p.applyAccepted(delivery, event)
 		}
 	default:
-		err = fmt.Errorf("registration: unsupported event %q at sequence %d", record.Type, delivery.Sequence)
+		err = fmt.Errorf("registration: unsupported event %q at sequence %d", envelope.Type, delivery.Sequence)
 	}
 	if err != nil {
 		return p.fail(err)
@@ -214,8 +217,8 @@ func (p *Projection) applyDecision(delivery eventfabric.Delivery, proposalID str
 	if !slices.Contains(proposal.ExpectedMachines, decided.machine) {
 		return fmt.Errorf("registration: decision %q is from unexpected machine %q", decisionID, decided.machine)
 	}
-	if delivery.Record.Node.Machine != decided.machine {
-		return fmt.Errorf("registration: decision %q claims machine %q but envelope states %q", decisionID, decided.machine, delivery.Record.Node.Machine)
+	if delivery.Envelope.Origin.Machine != decided.machine {
+		return fmt.Errorf("registration: decision %q claims machine %q but envelope states %q", decisionID, decided.machine, delivery.Envelope.Origin.Machine)
 	}
 	if decisionID != NewDecisionID(proposalID, decided.kind, decided.machine) {
 		return fmt.Errorf("registration: decision %q has an invalid identity", decisionID)
@@ -252,8 +255,8 @@ func (p *Projection) applyAccepted(delivery eventfabric.Delivery, event Accepted
 	if !ok {
 		return fmt.Errorf("registration: acceptance refers to unknown proposal %q", event.ProposalID)
 	}
-	if delivery.Record.Node.Machine != proposal.OriginMachine {
-		return fmt.Errorf("registration: acceptance for %q was stated by %q, not origin %q", event.ProposalID, delivery.Record.Node.Machine, proposal.OriginMachine)
+	if delivery.Envelope.Origin.Machine != proposal.OriginMachine {
+		return fmt.Errorf("registration: acceptance for %q was stated by %q, not origin %q", event.ProposalID, delivery.Envelope.Origin.Machine, proposal.OriginMachine)
 	}
 	if event != NewAccepted(proposal) {
 		return fmt.Errorf("registration: acceptance for %q does not match its proposal", event.ProposalID)
@@ -506,18 +509,18 @@ func compareKeys(a, b Key) int {
 	return int(a.UnitID) - int(b.UnitID)
 }
 
-// decode reads one event payload from a record, reporting a decode failure with
-// the event type for context.
-func decode(record events.Record, target events.Event) error {
-	if err := json.Unmarshal(record.Data, target); err != nil {
-		return fmt.Errorf("registration: decode %s: %w", record.Type, err)
+// decode reads one event payload from an envelope, reporting a decode failure
+// with the event type for context.
+func decode(envelope events.Envelope, target events.Event) error {
+	if err := json.Unmarshal(envelope.Data, target); err != nil {
+		return fmt.Errorf("registration: decode %s: %w", envelope.Type, err)
 	}
 	return nil
 }
 
 func validateProposed(delivery eventfabric.Delivery, proposal Proposed) error {
-	if delivery.Record.Node.Machine != proposal.OriginMachine {
-		return fmt.Errorf("registration: proposal %q claims origin %q but envelope states %q", proposal.ProposalID, proposal.OriginMachine, delivery.Record.Node.Machine)
+	if delivery.Envelope.Origin.Machine != proposal.OriginMachine {
+		return fmt.Errorf("registration: proposal %q claims origin %q but envelope states %q", proposal.ProposalID, proposal.OriginMachine, delivery.Envelope.Origin.Machine)
 	}
 	if len(proposal.ExpectedMachines) == 0 {
 		return fmt.Errorf("registration: proposal %q expects no machines", proposal.ProposalID)

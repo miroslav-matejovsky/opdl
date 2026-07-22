@@ -33,10 +33,10 @@ contract.
 
 `nats.FourMachineStorageTopologyAndFailure` has been seen to fail under full-suite
 load, and to pass on the next run and when run alone. The failing run's client-only
-machine logged `event_fabric.projector_reset` and `handler_reset` after
-reconnecting to a surviving storage server, then
-`event_fabric.projector_attach_retry` and `handler_attach_retry` with
-`context deadline exceeded`.
+machine logged `platform.nats.projector_reset` and `platform.nats.handler_reset`
+after reconnecting to a surviving storage server, then
+`platform.nats.projector_attach_retry` and `platform.nats.handler_attach_retry`
+with `context deadline exceeded`.
 
 That is this item's window, reached through re-attachment rather than publication:
 with eleven scenarios competing for CPU, re-attaching a consumer while the replica

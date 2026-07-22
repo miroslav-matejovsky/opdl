@@ -88,4 +88,16 @@
 // Status files report each instance's role (`primary` or `standby`), state (`active` or `passive`), PID, projection progress, lag,
 // and errors. They are operational evidence and never grant ownership, and the
 // directory holding them takes no part in the ownership decision.
+//
+// # Events
+//
+// This package states its own facts, declared in events.go: the object it
+// opened, that it is waiting, that it took ownership and whether the previous
+// owner handed it over or died, and how each activation ended. The package that
+// runs the transition is the one that can report it accurately, so it states
+// them itself rather than returning them for a caller to describe.
+//
+// They are recorded locally, through operations.Recorder, and not published. A
+// machine contends for ownership before it has a journal to write to, and an
+// instance that never becomes active never gets one at all.
 package redundancy

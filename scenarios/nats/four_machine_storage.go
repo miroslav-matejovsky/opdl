@@ -93,7 +93,7 @@ func FourMachineStorageTopologyAndFailure(t *testing.T) {
 	require.Equal(t, journalOf(t, nodeA), journalOf(t, nodeD))
 	require.Equal(t, nodeA.Sockets.Client, strings.Split(clientOnly.Servers, ",")[0],
 		"the client-only machine must initially connect to node-a so server loss is deterministic")
-	waitForConnectionEvent(t, nodeD, "event_fabric.client_connected", nodeA.Sockets.Client)
+	waitForConnectionEvent(t, nodeD, "platform.nats.client_connected", nodeA.Sockets.Client)
 
 	// Published through the client-only machine, replayed through a storage one.
 	fromD := harness.Propose(ctx, t, nodeD, `{"unit_type":5,"unit_id":81,"unit_type_name_advertised":"Client published"}`)
@@ -108,7 +108,7 @@ func FourMachineStorageTopologyAndFailure(t *testing.T) {
 
 	afterLoss := proposeEventually(ctx, t, nodeB,
 		`{"unit_type":5,"unit_id":82,"unit_type_name_advertised":"After storage loss"}`)
-	waitForConnectionEvent(t, nodeD, "event_fabric.client_reconnected", nodeB.Sockets.Client, nodeC.Sockets.Client)
+	waitForConnectionEvent(t, nodeD, "platform.nats.client_reconnected", nodeB.Sockets.Client, nodeC.Sockets.Client)
 
 	// The surviving storage machines write their own confirmations into the
 	// journal and project each other's. That is the proof the journal still

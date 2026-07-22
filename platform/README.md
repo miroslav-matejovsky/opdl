@@ -31,8 +31,16 @@ instead of moving the site onto a second one.
 There is no NATS monitoring listener. The per-process status files are the
 supported local monitoring surface: they report lifecycle state, projection
 progress against the journal's high-water sequence, lag, promotability, and the
-last error. Structured operational events are always written as JSON lines to
-stderr and can optionally be retained under `operations.event_dir`. They cover
-process, ownership, activation, server, connection, journal, projector, handler,
-readiness, API, and shutdown transitions even when the Event Fabric is
-unavailable. See the [operations guide](../docs/plan/operations/README.md).
+last error. Events are always written as JSON lines to stderr and can optionally
+be retained under `operations.event_dir`. They cover process, ownership,
+activation, server, connection, journal, projector, handler, readiness, API, and
+shutdown transitions even when the Event Fabric is unavailable.
+
+Local output and the site journal carry the same wrapper. Every event, wherever
+it is read, is an `events.Envelope`: one occurrence identity and time, its type
+and derived source, a schema version, a severity, the origin that stated it, the
+optional causal links, and the typed payload as JSON. A reader decodes one shape
+and never has to work out which writer produced a line first. What differs is
+only where an event goes and what a failure means: a journal publication fails
+the operation it belongs to, while a local record is best effort, because a
+process that cannot describe itself must still run.

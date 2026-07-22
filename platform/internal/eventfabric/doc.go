@@ -6,17 +6,23 @@
 //
 // # Responsibilities
 //
-// Six roles divide the work. The first three are the runtime's boundary; the
+// Seven roles divide the work. The first four are the runtime's boundary; the
 // last three are what a domain implements or receives.
 //
-//   - Fabric is the whole boundary a runtime owns: publish, replay, live
+//   - Fabric is the whole boundary a runtime owns: append, replay, live
 //     delivery, health, and shutdown. Runtime composition opens one, runs the
 //     node's projector and its service handlers on it, waits for catch-up, and
 //     closes it. A domain package never holds a Fabric; it is given the narrow
 //     Publisher, Projector, or Handler it needs.
-//   - Publisher appends one OPDL event to the site journal and returns a Receipt
-//     only after the journal has durably accepted it. A returning Publish means
-//     the fact is retained and ordered; a failing one means it is not.
+//   - Publisher states one OPDL event and returns a Receipt only after the
+//     journal has durably accepted it. A returning Publish means the fact is
+//     retained and ordered; a failing one means it is not. It is composed from
+//     the process's events.Factory and an Appender, so a caller supplies a typed
+//     payload and nothing else.
+//   - Appender is the adapter half of that: it appends one already stamped
+//     events.Envelope. Splitting the two is what keeps identity out of the
+//     transport. Stamping belongs to the process that states the fact, so an
+//     adapter is handed a completed occurrence and decides only where it goes.
 //   - Receipt is proof the journal accepted an event. It carries the event ID
 //     and the journal Sequence the event was assigned. Correctness never depends
 //     on the Receipt: it is an acknowledgement, and a lost Receipt after a
@@ -37,6 +43,21 @@
 // A Projector and a Handler are kept separate on purpose. Replaying history must
 // rebuild a read model without re-causing the side effects a Handler performs,
 // so projection and coordination never share one mechanism.
+//
+// # Causation
+//
+// Before a Handler is invoked, the delivery is attached to its context as the
+// cause, with events.WithCause. Whatever the Handler publishes with that context
+// records what produced it and which workflow both belong to, so a reader can
+// follow a reaction back to its input. A Handler never attaches or reads those
+// links: it states facts, and what caused it to run is not one of them.
+//
+// # Its own events
+//
+// The fabric states two facts of its own, declared in events.go: that a node is
+// ready and that one has begun stopping. Both are stated by runtime composition
+// rather than by an adapter, because readiness is a conclusion about a whole
+// node and a transport can only report on itself.
 //
 // This separation is also what a warm standby process runs on. A machine may run a
 // second local process that keeps its projections caught up from the journal but
@@ -95,8 +116,9 @@
 // One process moves through these phases. Each is bounded by context so no wait
 // can hang startup or shutdown.
 //
-//   - Publish. Build the record's envelope, validate it, derive its route, and
-//     append it to the journal. Return a Receipt with the assigned Sequence only
+//   - Publish. Stamp the payload into an events.Envelope with the process's one
+//     factory, then append that envelope: validate it, derive its route, and
+//     write it to the journal. Return a Receipt with the assigned Sequence only
 //     after durable acceptance.
 //   - Startup catch-up. Start one continuous ordered consumer from the first
 //     retained event. Capture the journal high-water Sequence, then wait until
