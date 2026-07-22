@@ -252,7 +252,7 @@ func (f *Fabric) Info() eventfabric.Info {
 
 // Publish stamps event with its envelope, validates it, and appends it to the
 // site journal, returning a receipt once JetStream has durably accepted it. It
-// deduplicates by the event's stable publication identity when it has one, so a
+// deduplicates by the event's stable domain identity when it declares one, so a
 // republished fact within the window collapses onto its first acceptance.
 func (f *Fabric) Publish(ctx context.Context, event events.Event) (eventfabric.Receipt, error) {
 	if err := f.check(ctx); err != nil {
@@ -279,9 +279,14 @@ func (f *Fabric) doPublish(ctx context.Context, event events.Event) (eventfabric
 		return eventfabric.Receipt{}, err
 	}
 
+	// A fact that declares a stable identity deduplicates on it, so the same
+	// decision recomputed after a redelivery collapses onto its first
+	// acceptance. A fact without one deduplicates only by its occurrence ID,
+	// which recognizes a repeated publish of one record but not a fact
+	// recomputed from scratch.
 	dedupID := id
-	if identified, ok := event.(eventfabric.Identified); ok {
-		dedupID = identified.DedupID()
+	if identified, ok := event.(events.Identified); ok {
+		dedupID = identified.StableID()
 	}
 	ack, err := f.js.Publish(ctx, route.Subject(), data, jetstream.WithMsgID(dedupID))
 	if err != nil {

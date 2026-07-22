@@ -60,6 +60,23 @@ type Fabric interface {
 	Close(ctx context.Context) error
 }
 
+// Info is a node's Event Fabric identity and storage disposition, as the
+// adapter knows it. It is operational metadata for whoever reads it, including
+// the node's ready event; no platform behavior depends on it.
+type Info struct {
+	// Adapter is the transport adapter's implementation name.
+	Adapter string `json:"adapter"`
+	// Server is this node's name within the site's transport cluster.
+	Server string `json:"server"`
+	// Journal is the site journal's name.
+	Journal string `json:"journal"`
+	// HostsStorage reports whether this node stores the journal, as opposed to
+	// routing to the nodes that do.
+	HostsStorage bool `json:"hosts_storage"`
+	// Replicas is the site journal's replica count.
+	Replicas int `json:"replicas"`
+}
+
 // Receipt is proof the journal durably accepted a published event. It is an
 // acknowledgement, not a source of truth: a lost Receipt after a durable write
 // is a redelivery to reconcile by identity, never a second fact to publish.
@@ -134,16 +151,4 @@ type Handler interface {
 	// decides from a caught-up local view. Returning nil acknowledges the input;
 	// returning an error leaves it unacknowledged for redelivery.
 	Handle(ctx context.Context, delivery Delivery) error
-}
-
-// Identified is the optional interface an events.Event implements to supply a
-// stable publication identity. The Event Fabric uses it as the journal's
-// deduplication key, so a fact republished after a redelivery — a handler
-// restating a decision, for instance — is recognized as the same message inside
-// the deduplication window. An event that does not implement it is deduplicated
-// only by its unique envelope ID, which recognizes a repeated publish of one
-// record but not a fact recomputed from scratch.
-type Identified interface {
-	// DedupID returns the event's stable deduplication identity.
-	DedupID() string
 }

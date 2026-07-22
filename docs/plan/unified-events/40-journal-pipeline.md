@@ -77,9 +77,14 @@ After all journal usages compile against `Envelope`, delete:
 - `events.Meta`;
 - `events.Record`;
 - `events.StampRecord`;
+- `events.NewID`, which stage 20 left exported only for hand-built records;
 - adapter-side stamping;
-- the old Event Fabric `Identified` interface;
-- the old explicit causal-context API.
+- the old explicit causal-context API;
+- `registration.Rejected.Tags`, which restates its warn severity only while the
+  stored record carries tags but no severity.
+
+Stage 30 already deleted the old Event Fabric `Identified` interface: dedup
+would otherwise have stopped working when `DedupID` became `StableID`.
 
 Backward-compatible JSON decoding is not added.
 

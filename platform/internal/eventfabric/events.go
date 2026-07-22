@@ -2,21 +2,23 @@ package eventfabric
 
 import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 
+// This file is the Event Fabric's own event catalog:
+//
+//   - platform.event_fabric.ready: a node has connected to its site journal,
+//     caught its projections up, attached its handlers, and is about to serve.
+//   - platform.event_fabric.stopping: a node has begun a clean shutdown.
+//
 // The Event Fabric states its own lifecycle through the same journal it carries
 // domain events on, so there is one ordered history and no second event path to
-// reconcile. It states readiness and the start of shutdown. It deliberately does
-// not state a completed stop: a closed transport cannot durably record its own
-// close, so the absence of a later ready is the only honest evidence a node
-// stopped.
+// reconcile. It deliberately does not state a completed stop: a closed
+// transport cannot durably record its own close, so the absence of a later
+// ready is the only honest evidence a node stopped.
 //
 // Both events are stated by runtime composition, not by the adapter. Readiness
 // is a conclusion about the whole node — its journal, its projections, and its
 // handlers — and a transport can only report on itself. An adapter that
 // announced itself ready when its connection opened would be stating something
 // it does not know.
-
-// lifecycleSource is the subsystem the Event Fabric's own events come from.
-const lifecycleSource = "event_fabric"
 
 const (
 	// TypeReady is stated when a node has connected to its site journal, caught
@@ -27,23 +29,6 @@ const (
 	// handlers have finished their active work and before the transport closes.
 	TypeStopping events.Type = "platform.event_fabric.stopping"
 )
-
-// Info is a node's Event Fabric identity and storage disposition, as the adapter
-// knows it and the ready event reports it. It is operational metadata for
-// whoever reads the journal; no platform behavior depends on it.
-type Info struct {
-	// Adapter is the transport adapter's implementation name.
-	Adapter string `json:"adapter"`
-	// Server is this node's name within the site's transport cluster.
-	Server string `json:"server"`
-	// Journal is the site journal's name.
-	Journal string `json:"journal"`
-	// HostsStorage reports whether this node stores the journal, as opposed to
-	// routing to the nodes that do.
-	HostsStorage bool `json:"hosts_storage"`
-	// Replicas is the site journal's replica count.
-	Replicas int `json:"replicas"`
-}
 
 // Ready states that a node's Event Fabric is ready and the node is about to
 // serve. It carries the fabric's identity and storage disposition, and the
@@ -69,9 +54,6 @@ func NewReady(info Info, highWater uint64, processRole string) Ready {
 // EventType returns the event's stable dotted kind.
 func (Ready) EventType() events.Type { return TypeReady }
 
-// Source returns the subsystem that states the fact.
-func (Ready) Source() string { return lifecycleSource }
-
 // Stopping states that a node's Event Fabric has begun a clean shutdown.
 type Stopping struct {
 	// Adapter is the transport adapter's implementation name.
@@ -89,6 +71,3 @@ func NewStopping(adapter, processRole string) Stopping {
 
 // EventType returns the event's stable dotted kind.
 func (Stopping) EventType() events.Type { return TypeStopping }
-
-// Source returns the subsystem that states the fact.
-func (Stopping) Source() string { return lifecycleSource }

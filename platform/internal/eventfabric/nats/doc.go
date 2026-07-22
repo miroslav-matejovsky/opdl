@@ -102,7 +102,7 @@
 // Publish stamps an event's envelope, validates it, and appends it to the
 // journal synchronously through JetStream, returning the assigned sequence in
 // the receipt. It sets the journal deduplication id from the event's stable
-// publication identity when it has one. A projector runs an ordered consumer
+// domain identity when it declares one. A projector runs an ordered consumer
 // from the first retained event and continues live; a handler runs a durable
 // pull consumer filtered by its routes with explicit acknowledgement and bounded
 // redelivery. A decode failure, an unsupported event, or exhausted delivery

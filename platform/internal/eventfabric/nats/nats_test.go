@@ -93,23 +93,20 @@ type probe struct {
 }
 
 func (probe) EventType() events.Type { return "platform.probe.happened" }
-func (probe) Source() string         { return "probe" }
 
-// keyedProbe carries a stable publication identity, so republishing it inside
-// the deduplication window collapses onto one journal entry.
+// keyedProbe carries a stable domain identity, so republishing it inside the
+// deduplication window collapses onto one journal entry.
 type keyedProbe struct {
 	Key string `json:"key"`
 }
 
 func (keyedProbe) EventType() events.Type { return "platform.probe.keyed" }
-func (keyedProbe) Source() string         { return "probe" }
-func (k keyedProbe) DedupID() string      { return k.Key }
+func (k keyedProbe) StableID() string     { return k.Key }
 
 // badEvent declares an event type that is not routable.
 type badEvent struct{}
 
 func (badEvent) EventType() events.Type { return "not.routable.extra.tokens" }
-func (badEvent) Source() string         { return "probe" }
 
 // recorder is a projector that records every delivery, and can be told to fail.
 type recorder struct {
