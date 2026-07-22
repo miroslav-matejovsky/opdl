@@ -4,7 +4,8 @@ Effort: M (about 1 day). Complexity: Med-High.
 
 ## Goal
 
-Add `scenarios/internal/runner` and `scenarios/cmd/scenarios/main.go`. The
+Add `scenarios/internal/runner` and `scenarios/cmd/main.go` (a plain `cmd`
+folder, no subfolder). The
 runner turns a set of registered scenarios into a `[]testing.InternalTest` and
 runs them through the standard test runner. The command parses flags, does the
 builder bootstrap, and calls the runner.
@@ -93,7 +94,7 @@ own. If the `testDeps` method set proves painful, use `RunTests` plus:
 
 ## The command
 
-`cmd/scenarios/main.go` responsibilities:
+`cmd/main.go` responsibilities:
 
 1. Define the command's own flags (stage 05 extends these):
    - `-parallel N` maps to `test.parallel`.

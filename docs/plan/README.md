@@ -72,8 +72,7 @@ watchdog) if the `testDeps` method set proves troublesome.
 scenarios/
   go.mod                         # still requires utils, now only for testnet
   cmd/
-    scenarios/
-      main.go                    # flags, registry wiring, builder bootstrap, MainStart runner
+    main.go                      # flags, registry wiring, builder bootstrap, MainStart runner
   internal/
     harness/                     # site/machine/build + platform API client + fabric-config inspection
       site.go machine.go blueprint.go platformapi.go fabric.go doc.go
@@ -100,7 +99,7 @@ scenarios with `internal/runner`.
 | ----- | --------------------------------- | ------------------------------------------------------- | ------ | ---------- |
 | 01    | `01-relocate-utils.md`            | Six utils packages moved into `scenarios/internal`      | S      | Low        |
 | 02    | `02-extract-harness.md`           | Shared harness extracted into `internal/harness`        | L      | High       |
-| 03    | `03-runner-and-cmd.md`            | `internal/runner` and `cmd/scenarios` skeleton          | M      | Med-High   |
+| 03    | `03-runner-and-cmd.md`            | `internal/runner` and `cmd` skeleton                    | M      | Med-High   |
 | 04    | `04-categorize-scenarios.md`      | Six scenario packages, registration wiring, task cutover| M-L    | Medium     |
 | 05    | `05-enable-disable-flags.md`      | Per-package enable/disable selection                    | S      | Low-Med    |
 | 06    | `06-deadcode-taskfile-docs.md`    | `deadcode.ps1`, docs, final gate reconciliation         | S-M    | Low        |
