@@ -3,20 +3,19 @@ package build
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 
 	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/pack"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/resolve"
 )
 
-// Default paths and platform identity, matching the builder CLI flag defaults.
-// They are relative to the builder module root, so the CLI resolves them the way
-// it always has. A Go caller that builds from elsewhere sets the fields
-// explicitly; the defaults only fill fields left empty.
+// Default platform identity and paths. They are relative to the builder module
+// root, so the CLI resolves them the way it always has. A Go caller that builds
+// from elsewhere sets the fields explicitly; the defaults only fill fields left
+// empty. BlueprintDir has no default: it names one specific blueprint and the
+// caller always provides it.
 const (
 	defaultPlatform    = "opdl"
-	defaultExamplesDir = "../examples"
 	defaultPlatformDir = "../platform"
 	defaultOutDir      = "../dist"
 )
@@ -24,10 +23,10 @@ const (
 // Options is one build request: which blueprint to build, which platform source
 // to compile, and where the packages go.
 type Options struct {
-	// ExamplesDir is the directory holding project blueprints.
-	ExamplesDir string
-	// Project is the blueprint directory name under ExamplesDir.
-	Project string
+	// BlueprintDir is the directory of the project blueprint to build. It is the
+	// blueprint itself, not a parent of several, so a caller points straight at
+	// the blueprint it rendered or authored.
+	BlueprintDir string
 	// Platform is the product-line identity stamped on descriptors.
 	Platform string
 	// PlatformDir is the platform module root to compile.
@@ -40,13 +39,11 @@ type Options struct {
 }
 
 // withDefaults fills empty fields with the CLI defaults, leaving any field the
-// caller set untouched.
+// caller set untouched. It does not default BlueprintDir; Run rejects an empty
+// one.
 func (o Options) withDefaults() Options {
 	if o.Platform == "" {
 		o.Platform = defaultPlatform
-	}
-	if o.ExamplesDir == "" {
-		o.ExamplesDir = defaultExamplesDir
 	}
 	if o.PlatformDir == "" {
 		o.PlatformDir = defaultPlatformDir
@@ -77,11 +74,11 @@ type Result struct {
 // error naming the machine, so a caller can see what completed before the stop.
 func Run(ctx context.Context, opts Options) ([]Result, error) {
 	opts = opts.withDefaults()
-	if opts.Project == "" {
-		return nil, fmt.Errorf("no project given")
+	if opts.BlueprintDir == "" {
+		return nil, fmt.Errorf("no blueprint directory given")
 	}
 
-	p, err := blueprint.Load(filepath.Join(opts.ExamplesDir, opts.Project))
+	p, err := blueprint.Load(opts.BlueprintDir)
 	if err != nil {
 		return nil, err
 	}

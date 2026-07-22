@@ -102,14 +102,17 @@ func cmdBuild(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	project := fs.Arg(0)
+	if project == "" {
+		return fmt.Errorf("no project given")
+	}
 
 	results, err := build.Run(context.Background(), build.Options{
-		ExamplesDir: *examples,
-		Project:     fs.Arg(0),
-		Platform:    *platform,
-		PlatformDir: *platformDir,
-		OutDir:      *out,
-		GOARCH:      *goarch,
+		BlueprintDir: filepath.Join(*examples, project),
+		Platform:     *platform,
+		PlatformDir:  *platformDir,
+		OutDir:       *out,
+		GOARCH:       *goarch,
 	})
 	if err != nil {
 		return err

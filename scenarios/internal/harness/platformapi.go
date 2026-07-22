@@ -1,4 +1,4 @@
-package scenarios
+package harness
 
 import (
 	"context"
@@ -24,23 +24,27 @@ import (
 const (
 	// apiPollInterval is how often a wait retries a request.
 	apiPollInterval = 100 * time.Millisecond
-	// apiWaitTimeout bounds a wait for the API to answer or to reach a state.
+	// APIWaitTimeout bounds a wait for the API to answer or to reach a state.
 	// It is generous: it covers a machine starting its NATS server, replaying the
 	// site journal, and every expected machine deciding on its own schedule.
-	apiWaitTimeout = 60 * time.Second
+	APIWaitTimeout = 60 * time.Second
 )
 
-// proposalAccepted is the observable shape of a 202: the journal took the
+// APIPollInterval is how often a wait retries a request. Scenarios that run their
+// own wait loops poll on the same cadence the harness does.
+const APIPollInterval = apiPollInterval
+
+// ProposalAccepted is the observable shape of a 202: the journal took the
 // proposal, and this is the handle to poll.
-type proposalAccepted struct {
+type ProposalAccepted struct {
 	// ProposalID is the proposal's stable identity and its status key.
 	ProposalID string `json:"proposal_id"`
 	// Sequence is the proposal's position in the site journal.
 	Sequence uint64 `json:"sequence"`
 }
 
-// registration is the observable shape of one registration in the API's JSON.
-type registration struct {
+// Registration is the observable shape of one registration in the API's JSON.
+type Registration struct {
 	// ProposalID is the proposal's stable identity.
 	ProposalID string `json:"proposal_id"`
 	// UnitType is the registered unit type identifier.
@@ -60,11 +64,11 @@ type registration struct {
 	// Reason is the optional bounded rejection code.
 	Reason *string `json:"reason,omitempty"`
 	// PlatformInstances is every expected platform instance's progress.
-	PlatformInstances []platformInstance `json:"platform_instances"`
+	PlatformInstances []PlatformInstance `json:"platform_instances"`
 }
 
-// platformInstance is one platform instance's progress for a registration.
-type platformInstance struct {
+// PlatformInstance is one platform instance's progress for a registration.
+type PlatformInstance struct {
 	// Machine is the platform instance's descriptor machine.
 	Machine string `json:"machine"`
 	// IP is the platform instance's descriptor IP.
@@ -75,8 +79,8 @@ type platformInstance struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
-// conflict is the observable shape of one resolved duplicate claim.
-type conflict struct {
+// Conflict is the observable shape of one resolved duplicate claim.
+type Conflict struct {
 	// UnitType is the unit type identifier shared by the competing proposals.
 	UnitType uint8 `json:"unit_type"`
 	// UnitID is the unit identifier shared by the competing proposals.
@@ -84,14 +88,14 @@ type conflict struct {
 	// ResolutionStatus is resolved once the winner is determined.
 	ResolutionStatus string `json:"resolution_status"`
 	// Winner is the proposal that keeps the unit key.
-	Winner registration `json:"winner"`
+	Winner Registration `json:"winner"`
 	// Losers are the proposals rejected for the key.
-	Losers []registration `json:"losers"`
+	Losers []Registration `json:"losers"`
 }
 
-// instance returns one expected platform instance's entry, failing when the
+// Instance returns one expected platform instance's entry, failing when the
 // projection does not cover that machine at all.
-func (r registration) instance(t *testing.T, machine string) platformInstance {
+func (r Registration) Instance(t *testing.T, machine string) PlatformInstance {
 	t.Helper()
 	for _, entry := range r.PlatformInstances {
 		if entry.Machine == machine {
@@ -99,7 +103,7 @@ func (r registration) instance(t *testing.T, machine string) platformInstance {
 		}
 	}
 	require.FailNow(t, "no platform instance entry", "machine %s not in %+v", machine, r.PlatformInstances)
-	return platformInstance{}
+	return PlatformInstance{}
 }
 
 // getJSON issues a GET and decodes a 200 body into T. A non-200 is returned as
@@ -147,7 +151,7 @@ func postJSON[T any](ctx context.Context, url, body string) (value T, code int, 
 	return value, response.StatusCode, nil
 }
 
-// submitRegistration submits a registration request to one machine and reports
+// SubmitRegistration submits a registration request to one machine and reports
 // what came back, including a transport failure as an error rather than as a
 // fatal assertion. The proposal is meaningful only on 202.
 //
@@ -163,67 +167,67 @@ func postJSON[T any](ctx context.Context, url, body string) (value T, code int, 
 // condition on the caller's goroutine. Keep the reporting variants anyway: a
 // function that returns an error is the better shape regardless, and the comment
 // explaining the history is worth preserving as a warning.
-func submitRegistration(ctx context.Context, m *machine, body string) (proposalAccepted, int, error) {
-	return postJSON[proposalAccepted](ctx, m.url+"/registrations", body)
+func SubmitRegistration(ctx context.Context, m *Machine, body string) (ProposalAccepted, int, error) {
+	return postJSON[ProposalAccepted](ctx, m.URL+"/registrations", body)
 }
 
 // fetchRegistration returns one machine's view of a proposal, the status code it
 // answered with, and any transport failure. The registration is meaningful only
-// on 200. It reports rather than asserts for the reason submitRegistration does.
-func fetchRegistration(ctx context.Context, m *machine, proposalID string) (registration, int, error) {
-	return getJSON[registration](ctx, m.url+"/registrations/"+proposalID)
+// on 200. It reports rather than asserts for the reason SubmitRegistration does.
+func fetchRegistration(ctx context.Context, m *Machine, proposalID string) (Registration, int, error) {
+	return getJSON[Registration](ctx, m.URL+"/registrations/"+proposalID)
 }
 
-// propose submits a registration request and requires the journal to take it,
+// Propose submits a registration request and requires the journal to take it,
 // which is what a scenario means when it says a client registered something.
-func propose(ctx context.Context, t *testing.T, m *machine, body string) proposalAccepted {
+func Propose(ctx context.Context, t *testing.T, m *Machine, body string) ProposalAccepted {
 	t.Helper()
-	accepted, code, err := submitRegistration(ctx, m, body)
-	require.NoErrorf(t, err, "%s did not answer the proposal:%s", m.name, diagnostics(m))
-	require.Equalf(t, http.StatusAccepted, code, "%s did not take the proposal:%s", m.name, diagnostics(m))
+	accepted, code, err := SubmitRegistration(ctx, m, body)
+	require.NoErrorf(t, err, "%s did not answer the proposal:%s", m.Name, Diagnostics(m))
+	require.Equalf(t, http.StatusAccepted, code, "%s did not take the proposal:%s", m.Name, Diagnostics(m))
 	require.NotEmpty(t, accepted.ProposalID, "202 hands back the handle the client polls with")
 	return accepted
 }
 
-// getRegistration returns one machine's view of a proposal, and the status code
+// GetRegistration returns one machine's view of a proposal, and the status code
 // it answered with. A machine that does not answer at all is a failure here, so
 // this is for the test goroutine; a poll wants fetchRegistration.
-func getRegistration(ctx context.Context, t *testing.T, m *machine, proposalID string) (view registration, code int) {
+func GetRegistration(ctx context.Context, t *testing.T, m *Machine, proposalID string) (view Registration, code int) {
 	t.Helper()
 	view, code, err := fetchRegistration(ctx, m, proposalID)
-	require.NoErrorf(t, err, "%s did not answer for proposal %s:%s", m.name, proposalID, diagnostics(m))
+	require.NoErrorf(t, err, "%s did not answer for proposal %s:%s", m.Name, proposalID, Diagnostics(m))
 	return view, code
 }
 
-// listRegistrations returns one machine's view of every proposal in the site.
-func listRegistrations(ctx context.Context, t *testing.T, m *machine) []registration {
+// ListRegistrations returns one machine's view of every proposal in the site.
+func ListRegistrations(ctx context.Context, t *testing.T, m *Machine) []Registration {
 	t.Helper()
-	registrations, code, err := getJSON[[]registration](ctx, m.url+"/registrations")
+	registrations, code, err := getJSON[[]Registration](ctx, m.URL+"/registrations")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, code)
 	return registrations
 }
 
-// listConflicts returns one machine's view of every resolved duplicate claim.
-func listConflicts(ctx context.Context, t *testing.T, m *machine) []conflict {
+// ListConflicts returns one machine's view of every resolved duplicate claim.
+func ListConflicts(ctx context.Context, t *testing.T, m *Machine) []Conflict {
 	t.Helper()
-	conflicts, code, err := getJSON[[]conflict](ctx, m.url+"/registrations/conflicts")
+	conflicts, code, err := getJSON[[]Conflict](ctx, m.URL+"/registrations/conflicts")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, code)
 	return conflicts
 }
 
-// waitForAPI blocks until a machine's registration API answers.
+// WaitForAPI blocks until a machine's registration API answers.
 //
 // That is the scenario's readiness signal, and it is a real one: the platform
 // does not listen until its Event Fabric has connected, its projection has
 // replayed the retained journal, and its handlers have worked through what was
 // waiting for them. An answer on this endpoint means all of that already
 // happened.
-func waitForAPI(ctx context.Context, t *testing.T, m *machine) {
+func WaitForAPI(ctx context.Context, t *testing.T, m *Machine) {
 	t.Helper()
 	cond := func() bool {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, m.url+"/registrations", http.NoBody)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, m.URL+"/registrations", http.NoBody)
 		if err != nil {
 			return false
 		}
@@ -235,27 +239,27 @@ func waitForAPI(ctx context.Context, t *testing.T, m *machine) {
 		return response.StatusCode == http.StatusOK
 	}
 	abort := func() (bool, string) {
-		if m.exited() {
-			return true, fmt.Sprintf("%s exited before serving its registration API:\n%s", m.name, m.logs())
+		if m.Exited() {
+			return true, fmt.Sprintf("%s exited before serving its registration API:\n%s", m.Name, m.Output())
 		}
 		return false, ""
 	}
-	diag := diagStringer(func() string {
-		return fmt.Sprintf("%s never served its registration API:\n%s", m.name, m.logs())
+	diag := DiagStringer(func() string {
+		return fmt.Sprintf("%s never served its registration API:\n%s", m.Name, m.Output())
 	})
-	waitFor(t, m.name+" serving registration API", apiWaitTimeout, apiPollInterval, cond, abort, diag)
+	WaitFor(t, m.Name+" serving registration API", APIWaitTimeout, apiPollInterval, cond, abort, diag)
 }
 
-// waitForRegistrationStatus polls one machine until a proposal reaches want,
+// WaitForRegistrationStatus polls one machine until a proposal reaches want,
 // which is how a real client learns its registration was decided.
-func waitForRegistrationStatus(ctx context.Context, t *testing.T, m *machine, proposalID, want string) registration {
+func WaitForRegistrationStatus(ctx context.Context, t *testing.T, m *Machine, proposalID, want string) Registration {
 	t.Helper()
-	return waitForRegistration(ctx, t, m, proposalID,
-		func(view registration) bool { return view.Status == want },
+	return WaitForRegistration(ctx, t, m, proposalID,
+		func(view Registration) bool { return view.Status == want },
 		"status "+want)
 }
 
-// waitForRegistration polls one machine until a proposal's projected view
+// WaitForRegistration polls one machine until a proposal's projected view
 // satisfies reached. Polling is the client's only confirmation mechanism:
 // nothing is pushed, and the platform makes no promise about when an expected
 // machine answers.
@@ -264,49 +268,50 @@ func waitForRegistrationStatus(ctx context.Context, t *testing.T, m *machine, pr
 // pending from the moment it is taken until the site decides it, so "wait for
 // pending" is not waiting at all; what a scenario usually means is that some
 // machine has answered, and that shows up per instance.
-func waitForRegistration(ctx context.Context, t *testing.T, m *machine, proposalID string, reached func(registration) bool, what string, extra ...fmt.Stringer) registration {
+func WaitForRegistration(ctx context.Context, t *testing.T, m *Machine, proposalID string, reached func(Registration) bool, what string, extra ...fmt.Stringer) Registration {
 	t.Helper()
-	var poll lastPoll
+	var poll LastPoll
 	cond := func() bool {
 		view, code, err := fetchRegistration(ctx, m, proposalID)
-		poll.record(view, code, err)
+		poll.Record(view, code, err)
 		return err == nil && code == http.StatusOK && reached(view)
 	}
 	abort := func() (bool, string) {
-		if m.exited() {
-			return true, fmt.Sprintf("%s exited while waiting for proposal %s to reach %s:\n%s", m.name, proposalID, what, m.logs())
+		if m.Exited() {
+			return true, fmt.Sprintf("%s exited while waiting for proposal %s to reach %s:\n%s", m.Name, proposalID, what, m.Output())
 		}
 		return false, ""
 	}
-	diag := diagStringer(func() string {
+	diag := DiagStringer(func() string {
 		return fmt.Sprintf("%s never reported proposal %s reaching %s; %s%s",
-			m.name, proposalID, what, &poll, appended(extra))
+			m.Name, proposalID, what, &poll, appended(extra))
 	})
-	waitFor(t, fmt.Sprintf("proposal %s reaching %s on %s", proposalID, what, m.name), apiWaitTimeout, apiPollInterval, cond, abort, diag)
+	WaitFor(t, fmt.Sprintf("proposal %s reaching %s on %s", proposalID, what, m.Name), APIWaitTimeout, apiPollInterval, cond, abort, diag)
 	return poll.registration()
 }
 
-// lastPoll is what the most recently completed poll saw.
+// LastPoll is what the most recently completed poll saw.
 //
-// It is mutex-guarded because require.Eventually runs its condition on its own
-// goroutine: the poll writes these fields and the failure message reads them.
-// The previous shape passed &code into the message instead, which printed the
-// pointer's address rather than the status ("last code 49112166178816").
-type lastPoll struct {
+// It is mutex-guarded because a poll condition and the failure message that reads
+// its fields can run on different goroutines. The previous shape passed &code into
+// the message instead, which printed the pointer's address rather than the status
+// ("last code 49112166178816").
+type LastPoll struct {
 	mu   sync.Mutex
 	code int
 	err  error
-	view registration
+	view Registration
 	seen bool
 }
 
-func (l *lastPoll) record(view registration, code int, err error) {
+// Record stores what a completed poll saw.
+func (l *LastPoll) Record(view Registration, code int, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.view, l.code, l.err, l.seen = view, code, err, true
 }
 
-func (l *lastPoll) registration() registration {
+func (l *LastPoll) registration() Registration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.view
@@ -316,7 +321,7 @@ func (l *lastPoll) registration() registration {
 // is between a machine that answered with a state the wait did not want and one
 // that did not answer at all: the second is not a slow decision, it is a machine
 // that stopped serving.
-func (l *lastPoll) String() string {
+func (l *LastPoll) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	switch {
@@ -331,9 +336,9 @@ func (l *lastPoll) String() string {
 	}
 }
 
-// confirmedBy reports whether one expected machine has accepted a proposal.
-func confirmedBy(machine string) func(registration) bool {
-	return func(view registration) bool {
+// ConfirmedBy reports whether one expected machine has accepted a proposal.
+func ConfirmedBy(machine string) func(Registration) bool {
+	return func(view Registration) bool {
 		for _, instance := range view.PlatformInstances {
 			if instance.Machine == machine {
 				return instance.Status == "accepted"

@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/scenarios/internal/logscan"
-	"github.com/miroslav-matejovsky/opdl/scenarios/internal/processinfo"
 	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/processinfo"
 )
 
 // TestWarmStandbyFailoverAndPreferredPrimary drives the complete redundant
@@ -19,101 +20,101 @@ import (
 func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	outDir := filepath.Join(scenarioDir(t), "out")
-	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "manifest-contract")
-	node := deployment.machine(t, "node-b")
+	outDir := filepath.Join(harness.ScenarioDir(t), "out")
+	deployment := harness.DeploySite(ctx, t, outDir, filepath.Join(harness.ScenarioDir(t), "work"), "manifest-contract")
+	node := deployment.Machine(t, "node-b")
 	// node-a carries the site's third storage instance. This scenario starts
 	// node-b's two instances itself, from the manifest, so the rest of the site is
 	// brought up here: without it the journal has no quorum to be created in.
-	deployment.startSite(ctx, t, "node-b")
-	manifest := readManifest(t, node.binaryPath)
+	deployment.StartSite(ctx, t, "node-b")
+	manifest := harness.ReadManifest(t, node.BinaryPath)
 	require.NotNil(t, manifest.Standby, "default policy must package a standby launch")
 
-	primary := node.startManaged(ctx, t, "primary", manifest.Primary.Args)
-	node.waitStatus(t, primary, "active", false)
+	primary := node.StartManaged(ctx, t, "primary", manifest.Primary.Args)
+	node.WaitStatus(t, primary, "active", false)
 	waitForManagedAPI(ctx, t, node, primary)
 
-	stable := propose(ctx, t, node,
+	stable := harness.Propose(ctx, t, node,
 		`{"unit_type":7,"unit_id":41,"unit_type_name_advertised":"Before failover","role":"Master"}`)
-	stableView := waitForRegistrationStatus(ctx, t, node, stable.ProposalID, "accepted")
+	stableView := harness.WaitForRegistrationStatus(ctx, t, node, stable.ProposalID, "accepted")
 
 	standbyStarted := time.Now()
-	standby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
-	standbyStatus := node.waitStatus(t, standby, "passive", true)
+	standby := node.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+	standbyStatus := node.WaitStatus(t, standby, "passive", true)
 	catchUpTime := standbyStatus.UpdatedAt.Sub(standbyStarted)
 	standbyMemory, err := processinfo.ResidentBytes(ctx, standby.PID())
 	require.NoError(t, err)
 
-	aroundFailover := propose(ctx, t, node,
+	aroundFailover := harness.Propose(ctx, t, node,
 		`{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"During failover","role":"Master"}`)
-	gapReady, listenerGap := observeListenerGap(ctx, node.url)
+	gapReady, listenerGap := observeListenerGap(ctx, node.URL)
 	select {
 	case <-gapReady:
-	case <-time.After(apiWaitTimeout):
+	case <-time.After(harness.APIWaitTimeout):
 		t.Fatal("listener observer did not see the active API")
 	}
 	failoverStarted := time.Now()
 	_ = primary.Kill()
-	failedOverStatus := node.waitStatus(t, standby, "active", false)
+	failedOverStatus := node.WaitStatus(t, standby, "active", false)
 	failoverTime := failedOverStatus.UpdatedAt.Sub(failoverStarted)
 	waitForManagedAPI(ctx, t, node, standby)
 	var gap time.Duration
 	select {
 	case gap = <-listenerGap:
-	case <-time.After(apiWaitTimeout):
+	case <-time.After(harness.APIWaitTimeout):
 		t.Fatal("listener observer did not see the API recover")
 	}
 
 	require.Equal(t, stableView,
-		waitForRegistrationStatus(ctx, t, node, stable.ProposalID, "accepted"),
+		harness.WaitForRegistrationStatus(ctx, t, node, stable.ProposalID, "accepted"),
 		"failover changed a registration retained before it")
-	failoverView := waitForRegistrationStatus(ctx, t, node, aroundFailover.ProposalID, "accepted")
+	failoverView := harness.WaitForRegistrationStatus(ctx, t, node, aroundFailover.ProposalID, "accepted")
 	require.Len(t, failoverView.PlatformInstances, 1,
 		"primary and standby must remain one machine decision")
-	require.Len(t, listRegistrations(ctx, t, node), 2,
+	require.Len(t, harness.ListRegistrations(ctx, t, node), 2,
 		"failover must not duplicate a logical proposal")
-	retry := propose(ctx, t, node,
+	retry := harness.Propose(ctx, t, node,
 		`{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"During failover","role":"Master"}`)
 	require.Equal(t, aroundFailover.ProposalID, retry.ProposalID)
-	require.Len(t, listRegistrations(ctx, t, node), 2)
+	require.Len(t, harness.ListRegistrations(ctx, t, node), 2)
 
-	primaryReturned := node.startManaged(ctx, t, "primary", manifest.Primary.Args)
-	node.waitStatus(t, primaryReturned, "passive", true)
+	primaryReturned := node.StartManaged(ctx, t, "primary", manifest.Primary.Args)
+	node.WaitStatus(t, primaryReturned, "passive", true)
 	failbackStarted := time.Now()
-	standby.stopGracefully(t)
-	node.waitStatus(t, primaryReturned, "active", false)
+	standby.StopGracefully(t)
+	node.WaitStatus(t, primaryReturned, "active", false)
 	waitForManagedAPI(ctx, t, node, primaryReturned)
 	failbackTime := time.Since(failbackStarted)
 
 	// Repeat failover and failback to expose stale status, ownership, listener, or
 	// storage ownership left behind by the first transfer.
-	standbySecond := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
-	node.waitStatus(t, standbySecond, "passive", true)
+	standbySecond := node.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+	node.WaitStatus(t, standbySecond, "passive", true)
 	_ = primaryReturned.Kill()
-	node.waitStatus(t, standbySecond, "active", false)
+	node.WaitStatus(t, standbySecond, "active", false)
 	waitForManagedAPI(ctx, t, node, standbySecond)
 
-	primarySecond := node.startManaged(ctx, t, "primary", manifest.Primary.Args)
-	node.waitStatus(t, primarySecond, "passive", true)
-	standbySecond.stopGracefully(t)
-	node.waitStatus(t, primarySecond, "active", false)
+	primarySecond := node.StartManaged(ctx, t, "primary", manifest.Primary.Args)
+	node.WaitStatus(t, primarySecond, "passive", true)
+	standbySecond.StopGracefully(t)
+	node.WaitStatus(t, primarySecond, "active", false)
 	waitForManagedAPI(ctx, t, node, primarySecond)
 
 	// Terminating a caught-up lock waiter must stop only that process. Context
 	// cancellation of Lock.Acquire is covered by the platform contract tests.
-	cancelledStandby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
-	node.waitStatus(t, cancelledStandby, "passive", true)
+	cancelledStandby := node.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+	node.WaitStatus(t, cancelledStandby, "passive", true)
 	_ = cancelledStandby.Kill()
 	require.True(t, primarySecond.Running())
 	waitForManagedAPI(ctx, t, node, primarySecond)
 
 	// Full machine shutdown is primary-service stop followed by standby-service
 	// stop. The standby may become Active in the bounded interval and must still stop.
-	shutdownStandby := node.startManaged(ctx, t, "standby", manifest.Standby.Args)
-	node.waitStatus(t, shutdownStandby, "passive", true)
-	primarySecond.stopGracefully(t)
-	node.waitStatus(t, shutdownStandby, "active", false)
-	shutdownStandby.stopGracefully(t)
+	shutdownStandby := node.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+	node.WaitStatus(t, shutdownStandby, "passive", true)
+	primarySecond.StopGracefully(t)
+	node.WaitStatus(t, shutdownStandby, "active", false)
+	shutdownStandby.StopGracefully(t)
 	require.False(t, primarySecond.Running())
 	require.False(t, shutdownStandby.Running())
 
@@ -135,98 +136,56 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 // that impossible: the machine has one endpoint set, the standby connects to the
 // one the active process is serving on, and promotion rebinds that same address
 // rather than moving the site onto a second one.
-func assertSharedEndpoints(t *testing.T, primary, standby *managedProcess) {
+func assertSharedEndpoints(t *testing.T, primary, standby *harness.ManagedProcess) {
 	t.Helper()
 
-	primaryFabrics := parseFabricConfigs(t, primary.role, primary.Logs())
-	standbyFabrics := parseFabricConfigs(t, standby.role, standby.Logs())
+	primaryFabrics := harness.ParseFabricConfigs(t, primary.Role, primary.Logs())
+	standbyFabrics := harness.ParseFabricConfigs(t, standby.Role, standby.Logs())
 	require.NotEmpty(t, primaryFabrics)
 	require.GreaterOrEqual(t, len(standbyFabrics), 2,
 		"the standby should report a client-only composition and then an active one after promotion:\n%s",
 		standby.Logs())
 
 	active := primaryFabrics[0]
-	require.True(t, active.storage, "the primary owns the machine's storage:\n%s", primary.Logs())
-	require.True(t, active.binds, "the primary binds the machine's NATS listener:\n%s", primary.Logs())
-	require.NotEmpty(t, active.endpoint)
+	require.True(t, active.Storage, "the primary owns the machine's storage:\n%s", primary.Logs())
+	require.True(t, active.Binds, "the primary binds the machine's NATS listener:\n%s", primary.Logs())
+	require.NotEmpty(t, active.Endpoint)
 
 	// The standby binds nothing while the primary holds Primary Ownership.
 	warm := standbyFabrics[0]
-	require.False(t, warm.storage, "the standby must not open the journal store:\n%s", standby.Logs())
-	require.False(t, warm.binds, "the standby must bind no NATS listener:\n%s", standby.Logs())
-	require.Equal(t, "none", warm.cluster, "the standby must bind no cluster listener:\n%s", standby.Logs())
+	require.False(t, warm.Storage, "the standby must not open the journal store:\n%s", standby.Logs())
+	require.False(t, warm.Binds, "the standby must bind no NATS listener:\n%s", standby.Logs())
+	require.Equal(t, "none", warm.Cluster, "the standby must bind no cluster listener:\n%s", standby.Logs())
 
 	// It is nonetheless talking about the same machine endpoint, and reaches the
 	// journal through exactly the server list the active process is serving. This
 	// is the assertion the original defect would fail: the standby had its own
 	// address, and nothing was listening on it.
-	require.Equal(t, active.endpoint, warm.endpoint,
+	require.Equal(t, active.Endpoint, warm.Endpoint,
 		"the standby composed a different machine endpoint from the active process")
-	require.Equal(t, active.servers, warm.servers,
+	require.Equal(t, active.Servers, warm.Servers,
 		"the standby used a different server list from the active process")
-	require.Contains(t, warm.servers, warm.endpoint,
+	require.Contains(t, warm.Servers, warm.Endpoint,
 		"a local standby follows the journal through its own machine's server")
 
 	// After promotion it owns the same endpoints the primary had, so nothing the
 	// rest of the site was told about this machine has changed.
 	promoted := standbyFabrics[len(standbyFabrics)-1]
-	require.True(t, promoted.storage, "the promoted process must own storage:\n%s", standby.Logs())
-	require.True(t, promoted.binds, "the promoted process must bind the listener:\n%s", standby.Logs())
-	require.Equal(t, active.endpoint, promoted.endpoint,
+	require.True(t, promoted.Storage, "the promoted process must own storage:\n%s", standby.Logs())
+	require.True(t, promoted.Binds, "the promoted process must bind the listener:\n%s", standby.Logs())
+	require.Equal(t, active.Endpoint, promoted.Endpoint,
 		"promotion moved the machine's client endpoint")
-	require.Equal(t, active.cluster, promoted.cluster,
+	require.Equal(t, active.Cluster, promoted.Cluster,
 		"promotion moved the machine's cluster endpoint")
-	require.Equal(t, active.servers, promoted.servers,
+	require.Equal(t, active.Servers, promoted.Servers,
 		"promotion changed the machine's server list")
 }
 
-// fabricConfig is one effective Event Fabric configuration a process reported at
-// startup, before it bound or connected anything.
-type fabricConfig struct {
-	// endpoint is the machine's own client address from the descriptor. It is
-	// reported whether or not this process binds it, which is what lets a standby
-	// and the active process it follows be compared.
-	endpoint string
-	// binds reports whether this process opens the machine's NATS listener.
-	binds   bool
-	cluster string
-	servers string
-	routes  string
-	storage bool
-}
-
-// fabricConfigPrefix is the runtime's effective-configuration log line.
-const fabricConfigPrefix = "platform: event fabric configuration "
-
-// parseFabricConfigs extracts every effective Event Fabric configuration a
-// process reported, in the order it reported them.
-//
-// A scenario reads this from the process output rather than from a status file
-// because it is the only place the composed endpoints appear before anything is
-// bound. That ordering is what distinguishes a client-only standby from an
-// active storage server, and a promotion from a fresh start.
-func parseFabricConfigs(t *testing.T, role, logs string) []fabricConfig {
-	t.Helper()
-	var configs []fabricConfig
-	for _, fields := range logscan.Fields(logs, fabricConfigPrefix) {
-		configs = append(configs, fabricConfig{
-			endpoint: fields["endpoint"],
-			binds:    fields["binds"] == "true",
-			cluster:  fields["cluster"],
-			servers:  fields["servers"],
-			routes:   fields["routes"],
-			storage:  fields["storage"] == "true",
-		})
-	}
-	require.NotEmptyf(t, configs, "%s never reported its effective Event Fabric configuration:\n%s", role, logs)
-	return configs
-}
-
-func waitForManagedAPI(ctx context.Context, t *testing.T, machine *machine, process *managedProcess) {
+func waitForManagedAPI(ctx context.Context, t *testing.T, machine *harness.Machine, process *harness.ManagedProcess) {
 	t.Helper()
 	client := &http.Client{Timeout: time.Second}
 	cond := func() bool {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, machine.url+"/registrations", http.NoBody)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, machine.URL+"/registrations", http.NoBody)
 		if err != nil {
 			return false
 		}
@@ -240,14 +199,14 @@ func waitForManagedAPI(ctx context.Context, t *testing.T, machine *machine, proc
 	abort := func() (bool, string) {
 		if !process.Running() {
 			out, _ := process.Wait()
-			return true, fmt.Sprintf("%s process exited before restoring the API:\n%s", process.role, out)
+			return true, fmt.Sprintf("%s process exited before restoring the API:\n%s", process.Role, out)
 		}
 		return false, ""
 	}
-	diag := diagStringer(func() string {
-		return fmt.Sprintf("%s process did not restore the API:\n%s", process.role, process.Logs())
+	diag := harness.DiagStringer(func() string {
+		return fmt.Sprintf("%s process did not restore the API:\n%s", process.Role, process.Logs())
 	})
-	waitFor(t, process.role+" restoring the API", apiWaitTimeout, apiPollInterval, cond, abort, diag)
+	harness.WaitFor(t, process.Role+" restoring the API", harness.APIWaitTimeout, harness.APIPollInterval, cond, abort, diag)
 }
 
 // observeListenerGap returns the last-success to first-recovery interval around

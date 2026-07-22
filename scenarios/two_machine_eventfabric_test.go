@@ -5,8 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/miroslav-matejovsky/opdl/scenarios/internal/logscan"
 	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/logscan"
 )
 
 // TestTwoMachineEventFabric is the smallest deployment that has to form a real
@@ -25,13 +27,13 @@ import (
 func TestTwoMachineEventFabric(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	outDir := filepath.Join(scenarioDir(t), "out")
+	outDir := filepath.Join(harness.ScenarioDir(t), "out")
 	// node-a and node-b hold the journal between them; node-c is a client of
 	// theirs. Nothing told any of them that: all derived it from the same topology
 	// in the blueprint the harness rendered and built.
-	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
-	nodeA, nodeB := deployment.machine(t, "node-a"), deployment.machine(t, "node-c")
-	deployment.startSite(ctx, t)
+	deployment := harness.DeploySite(ctx, t, outDir, filepath.Join(harness.ScenarioDir(t), "work"), "two-machine")
+	nodeA, nodeB := deployment.Machine(t, "node-a"), deployment.Machine(t, "node-c")
+	deployment.StartSite(ctx, t)
 
 	// Each machine reports its own part in the site's storage. This is the whole
 	// asymmetry, and it is derived rather than configured.
@@ -49,19 +51,19 @@ func TestTwoMachineEventFabric(t *testing.T) {
 	// The proof that they share it: a proposal published by the machine with no
 	// JetStream storage is projected by both. Nothing routed it there except the
 	// topology compiled into the binaries.
-	fromB := propose(ctx, t, nodeB, `{"unit_type":3,"unit_id":9,"unit_type_name_advertised":"Routed"}`)
-	onA := waitForRegistrationStatus(ctx, t, nodeA, fromB.ProposalID, "accepted")
+	fromB := harness.Propose(ctx, t, nodeB, `{"unit_type":3,"unit_id":9,"unit_type_name_advertised":"Routed"}`)
+	onA := harness.WaitForRegistrationStatus(ctx, t, nodeA, fromB.ProposalID, "accepted")
 	require.Equal(t, "node-c", onA.Machine,
 		"the storage node projected a proposal the other machine published")
 
 	// And the other way, so neither direction is an accident of who stores what.
-	fromA := propose(ctx, t, nodeA, `{"unit_type":3,"unit_id":10,"unit_type_name_advertised":"Stored"}`)
-	onB := waitForRegistrationStatus(ctx, t, nodeB, fromA.ProposalID, "accepted")
+	fromA := harness.Propose(ctx, t, nodeA, `{"unit_type":3,"unit_id":10,"unit_type_name_advertised":"Stored"}`)
+	onB := harness.WaitForRegistrationStatus(ctx, t, nodeB, fromA.ProposalID, "accepted")
 	require.Equal(t, "node-a", onB.Machine)
 
 	// Both machines answer with the same site state, because both folded the same
 	// ordered journal. Two machines of one site do not disagree about the site.
-	require.Equal(t, listRegistrations(ctx, t, nodeA), listRegistrations(ctx, t, nodeB))
+	require.Equal(t, harness.ListRegistrations(ctx, t, nodeA), harness.ListRegistrations(ctx, t, nodeB))
 
 	// The startup order the platform promises, in three steps rather than two.
 	//
@@ -74,8 +76,8 @@ func TestTwoMachineEventFabric(t *testing.T) {
 	// holding is the last step: nothing serves domain operations before the
 	// journal behind them is ready. Both machines are still running here; the
 	// lines being checked are startup lines, so they are long since written.
-	for _, m := range []*machine{nodeA, nodeB} {
-		logs := m.logs()
+	for _, m := range []*harness.Machine{nodeA, nodeB} {
+		logs := m.Output()
 		listeningAt := strings.Index(logs, "listening on")
 		// The line the Event Fabric prints once it is open, which names the journal
 		// it reached. Matching on ", journal " rather than on "event fabric" keeps
@@ -83,32 +85,32 @@ func TestTwoMachineEventFabric(t *testing.T) {
 		// off the server name, which is the machine's and differs per machine.
 		fabricAt := strings.Index(logs, ", journal ")
 		activeAt := strings.Index(logs, "active, serving on")
-		require.GreaterOrEqual(t, listeningAt, 0, "%s did not report its API address:\n%s", m.name, logs)
-		require.GreaterOrEqual(t, fabricAt, 0, "%s did not report its event fabric:\n%s", m.name, logs)
-		require.GreaterOrEqual(t, activeAt, 0, "%s never became active:\n%s", m.name, logs)
+		require.GreaterOrEqual(t, listeningAt, 0, "%s did not report its API address:\n%s", m.Name, logs)
+		require.GreaterOrEqual(t, fabricAt, 0, "%s did not report its event fabric:\n%s", m.Name, logs)
+		require.GreaterOrEqual(t, activeAt, 0, "%s never became active:\n%s", m.Name, logs)
 		require.Less(t, listeningAt, fabricAt,
-			"%s opened its event fabric before its listener; a passive instance must be reachable first:\n%s", m.name, logs)
+			"%s opened its event fabric before its listener; a passive instance must be reachable first:\n%s", m.Name, logs)
 		require.Less(t, fabricAt, activeAt,
-			"%s served domain operations before its event fabric was ready:\n%s", m.name, logs)
+			"%s served domain operations before its event fabric was ready:\n%s", m.Name, logs)
 	}
 }
 
 // journalOf reads the site journal name a machine reported at startup. It is
 // derived from the deployment scope, so two machines of one site must agree.
-func journalOf(t *testing.T, m *machine) string {
+func journalOf(t *testing.T, m *harness.Machine) string {
 	t.Helper()
 	const marker = "journal "
-	logs := m.logs()
+	logs := m.Output()
 	tokens := logscan.After(logs, marker)
-	require.NotEmpty(t, tokens, "%s did not name its journal:\n%s", m.name, logs)
-	require.NotEmpty(t, tokens[0], "%s named an empty journal:\n%s", m.name, logs)
+	require.NotEmpty(t, tokens, "%s did not name its journal:\n%s", m.Name, logs)
+	require.NotEmpty(t, tokens[0], "%s named an empty journal:\n%s", m.Name, logs)
 	return tokens[0]
 }
 
 // requireReported checks a running machine said something at startup, without
 // stopping it to find out.
-func requireReported(t *testing.T, m *machine, want string, because ...string) {
+func requireReported(t *testing.T, m *harness.Machine, want string, because ...string) {
 	t.Helper()
-	require.Containsf(t, m.logs(), want, "%s did not report %q: %s\n%s",
-		m.name, want, strings.Join(because, " "), m.logs())
+	require.Containsf(t, m.Output(), want, "%s did not report %q: %s\n%s",
+		m.Name, want, strings.Join(because, " "), m.Output())
 }

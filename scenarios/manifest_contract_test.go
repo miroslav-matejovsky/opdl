@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
 )
 
 // TestManifestArgumentsMatchRuntime consumes the packaged launch contract
@@ -12,14 +14,14 @@ import (
 func TestManifestArgumentsMatchRuntime(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	outDir := filepath.Join(scenarioDir(t), "out")
-	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "manifest-contract")
-	node := deployment.machine(t, "node-b")
+	outDir := filepath.Join(harness.ScenarioDir(t), "out")
+	deployment := harness.DeploySite(ctx, t, outDir, filepath.Join(harness.ScenarioDir(t), "work"), "manifest-contract")
+	node := deployment.Machine(t, "node-b")
 	// The subtests start node-b's instances one at a time with the manifest's own
 	// arguments. The rest of the site has to be running for either to reach the
 	// journal.
-	deployment.startSite(ctx, t, "node-b")
-	manifest := readManifest(t, node.binaryPath)
+	deployment.StartSite(ctx, t, "node-b")
+	manifest := harness.ReadManifest(t, node.BinaryPath)
 	require.Equal(t, []string{"-instance", "primary"}, manifest.Primary.Args)
 	require.NotNil(t, manifest.Standby)
 	require.Equal(t, []string{"-instance", "standby"}, manifest.Standby.Args)
@@ -38,7 +40,7 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 
 	launches := []struct {
 		name   string
-		launch launch
+		launch harness.Launch
 	}{
 		{name: "primary", launch: manifest.Primary},
 		{name: "standby", launch: *manifest.Standby},
@@ -48,11 +50,11 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 	// so do not add t.Parallel() inside this subtest loop.
 	for _, process := range launches {
 		t.Run(process.name, func(t *testing.T) {
-			node.launchArgs = process.launch.Args
+			node.LaunchArgs = process.launch.Args
 			node.Process = nil
-			node.start(ctx, t)
-			waitForAPI(ctx, t, node)
-			node.stop()
+			node.Start(ctx, t)
+			harness.WaitForAPI(ctx, t, node)
+			node.Stop()
 		})
 	}
 }

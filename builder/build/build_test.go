@@ -13,24 +13,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRunRequiresProject is the cheap guard: an empty request fails before any
-// blueprint is loaded or anything is compiled, so it runs in every gate.
-func TestRunRequiresProject(t *testing.T) {
+// TestRunRequiresBlueprintDir is the cheap guard: an empty request fails before
+// any blueprint is loaded or anything is compiled, so it runs in every gate.
+func TestRunRequiresBlueprintDir(t *testing.T) {
 	_, err := Run(context.Background(), Options{})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "no project given")
+	require.Contains(t, err.Error(), "no blueprint directory given")
 }
 
 // TestOptionsDefaults checks the empty-field defaults match the CLI's, and that
 // an explicit value is left alone.
 func TestOptionsDefaults(t *testing.T) {
-	filled := Options{Project: "p"}.withDefaults()
+	filled := Options{BlueprintDir: "b"}.withDefaults()
 	require.Equal(t, defaultPlatform, filled.Platform)
-	require.Equal(t, defaultExamplesDir, filled.ExamplesDir)
 	require.Equal(t, defaultPlatformDir, filled.PlatformDir)
 	require.Equal(t, defaultOutDir, filled.OutDir)
 
-	custom := Options{Project: "p", Platform: "custom", OutDir: "/tmp/out"}.withDefaults()
+	custom := Options{BlueprintDir: "b", Platform: "custom", OutDir: "/tmp/out"}.withDefaults()
 	require.Equal(t, "custom", custom.Platform)
 	require.Equal(t, "/tmp/out", custom.OutDir)
 }
@@ -50,10 +49,9 @@ func TestRunBuildsEveryMachine(t *testing.T) {
 
 	out := t.TempDir()
 	results, err := Run(context.Background(), Options{
-		ExamplesDir: "testdata",
-		Project:     "minimal",
-		PlatformDir: filepath.Join("..", "..", "platform"),
-		OutDir:      out,
+		BlueprintDir: filepath.Join("testdata", "minimal"),
+		PlatformDir:  filepath.Join("..", "..", "platform"),
+		OutDir:       out,
 	})
 	require.NoError(t, err)
 	require.Len(t, results, 2, "the fixture has two machines")

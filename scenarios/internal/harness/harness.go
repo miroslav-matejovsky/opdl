@@ -1,13 +1,13 @@
-package scenarios
+package harness
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"maps"
 	"net"
@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/miroslav-matejovsky/opdl/builder/build"
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/procrun"
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/semaphore"
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/waitfor"
@@ -33,7 +34,9 @@ import (
 
 // This file is the scenario harness: how a scenario builds a project and runs
 // the machines it produces. Everything here drives external processes the way a
-// customer would, so a scenario never imports builder or platform code.
+// customer would, so a scenario never imports platform code. The one build-time
+// dependency is builder/build, which the harness calls in-process to produce the
+// deployment packages a customer would build with the CLI.
 
 // scenarioSite is the site every scenario blueprint deploys to. Scenarios cover
 // one site at a time, so the site is fixed here rather than threaded through
@@ -49,52 +52,15 @@ const (
 	markerWaitTimeout = 90 * time.Second
 )
 
+//go:embed testdata/project.hcl.tmpl
+var projectTemplate string
+
 var (
 	// budget bounds the total number of platform processes the suite runs at once.
 	budget = semaphore.New(max(2, runtime.GOMAXPROCS(0)/2))
 	// buildBudget bounds concurrent builder compilations / executions to 2.
 	buildBudget = semaphore.New(2)
-	// builderBinary holds the path to the precompiled builder CLI executable.
-	builderBinary string
 )
-
-func runMain(m *testing.M) int {
-	flag.Parse()
-	if testing.Short() {
-		fmt.Println("skipping scenario suite in -short mode")
-		return 0
-	}
-
-	// Compile builder once for all scenarios to eliminate repeated go run compilations
-	// and build-cache contention during parallel runs.
-	tmpDir, err := os.MkdirTemp("", "opdl-builder-*")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create temp dir for builder binary: %v\n", err)
-		return 1
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	builderBinary = filepath.Join(tmpDir, "opdl.exe")
-
-	builderDir, err := filepath.Abs(filepath.Join("..", "builder"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to locate builder dir: %v\n", err)
-		return 1
-	}
-
-	buildCmd := exec.CommandContext(context.Background(), "go", "build", "-o", builderBinary, "./cmd/opdl")
-	buildCmd.Dir = builderDir
-	if out, err := buildCmd.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to compile builder CLI: %v\n%s\n", err, out)
-		return 1
-	}
-
-	return m.Run()
-}
-
-func TestMain(m *testing.M) {
-	os.Exit(runMain(m))
-}
 
 // machineFixture is one machine of a scenario blueprint: its identity, the
 // loopback address it deploys on, and its local redundancy policy.
@@ -246,6 +212,14 @@ func scenarioDir(t *testing.T) string {
 	return dir
 }
 
+// ScenarioDir returns this scenario's scratch root, the parent of its
+// blueprints/, out/, work/, and control/ subdirectories. A scenario composes the
+// subdirectory it wants under this root.
+func ScenarioDir(t *testing.T) string {
+	t.Helper()
+	return scenarioDir(t)
+}
+
 // apiPortsWanted counts the API ports a project's instances need: one per
 // deployed instance.
 func apiPortsWanted(fixtures []machineFixture) int {
@@ -349,7 +323,7 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 	projectDir := filepath.Join(root, project)
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 
-	tmpl, err := template.ParseFiles(filepath.Join("testdata", "project.hcl.tmpl"))
+	tmpl, err := template.New("project").Parse(projectTemplate)
 	require.NoError(t, err)
 	var rendered bytes.Buffer
 	require.NoError(t, tmpl.Execute(&rendered, data))
@@ -358,21 +332,25 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 	return root, endpoints
 }
 
-// buildProject drives the builder CLI to build every machine of a blueprint into
-// outDir. It is the same command a customer runs. Note that cmd.Dir must be set
-// explicitly rather than calling os.Chdir anywhere in the harness, because a chdir
-// inside a process with parallel tests would break all concurrent paths.
+// buildProject drives the builder to build every machine of a blueprint into
+// outDir. It calls build.Run in-process, which runs the same flow the builder
+// CLI a customer uses runs.
+//
+// It passes only scenario-owned inputs: the rendered blueprint directory, the
+// output directory, and nothing else. Where the platform source lives and what
+// product line it is are the builder's concern, so the harness leaves them to
+// build.Run's defaults and never names a path into the platform module. The
+// platform stays a black box the builder compiles.
 func buildProject(ctx context.Context, t *testing.T, blueprintsDir, outDir, project string) {
 	t.Helper()
 	require.NoError(t, buildBudget.Acquire(ctx, 1))
 	defer buildBudget.Release(1)
 
-	build := exec.CommandContext(ctx, builderBinary, "build",
-		"-examples", blueprintsDir, "-out", outDir, project)
-	proc, err := procrun.Start(build)
-	require.NoError(t, err)
-	output, err := proc.Wait()
-	require.NoError(t, err, "builder build failed:\n%s", output)
+	_, err := build.Run(ctx, build.Options{
+		BlueprintDir: filepath.Join(blueprintsDir, project),
+		OutDir:       outDir,
+	})
+	require.NoError(t, err, "builder build failed")
 }
 
 // machineBinary returns the path of one built machine's binary. The builder
@@ -381,38 +359,45 @@ func machineBinary(outDir, project, machine string) string {
 	return filepath.Join(outDir, project, scenarioSite, machine, machine+".exe")
 }
 
-type winService struct {
+// WinService is one instance's Windows Service identity, as read back from a
+// package manifest.
+type WinService struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
 }
 
-type launch struct {
-	Service winService `json:"service"`
+// Launch is one instance's launch record in a package manifest.
+type Launch struct {
+	Service WinService `json:"service"`
 	Args    []string   `json:"args"`
 }
 
-type packageManifest struct {
+// PackageManifest is the subset of a built package's manifest a scenario reads.
+// It is re-declared here rather than imported from the builder so a scenario
+// checks the shipped manifest contract as a black box.
+type PackageManifest struct {
 	MachineProfile string  `json:"machine_profile"`
-	Primary        launch  `json:"primary"`
-	Standby        *launch `json:"standby"`
+	Primary        Launch  `json:"primary"`
+	Standby        *Launch `json:"standby"`
 }
 
-func readManifest(t *testing.T, binaryPath string) packageManifest {
+// ReadManifest reads and decodes a built machine's package manifest.
+func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(binaryPath), "manifest.json"))
 	require.NoError(t, err)
-	var manifest packageManifest
+	var manifest PackageManifest
 	require.NoError(t, json.Unmarshal(data, &manifest))
 	require.NotEmpty(t, manifest.Primary.Args)
 	return manifest
 }
 
-// sockets are one machine's addresses and its local directories.
+// Sockets are one machine's addresses and its local directories.
 //
-// Only eventDir is a runtime setting now: it is the machine's own concern and a
+// Only EventDir is a runtime setting now: it is the machine's own concern and a
 // site owns it. Everything else was rendered into the blueprint before the build
 // and is carried only so a scenario can reach a machine and assert what the
-// deployment should have derived. dataDir is in that second group since stage
+// deployment should have derived. DataDir is in that second group since stage
 // 05: it is the Primary Instance's authored store, repeated here so a scenario
 // can find the directory rather than state it.
 //
@@ -420,36 +405,36 @@ func readManifest(t *testing.T, binaryPath string) packageManifest {
 // instance's runtime directory. Both are an instance's rather than a machine's,
 // so the descriptor resolves them per instance and the configuration file cannot
 // state either. The runtime directories are not carried here at all: they are
-// derived per role by machine.statusPath.
+// derived per role by Machine.statusPath.
 //
 // There is no monitor address. The platform runs no NATS monitoring listener;
 // its status files are the local operational surface.
-type sockets struct {
-	dataDir  string
-	eventDir string
+type Sockets struct {
+	DataDir  string
+	EventDir string
 
-	// api, client, and cluster are the blueprint's, for reaching a machine and
+	// API, Client, and Cluster are the blueprint's, for reaching a machine and
 	// for assertions. Nothing writes them to a config file.
-	api     string
-	client  string
-	cluster string
+	API     string
+	Client  string
+	Cluster string
 }
 
-// site is the machines of one built project under a scenario's control.
+// Site is the machines of one built project under a scenario's control.
 //
 // Every machine is prepared before any is started, because each one's
 // configuration names the others: the site's NATS nodes route to each other's
 // cluster addresses, and on one host those addresses are not the ones the
 // deployment derived. Preparing the site as a whole is what lets a scenario
 // start the machines in any order, or leave one deliberately absent.
-type site struct {
+type Site struct {
 	project  string
 	outDir   string
 	workDir  string
-	machines []*machine
+	Machines []*Machine
 }
 
-// deploySite renders the project's blueprint with allocated ports, builds every
+// DeploySite renders the project's blueprint with allocated ports, builds every
 // machine from it, and prepares each one to run.
 //
 // It replaces the older split between building and preparing because the two are
@@ -457,7 +442,7 @@ type site struct {
 // chosen before the build rather than handed to the runtime after it. That is the
 // point of the change. A scenario exercises the same contract a customer build
 // does, instead of a runtime override path that no deployment uses.
-func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project string) *site {
+func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project string) *Site {
 	t.Helper()
 
 	fixtures := projectFixtures[project]
@@ -470,22 +455,22 @@ func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	blueprints, endpoints := stageBlueprint(t, project, workDir)
 	buildProject(ctx, t, blueprints, outDir, project)
 
-	s := &site{project: project, outDir: outDir, workDir: workDir}
+	s := &Site{project: project, outDir: outDir, workDir: workDir}
 	for _, fixture := range fixtures {
 		reserved := endpoints[fixture.name]
-		s.machines = append(s.machines, prepareMachine(t, s, fixture.name, sockets{
+		s.Machines = append(s.Machines, prepareMachine(t, s, fixture.name, Sockets{
 			// The Primary Instance's own journal store, matching what the
 			// blueprint authored for it. A scenario that sabotages storage has to
 			// aim at the directory that instance actually opens, and since stage
 			// 05 that is per instance rather than per machine.
-			dataDir:  filepath.FromSlash(dataDirFor(workDir, fixture.name, "primary")),
-			eventDir: filepath.Join(workDir, "operations-"+fixture.name),
+			DataDir:  filepath.FromSlash(dataDirFor(workDir, fixture.name, "primary")),
+			EventDir: filepath.Join(workDir, "operations-"+fixture.name),
 			// The API address the builder resolved: this machine's authored
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
 			// than at an address it chose, because it no longer chooses one.
-			api:     net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
-			client:  net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.client)),
-			cluster: net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.cluster)),
+			API:     net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
+			Client:  net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.client)),
+			Cluster: net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.cluster)),
 		}))
 	}
 
@@ -522,7 +507,7 @@ func stagedSite() []machineFixture {
 	return append(minimumSite(), machineFixture{name: "node-c", ip: "127.0.0.3", standbyDisabled: true})
 }
 
-// storageMachines returns the names of the machines that store the site journal,
+// StorageMachines returns the names of the machines that store the site journal,
 // mirroring the platform's own rule: storage is selected per platform instance,
 // one instance for a site smaller than three, the first three by sorted instance
 // name otherwise.
@@ -531,7 +516,7 @@ func stagedSite() []machineFixture {
 // so it cannot quietly disagree with the deployment about who stores what. The
 // result is machine names because that is what a scenario reaches; a machine is
 // listed when either of its instances was selected.
-func storageMachines(project string) []string {
+func StorageMachines(project string) []string {
 	instances := make([]string, 0, len(projectFixtures[project])*2)
 	owner := map[string]string{}
 	for _, fixture := range projectFixtures[project] {
@@ -556,11 +541,11 @@ func storageMachines(project string) []string {
 	return slices.Sorted(maps.Keys(machines))
 }
 
-// machine returns one prepared machine of the site by name.
-func (s *site) machine(t *testing.T, name string) *machine {
+// Machine returns one prepared machine of the site by name.
+func (s *Site) Machine(t *testing.T, name string) *Machine {
 	t.Helper()
-	for _, m := range s.machines {
-		if m.name == name {
+	for _, m := range s.Machines {
+		if m.Name == name {
 			return m
 		}
 	}
@@ -568,7 +553,7 @@ func (s *site) machine(t *testing.T, name string) *machine {
 	return nil
 }
 
-// startSite starts every platform instance the site deploys, all at once, and
+// StartSite starts every platform instance the site deploys, all at once, and
 // only then waits for each machine's Primary Instance to serve.
 //
 // Every instance, not only the primaries. The journal's replica count is the
@@ -580,76 +565,76 @@ func (s *site) machine(t *testing.T, name string) *machine {
 // except names machines to leave down, for a scenario whose subject is a machine
 // that is absent. Only a machine outside the storage selection can be held back;
 // holding back a storage instance costs the journal a replica it cannot place.
-func (s *site) startSite(ctx context.Context, t *testing.T, except ...string) {
+func (s *Site) StartSite(ctx context.Context, t *testing.T, except ...string) {
 	t.Helper()
-	for _, m := range s.machines {
-		if slices.Contains(except, m.name) {
+	for _, m := range s.Machines {
+		if slices.Contains(except, m.Name) {
 			continue
 		}
-		m.start(ctx, t)
-		if manifest := readManifest(t, m.binaryPath); manifest.Standby != nil {
-			m.standby = m.startManaged(ctx, t, "standby", manifest.Standby.Args)
+		m.Start(ctx, t)
+		if manifest := ReadManifest(t, m.BinaryPath); manifest.Standby != nil {
+			m.Standby = m.StartManaged(ctx, t, "standby", manifest.Standby.Args)
 		}
 	}
-	for _, m := range s.machines {
-		if slices.Contains(except, m.name) {
+	for _, m := range s.Machines {
+		if slices.Contains(except, m.Name) {
 			continue
 		}
-		waitForAPI(ctx, t, m)
+		WaitForAPI(ctx, t, m)
 	}
 }
 
-// startTogether starts the named machines at once and only then waits for each
+// StartTogether starts the named machines at once and only then waits for each
 // to serve.
 //
 // A site with three storage machines cannot be started one at a time. Their
 // journal's metadata group needs a quorum of the three servers before it can
 // create the stream, so the first machine cannot finish starting until the other
 // two are already running. Waiting for each in turn would deadlock on the first.
-func (s *site) startTogether(ctx context.Context, t *testing.T, names ...string) {
+func (s *Site) StartTogether(ctx context.Context, t *testing.T, names ...string) {
 	t.Helper()
-	started := make([]*machine, 0, len(names))
+	started := make([]*Machine, 0, len(names))
 	for _, name := range names {
-		m := s.machine(t, name)
-		m.start(ctx, t)
+		m := s.Machine(t, name)
+		m.Start(ctx, t)
 		started = append(started, m)
 	}
 	for _, m := range started {
-		waitForAPI(ctx, t, m)
+		WaitForAPI(ctx, t, m)
 	}
 }
 
-// machine is one platform process under a scenario's control: prepared, and
+// Machine is one platform process under a scenario's control: prepared, and
 // running once started.
-type machine struct {
+type Machine struct {
 	*procrun.Process
 	// project is part of the compiled deployment identity and local status path.
 	project string
-	// name is the deployment machine identity.
-	name string
+	// Name is the deployment machine identity.
+	Name string
 	// workDir is the site's scratch space, and the root the blueprint's runtime
 	// directories were rendered under. It is how a scenario finds either
 	// instance's status file; see statusPath.
 	workDir string
-	// url is the base URL of its registration API, known from the moment it is
+	// URL is the base URL of its registration API, known from the moment it is
 	// prepared, whether or not it is running.
-	url string
-	// sockets are the addresses and storage it was configured with. A restart
+	URL string
+	// Sockets are the addresses and storage it was configured with. A restart
 	// reuses them, which is what makes replaying its own journal possible.
-	sockets sockets
+	Sockets Sockets
 
-	binaryPath string
+	BinaryPath string
 	configPath string
-	launchArgs []string
-	// standby is this machine's Standby Instance once startSite has started one.
-	standby *managedProcess
+	LaunchArgs []string
+	// Standby is this machine's Standby Instance once StartSite has started one.
+	Standby *ManagedProcess
 	stopped bool
 }
 
-// processStatus is the local operational contract deployment tooling reads.
+// ProcessStatus is the local operational contract deployment tooling reads.
 // It is re-declared here so scenarios consume the packaged runtime as a black
 // box instead of importing platform internals.
-type processStatus struct {
+type ProcessStatus struct {
 	Role          string    `json:"role"`
 	State         string    `json:"state"`
 	PID           int       `json:"pid"`
@@ -660,44 +645,46 @@ type processStatus struct {
 	LastError     string    `json:"last_error"`
 }
 
-// managedProcess is one explicitly named primary or standby process. It is used
+// ManagedProcess is one explicitly named primary or standby process. It is used
 // by redundancy scenarios that need to stop one process without stopping the
 // other process of the same machine.
-type managedProcess struct {
+type ManagedProcess struct {
 	*procrun.Process
-	role string
+	Role string
 }
 
-// running reports whether the machine's process is still alive.
-func (m *machine) running() bool {
+// IsRunning reports whether the machine's process is still alive.
+func (m *Machine) IsRunning() bool {
 	if m.Process == nil || m.stopped {
 		return false
 	}
 	return m.Running()
 }
 
-// exited reports that this machine had a process of its own and that process is
+// Exited reports that this machine had a process of its own and that process is
 // gone. It is the fail-fast signal for a wait: there is no point polling a
 // machine that has died.
 //
-// It is deliberately not the negation of running. A machine whose processes are
-// launched with startManaged, as the warm standby scenario does, never has a
-// process of its own, so running is false for it from the start. Aborting on
+// It is deliberately not the negation of IsRunning. A machine whose processes are
+// launched with StartManaged, as the warm standby scenario does, never has a
+// process of its own, so IsRunning is false for it from the start. Aborting on
 // that would fail every wait against such a machine before the first poll, while
 // the primary and standby serving its endpoint are perfectly healthy.
-func (m *machine) exited() bool {
-	return m.Process != nil && !m.running()
+func (m *Machine) Exited() bool {
+	return m.Process != nil && !m.IsRunning()
 }
 
-func (m *machine) startManaged(ctx context.Context, t *testing.T, role string, args []string) *managedProcess {
+// StartManaged starts one explicitly named instance of the machine and returns a
+// handle a scenario can stop on its own.
+func (m *Machine) StartManaged(ctx context.Context, t *testing.T, role string, args []string) *ManagedProcess {
 	t.Helper()
 	commandArgs := append([]string{"-config", m.configPath}, args...)
-	cmd := exec.CommandContext(ctx, m.binaryPath, commandArgs...)
+	cmd := exec.CommandContext(ctx, m.BinaryPath, commandArgs...)
 	proc, err := procrun.Start(cmd)
 	require.NoError(t, err)
-	p := &managedProcess{
+	p := &ManagedProcess{
 		Process: proc,
-		role:    role,
+		Role:    role,
 	}
 	t.Cleanup(func() {
 		_ = p.Kill()
@@ -705,21 +692,23 @@ func (m *machine) startManaged(ctx context.Context, t *testing.T, role string, a
 	return p
 }
 
-func (p *managedProcess) stopGracefully(t *testing.T) {
+// StopGracefully sends the process the operating system's stop signal and waits
+// for it to exit, failing the scenario if it does not.
+func (p *ManagedProcess) StopGracefully(t *testing.T) {
 	t.Helper()
 	if !p.Running() {
 		return
 	}
 	require.NoError(t, p.Stop())
-	err := waitfor.Poll(t.Context(), apiWaitTimeout, 50*time.Millisecond, func() bool {
+	err := waitfor.Poll(t.Context(), APIWaitTimeout, 50*time.Millisecond, func() bool {
 		return !p.Running()
 	}, nil)
 	if err != nil {
 		_ = p.Kill()
-		require.FailNowf(t, p.role+" did not stop", "%s", p.Logs())
+		require.FailNowf(t, p.Role+" did not stop", "%s", p.Logs())
 	}
 	_, exitErr := p.Wait()
-	require.NoError(t, exitErr, "%s did not stop cleanly:\n%s", p.role, p.Logs())
+	require.NoError(t, exitErr, "%s did not stop cleanly:\n%s", p.Role, p.Logs())
 }
 
 // statusPath is where one of this machine's instances writes its status file.
@@ -728,27 +717,31 @@ func (p *managedProcess) stopGracefully(t *testing.T) {
 // authored in the blueprint by runtimeDirFor, and the runtime writes
 // process.status inside the directory it was given. The project, site, and role
 // qualifiers this path used to carry now live in the authored directory itself.
-func (m *machine) statusPath(role string) string {
-	return filepath.Join(runtimeDirFor(m.workDir, m.name, role), "process.status")
+func (m *Machine) statusPath(role string) string {
+	return filepath.Join(runtimeDirFor(m.workDir, m.Name, role), "process.status")
 }
 
-func (m *machine) readStatus(role string) (processStatus, error) {
+func (m *Machine) readStatus(role string) (ProcessStatus, error) {
 	data, err := os.ReadFile(m.statusPath(role))
 	if err != nil {
-		return processStatus{}, err
+		return ProcessStatus{}, err
 	}
-	var status processStatus
+	var status ProcessStatus
 	if err := json.Unmarshal(data, &status); err != nil {
-		return processStatus{}, err
+		return ProcessStatus{}, err
 	}
 	return status, nil
 }
 
-type diagStringer func() string
+// DiagStringer adapts a func into a fmt.Stringer, so a scenario can defer
+// rendering a diagnostic until a wait actually fails.
+type DiagStringer func() string
 
-func (d diagStringer) String() string { return d() }
+func (d DiagStringer) String() string { return d() }
 
-func waitFor(t *testing.T, what string, timeout, interval time.Duration, cond func() bool, abort waitfor.Abort, diag fmt.Stringer) {
+// WaitFor polls cond until it holds, aborts early when abort says to, and fails
+// the scenario with diag rendered at failure time.
+func WaitFor(t *testing.T, what string, timeout, interval time.Duration, cond func() bool, abort waitfor.Abort, diag fmt.Stringer) {
 	t.Helper()
 	err := waitfor.Poll(t.Context(), timeout, interval, cond, abort)
 	if err != nil {
@@ -760,18 +753,18 @@ func waitFor(t *testing.T, what string, timeout, interval time.Duration, cond fu
 	}
 }
 
-// waitStatus blocks until a process reports the expected lifecycle state.
-func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string, failoverReady bool) processStatus {
+// WaitStatus blocks until a process reports the expected lifecycle state.
+func (m *Machine) WaitStatus(t *testing.T, process *ManagedProcess, state string, failoverReady bool) ProcessStatus {
 	t.Helper()
-	var last processStatus
+	var last ProcessStatus
 	var readErr error
 
 	cond := func() bool {
-		status, err := m.readStatus(process.role)
+		status, err := m.readStatus(process.Role)
 		readErr = err
 		if err == nil {
 			last = status
-			if status.Role == process.role && status.PID == process.PID() && status.State == state &&
+			if status.Role == process.Role && status.PID == process.PID() && status.State == state &&
 				(!failoverReady || status.FailoverReady) && status.LastError == "" {
 				return true
 			}
@@ -781,7 +774,7 @@ func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string
 	abort := func() (bool, string) {
 		if !process.Running() {
 			out, _ := process.Wait()
-			return true, fmt.Sprintf("%s exited before reaching %s:\n%s", process.role, state, out)
+			return true, fmt.Sprintf("%s exited before reaching %s:\n%s", process.Role, state, out)
 		}
 		return false, ""
 	}
@@ -789,11 +782,11 @@ func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string
 	// the process is still running, so Wait would block until the whole test
 	// binary times out and the diagnostics would never be printed at all. Logs is
 	// a snapshot of the same buffer and does not block.
-	diag := diagStringer(func() string {
+	diag := DiagStringer(func() string {
 		return statusDiagnostics(m, process, state, last, readErr, process.Logs())
 	})
 
-	waitFor(t, "process "+process.role+" reaching state "+state, apiWaitTimeout, markerPollInterval, cond, abort, diag)
+	WaitFor(t, "process "+process.Role+" reaching state "+state, APIWaitTimeout, markerPollInterval, cond, abort, diag)
 	return last
 }
 
@@ -806,10 +799,10 @@ func (m *machine) waitStatus(t *testing.T, process *managedProcess, state string
 // never got far enough to write one; the second means it is running and cannot
 // reach the address it was told to use, which is a topology problem rather than a
 // startup one.
-func statusDiagnostics(m *machine, process *managedProcess, want string, last processStatus, readErr error, output string) string {
+func statusDiagnostics(m *Machine, process *ManagedProcess, want string, last ProcessStatus, readErr error, output string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "machine %s process %s wanted state %q\n", m.name, process.role, want)
-	fmt.Fprintf(&b, "status file: %s\n", m.statusPath(process.role))
+	fmt.Fprintf(&b, "machine %s process %s wanted state %q\n", m.Name, process.Role, want)
+	fmt.Fprintf(&b, "status file: %s\n", m.statusPath(process.Role))
 	switch {
 	case readErr != nil && os.IsNotExist(readErr):
 		b.WriteString("status: never written\n")
@@ -822,7 +815,7 @@ func statusDiagnostics(m *machine, process *managedProcess, want string, last pr
 		}
 	}
 	fmt.Fprintf(&b, "expected event fabric endpoints: client=%s cluster=%s\n",
-		m.sockets.client, m.sockets.cluster)
+		m.Sockets.Client, m.Sockets.Cluster)
 	fmt.Fprintf(&b, "logs:\n%s", output)
 	fmt.Fprintf(&b, "\noperational events:\n%s", operationEvents(m))
 	return b.String()
@@ -831,10 +824,10 @@ func statusDiagnostics(m *machine, process *managedProcess, want string, last pr
 // operationEvents reads every retained JSONL stream for a machine. A restart or
 // warm standby creates another PID-specific file, so diagnostics include all of
 // them in filename order rather than guessing which process matters.
-func operationEvents(m *machine) string {
-	paths, err := filepath.Glob(filepath.Join(m.sockets.eventDir, "*.jsonl"))
+func operationEvents(m *Machine) string {
+	paths, err := filepath.Glob(filepath.Join(m.Sockets.EventDir, "*.jsonl"))
 	if err != nil {
-		return fmt.Sprintf("glob %s: %v\n", m.sockets.eventDir, err)
+		return fmt.Sprintf("glob %s: %v\n", m.Sockets.EventDir, err)
 	}
 	if len(paths) == 0 {
 		return "(none)\n"
@@ -859,7 +852,7 @@ func operationEvents(m *machine) string {
 // offline for part of a scenario while something else is already configured to
 // call it, which is the only way to observe what the platform does about an
 // expected machine that is not there.
-func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machine {
+func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machine {
 	t.Helper()
 	binaryPath := machineBinary(s.outDir, s.project, name)
 	require.FileExists(t, binaryPath)
@@ -867,17 +860,17 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 	configPath := filepath.Join(s.workDir, "config-"+name+".toml")
 	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved), 0o644))
 
-	m := &machine{
+	m := &Machine{
 		project:    s.project,
-		name:       name,
+		Name:       name,
 		workDir:    s.workDir,
-		url:        "http://" + reserved.api,
-		sockets:    reserved,
-		binaryPath: binaryPath,
+		URL:        "http://" + reserved.API,
+		Sockets:    reserved,
+		BinaryPath: binaryPath,
 		configPath: configPath,
-		launchArgs: readManifest(t, binaryPath).Primary.Args,
+		LaunchArgs: ReadManifest(t, binaryPath).Primary.Args,
 	}
-	t.Cleanup(m.stop)
+	t.Cleanup(m.Stop)
 	return m
 }
 
@@ -912,7 +905,7 @@ func prepareMachine(t *testing.T, s *site, name string, reserved sockets) *machi
 // The journal's storage joined them when each instance gained its own server. A
 // machine's two instances open two stores, so one machine-level data_dir could
 // not name both, and it is now authored per instance in the blueprint.
-func platformConfig(reserved sockets) []byte {
+func platformConfig(reserved Sockets) []byte {
 	return fmt.Appendf(nil, `read_header_timeout = "5s"
 shutdown_timeout = "10s"
 lag_bound = "2m"
@@ -921,35 +914,35 @@ event_dir = %q
 [event_fabric.nats]
 startup_timeout = "60s"
 catch_up_timeout = "60s"
-`, filepath.ToSlash(reserved.eventDir))
+`, filepath.ToSlash(reserved.EventDir))
 }
 
-// start runs a prepared machine.
-func (m *machine) start(ctx context.Context, t *testing.T) {
+// Start runs a prepared machine.
+func (m *Machine) Start(ctx context.Context, t *testing.T) {
 	t.Helper()
-	require.Nil(t, m.Process, "%s is already started", m.name)
-	args := append([]string{"-config", m.configPath}, m.launchArgs...)
-	cmd := exec.CommandContext(ctx, m.binaryPath, args...)
+	require.Nil(t, m.Process, "%s is already started", m.Name)
+	args := append([]string{"-config", m.configPath}, m.LaunchArgs...)
+	cmd := exec.CommandContext(ctx, m.BinaryPath, args...)
 	proc, err := procrun.Start(cmd)
 	require.NoError(t, err)
 	m.Process = proc
 	m.stopped = false
 }
 
-// restart force-stops the machine and starts it again on the same sockets and
+// Restart force-stops the machine and starts it again on the same sockets and
 // the same journal storage, which is what makes it the same node coming back
 // rather than a new one.
-func (m *machine) restart(ctx context.Context, t *testing.T) {
+func (m *Machine) Restart(ctx context.Context, t *testing.T) {
 	t.Helper()
-	m.stop()
+	m.Stop()
 	m.Process = nil
-	m.start(ctx, t)
+	m.Start(ctx, t)
 }
 
-// stop force-stops the machine. A graceful child interrupt is not portable, and
+// Stop force-stops the machine. A graceful child interrupt is not portable, and
 // stopping hard is also the more demanding test: the journal is on disk, so a
 // node that is killed must still come back to the same state.
-func (m *machine) stop() {
+func (m *Machine) Stop() {
 	if m.stopped || m.Process == nil {
 		return
 	}
@@ -957,34 +950,34 @@ func (m *machine) stop() {
 	_ = m.Kill()
 }
 
-// logs returns the machine's captured output, and says so when the machine was
+// Output returns the machine's captured output, and says so when the machine was
 // never started rather than dereferencing a process that does not exist.
 //
 // It does not stop the machine. The output buffer is mutex guarded, so reading
 // it while the process is still writing is safe and is what diagnostics need:
 // stopping a machine in order to find out what it said would destroy the state
-// the failure is about. Use wait when a scenario means to observe an exit.
-func (m *machine) logs() string {
+// the failure is about. Use AwaitExit when a scenario means to observe an exit.
+func (m *Machine) Output() string {
 	if m.Process == nil {
 		return "(never started)\n"
 	}
 	return m.Logs()
 }
 
-// wait blocks until the machine's process exits and returns its output. It is
-// for a scenario about a platform that is supposed to fail to start: waiting is
-// the assertion, and the output is why.
-func (m *machine) wait(t *testing.T) string {
+// AwaitExit blocks until the machine's process exits and returns its output. It
+// is for a scenario about a platform that is supposed to fail to start: waiting
+// is the assertion, and the output is why.
+func (m *Machine) AwaitExit(t *testing.T) string {
 	t.Helper()
-	require.NotNil(t, m.Process, "%s was never started", m.name)
+	require.NotNil(t, m.Process, "%s was never started", m.Name)
 	out, _ := m.Wait()
 	m.stopped = true
 	return out
 }
 
-// waitForMarker blocks until name appears in dir, which is how a scenario waits
+// WaitForMarker blocks until name appears in dir, which is how a scenario waits
 // for something inside another process to reach a point.
-func waitForMarker(t *testing.T, dir, name string, signaller *procrun.Process, describe func() string) {
+func WaitForMarker(t *testing.T, dir, name string, signaller *procrun.Process, describe func() string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
 	cond := func() bool {
@@ -998,25 +991,25 @@ func waitForMarker(t *testing.T, dir, name string, signaller *procrun.Process, d
 		}
 		return false, ""
 	}
-	diag := diagStringer(describe)
-	waitFor(t, name+" marker", markerWaitTimeout, markerPollInterval, cond, abort, diag)
+	diag := DiagStringer(describe)
+	WaitFor(t, name+" marker", markerWaitTimeout, markerPollInterval, cond, abort, diag)
 }
 
-// diagnose renders everything worth knowing when a scenario fails: what each
+// Diagnose renders everything worth knowing when a scenario fails: what each
 // machine printed, whether it was running, and where it answers.
-func diagnose(machines []*machine) string {
+func Diagnose(machines []*Machine) string {
 	var b strings.Builder
 	for _, m := range machines {
 		state := "not started"
 		if m.Process != nil {
 			state = "stopped"
 		}
-		if m.running() {
+		if m.IsRunning() {
 			state = "running"
 		}
 		fmt.Fprintf(&b, "\n--- machine %s (%s, api %s, journal %s) ---\n%s",
-			m.name, state, m.url, m.sockets.dataDir, m.logs())
-		fmt.Fprintf(&b, "\n--- machine %s operational events ---\n%s", m.name, operationEvents(m))
+			m.Name, state, m.URL, m.Sockets.DataDir, m.Output())
+		fmt.Fprintf(&b, "\n--- machine %s operational events ---\n%s", m.Name, operationEvents(m))
 	}
 	return b.String()
 }
@@ -1025,7 +1018,7 @@ func diagnose(machines []*machine) string {
 // fails.
 //
 // A message argument is evaluated where it is written, not where it is
-// formatted, so passing diagnose(...) straight into a wait captured every
+// formatted, so passing Diagnose(...) straight into a wait captured every
 // machine's output before the wait had had a chance to fail. The logs that
 // explained the failure were then precisely the ones missing from it, because
 // they had not been written yet. testify formats a message only on failure, so a
@@ -1034,9 +1027,9 @@ type lazily func() string
 
 func (l lazily) String() string { return l() }
 
-// diagnostics renders diagnose for these machines, at failure time.
-func diagnostics(machines ...*machine) fmt.Stringer {
-	return lazily(func() string { return diagnose(machines) })
+// Diagnostics renders Diagnose for these machines, at failure time.
+func Diagnostics(machines ...*Machine) fmt.Stringer {
+	return lazily(func() string { return Diagnose(machines) })
 }
 
 // appended renders trailing failure context, and nothing at all when a caller

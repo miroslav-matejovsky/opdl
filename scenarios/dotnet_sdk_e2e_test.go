@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/miroslav-matejovsky/opdl/scenarios/internal/procrun"
 	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/procrun"
 )
 
 // pendingObservedMarker is the file the .NET test writes once it has proven that
@@ -36,9 +38,8 @@ const pendingObservedMarker = "pending-observed"
 // projection is the second account of the same facts, and a scenario that only
 // checked one of them would not notice the other drifting.
 //
-// Nothing here imports builder, platform, or SDK code. The builder, both
-// machines, and the .NET test are external processes, exactly as a user would run
-// them.
+// Nothing here imports builder, platform, or SDK code. Both machines and the
+// .NET test are external processes, exactly as a user would run them.
 func TestDotnetSDKEndToEnd(t *testing.T) {
 	dotnet, err := exec.LookPath("dotnet")
 	if err != nil {
@@ -51,24 +52,24 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	ctx := t.Context()
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
-	outDir := filepath.Join(scenarioDir(t), "out")
+	outDir := filepath.Join(harness.ScenarioDir(t), "out")
 	// Every machine is prepared up front so the .NET test knows where the second
 	// one will answer, and node-c is started separately so it is genuinely absent
 	// while the pending assertions run. node-c is the machine held back because it
 	// stores no journal, so the site works without it.
-	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
-	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-c")
-	controlDir := filepath.Join(scenarioDir(t), "control")
+	deployment := harness.DeploySite(ctx, t, outDir, filepath.Join(harness.ScenarioDir(t), "work"), "two-machine")
+	first, second := deployment.Machine(t, "node-a"), deployment.Machine(t, "node-c")
+	controlDir := filepath.Join(harness.ScenarioDir(t), "control")
 
-	deployment.startSite(ctx, t, "node-c")
+	deployment.StartSite(ctx, t, "node-c")
 
 	// The .NET test runs asynchronously: it blocks partway through waiting for
 	// node B, so this scenario has to still be running to start it.
 	e2eProject := filepath.Join(scenariosDir, "..", "sdk-dotnet", "tests", "Opdl.Sdk.E2E", "Opdl.Sdk.E2E.csproj")
 	command := exec.CommandContext(ctx, dotnet, "test", e2eProject, "--nologo", "--verbosity", "quiet", "--logger", "console;verbosity=normal")
 	command.Env = append(os.Environ(),
-		"OPDL_PLATFORM_BASEURL_A="+first.url,
-		"OPDL_PLATFORM_BASEURL_B="+second.url,
+		"OPDL_PLATFORM_BASEURL_A="+first.URL,
+		"OPDL_PLATFORM_BASEURL_B="+second.URL,
 		"OPDL_CONTROL_DIR="+controlDir,
 	)
 	sdkTest, err := procrun.Start(command)
@@ -79,14 +80,14 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	})
 
 	// Node B starts only once the SDK test has proven pending behavior.
-	waitForMarker(t, controlDir, pendingObservedMarker, sdkTest, func() string {
-		return diagnose([]*machine{first, second}) + "\n--- dotnet SDK test output so far ---\n" + sdkTest.Logs()
+	harness.WaitForMarker(t, controlDir, pendingObservedMarker, sdkTest, func() string {
+		return harness.Diagnose([]*harness.Machine{first, second}) + "\n--- dotnet SDK test output so far ---\n" + sdkTest.Logs()
 	})
-	second.start(ctx, t)
+	second.Start(ctx, t)
 
 	testOut, err := sdkTest.Wait()
 	require.NoErrorf(t, err, "dotnet SDK end-to-end tests failed:\n%s%s",
-		testOut, diagnostics(first, second))
+		testOut, harness.Diagnostics(first, second))
 	// The tests skip without their environment variables, so a run that skipped
 	// would otherwise pass while proving nothing.
 	require.Containsf(t, testOut, "Passed Opdl.Sdk.E2E.RegistrationTests.RegistrationIsAcceptedOnlyAfterEveryExpectedMachineConfirms",
@@ -95,27 +96,27 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	// The platform's public projection and the SDK's account agree about what
 	// happened. The SDK drove the site to one accepted registration and two losing
 	// claims for the same key; both machines report exactly that.
-	for _, m := range []*machine{first, second} {
-		registrations := listRegistrations(ctx, t, m)
-		require.Len(t, registrations, 3, "%s: one winner and two losing claims", m.name)
+	for _, m := range []*harness.Machine{first, second} {
+		registrations := harness.ListRegistrations(ctx, t, m)
+		require.Len(t, registrations, 3, "%s: one winner and two losing claims", m.Name)
 
-		accepted := make([]registration, 0, 1)
+		accepted := make([]harness.Registration, 0, 1)
 		for _, view := range registrations {
 			if view.Status == "accepted" {
 				accepted = append(accepted, view)
 			}
 		}
-		require.Len(t, accepted, 1, "%s: exactly one claim holds the key", m.name)
-		require.Equal(t, "node-a", accepted[0].Machine, "%s: the origin is where the client asked", m.name)
+		require.Len(t, accepted, 1, "%s: exactly one claim holds the key", m.Name)
+		require.Equal(t, "node-a", accepted[0].Machine, "%s: the origin is where the client asked", m.Name)
 		require.Equal(t, "Billing", accepted[0].UnitTypeNameAdvertised)
-		require.Equal(t, "accepted", accepted[0].instance(t, "node-a").Status)
-		require.Equal(t, "accepted", accepted[0].instance(t, "node-b").Status,
-			"%s: the barrier held until node-b confirmed", m.name)
+		require.Equal(t, "accepted", accepted[0].Instance(t, "node-a").Status)
+		require.Equal(t, "accepted", accepted[0].Instance(t, "node-b").Status,
+			"%s: the barrier held until node-b confirmed", m.Name)
 
-		conflicts := listConflicts(ctx, t, m)
-		require.Len(t, conflicts, 1, "%s: one contested key", m.name)
+		conflicts := harness.ListConflicts(ctx, t, m)
+		require.Len(t, conflicts, 1, "%s: one contested key", m.Name)
 		require.Equal(t, accepted[0].ProposalID, conflicts[0].Winner.ProposalID,
-			"%s: the incumbent survived both later claims", m.name)
+			"%s: the incumbent survived both later claims", m.Name)
 		require.Len(t, conflicts[0].Losers, 2)
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
 )
 
 // This file holds the scenarios about a platform that is interrupted or cannot
@@ -25,37 +27,37 @@ import (
 func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	outDir := filepath.Join(scenarioDir(t), "out")
-	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "scenario")
-	node := deployment.machine(t, "node-a")
+	outDir := filepath.Join(harness.ScenarioDir(t), "out")
+	deployment := harness.DeploySite(ctx, t, outDir, filepath.Join(harness.ScenarioDir(t), "work"), "scenario")
+	node := deployment.Machine(t, "node-a")
 	// Both machines: a proposal needs a confirmation from every machine of the
 	// site, and the journal's metadata group needs a quorum before either can
 	// finish starting.
-	deployment.startSite(ctx, t)
+	deployment.StartSite(ctx, t)
 
-	accepted := propose(ctx, t, node, `{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Billing","role":"Master"}`)
-	before := waitForRegistrationStatus(ctx, t, node, accepted.ProposalID, "accepted")
-	listedBefore := listRegistrations(ctx, t, node)
+	accepted := harness.Propose(ctx, t, node, `{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Billing","role":"Master"}`)
+	before := harness.WaitForRegistrationStatus(ctx, t, node, accepted.ProposalID, "accepted")
+	listedBefore := harness.ListRegistrations(ctx, t, node)
 
 	// Nothing is handed to the new process but the same configuration and the same
 	// directory on disk.
-	node.restart(ctx, t)
-	waitForAPI(ctx, t, node)
+	node.Restart(ctx, t)
+	harness.WaitForAPI(ctx, t, node)
 
-	after, code := getRegistration(ctx, t, node, accepted.ProposalID)
+	after, code := harness.GetRegistration(ctx, t, node, accepted.ProposalID)
 	require.Equal(t, http.StatusOK, code,
 		"the restarted platform does not know a registration it had already accepted")
 	require.Equal(t, before, after, "a restarted platform answers the same question the same way")
-	require.Equal(t, listedBefore, listRegistrations(ctx, t, node))
+	require.Equal(t, listedBefore, harness.ListRegistrations(ctx, t, node))
 
 	// The state came back by replay, not by a second decision. An accepted
 	// proposal that was re-decided would be a new fact in the journal; the
 	// identity is the same, so the site sees the same registration it already had.
-	retry := propose(ctx, t, node, `{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Billing","role":"Master"}`)
+	retry := harness.Propose(ctx, t, node, `{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Billing","role":"Master"}`)
 	require.Equal(t, accepted.ProposalID, retry.ProposalID,
 		"the same request is the same claim across a restart: identity is derived, not remembered")
-	require.Len(t, listRegistrations(ctx, t, node), 1)
-	require.Empty(t, listConflicts(ctx, t, node),
+	require.Len(t, harness.ListRegistrations(ctx, t, node), 1)
+	require.Empty(t, harness.ListConflicts(ctx, t, node),
 		"a restart must not make a platform contend with its own history")
 }
 
@@ -69,19 +71,19 @@ func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
 func TestPlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	outDir := filepath.Join(scenarioDir(t), "out")
-	workDir := filepath.Join(scenarioDir(t), "work")
-	deployment := deploySite(ctx, t, outDir, workDir, "scenario")
-	node := deployment.machine(t, "node-a")
+	outDir := filepath.Join(harness.ScenarioDir(t), "out")
+	workDir := filepath.Join(harness.ScenarioDir(t), "work")
+	deployment := harness.DeploySite(ctx, t, outDir, workDir, "scenario")
+	node := deployment.Machine(t, "node-a")
 
 	// Put a file where the journal's directory has to be, so creating it cannot
 	// succeed. This is a stand-in for the real cases: no permission, or a full or
 	// unmounted disk.
-	require.NoError(t, os.MkdirAll(filepath.Dir(node.sockets.dataDir), 0o755))
-	require.NoError(t, os.WriteFile(node.sockets.dataDir, []byte("not a directory"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(node.Sockets.DataDir), 0o755))
+	require.NoError(t, os.WriteFile(node.Sockets.DataDir, []byte("not a directory"), 0o644))
 
-	node.start(ctx, t)
-	output := node.wait(t)
+	node.Start(ctx, t)
+	output := node.AwaitExit(t)
 
 	require.Contains(t, output, "data directory",
 		"a platform that cannot store its journal must say so:\n%s", output)
@@ -96,7 +98,7 @@ func TestPlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
 		"a platform that cannot store its journal must not activate its API:\n%s", output)
 
 	// The API never came up, so there is nothing to answer a client that tries.
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, node.url+"/registrations", http.NoBody)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, node.URL+"/registrations", http.NoBody)
 	require.NoError(t, err)
 	_, err = http.DefaultClient.Do(request)
 	require.Error(t, err, "the platform served its API despite failing to start")
