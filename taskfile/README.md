@@ -10,8 +10,10 @@ than once at the root.
   the first non-zero exit.
 - `tidy.ps1`, `vet.ps1`, `fmt.ps1`, `lint.ps1`: run `go mod tidy`, `go vet`,
   `go fmt`, and `golangci-lint` in every module.
-- `deadcode.ps1`: runs `deadcode -test ./...` in modules that have a command or scenario tests,
-  using command and test executables as reachability roots.
+- `deadcode.ps1`: runs `deadcode -test ./...` over the modules that have a
+  `cmd/`, using command and test executables as reachability roots. `scenarios`
+  is one of them like any other, which is why it is not named anywhere in the
+  script.
 - `deadcode.ps1` and `arch.ps1` use installed `deadcode` and `go-arch-lint`
   binaries when available, falling back to `go run ...@latest` only when a tool
   is missing. This keeps checks usable without network access when tools are
@@ -32,8 +34,9 @@ than once at the root.
   half. The suite is a program rather than a test binary, so the script only
   launches it and every knob is the command's: run `go run ./cmd -h` inside
   `scenarios/` for the list. It runs concurrently under a bounded load budget;
-  when debugging, you can serialize it with `go run ./cmd -parallel 1` and narrow
-  it with `go run ./cmd -run nats`.
+  when debugging, you can serialize it with `go run ./cmd -parallel 1`, see what
+  there is with `go run ./cmd -list`, and narrow it with `-only nats`, `-skip
+  sdk`, or `-run nats/FourMachine`.
 
   The two halves are separate scripts and separate tasks because they fail for
   different reasons and take very different times. A scenario failure means a

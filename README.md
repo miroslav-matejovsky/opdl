@@ -21,7 +21,7 @@ Start with the [documentation index](docs/README.md).
 | `builder` | Build one platform package per blueprint machine. |
 | `platform` | Run the registration API and the site event journal it projects from. |
 | `conformance-tests` | Regenerate API artifacts and verify shared contracts. |
-| `scenarios` | Run black-box tests against built binaries. |
+| `scenarios` | Drive built binaries as external processes. A program (`go run ./cmd`), not a test binary. |
 | `sdk-dotnet` | Generated .NET client and end-to-end tests. |
 | `api-specifications` | Generated OpenAPI YAML and Markdown. |
 

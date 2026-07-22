@@ -16,7 +16,14 @@
 //	-timeout d    overall timeout for the whole run (default 30m)
 //	-run regexp   run only scenarios whose name matches regexp
 //	-count n      run each scenario n times (default 1; scenarios never cache)
+//	-only a,b     run only these categories (default all)
+//	-skip x,y     run every category except these
+//	-list         print what would run, then exit
 //	-v            report each scenario as it runs
+//
+// A scenario's name is category/Scenario, so -run takes either half:
+// -run nats selects a category and -run nats/FourMachine selects within one.
+// -only and -skip select whole categories and compose with -run.
 package main
 
 import (
@@ -26,6 +33,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,8 +62,24 @@ func main() {
 	timeout := flag.Duration("timeout", 30*time.Minute, "overall timeout for the whole run")
 	run := flag.String("run", "", "run only scenarios whose name matches this regexp")
 	count := flag.Int("count", 1, "run each scenario n times; scenarios never use cached results")
+	only := flag.String("only", "", "comma-separated categories to run; empty runs every category")
+	skip := flag.String("skip", "", "comma-separated categories to leave out")
+	list := flag.Bool("list", false, "print the categories and scenarios that would run, then exit")
 	verbose := flag.Bool("v", false, "report each scenario as it runs")
 	flag.Parse()
+
+	sets, err := runner.Select(scenarioSets(), names(*only), names(*skip))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "scenarios:", err)
+		os.Exit(2)
+	}
+	if *list {
+		// The listing is of the selected sets rather than of all of them, so it
+		// answers "what will this invocation run" and, with no selection flags,
+		// still answers "what is there".
+		runner.List(os.Stdout, sets)
+		return
+	}
 
 	// Translate this command's flags into the test.* flags the runner reads.
 	setTestFlag(testFlags, "test.parallel", strconv.Itoa(*parallel))
@@ -66,8 +90,8 @@ func main() {
 		setTestFlag(testFlags, "test.v", "true")
 	}
 
-	// Backstop timeout. RunTests honours test.timeout as a per-test deadline but
-	// cannot interrupt a goroutine stuck in a syscall or waiting on a child
+	// Backstop timeout. The test runner honours test.timeout as a per-test
+	// deadline but cannot interrupt a goroutine stuck in a syscall or on a child
 	// process, which a scenario driving external processes can produce. This kills
 	// the whole run past the deadline; the job objects procrun places children in
 	// take them down with it. On a normal finish the process exits first and this
@@ -79,7 +103,19 @@ func main() {
 		os.Exit(2)
 	}()
 
-	os.Exit(runner.Run(scenarioSets()))
+	os.Exit(runner.Run(sets))
+}
+
+// names splits a comma-separated flag value into category names, tolerating
+// spaces and empty entries so -only "nats, sdk" and -only nats,, both work.
+func names(value string) []string {
+	var selected []string
+	for part := range strings.SplitSeq(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			selected = append(selected, part)
+		}
+	}
+	return selected
 }
 
 // scenarioSets returns every category's scenarios. This list is the suite: a

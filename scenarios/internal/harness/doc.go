@@ -13,7 +13,18 @@
 // customer uses runs: load and validate the blueprint, resolve the per-machine
 // plan, and compile a deployment package per machine. So a scenario proves the
 // shipped artifacts rather than the code that happens to be linked into a test
-// binary. The platform module root it compiles from defaults to ../platform.
+// binary.
+//
+// The harness passes builder only scenario-owned inputs: the blueprint directory
+// it rendered and the output directory to write packages to. Where the platform
+// source lives and what product line it is are the builder's defaults, so the
+// platform stays a black box on the build side too, not just at runtime.
+//
+// The supporting packages are all local: internal/procrun runs and supervises
+// the child processes, internal/semaphore bounds the load, internal/waitfor
+// polls, internal/logscan reads what a machine printed, and internal/processinfo
+// measures one. Only testnet, the port allocator, still comes from utils, which
+// platform shares.
 //
 // # Where the NATS ports come from
 //
@@ -64,8 +75,10 @@
 //
 // # Where scenario artifacts live
 //
-// Every scenario artifact outlives the run inside scenarios/.tmp/<TestName>/,
-// emptied once on first access per run. The subdirectories are:
+// Every scenario artifact outlives the run inside
+// scenarios/.tmp/<category>/<Scenario>/, emptied once on first access per run.
+// The path is the scenario's name, so a subtest shares its scenario's root and
+// two scenarios of one category do not share anything. The subdirectories are:
 //   - blueprints/: the temporary project.hcl rendered for the build
 //   - out/: the compiled packages and manifests produced by the builder
 //   - work/: runtime configuration files, site journals, status files, and

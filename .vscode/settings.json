@@ -94,6 +94,7 @@
     "pkgname",
     "platformapi",
     "platformdeployment",
+    "processinfo",
     "processtree",
     "procrun",
     "promotability",
