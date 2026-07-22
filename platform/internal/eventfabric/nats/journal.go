@@ -10,7 +10,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 )
 
 // journalConfig is the site journal's required configuration. The journal is
@@ -75,8 +74,10 @@ func (f *Fabric) ensureJournal(ctx context.Context) (jetstream.Stream, error) {
 			_, infoErr := stream.Info(ctx)
 			if infoErr == nil {
 				if attempt > 1 {
-					f.observer.Emit("event_fabric.journal_recovered", operations.LevelInfo, "event_fabric.nats", "site journal became available", map[string]any{
-						attributeJournal: want.Name, "attempts": attempt, operations.AttributeDurationMS: time.Since(started).Milliseconds(),
+					f.observer.Record(ctx, JournalRecovered{
+						Journal:    want.Name,
+						Attempts:   attempt,
+						DurationMS: time.Since(started).Milliseconds(),
 					})
 				}
 				return stream, nil
@@ -88,9 +89,7 @@ func (f *Fabric) ensureJournal(ctx context.Context) (jetstream.Stream, error) {
 		}
 		last = err
 		if attempt == 1 || attempt%10 == 0 {
-			f.observer.Emit("event_fabric.journal_retry", operations.LevelWarn, "event_fabric.nats", "site journal is unavailable; retrying", map[string]any{
-				attributeJournal: want.Name, attributeAttempt: attempt, operations.AttributeError: err.Error(),
-			})
+			f.observer.Record(ctx, JournalRetry{Journal: want.Name, Attempt: attempt, Error: err.Error()})
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("nats: wait for journal %s: %w", want.Name, ctxErr)

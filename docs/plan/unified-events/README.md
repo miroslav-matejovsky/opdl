@@ -1,8 +1,8 @@
 # Unified platform event model
 
-Status: option A selected. Stages 10 to 60 are implemented; stages 70 to 90 are
-pending. `operations.Event` and `Recorder.Emit` remain only for the NATS
-adapter, which stage 70 migrates.
+Status: option A selected. Stages 10 to 70 are implemented; stages 80 and 90 are
+pending. `operations.Event`, `Recorder.Emit`, `Level`, and the attribute
+constants now have no callers at all; stage 80 deletes them.
 
 ## Goal
 

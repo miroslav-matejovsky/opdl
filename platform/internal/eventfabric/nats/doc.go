@@ -115,6 +115,20 @@
 // client issues another pull, the adapter records the degradation, and delivery
 // continues on the same iterator.
 //
+// # Its own events
+//
+// The adapter states what its transport is doing — server, client, journal,
+// consumers, and its own release — as typed events declared in events.go, under
+// platform.nats.<fact>. They stay adapter-shaped: server addresses, stream
+// names, consumer attempts. None of that belongs in the common envelope.
+//
+// They are recorded locally, through operations.Recorder, and never published.
+// A node that has lost its connection or cannot reach its journal is precisely
+// the one that cannot write an event about it, so the diagnosis must not depend
+// on the thing being diagnosed. The client's own callbacks record the same way,
+// on their own goroutines and under a background context, and keep working while
+// the connection is going away.
+//
 // # What the adapter does not decide
 //
 // Open returns a fabric that is usable, not a node that is ready, and it states
