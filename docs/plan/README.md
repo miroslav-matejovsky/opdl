@@ -1,5 +1,9 @@
 # Plan: refactor the scenarios module into a cmd + internal structure
 
+A separate proposal for unifying the platform event models is under
+[unified-events](unified-events/README.md). It is currently at the architecture
+decision gate and has no implementation stages approved yet.
+
 ## Goal
 
 Turn `scenarios/` from a flat bag of `*_test.go` files driven by `go test`
