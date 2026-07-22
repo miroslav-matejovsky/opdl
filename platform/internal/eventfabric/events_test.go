@@ -1,6 +1,7 @@
 package eventfabric
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -8,15 +9,22 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
-func TestLifecycleEventsCarryProcessIdentityAndState(t *testing.T) {
-	ready := NewReady(Info{Adapter: "nats"}, 42, "standby")
-	require.Equal(t, "standby", ready.InstanceRole)
-	require.Equal(t, "active", ready.ProcessState)
+// TestLifecycleEventsCarryOnlyWhatTheEnvelopeDoesNot checks the payloads state
+// the node's transport and its catch-up point, and nothing the envelope already
+// carries: which process stated the fact is its origin, and what the process was
+// doing is the event type.
+func TestLifecycleEventsCarryOnlyWhatTheEnvelopeDoesNot(t *testing.T) {
+	ready := Ready{Info: Info{Adapter: "nats", Journal: "opdl_abc"}, HighWater: 42}
 	require.Equal(t, uint64(42), ready.HighWater)
+	require.Equal(t, "nats", ready.Adapter)
 
-	stopping := NewStopping("nats", "primary")
-	require.Equal(t, "primary", stopping.InstanceRole)
-	require.Equal(t, "stopping", stopping.ProcessState)
+	data, err := json.Marshal(ready)
+	require.NoError(t, err)
+	for _, absent := range []string{"process_role", "process_state", "pid", "machine"} {
+		require.NotContains(t, string(data), absent, "the envelope states this, so the payload must not")
+	}
+
+	require.Equal(t, "nats", Stopping{Adapter: "nats"}.Adapter)
 }
 
 func TestLifecycleEventsDeclareTheirContract(t *testing.T) {

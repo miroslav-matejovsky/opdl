@@ -1,13 +1,13 @@
-// Package events is the platform's domain event mechanism: the one event
-// contract, the one serialized wrapper, and the stamping that connects them. It
-// owns no events of its own.
+// Package events is the platform's event mechanism: the one event contract, the
+// one serialized wrapper, and the stamping that connects them. It owns no events
+// of its own.
 //
-// # Domain events, not logs
+// # Facts, not logs
 //
-// A platform event is a domain event in the DDD sense: a fact that has already
-// happened, stated in the past tense, that other parts of the system and the
-// people operating it can rely on. It is not a log line. The difference is not
-// cosmetic and drives how they are written:
+// A platform event is a fact that has already happened, stated in the past
+// tense, that other parts of the system and the people operating it can rely on.
+// It is not a log line. The difference is not cosmetic and drives how they are
+// written:
 //
 //   - An event is owned by the domain that produced it, not by an observer. It
 //     is recorded at the state transition that owns the fact, so an event
@@ -20,6 +20,27 @@
 //     understand the fact, so a reader never has to query the platform to
 //     interpret it. Where that means repeating a few fields, they are repeated.
 //   - An event is immutable and complete when recorded. Nothing amends it later.
+//
+// Some facts are domain events in the DDD sense — a registration was accepted —
+// and some are facts about a process — a client lost its connection. They are
+// one model. What differs is not the shape but the destination and what a
+// failure means, which is the next section.
+//
+// # Where an event goes
+//
+// A domain fact is published to the site journal through the Event Fabric,
+// synchronously, and a failure fails the operation that caused it: an event
+// nobody retained is a fact that did not happen as far as the site is concerned.
+//
+// A fact about one process is recorded locally through operations.Recorder,
+// best effort. It has to be: connection loss, journal unavailability, and
+// projection failure are exactly the conditions an operator needs to see, so
+// describing them must not depend on the journal being reachable. A process that
+// cannot describe itself must still run.
+//
+// Both destinations carry this package's Envelope, so an operator decodes one
+// shape wherever an event is read, and neither destination has any say in what
+// an event is.
 //
 // # Event types
 //
@@ -126,10 +147,13 @@
 // # Storage
 //
 // This package does not store events. It turns an event into a complete,
-// self-describing envelope, and the Event Fabric appends it to the site
-// journal — synchronously, so a fact is retained before the operation that
-// caused it returns. The journal is the platform's only event storage, and a
-// running service has exactly one event source: the retained site journal.
+// self-describing envelope; the Event Fabric appends it to the site journal and
+// operations.Recorder writes it to the local stream and file.
+//
+// The journal is the platform's only event storage in the sense that matters to
+// behavior: a running service reconstructs state from the retained site journal
+// and from nothing else. Local files are for the operator of one process and are
+// never read back by the platform.
 //
 // Encode and Decode are the one JSON representation of an envelope. Encode
 // validates before it writes, so an event nothing could replay never reaches

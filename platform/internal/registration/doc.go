@@ -9,6 +9,12 @@
 // It never constructs a subject, stream, or consumer, and it does not know which
 // transport carries the journal.
 //
+// The four facts it can state are declared in events.go, with the identities
+// that make them idempotent in identifiers.go. A call site constructs a typed
+// payload and publishes it; the envelope around it — occurrence identity, time,
+// origin, severity, causal links — is stamped by the runtime's one factory and
+// never by this package.
+//
 // # The event flow
 //
 // A registration is a site-wide decision expressed entirely as ordered events:

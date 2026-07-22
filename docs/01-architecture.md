@@ -71,10 +71,12 @@ stream, or consumer, or knows one exists.
 | --- | --- |
 | Journal | The site's ordered, retained event history. |
 | Route | A stable destination derived from deployment scope and event type. |
+| Publisher | Stamps a typed payload into an envelope and appends it. Business code is handed this and nothing else. |
+| Appender | Appends one already stamped envelope. The adapter half, so no transport decides what a fact says. |
 | Receipt | Proof the journal durably accepted and ordered an event. |
 | Projector | Rebuilds one node-local query model by folding the journal in order. |
 | Handler | Reacts to selected routes for one service on one node, and may publish resulting facts. |
-| Delivery | One journal event and the sequence the journal gave it. |
+| Delivery | One journal envelope and the sequence the journal gave it. |
 
 A route is `opdl.<site-scope>.event.<domain>.<fact>`, where `site-scope` is a
 stable transport-safe hash of the length-prefixed project, environment, and site.
@@ -223,23 +225,58 @@ enlarge the quorum deciding whether the site can write without adding anywhere t
 write to. A machine that does not store the journal therefore depends on one that
 does, and does not start until it can reach it.
 
-## Domain events
+## Events
 
 Events are facts stated by the package that owns the state transition. They are
-not log messages. Publishing is synchronous: a fact is in the site's journal
+not log messages. Publishing to the journal is synchronous: a fact is retained
 before the operation that caused it returns.
 
-| Package | Events |
-| --- | --- |
-| `internal/registration` | `platform.registration.proposed`, `confirmed`, `rejected`, `accepted` |
-| `internal/app` | `platform.event_fabric.ready`, `stopping` |
+The platform has one event model and one serialized wrapper. These invariants
+hold everywhere:
 
-`internal/events` owns only the envelope and its stamping. Every record is
-self-describing: it carries its own occurrence ID, event type, payload schema
-version, occurrence time, source subsystem, and the deployment node that stated
-it, plus optional causal links. It deliberately carries no transport ordering; the
-journal orders events when it accepts them, and that sequence belongs to the
-Event Fabric receipt and delivery, not to the immutable fact.
+- concrete event payloads live in the owning package's `events.go`, never in a
+  central catalog and never at a call site;
+- common metadata is stamped automatically by one factory per process, so
+  business code constructs a typed payload and nothing else;
+- an event type is `platform.<source>.<fact>`, and the source is derived from it
+  rather than restated;
+- transport order is delivery metadata, not part of the fact;
+- local event output stays usable while NATS is unavailable, because it does not
+  go through NATS;
+- storage and distribution do not define event shape; an adapter receives a
+  completed envelope and decides only where it goes.
+
+| Package | Events | Written to |
+| --- | --- | --- |
+| `internal/registration` | `platform.registration.proposed`, `confirmed`, `rejected`, `accepted` | site journal |
+| `internal/eventfabric` | `platform.event_fabric.ready`, `stopping` | site journal |
+| `internal/app` | `platform.app.<fact>`: process, status, API, standby, projection, and site transitions | local |
+| `internal/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | local |
+| `internal/eventfabric/nats` | `platform.nats.<fact>`: server, client, journal, and consumer transitions | local |
+
+`internal/events` owns the contract and the envelope and declares no events of
+its own. An event payload implements one method, `EventType`, and implements a
+small optional interface only where it differs from a default: a schema version
+other than `1`, a severity other than `info`, tags, or a domain-stable identity.
+
+`events.Envelope` is the only serialized wrapper. It carries the occurrence ID
+and UTC time, the event type and its derived source, the payload schema version,
+the severity, the origin that stated it, the optional causal links and stable
+identity, and the payload as JSON. Every envelope is validated before it leaves
+the process, so a stored event is always self-describing. It deliberately carries
+no transport ordering: the journal orders events when it accepts them, and that
+sequence belongs to the Event Fabric receipt and delivery, not to the immutable
+fact.
+
+Causal links are infrastructure, not domain vocabulary. The Event Fabric attaches
+a delivery to the handler's context as the cause before invoking it, so a
+consequence records what produced it and which workflow both belong to without
+the handler knowing that causation exists.
+
+Origin names the deployment down to the machine, plus the writing process's role
+and PID. The deployment half is domain identity; the process half is operational
+identity for an operator only. Domain behavior stays machine-scoped, so a machine
+running two instances is still one registration voter.
 
 The Event Fabric's own lifecycle events are stated by runtime composition, not by
 the adapter. Readiness is a conclusion about a whole node — its journal, its

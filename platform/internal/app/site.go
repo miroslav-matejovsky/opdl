@@ -43,7 +43,6 @@ type site struct {
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
-	role       redundancy.InstanceRole
 	observer   *operations.Recorder
 
 	// projector is the node-wide ordered consumer: one loop, from the first
@@ -117,7 +116,6 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 		fabric:          fabric,
 		publisher:       eventfabric.NewPublisher(factory, fabric),
 		projection:      registration.NewProjection(),
-		role:            role,
 		observer:        observer,
 		stopped:         make(chan struct{}),
 		catchUpTimeout:  fabricCfg.CatchUpTimeout,
@@ -198,7 +196,7 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 		return err
 	}
 
-	receipt, err := s.publisher.Publish(catchUpCtx, eventfabric.NewReady(s.fabric.Info(), s.projection.Sequence(), s.role.String()))
+	receipt, err := s.publisher.Publish(catchUpCtx, eventfabric.Ready{Info: s.fabric.Info(), HighWater: s.projection.Sequence()})
 	if err != nil {
 		return fmt.Errorf("state ready: %w", err)
 	}
@@ -334,7 +332,7 @@ func (s *site) release(ctx context.Context) error {
 	// A node that never said it was ready has nothing to say about stopping. It
 	// would be stating the end of something the site never heard begin.
 	if s.ready {
-		if _, err := s.publisher.Publish(stopCtx, eventfabric.NewStopping(s.fabric.Info().Adapter, s.role.String())); err != nil {
+		if _, err := s.publisher.Publish(stopCtx, eventfabric.Stopping{Adapter: s.fabric.Info().Adapter}); err != nil {
 			errs = append(errs, fmt.Errorf("state stopping: %w", err))
 		}
 	}

@@ -27,9 +27,9 @@ type file struct {
 	EventFabric EventFabric `toml:"event_fabric"`
 }
 
-// Operations configures local operational event retention. Structured events
-// are always written to the process error stream; EventDir optionally retains
-// the same records as JSONL for incident analysis.
+// Operations configures local event retention. Events are always written to the
+// process error stream as one JSON envelope per line; EventDir optionally
+// retains the same lines as JSONL for incident analysis.
 type Operations struct {
 	EventDir string `toml:"event_dir"`
 }

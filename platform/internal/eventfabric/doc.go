@@ -44,6 +44,21 @@
 // rebuild a read model without re-causing the side effects a Handler performs,
 // so projection and coordination never share one mechanism.
 //
+// # Causation
+//
+// Before a Handler is invoked, the delivery is attached to its context as the
+// cause, with events.WithCause. Whatever the Handler publishes with that context
+// records what produced it and which workflow both belong to, so a reader can
+// follow a reaction back to its input. A Handler never attaches or reads those
+// links: it states facts, and what caused it to run is not one of them.
+//
+// # Its own events
+//
+// The fabric states two facts of its own, declared in events.go: that a node is
+// ready and that one has begun stopping. Both are stated by runtime composition
+// rather than by an adapter, because readiness is a conclusion about a whole
+// node and a transport can only report on itself.
+//
 // This separation is also what a warm standby process runs on. A machine may run a
 // second local process that keeps its projections caught up from the journal but
 // holds no active capability. Publishing is active-only: running durable Handlers

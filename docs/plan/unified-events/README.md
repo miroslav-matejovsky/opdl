@@ -1,69 +1,50 @@
 # Unified platform event model
 
-Status: option A selected. Stages 10 to 80 are implemented; stage 90 is pending.
-`events.Envelope` is the platform's only serialized event wrapper, and the five
-`events.go` catalogs are the only places concrete events are declared.
+Status: complete. All nine stages are implemented and `task all` passes.
 
-## Goal
+## Result
 
-Replace the two existing event models with one canonical model:
+The platform has one event model and one serialized wrapper:
 
-- `internal/events.Event` with `events.Meta` and `events.Record`;
-- `internal/operations.Event` written by `operations.Recorder`.
+- `events.Event` is the payload contract, and it is one method, `EventType`.
+- `events.Envelope` is the only serialized wrapper. Local output and the site
+  journal carry the same shape, so a reader never selects a model before
+  decoding.
+- `events.Factory` stamps every envelope, once per process, from the deployment
+  descriptor and the instance role.
+- Concrete events live in the owning package's `events.go`. There are five:
+  `registration`, `eventfabric`, `app`, `redundancy`, and `eventfabric/nats`.
+- Business code constructs a typed payload and calls `Publish` or `Record`. It
+  supplies no IDs, timestamps, identity, source, severity, causal links, JSON,
+  subjects, or attribute maps.
 
-After the refactor:
-
-- the platform has one event payload contract;
-- the platform has one serialized event wrapper;
-- every package that defines events keeps all of its event structs in
-  `events.go`;
-- local JSONL, stderr, NATS, and future stores or distributors consume the same
-  wrapper;
-- storage and distribution behavior is not part of the event model.
+`operations.Event`, `Recorder.Emit`, `events.Meta`, `events.Record`,
+`StampRecord`, and adapter-side stamping are gone, with no compatibility layer.
 
 ## Documents
 
-1. [Current state](00-current-state.md) describes the duplication.
+1. [Current state](00-current-state.md) describes the duplication that was
+   removed.
 2. [Canonical model options](01-architecture-options.md) records the selected
    wrapper shape.
 
-## Target usage
+## Stages
 
-Business code constructs only its typed payload:
+| Stage | File | Outcome |
+| --- | --- | --- |
+| 10 | [Canonical model](10-canonical-model.md) | `Event`, `Envelope`, `Origin`, `Type`, `Severity` and the optional interfaces |
+| 20 | [Envelope factory](20-envelope-factory.md) | `Factory.Wrap` and context-carried causal links |
+| 30 | [Domain event catalogs](30-domain-event-catalogs.md) | registration and Event Fabric catalogs moved into `events.go` |
+| 40 | [Journal pipeline](40-journal-pipeline.md) | publisher and appender split; deliveries carry envelopes |
+| 50 | [Application events](50-application-events.md) | 20 typed `platform.app.<fact>` events; `Recorder.Record` |
+| 60 | [Redundancy events](60-redundancy-events.md) | 6 typed `platform.redundancy.<fact>` events |
+| 70 | [NATS events](70-nats-events.md) | 22 typed `platform.nats.<fact>` events |
+| 80 | [Remove duplicate model](80-remove-duplicate-model.md) | the second wrapper and its API deleted |
+| 90 | [Documentation and validation](90-documentation-validation.md) | docs reconciled, full gate green |
 
-```go
-receipt, err := publisher.Publish(ctx, NewAccepted(proposal))
-observer.Record(ctx, SiteOpening{Active: true})
-```
+## Where the invariants are documented
 
-Business code does not supply IDs, timestamps, deployment or process identity,
-source, schema defaults, severity defaults, causal links, JSON, subjects, file
-paths, or generic attribute maps.
-
-The common event factory populates that data. Event definitions contain only the
-metadata that differs from the defaults, next to their typed payload structs in
-the owning package's `events.go`.
-
-## Detailed stages
-
-| Stage | File | Outcome | Effort | Complexity |
-| --- | --- | --- | --- | --- |
-| 10 | [Canonical model](10-canonical-model.md) | Add the canonical envelope and payload contract | M | Medium |
-| 20 | [Envelope factory](20-envelope-factory.md) | Populate common metadata and causal context automatically | M | High |
-| 30 | [Domain event catalogs](30-domain-event-catalogs.md) | Move existing typed events into owner `events.go` files | S-M | Low-Medium |
-| 40 | [Journal pipeline](40-journal-pipeline.md) | Make Event Fabric and NATS carry completed envelopes | L | High |
-| 50 | [Application events](50-application-events.md) | Replace app string/map events with typed payloads | L | Medium-High |
-| 60 | [Redundancy events](60-redundancy-events.md) | Replace redundancy string/map events with typed payloads | M | Medium |
-| 70 | [NATS events](70-nats-events.md) | Replace adapter string/map events with typed payloads | L | Medium-High |
-| 80 | [Remove duplicate model](80-remove-duplicate-model.md) | Delete `operations.Event` and the old emit API | M | Medium |
-| 90 | [Documentation and validation](90-documentation-validation.md) | Reconcile docs and run the complete gate | S-M | Low-Medium |
-
-Effort scale: S is up to one engineer-day, M is one to three days, and L is
-three to five days.
-
-## POC rule
-
-Backward compatibility is not required. Do not add deprecated aliases, dual JSON
-formats, event conversion layers, or readers for the old wrappers. Temporary
-internal scaffolding is allowed only while the workspace is migrated and must be
-removed by stage 80.
+`platform/internal/events/doc.go` is the reference: payload ownership, event type
+convention, defaults, envelope fields, stamping, causal links, and origin. The
+architecture overview states the same invariants at system level in
+[docs/01-architecture.md](../../01-architecture.md).
