@@ -74,8 +74,10 @@ deps:
     canUse: [nats-server, nats-client]
     mayDependOn: [config, events, eventfabric, operations]
 
+  # operations is the local event writer: it stamps typed payloads with the
+  # process's envelope factory and serializes them. It owns no events.
   operations:
-    mayDependOn: [config]
+    mayDependOn: [events]
   httpapi:
     canUse: [huma]
     mayDependOn: [api, registration]

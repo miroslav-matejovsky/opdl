@@ -94,7 +94,7 @@ func PlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
 	// answer domain operations from a journal it could not store.
 	require.NotContains(t, output, "active, serving on",
 		"a platform that cannot store its journal must not serve:\n%s", output)
-	require.NotContains(t, output, "platform.api_active",
+	require.NotContains(t, output, "platform.app.api_active",
 		"a platform that cannot store its journal must not activate its API:\n%s", output)
 
 	// The API never came up, so there is nothing to answer a client that tries.

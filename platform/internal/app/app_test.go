@@ -19,6 +19,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
@@ -198,6 +199,15 @@ func embeddedDescriptor(t *testing.T) config.Descriptor {
 	return d
 }
 
+// openSite composes a site the way Run does: one envelope factory for the
+// process, stamping everything the node states.
+func openSite(t *testing.T, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
+	t.Helper()
+	factory, err := events.NewFactory(descriptor, role.String())
+	require.NoError(t, err)
+	return open(t.Context(), descriptor, cfg, active, role, factory)
+}
+
 // openTestSite composes a real Event Fabric on loopback and returns it ready to
 // serve, as Run would. It skips in the fast gate: a site is not a site without a
 // journal, and a journal means a server and a disk.
@@ -209,7 +219,7 @@ func openTestSite(t *testing.T) *site {
 	cfg, err := config.Load(writeConfig(t, t.TempDir()))
 	require.NoError(t, err)
 
-	s, err := open(t.Context(), descriptorOnFreePorts(t, cfg), cfg, true, redundancy.RolePrimary)
+	s, err := openSite(t, descriptorOnFreePorts(t, cfg), cfg, true, redundancy.RolePrimary)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.close(context.Background()) })
 	return s
@@ -578,13 +588,13 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 	require.NoError(t, err)
 	descriptor := deployStandby(descriptorOnFreePorts(t, cfg))
 
-	active, err := open(t.Context(), descriptor, cfg, true, redundancy.RolePrimary)
+	active, err := openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = active.close(context.Background()) })
 	require.True(t, active.ready, "the active process announces readiness")
 	require.True(t, active.fabric.Info().HostsStorage, "the active process stores the journal")
 
-	standby, err := open(t.Context(), descriptor, cfg, false, redundancy.RoleStandby)
+	standby, err := openSite(t, descriptor, cfg, false, redundancy.RoleStandby)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = standby.close(context.Background()) })
 
@@ -653,7 +663,7 @@ func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	descriptor := descriptorOnFreePorts(t, cfg)
 	descriptor.Instances.Primary.DataDir = blocked
 
-	_, err = open(t.Context(), descriptor, cfg, true, redundancy.RolePrimary)
+	_, err = openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "data directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
 }

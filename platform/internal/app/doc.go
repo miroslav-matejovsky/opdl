@@ -23,4 +23,18 @@
 // App owns startup, readiness, lag enforcement, and ordered shutdown. Domain
 // packages receive narrow Event Fabric and registration contracts and never
 // configure the transport directly.
+//
+// # Its own events
+//
+// The runtime states its own facts: what it started, bound, opened, waited for,
+// and stopped. They are declared in events.go and recorded locally through
+// operations.Recorder, not published to the site journal, because they describe
+// one process — and a process that is failing to start is exactly the one that
+// cannot write to a journal.
+//
+// This package also composes the process's one events.Factory, from the
+// deployment descriptor and the resolved instance role, and passes it to the
+// local recorder and to the Event Fabric publisher. Everything this process
+// states, locally or into the journal, is stamped by that one factory, so a
+// local record and a published event carry the same origin.
 package app

@@ -90,13 +90,13 @@ type service struct {
 // opens no durable handler, publishes no readiness, and binds no listener, so it
 // follows the site's history without producing a decision or holding an
 // active-only capability.
-func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
+func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole, factory events.Factory) (*site, error) {
 	observer := operations.FromContext(ctx)
 	openedAt := time.Now()
-	observer.Emit("platform.site_opening", operations.LevelInfo, "platform.site", "site runtime opening", map[string]any{"active": active})
+	observer.Record(ctx, SiteOpening{Active: active})
 	fabricCfg, err := natsConfig(descriptor, cfg, role)
 	if err != nil {
-		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "site configuration failed", map[string]any{operations.AttributeError: err.Error()})
+		observer.Record(ctx, SiteOpenFailed{Phase: PhaseConfiguration, Error: err.Error()})
 		return nil, err
 	}
 	logEffectiveFabric(descriptor, fabricCfg, role)
@@ -105,21 +105,13 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 	// rather than half way through starting a server.
 	fabric, err := natsfabric.Open(ctx, descriptor, fabricCfg)
 	if err != nil {
-		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "Event Fabric failed to open", map[string]any{operations.AttributeError: err.Error()})
+		observer.Record(ctx, SiteOpenFailed{Phase: PhaseEventFabric, Error: err.Error()})
 		return nil, err
 	}
 	info := fabric.Info()
 	fmt.Printf("platform: event fabric %s on %s, journal %s (storage=%t replicas=%d)\n",
 		info.Server, strings.Join(fabricCfg.Servers, ","), info.Journal,
 		info.HostsStorage, info.Replicas)
-
-	// One factory per process stamps every event this node states, so origin and
-	// occurrence identity are decided here and never by a caller or an adapter.
-	factory, err := events.NewFactory(descriptor, role.String())
-	if err != nil {
-		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "event identity failed to compose", map[string]any{operations.AttributeError: err.Error()})
-		return nil, errors.Join(err, fabric.Close(ctx))
-	}
 
 	s := &site{
 		fabric:          fabric,
@@ -134,11 +126,12 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 
 	if !active {
 		if err := s.startStandby(ctx); err != nil {
-			observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "standby site failed to catch up", map[string]any{operations.AttributeError: err.Error()})
+			observer.Record(ctx, SiteOpenFailed{Phase: PhaseStandbyCatchUp, Error: err.Error()})
 			return nil, errors.Join(err, s.close(ctx))
 		}
-		observer.Emit("platform.standby_ready", operations.LevelInfo, "platform.site", "standby projection caught up", map[string]any{
-			operations.AttributeDurationMS: time.Since(openedAt).Milliseconds(), operations.AttributeAppliedSequence: s.projection.Sequence(),
+		observer.Record(ctx, StandbyReady{
+			AppliedSequence: s.projection.Sequence(),
+			DurationMS:      time.Since(openedAt).Milliseconds(),
 		})
 		return s, nil
 	}
@@ -157,11 +150,12 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 	}
 
 	if err := s.start(ctx, handler); err != nil {
-		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "active site readiness failed", map[string]any{operations.AttributeError: err.Error()})
+		observer.Record(ctx, SiteOpenFailed{Phase: PhaseActiveReadiness, Error: err.Error()})
 		return nil, errors.Join(err, s.close(ctx))
 	}
-	observer.Emit("platform.site_ready", operations.LevelInfo, "platform.site", "active site is ready to serve", map[string]any{
-		operations.AttributeDurationMS: time.Since(openedAt).Milliseconds(), operations.AttributeAppliedSequence: s.projection.Sequence(),
+	observer.Record(ctx, SiteReady{
+		AppliedSequence: s.projection.Sequence(),
+		DurationMS:      time.Since(openedAt).Milliseconds(),
 	})
 	return s, nil
 }
@@ -246,8 +240,11 @@ func (s *site) catchUp(ctx context.Context, what string) error {
 	if err := s.awaitApplied(ctx, high, what); err != nil {
 		return err
 	}
-	s.observer.Emit("platform.projection_caught_up", operations.LevelInfo, "platform.site", "projection reached captured journal high-water mark", map[string]any{
-		"phase": what, "high_water": high, operations.AttributeAppliedSequence: s.projection.Sequence(), operations.AttributeDurationMS: time.Since(started).Milliseconds(),
+	s.observer.Record(ctx, ProjectionCaughtUp{
+		Phase:           what,
+		HighWater:       high,
+		AppliedSequence: s.projection.Sequence(),
+		DurationMS:      time.Since(started).Milliseconds(),
 	})
 	return nil
 }
@@ -326,7 +323,7 @@ func (s *site) close(ctx context.Context) error {
 }
 
 func (s *site) release(ctx context.Context) error {
-	s.observer.Emit("platform.site_stopping", operations.LevelInfo, "platform.site", "site runtime stopping", map[string]any{"ready": s.ready})
+	s.observer.Record(ctx, SiteStopping{Ready: s.ready})
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownTimeout)
 	defer cancel()
 
@@ -343,13 +340,11 @@ func (s *site) release(ctx context.Context) error {
 	}
 	errs = append(errs, s.projector.stop(), s.fabric.Close(stopCtx))
 	err := errors.Join(errs...)
-	level := operations.LevelInfo
-	attributes := map[string]any{}
+	stopped := SiteStopped{}
 	if err != nil {
-		level = operations.LevelError
-		attributes[operations.AttributeError] = err.Error()
+		stopped.Error = err.Error()
 	}
-	s.observer.Emit("platform.site_stopped", level, "platform.site", "site runtime stopped", attributes)
+	s.observer.Record(ctx, stopped)
 	return err
 }
 
@@ -412,13 +407,11 @@ func (s *site) run(ctx context.Context, name string, loop func(context.Context) 
 			s.stoppedOnce.Do(func() { close(s.stopped) })
 		}()
 		r.err = loop(runCtx)
-		level := operations.LevelInfo
-		attributes := map[string]any{"loop": name}
+		stopped := BackgroundLoopStopped{Loop: name}
 		if r.err != nil {
-			level = operations.LevelError
-			attributes[operations.AttributeError] = r.err.Error()
+			stopped.Error = r.err.Error()
 		}
-		s.observer.Emit("platform.background_loop_stopped", level, "platform.site", "background Event Fabric loop stopped", attributes)
+		s.observer.Record(ctx, stopped)
 	}()
 	return r
 }
