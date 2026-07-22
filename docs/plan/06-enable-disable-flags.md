@@ -1,4 +1,4 @@
-# Stage 05: per-package enable and disable selection
+# Stage 06: per-package enable and disable selection
 
 Effort: S (about 0.5 day). Complexity: Low-Med.
 
@@ -11,7 +11,7 @@ called for, and it belongs in the command, not the taskfile.
 
 ## Flag design
 
-Add to `cmd/scenarios/main.go` (on top of the flags from stage 03):
+Add to `cmd/main.go` (on top of the flags from stage 04):
 
 - `-only a,b,c`: run only the named packages. Empty means all.
 - `-skip x,y`: run everything except the named packages.
@@ -25,7 +25,7 @@ Rules:
 - An unknown name is an error, so a typo fails loudly instead of silently
   running everything.
 
-`-run PATTERN` from stage 03 still works and composes: `-only nats -run
+`-run PATTERN` from stage 04 still works and composes: `-only nats -run
 FourMachine` selects within a package. Package selection filters `runner.Set`s;
 `-run` filters individual scenarios through the testing runner's matcher.
 
@@ -52,22 +52,22 @@ CI, and a developer narrows locally.
 1. Add `-only`, `-skip`, `-list` flags to the command.
 2. Add `runner.Select` with validation and the mutual-exclusion rule.
 3. Add `runner.List` (or inline in the command) for `-list`.
-4. Document the flags in `cmd/scenarios/doc.go` or a `-h` usage string.
+4. Document the flags in `cmd/doc.go` or a `-h` usage string.
 
 ## Files touched
 
-- Edited: `scenarios/cmd/scenarios/main.go`.
+- Edited: `scenarios/cmd/main.go`.
 - Edited: `scenarios/internal/runner/runner.go` (add `Select`, `List`).
 
 ## Verification
 
-- `go run ./cmd/scenarios -list` prints six packages and their scenarios.
-- `go run ./cmd/scenarios -only nats -run x` selects only `nats`, matches
+- `go run ./cmd -list` prints six packages and their scenarios.
+- `go run ./cmd -only nats -run x` selects only `nats`, matches
   nothing, exits 0.
-- `go run ./cmd/scenarios -skip sdk,standby -run x` excludes two packages.
-- `go run ./cmd/scenarios -only bogus` errors with a clear message and non-zero
+- `go run ./cmd -skip sdk,standby -run x` excludes two packages.
+- `go run ./cmd -only bogus` errors with a clear message and non-zero
   exit.
-- `go run ./cmd/scenarios -only nats -skip sdk` errors (mutually exclusive).
+- `go run ./cmd -only nats -skip sdk` errors (mutually exclusive).
 - `task fast` passes.
 
 ## Risks and notes

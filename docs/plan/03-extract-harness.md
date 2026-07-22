@@ -1,4 +1,4 @@
-# Stage 02: extract the shared harness into internal/harness
+# Stage 03: extract the shared harness into internal/harness
 
 Effort: L (about 1.5 to 2 days). Complexity: High.
 
@@ -136,7 +136,7 @@ Fabric config (moved from `warm_standby_test.go`, shared by nats and standby):
 | `fabricConfigPrefix`          | keep internal                    |
 
 Helpers that a single category owns are not moved here. They move with their
-scenario in stage 04:
+scenario in stage 05:
 
 - `journalOf`, `requireReported`: only `nats` uses them.
 - `lastFabricConfig`, `waitForConnectionEvent`, `proposeEventually`: only `nats`
@@ -163,27 +163,40 @@ var projectTemplate string
 Render with `template.New("project").Parse(projectTemplate)`. This removes the
 working-directory dependency for the template entirely.
 
-## Builder bootstrap, handled temporarily
+## The build call, now in-process
 
-`runMain`/`TestMain` in `harness_test.go` compiles the builder CLI once into a
-temp binary and stores the path in the package var `builderBinary`, plus it
-short-circuits `-short`. That logic does not belong in the harness package long
-term; it moves into the command in stage 03.
+The current harness compiles the builder CLI once into a temp binary
+(`runMain`/`TestMain`) and `buildProject` runs that binary with `exec`. With the
+builder build flow exposed as a public package in stage 02, this whole bootstrap
+goes away.
 
-For this stage, keep it working with the least churn:
+Replace it with a direct call:
 
-- Keep a `TestMain(m *testing.M)` in the scenarios test package (`package
-  scenarios`, in a file such as `main_test.go`) that does the builder compile
-  and calls `harness.SetBuilder(path)` before `m.Run()`.
-- Add `harness.SetBuilder(path string)` and an internal `builderBinary` var in
-  the harness package, read by `DeploySite`/`buildProject`. This is the same
-  singleton shape the code already has, just addressable from outside.
-- The builder directory lookup (`filepath.Abs(filepath.Join("..", "builder"))`)
-  stays working-directory relative for now; stage 03 makes it a command
-  responsibility with an override flag.
+- `buildProject` calls `build.Run(ctx, build.Options{ExamplesDir: blueprintsDir,
+  OutDir: outDir, Project: project, Platform: "opdl", PlatformDir: platformDir})`
+  from `github.com/miroslav-matejovsky/opdl/builder/build`.
+- Delete `runMain`, the `TestMain` builder-compile step, the `builderBinary`
+  package var, and the whole "compile the CLI once" comment. There is no CLI
+  binary to compile any more; the builder code is linked into the scenarios
+  program.
+- The `-short` short-circuit also goes. Under `go test` the scenario functions
+  are not `Test*` functions (from stage 05 on), so nothing runs them there; and
+  the command that drives them has no `-short`. Until stage 05, while scenarios
+  are still `*_test.go`, keep a minimal `TestMain` only if a scenario still needs
+  `-short` skipping; otherwise drop it.
+- `PlatformDir` is the platform module root. Default it to
+  `filepath.Abs(filepath.Join("..", "platform"))` relative to the working
+  directory, which is `scenarios/` under the task. Stage 04 lets the command
+  override it with a flag. Keep a single `harness` setter or config field for it
+  rather than recomputing it per build.
 
-Stage 03 replaces this `TestMain` bootstrap with the command doing the same work
-before `MainStart`.
+This removes the temp-binary path, the `SetBuilder` idea, and the builder
+directory lookup. The concurrency budget stays: `build.Run` still triggers a
+`go build` of the platform per machine, so `buildBudget` continues to bound
+concurrent builds exactly as before.
+
+`scenarios/go.mod` gains `require github.com/miroslav-matejovsky/opdl/builder`
+and `replace ... => ../builder`. No import cycle results (see stage 02).
 
 ## Steps
 
@@ -194,24 +207,29 @@ before `MainStart`.
    `harness/fabric.go` and export them.
 3. Move and embed the template; delete `scenarios/testdata/` once nothing reads
    it from disk.
-4. Add `harness.SetBuilder` and keep the builder var internal.
+4. Rewrite `buildProject` to call `build.Run` in-process. Delete `runMain`, the
+   builder-compile step, and the `builderBinary` var. Add a `PlatformDir` config
+   field or setter with the `../platform` default.
 5. Rewrite the scenario `*_test.go` files to import `internal/harness` and call
    the exported API. Replace every bare `deploySite(...)`, `propose(...)`,
    `node.binaryPath`, etc. with the `harness.` qualified form.
-6. Add a `main_test.go` in `package scenarios` holding the `TestMain` bootstrap.
+6. Update `scenarios/go.mod` to require and replace `builder`; run `task tidy`.
 7. Delete the now-empty original `harness_test.go`, `registrationapi_test.go`,
-   and the old package `doc.go` content that described the harness (fold the
-   still-relevant prose into `harness/doc.go`; keep a short root `doc.go` if the
-   `scenarios` package still has test files).
+   and the old package `doc.go` content that described the harness. Fold the
+   still-relevant prose into `harness/doc.go`, and correct the narrative that
+   says scenarios "depend on no other module" and drive "the builder CLI as a
+   subprocess": the builder is now called in-process through `builder/build`,
+   and `utils/testnet` remains an import. Keep a short root `doc.go` only if the
+   `scenarios` root package still has test files.
 
 ## Files touched
 
 - New: `scenarios/internal/harness/*.go`,
   `scenarios/internal/harness/testdata/project.hcl.tmpl`.
 - Rewritten to call the harness: all eight scenario `*_test.go` files.
-- New: `scenarios/main_test.go` (temporary bootstrap).
+- Edited: `scenarios/go.mod` (require and replace `builder`).
 - Deleted: `scenarios/harness_test.go`, `scenarios/registrationapi_test.go`,
-  `scenarios/testdata/`.
+  `scenarios/testdata/`, and the builder-compile `TestMain` logic.
 
 ## Verification
 
@@ -220,9 +238,9 @@ before `MainStart`.
   (the `-run x` matches nothing, so it only checks compilation quickly).
 - `task fast` passes.
 - Optionally run one scenario end to end with `go test -run
-  TestBuildAndRunMinimumSite -count=1` to confirm the embedded template and
-  `SetBuilder` path work. Scenario success is not required by this plan, but a
-  clean build failure versus a scenario assertion failure must be
+  TestBuildAndRunMinimumSite -count=1` to confirm the embedded template and the
+  in-process `build.Run` call work. Scenario success is not required by this
+  plan, but a clean build failure versus a scenario assertion failure must be
   distinguishable.
 
 ## Risks and notes

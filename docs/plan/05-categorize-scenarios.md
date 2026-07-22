@@ -1,4 +1,4 @@
-# Stage 04: categorize scenarios into six packages and cut over the task
+# Stage 05: categorize scenarios into six packages and cut over the task
 
 Effort: M-L (about 1 to 1.5 days). Complexity: Medium.
 
@@ -7,9 +7,9 @@ Effort: M-L (about 1 to 1.5 days). Complexity: Medium.
 Convert the eight scenario `*_test.go` files in `package scenarios` into six
 top-level packages, each holding regular `.go` files whose scenario functions
 are registered with the runner. Delete the old root files. Flip
-`taskfile/scenarios.ps1` from `go test` to `go run ./cmd/scenarios`.
+`taskfile/scenarios.ps1` from `go test` to `go run ./cmd`.
 
-The work is mostly mechanical because stage 02 already made the harness an
+The work is mostly mechanical because stage 03 already made the harness an
 imported package. Each scenario body stays the same; what changes is where it
 lives, that it is a regular function instead of a `Test` function, and that it is
 registered.
@@ -61,7 +61,7 @@ func Scenarios() runner.Set {
 
 ## Wiring the command
 
-`cmd/scenarios/main.go` imports the six packages and assembles the set list:
+`cmd/main.go` imports the six packages and assembles the set list:
 
 ```go
 sets := []runner.Set{
@@ -90,7 +90,7 @@ Each package gets a `doc.go`. Split the current root `doc.go` prose by subject:
 - `sdk/doc.go`: the .NET end-to-end narrative and the marker handshake.
 
 Concurrency, artifact layout, and evidence prose that describe the harness move
-to `internal/harness/doc.go` (done in stage 02); reference it from the package
+to `internal/harness/doc.go` (done in stage 03); reference it from the package
 docs rather than duplicating.
 
 ## Task cutover
@@ -102,7 +102,7 @@ Rewrite `taskfile/scenarios.ps1` to run the command:
 Write-Host "--- scenarios ---"
 Push-Location (Join-Path $RepoRoot "scenarios")
 try {
-    go run ./cmd/scenarios -timeout 30m -parallel $([Environment]::ProcessorCount)
+    go run ./cmd -timeout 30m -parallel $([Environment]::ProcessorCount)
     if ($LASTEXITCODE -ne 0) { throw "scenarios failed (exit $LASTEXITCODE)" }
 }
 finally { Pop-Location }
@@ -110,9 +110,11 @@ Write-Host "scenarios done"
 ```
 
 Notes:
-- `dir` stays `scenarios/` so `../builder` and `../sdk-dotnet` resolve, unless
-  stage 03's `-repo-root` flag is used instead.
-- `-count=1` behavior moves into the command default (stage 03), so caching is
+- `dir` stays `scenarios/` so the harness's default `../platform` build path and
+  the SDK scenario's `../sdk-dotnet` path resolve, unless stage 04's
+  `-platform-dir` flag is used instead. The builder is no longer a path here; it
+  is built in-process (stages 02 and 03).
+- `-count=1` behavior moves into the command default (stage 04), so caching is
   off without a flag here.
 - `gotestsum` was formatting `go test` output. Under `go run`, the testing
   runner's own `-v` output is what prints. If a nicer format is wanted later,
@@ -130,20 +132,20 @@ Notes:
    (keep a minimal root `doc.go` only if the `scenarios` root package still
    needs one; after this stage the root has no Go files, so no root package
    remains).
-6. Rewrite `taskfile/scenarios.ps1` to `go run ./cmd/scenarios`.
+6. Rewrite `taskfile/scenarios.ps1` to `go run ./cmd`.
 
 ## Files touched
 
 - New: `scenarios/{build,registration,nats,resilience,standby,sdk}/*.go`.
-- Edited: `scenarios/cmd/scenarios/main.go` (register the six sets).
+- Edited: `scenarios/cmd/main.go` (register the six sets).
 - Edited: `taskfile/scenarios.ps1`.
 - Deleted: the eight root `*_test.go` scenario files and the root `doc.go`.
 
 ## Verification
 
 - `go build ./...` and `go vet ./...` in `scenarios/` succeed.
-- `go run ./cmd/scenarios -run x` lists and matches nothing, exits 0.
-- `go run ./cmd/scenarios -run BuildAndRun` starts the one scenario. It may fail
+- `go run ./cmd -run x` lists and matches nothing, exits 0.
+- `go run ./cmd -run BuildAndRun` starts the one scenario. It may fail
   on its assertions (scenarios are not expected to pass), but it must start,
   compile, and reach real scenario logic rather than a wiring error.
 - `deadcode`: every category package is reachable from `main.go`; the scenario
@@ -155,7 +157,7 @@ Notes:
 ## Risks and notes
 
 - Watch for helpers used by two categories that were not lifted to the harness
-  in stage 02. `ParseFabricConfigs` is the known one and is already in the
+  in stage 03. `ParseFabricConfigs` is the known one and is already in the
   harness. If another shared helper surfaces, lift it to `internal/harness`
   rather than duplicating it.
 - After deleting the root test files, the `scenarios` root directory has no `.go`

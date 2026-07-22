@@ -96,7 +96,7 @@ scenarios module already requires. So no new module dependency is introduced.
   point of checking is only that the relocation did not break a `-short` guard.
 - `task fast` passes (this exercises `deadcode`, `lint`, `arch`, `vet`, `test`).
   `deadcode.ps1` still special-cases `scenarios`; that is fine and is cleaned up
-  in stage 06.
+  in stage 07.
 
 ## Risks and notes
 
