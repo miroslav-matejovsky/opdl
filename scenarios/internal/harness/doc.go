@@ -13,8 +13,7 @@
 // customer uses runs: load and validate the blueprint, resolve the per-machine
 // plan, and compile a deployment package per machine. So a scenario proves the
 // shipped artifacts rather than the code that happens to be linked into a test
-// binary. The platform module root it compiles from defaults to ../platform and
-// can be overridden with SetPlatformDir.
+// binary. The platform module root it compiles from defaults to ../platform.
 //
 // # Where the NATS ports come from
 //
