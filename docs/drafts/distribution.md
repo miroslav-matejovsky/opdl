@@ -1,8 +1,9 @@
 lets prepare plan for bigger refactor;
 goals:
-- introduce a new distribution package in the platform/internal that will be acting as an abstraction layer for NATS and will provide possibility to switch to other messaging systems in the future;
+- introduce a new distribution package in the platform/internal that will be acting as an abstraction layer for current NATS and will provide possibility to switch to other messaging systems in the future;
 - this distribution package will provide pluggable architecture for distribution layer, so that we can use for example sqlite locally for testing and NATS for production;
 - start with the blueprint, because blueprint is the declarative configuration of the platform and it is crucial for understanding the platform and its components;
+- local redundancy must be fully independent of the distribution layer, so that we can switch between different distribution types without affecting the local redundancy;
 - each site will have defined distribution_type, so that we can switch between different distribution types for each site;
 ```hcl
   site "north" {
