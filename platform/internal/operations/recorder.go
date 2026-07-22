@@ -2,7 +2,6 @@ package operations
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,72 +10,33 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
-// Level is the operational severity of an event.
-type Level string
-
-const (
-	// LevelInfo describes a normal lifecycle transition.
-	LevelInfo Level = "info"
-	// LevelWarn describes a recoverable degradation that needs attention.
-	LevelWarn Level = "warn"
-	// LevelError describes an operation that failed or made the process unavailable.
-	LevelError Level = "error"
-
-	// AttributeError contains an operation's error string.
-	AttributeError = "error"
-	// AttributeDurationMS contains elapsed wall-clock milliseconds.
-	AttributeDurationMS = "duration_ms"
-)
-
-// Event is the temporary wrapper Emit writes, and the second event model this
-// package still owns. Every caller is being migrated onto typed payloads and
-// Record; Event and Emit are deleted with the last of them.
-type Event struct {
-	Timestamp   time.Time      `json:"timestamp"`
-	Type        string         `json:"type"`
-	Level       Level          `json:"level"`
-	Component   string         `json:"component"`
-	Project     string         `json:"project"`
-	Environment string         `json:"environment"`
-	Site        string         `json:"site"`
-	Machine     string         `json:"machine"`
-	Role        string         `json:"role"`
-	PID         int            `json:"pid"`
-	Message     string         `json:"message"`
-	Attributes  map[string]any `json:"attributes,omitempty"`
-}
-
-// Recorder serializes platform events to the process error stream and,
-// optionally, one append-only JSONL file. Record and Emit are safe for
-// concurrent callbacks.
+// Recorder writes platform events to the process error stream and, optionally,
+// to one append-only JSONL file. Record is safe for concurrent callbacks.
 //
-// It is the platform's local writer, not a second event model: Record stamps a
-// typed payload with the process's one envelope factory and writes the same
-// canonical envelope the site journal carries. What differs is only where the
-// event goes and what a failure means. A local record is best effort, because a
-// process that cannot describe itself must still run.
+// It is a writer, not an event model: Record stamps a typed payload with the
+// process's one envelope factory and writes the same canonical envelope the site
+// journal carries. What differs is only where the event goes and what a failure
+// means. A local record is best effort, because a process that cannot describe
+// itself must still run.
 type Recorder struct {
 	mu      sync.Mutex
 	factory events.Factory
-	// identity is the fixed part of the temporary Emit wrapper. It goes with
-	// Emit.
-	identity Event
-	stderr   io.Writer
-	file     *os.File
-	path     string
-	now      func() time.Time
+	stderr  io.Writer
+	file    *os.File
+	path    string
 }
 
 type contextKey struct{}
 
 var safeFilename = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
 
-var discard = &Recorder{stderr: io.Discard, now: time.Now}
+// discard is what a component used on its own gets: a recorder that writes
+// nowhere. It carries no factory, so it never stamps anything either.
+var discard = &Recorder{stderr: io.Discard}
 
 // Open creates a recorder that stamps with factory, the one envelope factory
 // composed for this process. eventDir may be empty to disable JSONL retention;
@@ -87,19 +47,7 @@ var discard = &Recorder{stderr: io.Discard, now: time.Now}
 // opening either.
 func Open(eventDir string, factory events.Factory) (*Recorder, error) {
 	origin := factory.Origin()
-	r := &Recorder{
-		factory: factory,
-		identity: Event{
-			Project:     origin.Project,
-			Environment: origin.Environment,
-			Site:        origin.Site,
-			Machine:     origin.Machine,
-			Role:        origin.ProcessRole,
-			PID:         origin.PID,
-		},
-		stderr: os.Stderr,
-		now:    time.Now,
-	}
+	r := &Recorder{factory: factory, stderr: os.Stderr}
 	eventDir = strings.TrimSpace(eventDir)
 	if eventDir == "" {
 		return r, nil
@@ -156,43 +104,28 @@ func (r *Recorder) Record(ctx context.Context, event events.Event) {
 		fallbackWrite(r.stderr, "platform event stamping failed: type=%s error=%v\n", event.EventType(), err)
 		return
 	}
+	r.write(envelope)
+}
+
+// write puts one envelope on both sinks as a single JSON line. It is the only
+// thing that writes an event, and it accepts nothing but an envelope, so no
+// other shape can reach a sink.
+//
+// A sink failure is reported to the other sink as plain text, never as an event
+// line: a broken sink is not a fact about the platform, and a reader must be
+// able to decode every event line it finds. It is never recursively recorded.
+func (r *Recorder) write(envelope events.Envelope) {
 	data, err := events.Encode(envelope)
 	if err != nil {
 		fallbackWrite(r.stderr, "platform event encoding failed: type=%s error=%v\n", envelope.Type, err)
 		return
 	}
-	r.write(append(data, '\n'))
-}
+	data = append(data, '\n')
 
-// Emit records one operational transition in the temporary wrapper. Attributes
-// must contain values that encoding/json can marshal. It goes with Event, once
-// its remaining callers state typed payloads through Record.
-func (r *Recorder) Emit(eventType string, level Level, component, message string, attributes map[string]any) {
-	if r == nil {
-		return
-	}
-	event := r.identity
-	event.Timestamp = r.now().UTC()
-	event.Type = eventType
-	event.Level = level
-	event.Component = component
-	event.Message = message
-	event.Attributes = attributes
-	data, err := json.Marshal(event)
-	if err != nil {
-		fallbackWrite(r.stderr, "platform operations event encoding failed: type=%s error=%v\n", eventType, err)
-		return
-	}
-	r.write(append(data, '\n'))
-}
-
-// write puts one complete JSON line on both sinks. A sink failure is reported to
-// the other one and never recursively recorded.
-func (r *Recorder) write(data []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, err := r.stderr.Write(data); err != nil && r.file != nil {
-		fallbackWrite(r.file, "{\"type\":\"operations.stderr_write_failed\",\"error\":%q}\n", err.Error())
+		fallbackWrite(r.file, "platform event stderr write failed: error=%v\n", err)
 	}
 	if r.file != nil {
 		if _, err := r.file.Write(data); err != nil {

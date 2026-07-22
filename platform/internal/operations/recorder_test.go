@@ -3,10 +3,11 @@ package operations
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
+	"errors"
 	"os"
+	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -20,13 +21,19 @@ var testDescriptor = config.Descriptor{
 	Site: "west", Machine: "node-a", MachineProfile: "all-in-one",
 }
 
+// mustFactory composes the process identity a test recorder stamps with.
+func mustFactory(t *testing.T, role string) events.Factory {
+	t.Helper()
+	factory, err := events.NewFactory(testDescriptor, role)
+	require.NoError(t, err)
+	return factory
+}
+
 // openRecorder opens a recorder over a fresh directory, writing its error
 // stream to a buffer the test can read.
 func openRecorder(t *testing.T, role string) (*Recorder, *bytes.Buffer) {
 	t.Helper()
-	factory, err := events.NewFactory(testDescriptor, role)
-	require.NoError(t, err)
-	recorder, err := Open(t.TempDir(), factory)
+	recorder, err := Open(t.TempDir(), mustFactory(t, role))
 	require.NoError(t, err)
 	log := &bytes.Buffer{}
 	recorder.stderr = log
@@ -128,20 +135,86 @@ func TestPathNamesTheWritingProcess(t *testing.T) {
 	require.Contains(t, recorder.Path(), "standby", "two instances of one machine write to two files")
 }
 
-// These cover the temporary Emit wrapper and go with it.
-
-func TestEmitWritesSameStructuredEventToLogAndJSONL(t *testing.T) {
+func TestRecordIsSafeForConcurrentCallbacks(t *testing.T) {
+	const writers, each = 8, 25
 	recorder, log := openRecorder(t, "primary")
-	recorder.now = func() time.Time { return time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC) }
-	recorder.Emit("event_fabric.connected", LevelInfo, "event_fabric.nats", "connected", map[string]any{"server": "nats://127.0.0.1:4222"})
+
+	var running sync.WaitGroup
+	running.Add(writers)
+	for range writers {
+		go func() {
+			defer running.Done()
+			for range each {
+				recorder.Record(t.Context(), probe{Detail: "concurrent"})
+			}
+		}()
+	}
+	running.Wait()
+	require.NoError(t, recorder.Close())
+
+	// Interleaved writes must not tear: every line is still one whole envelope,
+	// and both sinks received the same bytes.
+	fileData, err := os.ReadFile(recorder.Path())
+	require.NoError(t, err)
+	require.Equal(t, log.String(), string(fileData))
+	lines := strings.Split(strings.TrimSpace(string(fileData)), "\n")
+	require.Len(t, lines, writers*each)
+	for _, line := range lines {
+		envelope, err := events.Decode([]byte(line))
+		require.NoError(t, err)
+		require.NoError(t, envelope.Validate())
+	}
+}
+
+func TestRecordReportsABrokenSinkToTheOtherOne(t *testing.T) {
+	recorder, _ := openRecorder(t, "primary")
+	recorder.stderr = brokenWriter{}
+	recorder.Record(t.Context(), probe{Detail: "started"})
 	require.NoError(t, recorder.Close())
 
 	fileData, err := os.ReadFile(recorder.Path())
 	require.NoError(t, err)
-	require.Equal(t, log.String(), string(fileData))
-	var event Event
-	require.NoError(t, json.Unmarshal(bytes.TrimSpace(fileData), &event))
-	require.Equal(t, "event_fabric.connected", event.Type)
-	require.Equal(t, "node-a", event.Machine)
-	require.Len(t, event.Attributes, 1)
+	lines := strings.Split(strings.TrimSpace(string(fileData)), "\n")
+	require.Len(t, lines, 2)
+	require.Contains(t, lines[0], "stderr write failed",
+		"the terminal fallback reports the broken sink as plain text, not as an event")
+	envelope, err := events.Decode([]byte(lines[1]))
+	require.NoError(t, err)
+	require.Equal(t, events.Type("platform.test.happened"), envelope.Type,
+		"a broken sink does not stop the working one")
+}
+
+// brokenWriter stands in for a sink that has failed, such as a closed pipe to a
+// service manager.
+type brokenWriter struct{}
+
+func (brokenWriter) Write([]byte) (int, error) { return 0, errors.New("sink is gone") }
+
+func TestCloseIsIdempotentAndReportsItsErrors(t *testing.T) {
+	recorder, _ := openRecorder(t, "primary")
+	recorder.Record(t.Context(), probe{Detail: "started"})
+
+	require.NoError(t, recorder.Close())
+	require.NoError(t, recorder.Close(), "closing twice reports the same answer")
+
+	// A recorder with no file has nothing to close, and neither has a nil one:
+	// the open failure path and the discard recorder both rely on that.
+	withoutFile, err := Open("", mustFactory(t, "primary"))
+	require.NoError(t, err)
+	require.Empty(t, withoutFile.Path())
+	require.NoError(t, withoutFile.Close())
+	require.NoError(t, (*Recorder)(nil).Close())
+}
+
+func TestCloseReportsASyncFailure(t *testing.T) {
+	recorder, _ := openRecorder(t, "primary")
+	recorder.Record(t.Context(), probe{Detail: "started"})
+	// Closing the handle underneath leaves the recorder holding a file it can
+	// neither sync nor close, which is what an unmounted volume looks like.
+	require.NoError(t, recorder.file.Close())
+
+	err := recorder.Close()
+	require.ErrorContains(t, err, "sync operations event file")
+	require.ErrorContains(t, err, "close operations event file")
+	require.ErrorContains(t, err, recorder.Path(), "the failure names the file it was writing")
 }

@@ -1,8 +1,8 @@
 # Unified platform event model
 
-Status: option A selected. Stages 10 to 70 are implemented; stages 80 and 90 are
-pending. `operations.Event`, `Recorder.Emit`, `Level`, and the attribute
-constants now have no callers at all; stage 80 deletes them.
+Status: option A selected. Stages 10 to 80 are implemented; stage 90 is pending.
+`events.Envelope` is the platform's only serialized event wrapper, and the five
+`events.go` catalogs are the only places concrete events are declared.
 
 ## Goal
 

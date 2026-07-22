@@ -136,7 +136,10 @@ func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) e
 	}
 
 	envelope := delivery.Envelope
-	if !strings.HasPrefix(string(envelope.Type), "platform.registration.") {
+	// Another domain's fact advances the projection's position and nothing else.
+	// The source is derived from the event type, so this asks the envelope which
+	// domain stated it rather than matching a name.
+	if envelope.Type.Source() != eventSource {
 		p.advance(delivery.Sequence)
 		return nil
 	}

@@ -22,6 +22,12 @@ import (
 // The deterministic identities these payloads carry are derived in
 // identifiers.go.
 
+// eventSource is the subsystem every event in this catalog comes from. It is
+// the middle token of every type below, which is where a reader gets it: no
+// event restates it, and the projection asks the envelope rather than matching
+// a name.
+const eventSource = "registration"
+
 // schemaVersion is the payload schema version every event in this catalog
 // reports. It is also stamped into a proposal identity, so proposals written by
 // two encodings can never share one ID.

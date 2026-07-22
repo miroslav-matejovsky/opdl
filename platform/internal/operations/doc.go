@@ -19,13 +19,14 @@
 // which fails the operation instead.
 //
 // Which events exist is not this package's business. Each package declares the
-// facts it can state in its own events.go; internal/app owns the application
-// runtime's catalog.
+// facts it can state in its own events.go: internal/app for the runtime,
+// internal/redundancy for ownership, and internal/eventfabric/nats for the
+// transport.
 //
-// # Temporary second wrapper
+// # One shape on the wire
 //
-// Event and Emit are the previous untyped wrapper: an event type string, a
-// level, a component, a message, and an attribute map. They remain only while
-// internal/redundancy and the NATS adapter are migrated onto typed payloads,
-// and are deleted with the last caller.
+// The writer accepts an events.Envelope and nothing else, so every line it
+// produces decodes as one. A broken sink is reported to the other sink as plain
+// text rather than as an event, because a reader must be able to decode every
+// event line it finds, and a failed write is not a fact about the platform.
 package operations

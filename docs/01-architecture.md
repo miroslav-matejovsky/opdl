@@ -56,7 +56,7 @@ The platform is composed around three boundaries:
 | `internal/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
 | `internal/eventfabric` | Publishes facts to the site's ordered journal, replays them, delivers them, and reports health. Runtime code does not depend on a transport. |
 | `internal/redundancy` | Owns process roles, lifecycle state, Primary Ownership, projection-lag state, and atomic status files. |
-| `internal/operations` | Writes local structured operational events to stderr and optional JSONL without depending on the Event Fabric. |
+| `internal/operations` | Writes canonical event envelopes to stderr and optional JSONL without depending on the Event Fabric. It owns no events. |
 
 The production adapter is `eventfabric/nats`. NATS is imported only by it.
 
@@ -172,9 +172,10 @@ There is no NATS monitoring listener. `HTTPPort` and `HTTPSPort` are left at
 zero, which is what makes the embedded server start none. The runtime reads
 connection state, journal high-water, projection progress, and lag through the
 Event Fabric client API and writes them to per-process status files. It also
-writes structured local operational events to stderr and optional JSONL. Those
-events deliberately do not depend on NATS, so they remain available to explain a
-connection or journal outage. A second unauthenticated HTTP surface would add an
+writes local events to stderr and optional JSONL, in the same envelope the site
+journal carries, so an operator decodes one shape wherever an event is read.
+Those events deliberately do not depend on NATS, so they remain available to
+explain a connection or journal outage. A second unauthenticated HTTP surface would add an
 open port without adding a signal. Any remote operational API is a separate
 contract that must be platform-owned, authenticated, and authorized, and must
 not proxy the NATS monitor.
