@@ -11,7 +11,7 @@ Push-Location (Join-Path $RepoRoot "builder")
 try {
     foreach ($p in $projects) {
         Write-Host "--- $p ---"
-        go run ./cmd/opdl validate $p
+        go run ./cmd validate $p
         if ($LASTEXITCODE -ne 0) {
             throw "validate failed for project '$p' (exit $LASTEXITCODE)"
         }

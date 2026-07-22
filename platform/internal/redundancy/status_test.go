@@ -10,22 +10,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestStatusPathIsInsideTheInstancesOwnDirectory checks the path is the instance's
+// runtime directory and nothing else.
+//
+// It used to qualify the file by project, machine, and role, because one shared
+// directory held every instance on the host. The directory is now authored per
+// instance, so two instances are separated by the directory they were given
+// rather than by a name the runtime composes.
+func TestStatusPathIsInsideTheInstancesOwnDirectory(t *testing.T) {
+	t.Parallel()
+
+	primaryDir, standbyDir := t.TempDir(), t.TempDir()
+	a := redundancy.StatusPath(primaryDir)
+	b := redundancy.StatusPath(standbyDir)
+
+	require.Equal(t, filepath.Join(primaryDir, "process.status"), a)
+	require.Equal(t, primaryDir, filepath.Dir(a))
+	require.NotEqual(t, a, b, "two instances given their own directories write two files")
+}
+
 func TestStatusWriteReadRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	path := redundancy.StatusPath(t.TempDir(), "p", "e", "s", "m", redundancy.RoleStandby)
+	path := redundancy.StatusPath(t.TempDir())
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 
 	want := redundancy.Status{
-		Role:       redundancy.RoleStandby,
-		State:      redundancy.StateStandby,
-		PID:        4321,
-		Applied:    41,
-		HighWater:  42,
-		Lag:        "1.5s",
-		Promotable: true,
-		UpdatedAt:  time.Now().UTC().Truncate(time.Second),
-		LastError:  "",
+		Role:          redundancy.RoleStandby,
+		State:         redundancy.StatePassive,
+		PID:           4321,
+		Applied:       41,
+		HighWater:     42,
+		Lag:           "1.5s",
+		FailoverReady: true,
+		UpdatedAt:     time.Now().UTC().Truncate(time.Second),
+		LastError:     "",
 	}
 	require.NoError(t, want.Write(path))
 
@@ -40,7 +59,7 @@ func TestStatusWriteIsAtomic(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	path := redundancy.StatusPath(dir, "p", "e", "s", "m", redundancy.RolePrimary)
+	path := redundancy.StatusPath(dir)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 
 	require.NoError(t, redundancy.Status{Role: redundancy.RolePrimary, State: redundancy.StateActive}.Write(path))
@@ -49,9 +68,9 @@ func TestStatusWriteIsAtomic(t *testing.T) {
 }
 
 func TestStatusCanBeReplacedWhileDeploymentReadsIt(t *testing.T) {
-	path := redundancy.StatusPath(t.TempDir(), "p", "e", "s", "m", redundancy.RoleStandby)
+	path := redundancy.StatusPath(t.TempDir())
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, redundancy.Status{Role: redundancy.RoleStandby, State: redundancy.StateStandby}.Write(path))
+	require.NoError(t, redundancy.Status{Role: redundancy.RoleStandby, State: redundancy.StatePassive}.Write(path))
 
 	reader, err := os.Open(path)
 	require.NoError(t, err)

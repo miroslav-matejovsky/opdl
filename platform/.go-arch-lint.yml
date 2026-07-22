@@ -21,16 +21,14 @@ vendors:
   nats-client: { in: "github.com/nats-io/nats.go**" }
   sys: { in: "golang.org/x/sys/**" }
   atomicfile: { in: "github.com/miroslav-matejovsky/opdl/utils/atomicfile" }
-  filelock: { in: "github.com/miroslav-matejovsky/opdl/utils/filelock" }
+  winmutex: { in: "github.com/miroslav-matejovsky/opdl/utils/winmutex" }
   stablehash: { in: "github.com/miroslav-matejovsky/opdl/utils/stablehash" }
 
 components:
   api: { in: api }
   cmd: { in: cmd }
-  deployment: { in: deployment }
-  embedded: { in: embedded }
+  config: { in: config }
   app: { in: internal/app }
-  config: { in: internal/config }
   events: { in: internal/events }
   eventfabric: { in: internal/eventfabric }
   eventfabric-nats: { in: internal/eventfabric/nats }
@@ -44,26 +42,36 @@ deps:
     canUse: [huma]
   cmd:
     mayDependOn: [app]
-  embedded:
-    mayDependOn: [deployment]
   app:
-    mayDependOn: [config, deployment, eventfabric, eventfabric-nats, httpapi, operations, redundancy, registration]
+    # api is here because composition is what knows which instance this process
+    # is: it fills the instance identity both the Active and the Passive handler
+    # serve. The domain operations stay behind httpapi.
+    mayDependOn: [api, config, eventfabric, eventfabric-nats, httpapi, operations, redundancy, registration]
   redundancy:
-    canUse: [sys, atomicfile, filelock]
+    canUse: [sys, atomicfile, winmutex]
+    # Ownership transitions are operational events in their own right: which
+    # instance became Active, when, and whether it took over from a process that
+    # died. The package that runs the transitions is the one that can report them
+    # accurately, so it emits them itself rather than returning them for a caller
+    # to describe.
+    mayDependOn: [operations]
+  # config is a leaf. It carries both tiers of configuration — the deployment
+  # descriptor compiled in at build time and the TOML file read at startup — so
+  # the packages below depend on it for the machine's identity and topology, and
+  # it depends on none of them.
   config:
     canUse: [toml]
-    mayDependOn: [deployment, embedded]
   events:
-    mayDependOn: [deployment]
+    mayDependOn: [config]
   eventfabric:
     canUse: [stablehash]
     mayDependOn: [events]
   eventfabric-nats:
     canUse: [nats-server, nats-client]
-    mayDependOn: [deployment, events, eventfabric, operations]
+    mayDependOn: [config, events, eventfabric, operations]
 
   operations:
-    mayDependOn: [deployment]
+    mayDependOn: [config]
   httpapi:
     canUse: [huma]
     mayDependOn: [api, registration]

@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRecorderWritesSameStructuredEventToLogAndJSONL(t *testing.T) {
-	recorder, err := Open(t.TempDir(), deployment.Descriptor{
+	recorder, err := Open(t.TempDir(), config.Descriptor{
 		Project: "p", Environment: "production", Site: "west", Machine: "node-a",
 	}, "primary")
 	require.NoError(t, err)
@@ -34,7 +34,7 @@ func TestRecorderWritesSameStructuredEventToLogAndJSONL(t *testing.T) {
 }
 
 func TestRecorderEmitsOneJSONObjectPerLine(t *testing.T) {
-	recorder, err := Open(t.TempDir(), deployment.Descriptor{Machine: "node-a"}, "standby")
+	recorder, err := Open(t.TempDir(), config.Descriptor{Machine: "node-a"}, "standby")
 	require.NoError(t, err)
 	recorder.stderr = &bytes.Buffer{}
 	recorder.Emit("one", LevelInfo, "test", "first", nil)

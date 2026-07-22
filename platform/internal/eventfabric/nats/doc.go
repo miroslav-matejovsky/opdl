@@ -67,14 +67,14 @@
 // DefaultConfig takes no process role. A machine has one NATS topology, and the
 // primary and standby are mutually exclusive owners of it.
 //
-// On a storage machine only the process holding the machine fence enables the
+// On a storage machine only the instance holding Primary Ownership enables the
 // embedded server and opens the JetStream directory. Its standby composes the
 // same configuration and is then converted to client-only, which clears server
 // ownership, the listener addresses, the routes, and the data directory while
 // keeping the resolved server list whole. That list is what it reaches the
 // journal through, and its first entry is the address the active process is
 // serving on. Promotion closes that client composition before reopening the
-// embedded server and retained directory under the fence, on the same addresses.
+// embedded server and retained directory under the lock, on the same addresses.
 //
 // Deriving a separate endpoint for the standby is what previously left it
 // retrying against an address nothing was listening on, so no process role may

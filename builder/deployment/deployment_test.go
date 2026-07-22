@@ -8,32 +8,88 @@ import (
 	"github.com/miroslav-matejovsky/opdl/builder/deployment"
 )
 
+// The fixture is a three-machine site where this machine deploys both instances
+// and its peers deploy one each. That is the shape the rules are about: four
+// storage servers on three machines, two of them sharing a host.
+const (
+	machineIP   = "10.0.1.10"
+	gatewayIP   = "10.0.1.11"
+	historianIP = "10.0.1.12"
+
+	// The api addresses are on loopback; every Event Fabric address is on the
+	// machine ip. That split is what the descriptor is checked against.
+	primaryAPI        = "127.0.0.1:8080"
+	primaryRuntime    = "C:/ProgramData/opdl/sensor/primary"
+	primaryDataDir    = "D:/opdl-journal/sensor/primary"
+	primaryClient     = "10.0.1.10:4222"
+	primaryCluster    = "10.0.1.10:6222"
+	standbyAPI        = "127.0.0.1:8081"
+	standbyRuntimeDir = "C:/ProgramData/opdl/sensor/standby"
+	standbyDataDir    = "D:/opdl-journal/sensor/standby"
+	standbyClient     = "10.0.1.10:4322"
+	standbyCluster    = "10.0.1.10:6322"
+
+	gatewayClient    = "10.0.1.11:4222"
+	gatewayCluster   = "10.0.1.11:6222"
+	historianClient  = "10.0.1.12:4222"
+	historianCluster = "10.0.1.12:6222"
+)
+
+func peer(machine string, role deployment.PlatformInstanceRole, ip, client, cluster string) deployment.Peer {
+	return deployment.Peer{
+		Site: "north", Machine: machine, Role: role, IP: ip,
+		Nats: deployment.PeerNats{ClientAddress: client, ClusterAddress: cluster},
+	}
+}
+
 func validDescriptor() deployment.Descriptor {
 	return deployment.Descriptor{
-		Platform:    "opdl",
-		Project:     "customer-a",
-		Environment: "production",
-		Site:        "north",
-		Machine:     "sensor",
-		Role:        "sensor-node",
-		IP:          "10.0.1.10",
-		Services:    []string{"sensor-services"},
-		Features:    deployment.Features{Chaos: true},
-		Slots: deployment.Slots{
-			Primary: deployment.Slot{Disabled: false},
-			Standby: deployment.Slot{Disabled: false},
+		Platform:       "opdl",
+		Project:        "customer-a",
+		Environment:    "production",
+		Site:           "north",
+		Machine:        "sensor",
+		MachineProfile: "sensor-node",
+		IP:             machineIP,
+		Services:       []string{"sensor-services"},
+		Features:       deployment.Features{Chaos: true},
+		Instances: deployment.Instances{
+			Primary: deployment.Instance{
+				Disabled:   false,
+				Service:    &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
+				RuntimeDir: primaryRuntime,
+				DataDir:    primaryDataDir,
+				APIAddress: primaryAPI,
+				Nats: &deployment.Nats{
+					ClientAddress:  primaryClient,
+					ClusterAddress: primaryCluster,
+					Routes:         []string{gatewayCluster, standbyCluster},
+					Servers:        []string{primaryClient, gatewayClient, standbyClient},
+				},
+			},
+			Standby: deployment.Instance{
+				Disabled:   false,
+				Service:    &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
+				RuntimeDir: standbyRuntimeDir,
+				DataDir:    standbyDataDir,
+				APIAddress: standbyAPI,
+				Nats: &deployment.Nats{
+					ClientAddress:  standbyClient,
+					ClusterAddress: standbyCluster,
+					Routes:         []string{gatewayCluster, primaryCluster},
+					Servers:        []string{standbyClient, gatewayClient, primaryClient},
+				},
+			},
 		},
-		EventFabric: deployment.EventFabric{
-			Nats: deployment.EventFabricNats{
-				ClientAddress:  "10.0.1.10:4222",
-				ClusterAddress: "10.0.1.10:6222",
-				Routes:         []string{"10.0.1.11:6222", "10.0.1.12:6222"},
-				Servers:        []string{"10.0.1.10:4222", "10.0.1.11:4222", "10.0.1.12:4222"},
-			},
-			Peers: []deployment.EventFabricPeer{
-				{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
-				{Site: "north", Machine: "historian", IP: "10.0.1.12"},
-			},
+		Lock: &deployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
+		// The platform's minimum site: two machines and three platform instances.
+		// Three is also exactly the storage selection, so every instance here runs
+		// a server and routes to the other two. Fixtures that need a non-storage
+		// instance add a fourth.
+		Peers: []deployment.Peer{
+			peer("gateway", deployment.RolePrimary, gatewayIP, gatewayClient, gatewayCluster),
+			peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
+			peer("sensor", deployment.RoleStandby, machineIP, standbyClient, standbyCluster),
 		},
 	}
 }
@@ -48,127 +104,217 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		mutate  func(*deployment.Descriptor)
 		errText string
 	}{
+		{"missing platform", func(d *deployment.Descriptor) { d.Platform = "" }, "platform is required"},
+		{"missing project", func(d *deployment.Descriptor) { d.Project = "" }, "project is required"},
+		{"missing environment", func(d *deployment.Descriptor) { d.Environment = "" }, "environment is required"},
+		{"missing site", func(d *deployment.Descriptor) { d.Site = "" }, "site is required"},
+		{"missing machine", func(d *deployment.Descriptor) { d.Machine = "" }, "machine is required"},
+		{"missing machine profile", func(d *deployment.Descriptor) { d.MachineProfile = "" }, "machine profile is required"},
+		{"missing ip", func(d *deployment.Descriptor) { d.IP = "" }, `ip "" is not a valid IP address`},
+		{"invalid ip", func(d *deployment.Descriptor) { d.IP = "bad-ip" }, `ip "bad-ip" is not a valid IP address`},
+		{"missing services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
+		{"missing lock when standby deployed", func(d *deployment.Descriptor) { d.Lock = nil }, "lock is required when instances.standby.disabled is false"},
+		{"missing lock windows_mutex", func(d *deployment.Descriptor) { d.Lock = &deployment.Lock{WindowsMutex: ""} }, "lock.windows_mutex is required"},
+		{"lock present when standby disabled", func(d *deployment.Descriptor) {
+			d.Instances.Standby.Disabled = true
+			d.Lock = &deployment.Lock{WindowsMutex: "Global\\opdl-sensor"}
+		}, "lock is set but instances.standby.disabled is true; omit lock when no standby is deployed"},
 		{
-			"missing platform",
-			func(d *deployment.Descriptor) { d.Platform = "" },
-			"platform is required",
+			"disabled primary",
+			func(d *deployment.Descriptor) { d.Instances.Primary.Disabled = true },
+			"a machine must deploy a Primary Instance",
+		},
+
+		// Services.
+		{
+			"missing primary service",
+			func(d *deployment.Descriptor) { d.Instances.Primary.Service = nil },
+			"instances.primary.service is required",
 		},
 		{
-			"missing project",
-			func(d *deployment.Descriptor) { d.Project = "" },
-			"project is required",
+			"missing standby service while deployed",
+			func(d *deployment.Descriptor) { d.Instances.Standby.Service = nil },
+			"instances.standby.service is required",
 		},
 		{
-			"missing environment",
-			func(d *deployment.Descriptor) { d.Environment = "" },
-			"environment is required",
-		},
-		{
-			"missing site",
-			func(d *deployment.Descriptor) { d.Site = "" },
-			"site is required",
-		},
-		{
-			"missing machine",
-			func(d *deployment.Descriptor) { d.Machine = "" },
-			"machine is required",
-		},
-		{
-			"missing role",
-			func(d *deployment.Descriptor) { d.Role = "" },
-			"role is required",
-		},
-		{
-			"missing ip",
-			func(d *deployment.Descriptor) { d.IP = "" },
-			`ip "" is not a valid IP address`,
-		},
-		{
-			"invalid ip",
-			func(d *deployment.Descriptor) { d.IP = "bad-ip" },
-			`ip "bad-ip" is not a valid IP address`,
-		},
-		{
-			"missing services",
-			func(d *deployment.Descriptor) { d.Services = nil },
-			"at least one service is required",
-		},
-		{
-			"duplicate peer machine",
+			"instances share a service name",
 			func(d *deployment.Descriptor) {
-				d.EventFabric.Peers = append(d.EventFabric.Peers, d.EventFabric.Peers[0])
+				d.Instances.Standby.Service.Name = d.Instances.Primary.Service.Name
 			},
-			`event fabric peer "gateway" is duplicated or is this machine itself`,
+			"share service name",
+		},
+
+		// Endpoints. The two instances run together on one host, so anything
+		// resolved onto one address twice is a listener that cannot bind.
+		{
+			"missing api address",
+			func(d *deployment.Descriptor) { d.Instances.Primary.APIAddress = "" },
+			"instances.primary.api_address is required",
 		},
 		{
-			"duplicate peer ip",
+			"invalid api address",
+			func(d *deployment.Descriptor) { d.Instances.Primary.APIAddress = "no-port" },
+			"instances.primary.api_address:",
+		},
+		// The platform API is machine-local. A descriptor resolving it onto the
+		// machine's ip would expose every deployment's API to the network, which is
+		// exactly what authoring it as api.local_port exists to prevent.
+		{
+			"api address off loopback",
+			func(d *deployment.Descriptor) { d.Instances.Primary.APIAddress = "10.0.1.10:8080" },
+			"is not on the loopback interface",
+		},
+		{
+			"api address on a hostname rather than a loopback ip",
+			func(d *deployment.Descriptor) { d.Instances.Primary.APIAddress = "localhost:8080" },
+			"is not on the loopback interface",
+		},
+		{
+			"missing runtime dir",
+			func(d *deployment.Descriptor) { d.Instances.Primary.RuntimeDir = "" },
+			"instances.primary.runtime_dir is required",
+		},
+		{
+			"instances share a runtime dir",
 			func(d *deployment.Descriptor) {
-				d.EventFabric.Peers[1].IP = d.EventFabric.Peers[0].IP
+				d.Instances.Standby.RuntimeDir = d.Instances.Primary.RuntimeDir
 			},
-			`ip "10.0.1.11" is already used by another member`,
+			"cannot share a runtime directory",
+		},
+		{
+			"missing nats",
+			func(d *deployment.Descriptor) { d.Instances.Primary.Nats = nil },
+			"instances.primary.nats is required",
+		},
+		{
+			"instances share an api address",
+			func(d *deployment.Descriptor) {
+				d.Instances.Standby.APIAddress = d.Instances.Primary.APIAddress
+			},
+			"cannot share a listener",
+		},
+		{
+			"instances share a nats client address",
+			func(d *deployment.Descriptor) {
+				d.Instances.Standby.Nats.ClientAddress = d.Instances.Primary.Nats.ClientAddress
+			},
+			"cannot share a listener",
+		},
+
+		// A standby that is not deployed carries nothing it would have bound.
+		{
+			"standby service while disabled",
+			func(d *deployment.Descriptor) {
+				d.Instances.Standby.Disabled = true
+				d.Lock = nil
+				d.Instances.Standby.APIAddress = ""
+				d.Instances.Standby.Nats = nil
+			},
+			"instances.standby.service is set but the standby is disabled",
+		},
+		{
+			"standby api address while disabled",
+			func(d *deployment.Descriptor) {
+				d.Instances.Standby.Disabled = true
+				d.Lock = nil
+				d.Instances.Standby.Service = nil
+				d.Instances.Standby.Nats = nil
+			},
+			"instances.standby.api_address is set but the standby is disabled",
+		},
+		{
+			"standby runtime dir while disabled",
+			func(d *deployment.Descriptor) {
+				d.Instances.Standby.Disabled = true
+				d.Lock = nil
+				d.Instances.Standby.Service = nil
+				d.Instances.Standby.APIAddress = ""
+				d.Instances.Standby.Nats = nil
+			},
+			"instances.standby.runtime_dir is set but the standby is disabled",
+		},
+
+		// Peers are instances, and every listener in the site is distinct.
+		{
+			"duplicate peer",
+			func(d *deployment.Descriptor) { d.Peers = append(d.Peers, d.Peers[0]) },
+			`peer gateway/primary is listed twice`,
+		},
+		{
+			"peer in another site",
+			func(d *deployment.Descriptor) { d.Peers[0].Site = "south" },
+			`is in site "south", not this machine's site "north"`,
+		},
+		{
+			"peer with an unknown role",
+			func(d *deployment.Descriptor) { d.Peers[0].Role = "spare" },
+			`has role "spare", want "primary" or "standby"`,
 		},
 		{
 			"peers out of order",
-			func(d *deployment.Descriptor) {
-				d.EventFabric.Peers[0], d.EventFabric.Peers[1] = d.EventFabric.Peers[1], d.EventFabric.Peers[0]
-			},
-			`event fabric peers are not ordered by machine: "gateway" after "historian"`,
+			func(d *deployment.Descriptor) { d.Peers[0], d.Peers[1] = d.Peers[1], d.Peers[0] },
+			"peers are not ordered by machine then role",
 		},
 		{
-			"disabled primary",
-			func(d *deployment.Descriptor) { d.Slots.Primary.Disabled = true },
-			"slots.primary.disabled: a machine must deploy a primary process",
+			"two peers claim one address",
+			func(d *deployment.Descriptor) { d.Peers[1].Nats.ClientAddress = d.Peers[0].Nats.ClientAddress },
+			"is already used by",
 		},
 		{
-			"missing client_address",
-			func(d *deployment.Descriptor) { d.EventFabric.Nats.ClientAddress = "" },
-			"event_fabric.nats.client_address is required",
+			"machine is missing from its own site membership",
+			// Drops the last peer, which is this machine's own Standby Instance.
+			func(d *deployment.Descriptor) { d.Peers = d.Peers[:len(d.Peers)-1] },
+			"peers do not include this machine's own standby instance",
 		},
-		{
-			"invalid client_address",
-			func(d *deployment.Descriptor) { d.EventFabric.Nats.ClientAddress = "no-port" },
-			"event_fabric.nats.client_address:",
-		},
-		{
-			"missing cluster_address",
-			func(d *deployment.Descriptor) { d.EventFabric.Nats.ClusterAddress = "" },
-			"event_fabric.nats.cluster_address is required",
-		},
+
+		// Resolved NATS topology.
 		{
 			"missing servers",
-			func(d *deployment.Descriptor) { d.EventFabric.Nats.Servers = nil },
-			"event_fabric.nats.servers: at least one server is required",
+			func(d *deployment.Descriptor) { d.Instances.Primary.Nats.Servers = nil },
+			"instances.primary.nats.servers: at least one server is required",
 		},
 		{
 			"duplicate server",
 			func(d *deployment.Descriptor) {
-				d.EventFabric.Nats.Servers = append(d.EventFabric.Nats.Servers, d.EventFabric.Nats.Servers[1])
+				nats := d.Instances.Primary.Nats
+				nats.Servers = append(nats.Servers, nats.Servers[1])
 			},
-			`event_fabric.nats.servers: "10.0.1.11:4222" is listed twice`,
+			`instances.primary.nats.servers: "` + gatewayClient + `" is listed twice`,
 		},
 		{
 			"duplicate route",
 			func(d *deployment.Descriptor) {
-				d.EventFabric.Nats.Routes = append(d.EventFabric.Nats.Routes, d.EventFabric.Nats.Routes[0])
+				nats := d.Instances.Primary.Nats
+				nats.Routes = append(nats.Routes, nats.Routes[0])
 			},
-			`event_fabric.nats.routes: "10.0.1.11:6222" is listed twice`,
+			`instances.primary.nats.routes: "` + gatewayCluster + `" is listed twice`,
 		},
 		{
-			"route points at this machine",
+			"route points at this instance",
 			func(d *deployment.Descriptor) {
-				d.EventFabric.Nats.Routes[0] = d.EventFabric.Nats.ClusterAddress
+				d.Instances.Primary.Nats.Routes[0] = d.Instances.Primary.Nats.ClusterAddress
 			},
-			`event_fabric.nats.routes: "10.0.1.10:6222" is this machine itself`,
+			`instances.primary.nats.routes: "` + primaryCluster + `" is this instance itself`,
 		},
 		{
-			// A storage machine that does not list itself first would send its
-			// own traffic to a peer while its local server is up.
-			"storage machine does not list itself first",
+			// An instance on a storage machine that does not list itself first
+			// would send its own traffic to a peer while its local server is up.
+			"storage instance does not list itself first",
 			func(d *deployment.Descriptor) {
-				d.EventFabric.Nats.Servers[0], d.EventFabric.Nats.Servers[1] =
-					d.EventFabric.Nats.Servers[1], d.EventFabric.Nats.Servers[0]
+				nats := d.Instances.Primary.Nats
+				nats.Servers[0], nats.Servers[1] = nats.Servers[1], nats.Servers[0]
 			},
-			"a storage machine must list its own client address",
+			"must list its own client address",
+		},
+		{
+			// Every other storage server contributes one route and one server, so
+			// a dropped server breaks the relation whatever the site's shape.
+			"a storage server is missing a route",
+			func(d *deployment.Descriptor) {
+				nats := d.Instances.Primary.Nats
+				nats.Routes = nats.Routes[:len(nats.Routes)-1]
+			},
+			"an instance routes to every storage server but its own",
 		},
 	}
 	for _, tc := range tests {
@@ -180,57 +326,88 @@ func TestDescriptorValidateFailures(t *testing.T) {
 	}
 }
 
-// TestDescriptorValidateAcceptsOneMemberFabric checks a single-machine site is a
-// valid deployment: it forms a fabric with itself and no peers. It stores the
-// journal alone, so it has no peer server to route to.
-func TestDescriptorValidateAcceptsOneMemberFabric(t *testing.T) {
+// TestDescriptorValidateAcceptsOneInstanceMachine checks a machine that deploys
+// no standby is a valid deployment, and that it then carries nothing the absent
+// instance would have bound.
+func TestDescriptorValidateAcceptsOneInstanceMachine(t *testing.T) {
 	d := validDescriptor()
-	d.EventFabric.Peers = nil
-	d.EventFabric.Nats.Routes = []string{}
-	d.EventFabric.Nats.Servers = []string{"10.0.1.10:4222"}
+	d.Instances.Standby = deployment.Instance{Disabled: true}
+	d.Lock = nil
+	d.Peers = d.Peers[:3]
+	nats := d.Instances.Primary.Nats
+	nats.Routes = []string{gatewayCluster, historianCluster}
+	nats.Servers = []string{primaryClient, gatewayClient, historianClient}
 	require.NoError(t, d.Validate())
 }
 
-// TestDescriptorValidateRejectsRoutesWithoutACluster checks a machine cannot
-// carry routes its site's storage selection does not justify.
-//
-// Both shapes are rejected for the same reason: a cluster listener is bound
-// because routes exist, so a route resolved where no peer server runs would open
-// a port nothing can connect to.
-func TestDescriptorValidateRejectsRoutesWithoutACluster(t *testing.T) {
-	t.Run("non-storage machine", func(t *testing.T) {
-		d := validDescriptor()
-		// A fourth machine sorts after the first three, so it stores nothing.
-		d.Machine = "zulu"
-		d.IP = "10.0.1.20"
-		d.EventFabric.Nats.ClientAddress = "10.0.1.20:4222"
-		d.EventFabric.Nats.ClusterAddress = "10.0.1.20:6222"
-		d.EventFabric.Peers = append(d.EventFabric.Peers,
-			deployment.EventFabricPeer{Site: "north", Machine: "sensor", IP: "10.0.1.10"})
-		require.ErrorContains(t, d.Validate(),
-			"a machine that does not store the journal has no cluster to route to")
-	})
+// TestDescriptorValidateAcceptsOneMemberSite checks a single-machine,
+// single-instance site is a valid deployment: it stores the journal alone, so it
+// has one server and no peer to route to.
+func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
+	d := validDescriptor()
+	d.Instances.Standby = deployment.Instance{Disabled: true}
+	d.Lock = nil
+	d.Peers = []deployment.Peer{
+		peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
+	}
+	nats := d.Instances.Primary.Nats
+	nats.Routes = []string{}
+	nats.Servers = []string{primaryClient}
+	require.NoError(t, d.Validate())
+}
 
-	t.Run("site with one storage machine", func(t *testing.T) {
-		d := validDescriptor()
-		d.EventFabric.Peers = nil
-		d.EventFabric.Nats.Servers = []string{"10.0.1.10:4222"}
-		require.ErrorContains(t, d.Validate(),
-			"a site with 1 storage machine(s) has no routes")
-	})
+// TestDescriptorValidateRejectsRoutesOnANonStorageMachine checks an instance
+// cannot carry routes its site's storage selection does not justify. A cluster
+// listener is bound because routes exist, so a route where no peer server runs
+// would open a port nothing can connect to.
+func TestDescriptorValidateRejectsRoutesOnANonStorageMachine(t *testing.T) {
+	d := nonStorageDescriptor()
+	require.ErrorContains(t, d.Validate(),
+		"an instance that does not store the journal has no cluster to route to")
 }
 
 // TestDescriptorValidateAcceptsNonStorageMachine checks a machine that stores
 // nothing is still a valid deployment: it knows every storage server, lists none
-// of its own addresses among them, and binds nothing.
+// of its own addresses among them, and binds no cluster listener.
 func TestDescriptorValidateAcceptsNonStorageMachine(t *testing.T) {
+	d := nonStorageDescriptor()
+	for _, instance := range []*deployment.Instance{&d.Instances.Primary, &d.Instances.Standby} {
+		instance.Nats.Routes = []string{}
+		instance.Nats.Servers = []string{gatewayClient, historianClient}
+	}
+	require.NoError(t, d.Validate())
+}
+
+// nonStorageDescriptor is a machine that sorts after the site's first three, so
+// the storage selection excludes it. Its own instances keep their addresses,
+// which it never binds.
+func nonStorageDescriptor() deployment.Descriptor {
+	const (
+		zuluIP = "10.0.1.20"
+		// The api addresses stay on loopback: they are this machine's own, and a
+		// machine's api is machine-local whether or not it stores the journal.
+		zuluAPI            = "127.0.0.1:8080"
+		zuluClient         = "10.0.1.20:4222"
+		zuluCluster        = "10.0.1.20:6222"
+		zuluStandbyAPI     = "127.0.0.1:8081"
+		zuluStandbyClient  = "10.0.1.20:4322"
+		zuluStandbyCluster = "10.0.1.20:6322"
+	)
 	d := validDescriptor()
 	d.Machine = "zulu"
-	d.IP = "10.0.1.20"
-	d.EventFabric.Nats.ClientAddress = "10.0.1.20:4222"
-	d.EventFabric.Nats.ClusterAddress = "10.0.1.20:6222"
-	d.EventFabric.Nats.Routes = []string{}
-	d.EventFabric.Peers = append(d.EventFabric.Peers,
-		deployment.EventFabricPeer{Site: "north", Machine: "sensor", IP: "10.0.1.10"})
-	require.NoError(t, d.Validate())
+	d.IP = zuluIP
+	d.Instances.Primary.APIAddress = zuluAPI
+	d.Instances.Primary.Nats.ClientAddress = zuluClient
+	d.Instances.Primary.Nats.ClusterAddress = zuluCluster
+	d.Instances.Standby.APIAddress = zuluStandbyAPI
+	d.Instances.Standby.Nats.ClientAddress = zuluStandbyClient
+	d.Instances.Standby.Nats.ClusterAddress = zuluStandbyCluster
+	d.Peers = []deployment.Peer{
+		peer("gateway", deployment.RolePrimary, gatewayIP, gatewayClient, gatewayCluster),
+		peer("historian", deployment.RolePrimary, historianIP, historianClient, historianCluster),
+		peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
+		peer("zulu", deployment.RolePrimary, zuluIP, zuluClient, zuluCluster),
+		peer("zulu", deployment.RoleStandby, zuluIP, zuluStandbyClient, zuluStandbyCluster),
+	}
+	return d
 }

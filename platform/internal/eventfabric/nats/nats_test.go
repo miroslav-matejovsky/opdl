@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
@@ -22,9 +22,9 @@ import (
 // integration gate. Reusable server setup lives here rather than in a separate
 // package, as the plan requires.
 
-var testDescriptor = deployment.Descriptor{
+var testDescriptor = config.Descriptor{
 	Platform: "opdl", Project: "customer-a", Environment: "production",
-	Site: "north", Machine: "node", Role: "all-in-one", IP: "127.0.0.1",
+	Site: "north", Machine: "node", MachineProfile: "all-in-one", IP: "127.0.0.1",
 }
 
 // open starts a fabric for cfg and closes it when the test ends. It skips the

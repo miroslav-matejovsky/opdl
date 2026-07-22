@@ -1,0 +1,122 @@
+package sdk
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/procrun"
+)
+
+// pendingObservedMarker is the file the .NET test writes once it has proven that
+// node A reports the proposal as pending while node B is offline. It is this
+// scenario's cue to start node B.
+//
+// It is a handshake rather than a delay because the fact being waited for is
+// another process finishing an assertion. Its name is shared with
+// sdk-dotnet/tests/Opdl.Sdk.E2E/RegistrationTests.cs.
+const pendingObservedMarker = "pending-observed"
+
+// DotnetSDKEndToEnd is the first use case as a customer meets it, with
+// nothing simulated: the builder builds two machines from one blueprint, both
+// run as real processes over a real site journal, and a .NET consumer drives them
+// through the generated SDK.
+//
+// It proves the acceptance barrier from the outside. Node A takes a proposal
+// while node B is deliberately not running, and the platform must keep it pending
+// and name node B as what it is waiting for. Only once the .NET test has asserted
+// that, and said so through a file marker, does this scenario start node B and
+// let the site accept.
+//
+// The SDK is the subject, not just the transport: the contract is asynchronous,
+// so what is being checked is that a generated client can take a proposal's
+// identity from a 202 and follow it to a decision. The platform's own public
+// projection is the second account of the same facts, and a scenario that only
+// checked one of them would not notice the other drifting.
+//
+// Nothing here imports builder, platform, or SDK code. Both machines and the
+// .NET test are external processes, exactly as a user would run them.
+func DotnetSDKEndToEnd(t *testing.T) {
+	dotnet, err := exec.LookPath("dotnet")
+	if err != nil {
+		t.Skip("dotnet not installed; skipping dotnet SDK end-to-end scenario")
+	}
+	// After the skip, so a host without dotnet reports the skip immediately
+	// instead of parking the test until the serial phase ends.
+	t.Parallel()
+
+	ctx := t.Context()
+	scenariosDir, err := filepath.Abs(".")
+	require.NoError(t, err)
+	outDir := filepath.Join(harness.ScenarioDir(t), "out")
+	// Every machine is prepared up front so the .NET test knows where the second
+	// one will answer, and node-c is started separately so it is genuinely absent
+	// while the pending assertions run. node-c is the machine held back because it
+	// stores no journal, so the site works without it.
+	deployment := harness.DeploySite(ctx, t, outDir, filepath.Join(harness.ScenarioDir(t), "work"), "two-machine")
+	first, second := deployment.Machine(t, "node-a"), deployment.Machine(t, "node-c")
+	controlDir := filepath.Join(harness.ScenarioDir(t), "control")
+
+	deployment.StartSite(ctx, t, "node-c")
+
+	// The .NET test runs asynchronously: it blocks partway through waiting for
+	// node B, so this scenario has to still be running to start it.
+	e2eProject := filepath.Join(scenariosDir, "..", "sdk-dotnet", "tests", "Opdl.Sdk.E2E", "Opdl.Sdk.E2E.csproj")
+	command := exec.CommandContext(ctx, dotnet, "test", e2eProject, "--nologo", "--verbosity", "quiet", "--logger", "console;verbosity=normal")
+	command.Env = append(os.Environ(),
+		"OPDL_PLATFORM_BASEURL_A="+first.URL,
+		"OPDL_PLATFORM_BASEURL_B="+second.URL,
+		"OPDL_CONTROL_DIR="+controlDir,
+	)
+	sdkTest, err := procrun.Start(command)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sdkTest.Kill()
+		_, _ = sdkTest.Wait()
+	})
+
+	// Node B starts only once the SDK test has proven pending behavior.
+	harness.WaitForMarker(t, controlDir, pendingObservedMarker, sdkTest, func() string {
+		return harness.Diagnose([]*harness.Machine{first, second}) + "\n--- dotnet SDK test output so far ---\n" + sdkTest.Logs()
+	})
+	second.Start(ctx, t)
+
+	testOut, err := sdkTest.Wait()
+	require.NoErrorf(t, err, "dotnet SDK end-to-end tests failed:\n%s%s",
+		testOut, harness.Diagnostics(first, second))
+	// The tests skip without their environment variables, so a run that skipped
+	// would otherwise pass while proving nothing.
+	require.Containsf(t, testOut, "Passed Opdl.Sdk.E2E.RegistrationTests.RegistrationIsAcceptedOnlyAfterEveryExpectedMachineConfirms",
+		"dotnet SDK end-to-end tests did not run to a pass (skipped or empty?):\n%s", testOut)
+
+	// The platform's public projection and the SDK's account agree about what
+	// happened. The SDK drove the site to one accepted registration and two losing
+	// claims for the same key; both machines report exactly that.
+	for _, m := range []*harness.Machine{first, second} {
+		registrations := harness.ListRegistrations(ctx, t, m)
+		require.Len(t, registrations, 3, "%s: one winner and two losing claims", m.Name)
+
+		accepted := make([]harness.Registration, 0, 1)
+		for _, view := range registrations {
+			if view.Status == "accepted" {
+				accepted = append(accepted, view)
+			}
+		}
+		require.Len(t, accepted, 1, "%s: exactly one claim holds the key", m.Name)
+		require.Equal(t, "node-a", accepted[0].Machine, "%s: the origin is where the client asked", m.Name)
+		require.Equal(t, "Billing", accepted[0].UnitTypeNameAdvertised)
+		require.Equal(t, "accepted", accepted[0].Instance(t, "node-a").Status)
+		require.Equal(t, "accepted", accepted[0].Instance(t, "node-b").Status,
+			"%s: the barrier held until node-b confirmed", m.Name)
+
+		conflicts := harness.ListConflicts(ctx, t, m)
+		require.Len(t, conflicts, 1, "%s: one contested key", m.Name)
+		require.Equal(t, accepted[0].ProposalID, conflicts[0].Winner.ProposalID,
+			"%s: the incumbent survived both later claims", m.Name)
+		require.Len(t, conflicts[0].Losers, 2)
+	}
+}

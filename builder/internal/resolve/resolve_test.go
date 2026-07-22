@@ -12,35 +12,85 @@ import (
 	"github.com/miroslav-matejovsky/opdl/builder/internal/resolve"
 )
 
-// Every machine in these fixtures authors the same two ports. That is the point
-// of the contract: ports are a machine-level policy, and the addresses that
-// distinguish machines come from their ips, not from giving each one a different
-// port.
+// Every machine in these fixtures authors the same ports. That is the point of
+// the contract: a port is one instance's policy, and what distinguishes machines
+// is their ips, not giving each one a different port. What must differ is the two
+// instances of one machine, which is why the standby's ports are offset.
 const (
+	apiPort     = 8080
 	clientPort  = 4222
 	clusterPort = 6222
+
+	standbyAPIPort     = 8081
+	standbyClientPort  = 4322
+	standbyClusterPort = 6322
 )
 
 // machine builds a valid machine with the mandatory platform policy filled in.
 func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
+	standby := &blueprint.Standby{Disabled: standbyDisabled}
+	if !standbyDisabled {
+		standby.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-" + name}
+		standby.RuntimeDir = runtimeDir(name, "standby")
+		standby.DataDir = dataDir(name, "standby")
+		standby.API = &blueprint.API{LocalPort: standbyAPIPort}
+		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
+		standby.Nats = &blueprint.Nats{ClientPort: standbyClientPort, ClusterPort: standbyClusterPort}
+	}
 	return blueprint.Machine{
-		Name: name, Role: "node", IP: ip, Services: []string{"core-services"},
+		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
 		Platform: &blueprint.Platform{
-			Nats:    &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
-			Standby: &blueprint.Standby{Disabled: standbyDisabled},
+			RuntimeDir: runtimeDir(name, "primary"),
+			DataDir:    dataDir(name, "primary"),
+			API:        &blueprint.API{LocalPort: apiPort},
+			WinService: &blueprint.WinService{Name: name + "-primary"},
+			Nats:       &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
+			Standby:    standby,
 		},
 	}
 }
 
+// runtimeDir is one instance's own local runtime directory.
+func runtimeDir(machine, role string) string {
+	return fmt.Sprintf("C:/ProgramData/opdl/%s/%s", machine, role)
+}
+
+// dataDir is one instance's own JetStream file store directory. It is separate
+// from runtimeDir because the two live on different volumes in a real
+// deployment: a status file is small and disposable, a journal is not.
+func dataDir(machine, role string) string {
+	return fmt.Sprintf("D:/opdl-journal/%s/%s", machine, role)
+}
+
+// addr is the address a machine's Event Fabric listener is reached on.
+func addr(ip string, port int) string { return fmt.Sprintf("%s:%d", ip, port) }
+
 // site builds a site of machinesCount machines named node-1..node-N with
 // sequential ips, declared in reverse name order so a test can tell derived
 // ordering from declaration order.
+//
+// Every machine deploys only a Primary Instance, so the machine count is also the
+// instance count. That means machinesCount must be at least three: the platform's
+// minimum site is two machines and three instances, and a site of one or two
+// single-instance machines is rejected before anything a caller is testing runs.
 func site(name string, machineCount int) blueprint.Site {
 	machines := make([]blueprint.Machine, 0, machineCount)
 	for i := machineCount; i >= 1; i-- {
 		machines = append(machines, machine(fmt.Sprintf("node-%d", i), fmt.Sprintf("10.0.1.%d", i), true))
 	}
 	return blueprint.Site{Name: name, Machines: machines}
+}
+
+// companion is a second machine carrying a Standby Instance, for fixtures whose
+// subject is one machine.
+//
+// The platform's smallest site is two machines and three platform instances, so
+// a site of one machine is rejected before any rule a test is about gets a
+// chance to run. Appending this keeps such a fixture legal without changing what
+// it is testing: it is declared after the machine under test, so that machine
+// stays plan.Machines[0].
+func companion() blueprint.Machine {
+	return machine("companion", "10.0.99.1", false)
 }
 
 func projectOf(sites ...blueprint.Site) *blueprint.Project {
@@ -55,18 +105,17 @@ func projectOf(sites ...blueprint.Site) *blueprint.Project {
 // project is a one-machine, one-site project.
 func project() *blueprint.Project {
 	return projectOf(blueprint.Site{
-		Name: "north",
-		Machines: []blueprint.Machine{{
-			Name:     "sensor",
-			Role:     "sensor-node",
-			IP:       "10.0.1.10",
-			Services: []string{"sensor-services"},
-			Platform: &blueprint.Platform{
-				Nats:    &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
-				Standby: &blueprint.Standby{Disabled: true},
-			},
-		}},
+		Name:     "north",
+		Machines: []blueprint.Machine{sensor(), companion()},
 	})
+}
+
+// sensor is a one-instance machine: it deploys no Standby Instance.
+func sensor() blueprint.Machine {
+	m := machine("sensor", "10.0.1.10", true)
+	m.MachineProfile = "sensor-node"
+	m.Services = []string{"sensor-services"}
+	return m
 }
 
 // twoSiteProject has two sites, and declares machines out of name order so a
@@ -80,6 +129,7 @@ func twoSiteProject() *blueprint.Project {
 		}},
 		blueprint.Site{Name: "south", Machines: []blueprint.Machine{
 			machine("south-node", "10.0.2.10", true),
+			machine("south-relay", "10.0.2.11", false),
 		}},
 	)
 }
@@ -100,18 +150,19 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	plan, err := resolve.Build(project(), "acme-opdl")
 	require.NoError(t, err)
 	require.Equal(t, "customer-a", plan.Project)
-	require.Len(t, plan.Machines, 1)
+	// The sensor under test, plus the companion that makes the site a legal size.
+	require.Len(t, plan.Machines, 2)
 
 	m := plan.Machines[0]
 	require.Equal(t, "acme-opdl", m.Platform)
 	require.Equal(t, "production", m.Environment)
 	require.Equal(t, "north", m.Site)
 	require.Equal(t, "sensor", m.Machine)
-	require.Equal(t, "sensor-node", m.Role)
+	require.Equal(t, "sensor-node", m.MachineProfile)
 	require.Equal(t, "10.0.1.10", m.IP)
 	require.Equal(t, []string{"sensor-services"}, m.Services)
 	require.True(t, m.Features.Chaos)
-	require.False(t, m.Slots.Primary.Disabled, "a machine always deploys a primary process")
+	require.False(t, m.Instances.Primary.Disabled, "a machine always deploys a primary process")
 }
 
 // TestBuildCopiesStandbyDecision checks the resolved descriptor states the
@@ -121,12 +172,14 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 func TestBuildCopiesStandbyDecision(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
-			p := project()
-			p.Sites[0].Machines[0].Platform.Standby.Disabled = disabled
+			p := projectOf(blueprint.Site{
+				Name:     "north",
+				Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", disabled), companion()},
+			})
 			plan, err := resolve.Build(p, "acme-opdl")
 			require.NoError(t, err)
-			require.Equal(t, disabled, plan.Machines[0].Slots.Standby.Disabled)
-			require.False(t, plan.Machines[0].Slots.Primary.Disabled)
+			require.Equal(t, disabled, plan.Machines[0].Instances.Standby.Disabled)
+			require.False(t, plan.Machines[0].Instances.Primary.Disabled)
 		})
 	}
 }
@@ -144,29 +197,13 @@ func TestBuildStandbyIsPerMachine(t *testing.T) {
 	disabled := machine("gateway", "10.0.1.11", true)
 
 	forward := build([]blueprint.Machine{enabled, disabled})
-	require.False(t, machineByName(t, forward, "sensor").Slots.Standby.Disabled)
-	require.True(t, machineByName(t, forward, "gateway").Slots.Standby.Disabled)
+	require.False(t, machineByName(t, forward, "sensor").Instances.Standby.Disabled)
+	require.True(t, machineByName(t, forward, "gateway").Instances.Standby.Disabled)
 
 	// Declaration order must not change the resolved policy of either machine.
 	reversed := build([]blueprint.Machine{disabled, enabled})
-	require.False(t, machineByName(t, reversed, "sensor").Slots.Standby.Disabled)
-	require.True(t, machineByName(t, reversed, "gateway").Slots.Standby.Disabled)
-}
-
-// TestBuildDerivesOneMemberEventFabricForSingleMachineSite checks a standalone
-// machine is a valid fabric of one, not a machine with a missing fabric.
-func TestBuildDerivesOneMemberEventFabricForSingleMachineSite(t *testing.T) {
-	plan, err := resolve.Build(project(), "acme-opdl")
-	require.NoError(t, err)
-	require.Equal(t, deployment.EventFabric{
-		Nats: deployment.EventFabricNats{
-			ClientAddress:  "10.0.1.10:4222",
-			ClusterAddress: "10.0.1.10:6222",
-			Routes:         []string{},
-			Servers:        []string{"10.0.1.10:4222"},
-		},
-		Peers: []deployment.EventFabricPeer{},
-	}, plan.Machines[0].EventFabric)
+	require.False(t, machineByName(t, reversed, "sensor").Instances.Standby.Disabled)
+	require.True(t, machineByName(t, reversed, "gateway").Instances.Standby.Disabled)
 }
 
 // TestBuildDerivesEventFabricPeersFromTheSiteOnly checks the fabric spans exactly one
@@ -176,36 +213,45 @@ func TestBuildDerivesEventFabricPeersFromTheSiteOnly(t *testing.T) {
 	plan, err := resolve.Build(twoSiteProject(), "acme-opdl")
 	require.NoError(t, err)
 
+	// The north site's machines each deploy one instance here, so its membership is
+	// three peers ordered by machine name, and it includes this machine's own.
 	sensor := machineByName(t, plan, "sensor")
-	require.Equal(t, []deployment.EventFabricPeer{
-		{Site: "north", Machine: "archive", IP: "10.0.1.12"},
-		{Site: "north", Machine: "gateway", IP: "10.0.1.11"},
-	}, sensor.EventFabric.Peers, "peers are the site's other machines, ordered by name")
+	names := make([]string, 0, len(sensor.Peers))
+	for _, peer := range sensor.Peers {
+		require.Equal(t, "north", peer.Site)
+		names = append(names, peer.Machine+"/"+string(peer.Role))
+	}
+	require.Equal(t, []string{"archive/primary", "gateway/primary", "sensor/primary"}, names)
 
 	// The site has three machines, so all three store the journal and route to
 	// each other. Storage order is by machine name: archive, gateway, sensor.
-	require.Equal(t, deployment.EventFabricNats{
-		ClientAddress:  "10.0.1.10:4222",
-		ClusterAddress: "10.0.1.10:6222",
-		Servers:        []string{"10.0.1.10:4222", "10.0.1.12:4222", "10.0.1.11:4222"},
-		Routes:         []string{"10.0.1.12:6222", "10.0.1.11:6222"},
-	}, sensor.EventFabric.Nats)
+	require.Equal(t, &deployment.Nats{
+		ClientAddress:  addr("10.0.1.10", clientPort),
+		ClusterAddress: addr("10.0.1.10", clusterPort),
+		Servers:        []string{addr("10.0.1.10", clientPort), addr("10.0.1.12", clientPort), addr("10.0.1.11", clientPort)},
+		Routes:         []string{addr("10.0.1.12", clusterPort), addr("10.0.1.11", clusterPort)},
+	}, sensor.Instances.Primary.Nats)
 
-	// The south machine is alone in its site, so it forms its own fabric and
-	// never meets the north machines.
+	// The south site forms its own fabric and never meets the north machines. Its
+	// membership is its own two machines' three instances, and nothing of north's.
 	south := machineByName(t, plan, "south-node")
-	require.Empty(t, south.EventFabric.Peers)
-	require.Empty(t, south.EventFabric.Nats.Routes)
+	southNames := make([]string, 0, len(south.Peers))
+	for _, peer := range south.Peers {
+		require.Equal(t, "south", peer.Site)
+		southNames = append(southNames, peer.Machine+"/"+string(peer.Role))
+	}
+	require.Equal(t, []string{"south-node/primary", "south-relay/primary", "south-relay/standby"}, southNames)
 }
 
 // TestBuildDerivesStorageTopologyBySiteSize checks the listener matrix the
 // contract promises: how many machines store the journal, which of them bind a
 // cluster listener, and what a machine that stores nothing still knows.
 //
-// The cluster listener is the interesting column. A one or two machine site
-// authors a cluster port like every other machine but must resolve no routes,
-// because there is no peer server to route to and binding it would open a port
-// nothing can reach.
+// The cluster listener is the interesting column. Every site the platform accepts
+// has at least three platform instances, so the storage selection is always three
+// and there is always a real cluster; what varies is how many machines are
+// clients of it. The one-storage-node shape the selection still codes for is
+// unreachable through a valid blueprint, which is why it is not a case here.
 func TestBuildDerivesStorageTopologyBySiteSize(t *testing.T) {
 	tests := []struct {
 		siteSize     int
@@ -214,8 +260,6 @@ func TestBuildDerivesStorageTopologyBySiteSize(t *testing.T) {
 		wantServers  int
 		clusterNodes int
 	}{
-		{siteSize: 1, storage: []string{"node-1"}, wantServers: 1, clusterNodes: 0},
-		{siteSize: 2, storage: []string{"node-1"}, wantServers: 1, clusterNodes: 0},
 		{siteSize: 3, storage: []string{"node-1", "node-2", "node-3"}, wantServers: 3, clusterNodes: 3},
 		{siteSize: 4, storage: []string{"node-1", "node-2", "node-3"}, wantServers: 3, clusterNodes: 3},
 	}
@@ -228,7 +272,7 @@ func TestBuildDerivesStorageTopologyBySiteSize(t *testing.T) {
 
 			withRoutes := 0
 			for _, d := range plan.Machines {
-				nats := d.EventFabric.Nats
+				nats := d.Instances.Primary.Nats
 				storesJournal := slices.Contains(tc.storage, d.Machine)
 
 				// Every machine reaches the journal through the same storage
@@ -272,8 +316,8 @@ func TestBuildEventFabricOrderIsIndependentOfDeclarationOrder(t *testing.T) {
 
 	for _, name := range []string{"sensor", "gateway", "archive"} {
 		require.Equal(t,
-			machineByName(t, authored, name).EventFabric,
-			machineByName(t, shuffled, name).EventFabric,
+			machineByName(t, authored, name).Instances,
+			machineByName(t, shuffled, name).Instances,
 			"machine %s", name)
 	}
 }
@@ -282,10 +326,15 @@ func TestBuildEventFabricOrderIsIndependentOfDeclarationOrder(t *testing.T) {
 // empty JSON array rather than null, so a descriptor reader can tell "resolved
 // to nothing" from "not resolved".
 func TestBuildResolvesEmptyListsAsEmptyArrays(t *testing.T) {
-	plan, err := resolve.Build(project(), "acme-opdl")
+	// A site of four single-instance machines: the first three by name store the
+	// journal, and the fourth routes to nothing. Every valid site has at least
+	// three storage instances, so an empty route list now belongs to an instance
+	// the selection left out rather than to a site too small to cluster.
+	plan, err := resolve.Build(projectOf(site("north", 4)), "acme-opdl")
 	require.NoError(t, err)
-	require.NotNil(t, plan.Machines[0].EventFabric.Nats.Routes)
-	require.Empty(t, plan.Machines[0].EventFabric.Nats.Routes)
+	client := machineByName(t, plan, "node-4")
+	require.NotNil(t, client.Instances.Primary.Nats.Routes)
+	require.Empty(t, client.Instances.Primary.Nats.Routes)
 }
 
 func TestBuildValidatesBlueprint(t *testing.T) {
@@ -305,4 +354,56 @@ func TestBuildValidatesDescriptors(t *testing.T) {
 func TestBuildRequiresPlatformName(t *testing.T) {
 	_, err := resolve.Build(project(), "")
 	require.ErrorContains(t, err, "platform is required")
+}
+
+// TestBuildCarriesAuthoredLock checks the lock policy is carried onto the descriptor when
+// a standby is deployed, and nil when standby is disabled.
+func TestBuildCarriesAuthoredLock(t *testing.T) {
+	t.Run("standby deployed carries lock", func(t *testing.T) {
+		p := projectOf(blueprint.Site{
+			Name:     "north",
+			Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", false), companion()},
+		})
+		plan, err := resolve.Build(p, "acme-opdl")
+		require.NoError(t, err)
+		require.Equal(t, &deployment.Lock{WindowsMutex: "Global\\opdl-sensor"}, plan.Machines[0].Lock)
+	})
+
+	t.Run("standby disabled yields nil lock", func(t *testing.T) {
+		p := projectOf(blueprint.Site{
+			Name:     "north",
+			Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", true), companion()},
+		})
+		plan, err := resolve.Build(p, "acme-opdl")
+		require.NoError(t, err)
+		require.Nil(t, plan.Machines[0].Lock)
+	})
+}
+
+// TestBuildCarriesWinServiceIdentities checks the authored service names reach
+// the descriptor, with the display name default filled in, and that an undeployed
+// instance carries none.
+func TestBuildCarriesWinServiceIdentities(t *testing.T) {
+	t.Run("standby deployed", func(t *testing.T) {
+		p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", false), companion()}})
+		plan, err := resolve.Build(p, "acme-opdl")
+		require.NoError(t, err)
+
+		instances := plan.Machines[0].Instances
+		require.NotNil(t, instances.Primary.Service)
+		require.Equal(t, "node-a-primary", instances.Primary.Service.Name)
+		require.Equal(t, "node-a-primary", instances.Primary.Service.DisplayName, "display name defaults to the name")
+		require.NotNil(t, instances.Standby.Service)
+		require.Equal(t, "node-a-standby", instances.Standby.Service.Name)
+	})
+
+	t.Run("standby not deployed", func(t *testing.T) {
+		p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", true), companion()}})
+		plan, err := resolve.Build(p, "acme-opdl")
+		require.NoError(t, err)
+
+		instances := plan.Machines[0].Instances
+		require.NotNil(t, instances.Primary.Service, "a machine always deploys a Primary Instance")
+		require.Nil(t, instances.Standby.Service, "an undeployed instance names no service")
+	})
 }

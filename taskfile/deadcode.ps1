@@ -3,9 +3,14 @@
 
 $deadcodeTool = Get-Command deadcode -ErrorAction SilentlyContinue
 
-# Collect the packages reachable from command modules and scenarios. The workspace
-# uses go.work, so package dependencies do not need replace directives in go.mod.
-$roots = @($CmdModules + "scenarios") | Sort-Object -Unique
+# Collect the packages reachable from the command modules. The workspace uses
+# go.work, so package dependencies do not need replace directives in go.mod.
+#
+# scenarios used to be named here on top of $CmdModules, because the suite was a
+# bag of test files with no entry point. It has a cmd/ now, so the probe in
+# modules.ps1 finds it like any other command module and there is no special case
+# left to make.
+$roots = @($CmdModules) | Sort-Object -Unique
 $reachable = New-Object System.Collections.Generic.HashSet[string]
 foreach ($m in $roots) {
     Write-Host "--- $m (dependencies) ---"
@@ -24,7 +29,7 @@ foreach ($m in $roots) {
     finally { Pop-Location }
 }
 
-# Layer 1: unreachable functions across all command and scenario modules.
+# Layer 1: unreachable functions across all command modules.
 # Starting from each root module's commands and package test executables, report
 # functions that no execution or test path can reach across the workspace.
 $rootPatterns = @($roots | ForEach-Object { "./$_/..." })
@@ -55,9 +60,9 @@ finally {
     Pop-Location
 }
 
-# Layer 2: packages not reachable from a command or scenario module.
+# Layer 2: packages not reachable from a command module.
 # A package that is only imported by another library package is still dead if
-# that library package is not part of a command or scenario's dependency graph.
+# that library package is not part of a command's dependency graph.
 $workspacePackages = @()
 foreach ($m in $Modules) {
     Push-Location (Join-Path $RepoRoot $m)
@@ -83,7 +88,7 @@ foreach ($m in $Modules) {
 $orphans = @($workspacePackages | Where-Object { -not $reachable.Contains($_) })
 
 if ($orphans) {
-    Write-Host "unreachable (dead) packages from command and scenario modules:"
+    Write-Host "unreachable (dead) packages from command modules:"
     $orphans | Sort-Object -Unique | ForEach-Object { Write-Host "  $_" }
     throw "unreachable packages found"
 }

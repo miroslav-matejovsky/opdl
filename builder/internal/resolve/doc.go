@@ -28,7 +28,7 @@
 // like a working one.
 //
 // There is one NATS topology per machine, not one per process slot. The primary
-// and standby are mutually exclusive owners of the machine fence and therefore of
+// and standby are mutually exclusive holders of Primary Ownership and therefore of
 // the machine's endpoints, so the resolved topology lives on the descriptor's
 // Event Fabric rather than on a slot. The slots carry only their explicit
 // disabled decision.

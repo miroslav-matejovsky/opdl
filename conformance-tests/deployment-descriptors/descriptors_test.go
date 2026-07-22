@@ -6,12 +6,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	platformdeployment "github.com/miroslav-matejovsky/opdl/platform/deployment"
+	platformconfig "github.com/miroslav-matejovsky/opdl/platform/config"
 )
 
 // TestSignature is a small unit test of the structural JSON signature helper,
 // exercised on a real descriptor sub-type. It pins the format the descriptor
 // comparison relies on: JSON field names mapped to their kinds, sorted.
 func TestSignature(t *testing.T) {
-	require.Equal(t, "{chaos:bool}", signature(reflect.TypeFor[platformdeployment.Features]()))
+	require.Equal(t, "{chaos:bool}", signature(reflect.TypeFor[platformconfig.Features]()))
 }

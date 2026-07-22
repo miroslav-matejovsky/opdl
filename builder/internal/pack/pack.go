@@ -34,7 +34,7 @@ const targetOS = "windows"
 const binaryExt = ".exe"
 
 // Packer builds deployment packages by staging a machine's deployment
-// descriptor into the platform's embedded folder and driving the platform's own
+// descriptor into the platform's config package and driving the platform's own
 // go build.
 type Packer struct {
 	platformDir string
@@ -53,7 +53,7 @@ func New(platformDir, outputDir, goarch string) (*Packer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve platform directory: %w", err)
 	}
-	embedFile := filepath.Join(absolutePlatformDir, "embedded", deploymentFile)
+	embedFile := filepath.Join(absolutePlatformDir, "config", deploymentFile)
 	if _, err := os.Stat(embedFile); err != nil {
 		return nil, fmt.Errorf("find embedded deployment descriptor: %w", err)
 	}
@@ -77,7 +77,7 @@ type Result struct {
 }
 
 // BuildMachine stages the machine's deployment descriptor into the platform's
-// embedded folder, compiles the platform, and assembles the deployment
+// config package, compiles the platform, and assembles the deployment
 // package: the binary, a copy of the descriptor, a manifest, release metadata,
 // and a checksums file.
 func (p *Packer) BuildMachine(ctx context.Context, d deployment.Descriptor) (result *Result, resultErr error) {
@@ -153,19 +153,19 @@ func (p *Packer) compile(ctx context.Context, out, overlayPath string) error {
 // writeMetadata writes the manifest, release metadata, and checksums file.
 func (p *Packer) writeMetadata(pkgDir string, d deployment.Descriptor, binary, sum string) error {
 	now := time.Now().UTC()
-	primary, standby := launches(!d.Slots.Standby.Disabled)
+	primary, standby := launches(d.Instances)
 	man := Manifest{
-		Project:     d.Project,
-		Site:        d.Site,
-		Machine:     d.Machine,
-		Role:        d.Role,
-		Platform:    d.Platform,
-		Binary:      binary,
-		Services:    d.Services,
-		Deployment:  deploymentFile,
-		Primary:     primary,
-		Standby:     standby,
-		GeneratedAt: now,
+		Project:        d.Project,
+		Site:           d.Site,
+		Machine:        d.Machine,
+		MachineProfile: d.MachineProfile,
+		Platform:       d.Platform,
+		Binary:         binary,
+		Services:       d.Services,
+		Deployment:     deploymentFile,
+		Primary:        primary,
+		Standby:        standby,
+		GeneratedAt:    now,
 	}
 	rel := Release{
 		Builder:      builderName,

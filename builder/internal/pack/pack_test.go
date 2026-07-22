@@ -15,7 +15,7 @@ import (
 func fakePlatform(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	embed := filepath.Join(root, "embedded")
+	embed := filepath.Join(root, "config")
 	require.NoError(t, os.MkdirAll(embed, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(embed, deploymentFile), []byte(`{"project":"mock"}`), 0o644))
 	return root
@@ -28,7 +28,7 @@ func TestNewFailsWithoutEmbeddedDescriptor(t *testing.T) {
 
 func TestStageOverlayLeavesPlaceholderUnchanged(t *testing.T) {
 	platformDir := fakePlatform(t)
-	embedFile := filepath.Join(platformDir, "embedded", deploymentFile)
+	embedFile := filepath.Join(platformDir, "config", deploymentFile)
 
 	p, err := New(platformDir, t.TempDir(), "")
 	require.NoError(t, err)
@@ -67,15 +67,35 @@ func TestWriteJSONRoundTrip(t *testing.T) {
 }
 
 func TestLaunches(t *testing.T) {
+	primaryService := &deployment.WinService{Name: "node-primary", DisplayName: "node primary"}
+	standbyService := &deployment.WinService{Name: "node-standby", DisplayName: "node standby"}
+
 	t.Run("standby enabled", func(t *testing.T) {
-		primary, standby := launches(true)
-		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
-		require.Equal(t, &Launch{Args: []string{"-instance", "standby"}}, standby)
+		primary, standby := launches(deployment.Instances{
+			Primary: deployment.Instance{Service: primaryService},
+			Standby: deployment.Instance{Disabled: false, Service: standbyService},
+		})
+		require.Equal(t, Launch{
+			Service: WinService{Name: "node-primary", DisplayName: "node primary"},
+			Args:    []string{"-instance", "primary"},
+		}, primary)
+		require.Equal(t, &Launch{
+			Service: WinService{Name: "node-standby", DisplayName: "node standby"},
+			Args:    []string{"-instance", "standby"},
+		}, standby)
 	})
 
+	// A machine that deploys no Standby Instance ships no standby launch, so
+	// nothing names a service for an instance that will never run.
 	t.Run("standby disabled", func(t *testing.T) {
-		primary, standby := launches(false)
-		require.Equal(t, Launch{Args: []string{"-instance", "primary"}}, primary)
+		primary, standby := launches(deployment.Instances{
+			Primary: deployment.Instance{Service: primaryService},
+			Standby: deployment.Instance{Disabled: true},
+		})
+		require.Equal(t, Launch{
+			Service: WinService{Name: "node-primary", DisplayName: "node primary"},
+			Args:    []string{"-instance", "primary"},
+		}, primary)
 		require.Nil(t, standby)
 	})
 }

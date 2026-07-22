@@ -1,0 +1,87 @@
+# Scenario blueprint template.
+#
+# Scenarios build from the same blueprint contract a customer does, so the NATS
+# ports come from here rather than from a runtime setting. They cannot be fixed
+# numbers: several machines share one host and a developer's machine may already
+# hold 4222, so the harness reserves free ports and renders them in.
+#
+# The .tmpl extension is deliberate. The builder loads every *.hcl file in a
+# blueprint directory, so an unrendered template must not look like one.
+#
+# Everything else is authored per fixture in the harness's fixture model, which
+# is the single source of each machine's name, address, and standby policy.
+project "{{ .Name }}" {
+  environment = "development"
+
+  features {
+    chaos = false
+  }
+
+  site "{{ .Site }}" {
+{{- range .Machines }}
+    machine "{{ .Name }}" {
+      profile  = "all-in-one"
+      ip       = "{{ .IP }}"
+      services = ["core-services"]
+
+      platform {
+        # The blocks directly under platform are the Primary Instance's; standby
+        # carries the Standby Instance's. Every port is reserved separately by the
+        # harness, because the two instances run together on one host.
+        #
+        # runtime_dir and data_dir are per instance for the same reason the ports
+        # are: several machines share one host here, so the harness renders a
+        # distinct directory for every instance of every machine. data_dir needs
+        # it most, because two NATS servers cannot open one JetStream store and
+        # every deployed instance on a storage machine runs one.
+        #
+        # The platform installs and manages no services; the winservice names are
+        # carried into the manifest so the roles are named consistently. The
+        # namespace token keeps concurrent scenario runs from naming the same
+        # service twice.
+        runtime_dir = "{{ .RuntimeDir }}"
+        data_dir    = "{{ .DataDir }}"
+
+        api {
+          local_port = {{ .APIPort }}
+        }
+
+        winservice {
+          name         = "{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}-primary"
+          display_name = "OPDL {{ $.Name }} {{ .Name }} (Primary Instance)"
+        }
+
+        nats {
+          client_port  = {{ .ClientPort }}
+          cluster_port = {{ .ClusterPort }}
+        }
+
+        standby {
+          disabled = {{ .StandbyDisabled }}
+{{- if not .StandbyDisabled }}
+          runtime_dir = "{{ .StandbyRuntimeDir }}"
+          data_dir    = "{{ .StandbyDataDir }}"
+
+          lock {
+            windows_mutex = "Global\\{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}"
+          }
+
+          api {
+            local_port = {{ .StandbyAPIPort }}
+          }
+
+          winservice {
+            name         = "{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}-standby"
+            display_name = "OPDL {{ $.Name }} {{ .Name }} (Standby Instance)"
+          }
+
+          nats {
+            client_port  = {{ .StandbyClientPort }}
+            cluster_port = {{ .StandbyClusterPort }}
+          }
+{{- end }}
+        }
+      }
+    }
+{{ end }}  }
+}

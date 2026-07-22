@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 )
 
 // Level is the operational severity of an event.
@@ -33,10 +33,28 @@ const (
 	AttributeDurationMS = "duration_ms"
 	// AttributePath contains the local path involved in an operation.
 	AttributePath = "path"
-	// AttributeActivationKind identifies initial activation, promotion, or reclamation.
+	// AttributeActivationKind identifies initial activation, failover, or failback.
 	AttributeActivationKind = "activation_kind"
 	// AttributeAppliedSequence contains the last journal sequence projected locally.
 	AttributeAppliedSequence = "applied_sequence"
+	// AttributeObject contains the kernel object name involved in an operation,
+	// such as the Primary Ownership mutex. A named kernel object has no
+	// path, so this is what identifies it to an operator.
+	AttributeObject = "object"
+	// AttributeAbandoned reports that ownership was taken over from a process that
+	// died without releasing it, rather than from one that handed it over. It is
+	// what distinguishes a crash failover from a planned handover.
+	AttributeAbandoned = "abandoned"
+	// AttributeExisted reports that a kernel object already existed when this
+	// process opened it, meaning a peer process on this machine is running.
+	AttributeExisted = "existed"
+	// AttributeAddress contains the host:port an instance binds. Each instance
+	// binds its own for its whole lifetime, so this identifies the instance a
+	// request would reach as well as the socket.
+	AttributeAddress = "address"
+	// AttributeInstanceState contains what an instance is doing: active or
+	// passive. It is the half that changes; the role never does.
+	AttributeInstanceState = "instance_state"
 )
 
 // Event is one self-contained operational JSONL record.
@@ -74,7 +92,7 @@ var discard = &Recorder{stderr: io.Discard, now: time.Now}
 
 // Open creates a recorder. eventDir may be empty to disable JSONL retention;
 // structured events are still written to stderr for the service manager.
-func Open(eventDir string, descriptor deployment.Descriptor, role string) (*Recorder, error) {
+func Open(eventDir string, descriptor config.Descriptor, role string) (*Recorder, error) {
 	r := &Recorder{
 		identity: Event{
 			Project:     descriptor.Project,

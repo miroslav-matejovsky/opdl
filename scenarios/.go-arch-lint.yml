@@ -1,0 +1,82 @@
+version: 3
+
+workdir: .
+
+allow:
+  depOnAnyVendor: false
+  deepScan: true
+
+exclude:
+  - ".gocache"
+  - ".lintcache"
+  - ".test-results"
+  - ".tmp"
+
+excludeFiles:
+  - "^.*_test\\.go$"
+
+vendors:
+  testify: { in: "github.com/stretchr/testify/**" }
+  # The only build-time dependency a scenario has. The platform is reached
+  # through the packages this produces, never by importing it.
+  builder-build: { in: "github.com/miroslav-matejovsky/opdl/builder/build" }
+  testnet: { in: "github.com/miroslav-matejovsky/opdl/utils/testnet" }
+
+components:
+  root: { in: . }
+  cmd: { in: cmd }
+  runner: { in: internal/runner }
+  harness: { in: internal/harness }
+  logscan: { in: internal/logscan }
+  procrun: { in: internal/procrun }
+  processtree: { in: internal/processtree }
+  processinfo: { in: internal/processinfo }
+  semaphore: { in: internal/semaphore }
+  waitfor: { in: internal/waitfor }
+  registration: { in: registration }
+  nats: { in: nats }
+  resilience: { in: resilience }
+  standby: { in: standby }
+  sdk: { in: sdk }
+
+# A component with no entry here depends on nothing outside the standard
+# library. That covers the root documentation package, the runner, and every
+# leaf helper except procrun, which owns the process tree it has to clean up.
+deps:
+  # The command is the only place that knows the suite as a whole. A category
+  # package is reached from here and from nowhere else, which is what keeps the
+  # categories independent of each other.
+  cmd:
+    mayDependOn: [runner, registration, nats, resilience, standby, sdk]
+
+  # The harness is the only component that builds anything or starts a platform
+  # process. No category package may do either directly, which is what makes the
+  # platform a black box on the build side as well as at runtime.
+  harness:
+    canUse: [testify, builder-build, testnet]
+    mayDependOn: [logscan, procrun, semaphore, waitfor]
+
+  # Category packages depend on the harness for everything about the platform.
+  # They reach a leaf helper directly only where the helper is about reading
+  # evidence or running an unrelated process, never about the platform itself.
+  # They must never depend on each other: a helper two categories want belongs
+  # in the harness.
+  registration:
+    canUse: [testify]
+    mayDependOn: [harness, runner]
+  nats:
+    canUse: [testify]
+    mayDependOn: [harness, runner, logscan]
+  resilience:
+    canUse: [testify]
+    mayDependOn: [harness, runner]
+  standby:
+    canUse: [testify]
+    mayDependOn: [harness, runner, processinfo]
+  sdk:
+    canUse: [testify]
+    mayDependOn: [harness, runner, procrun]
+
+  procrun:
+    mayDependOn: [processtree]
+

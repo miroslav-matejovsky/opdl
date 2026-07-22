@@ -59,6 +59,8 @@
     "apispecifications",
     "atomicfile",
     "builderdeployment",
+    "cutover",
+    "DACL",
     "danielgtaylor",
     "deadcode",
     "eventfabric",
@@ -92,6 +94,7 @@
     "pkgname",
     "platformapi",
     "platformdeployment",
+    "processinfo",
     "processtree",
     "procrun",
     "promotability",
@@ -102,6 +105,8 @@
     "taskfile",
     "testname",
     "unioned",
+    "winmutex",
+    "winservice",
     "Xunit"
   ]
 }

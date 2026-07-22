@@ -6,6 +6,7 @@ using Microsoft.Kiota.Serialization.Form;
 using Microsoft.Kiota.Serialization.Json;
 using Microsoft.Kiota.Serialization.Multipart;
 using Microsoft.Kiota.Serialization.Text;
+using Opdl.Sdk.Client.Instance;
 using Opdl.Sdk.Client.Registrations;
 using System.Collections.Generic;
 using System.IO;
@@ -19,6 +20,11 @@ namespace Opdl.Sdk.Client
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     public partial class PlatformClient : BaseRequestBuilder
     {
+        /// <summary>The instance property</summary>
+        public global::Opdl.Sdk.Client.Instance.InstanceRequestBuilder Instance
+        {
+            get => new global::Opdl.Sdk.Client.Instance.InstanceRequestBuilder(PathParameters, RequestAdapter);
+        }
         /// <summary>The registrations property</summary>
         public global::Opdl.Sdk.Client.Registrations.RegistrationsRequestBuilder Registrations
         {

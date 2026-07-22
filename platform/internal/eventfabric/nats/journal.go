@@ -16,6 +16,13 @@ import (
 // journalConfig is the site journal's required configuration. The journal is
 // file-backed and limits-retained, keeps history without age or count deletion,
 // and rejects new events when full so a replay is never quietly made impossible.
+//
+// Its replicas are spread across machines, but not by anything stated here. The
+// constraint is the server's JetStreamUniqueTag, set in serverOptions, because
+// the client's per-stream Placement carries only a cluster and a tag list and has
+// no way to say "distinct values of this tag". Declaring it once per server is
+// also what D2 of the plan asked for: it cannot be forgotten by a stream added
+// later.
 func (f *Fabric) journalConfig() jetstream.StreamConfig {
 	return jetstream.StreamConfig{
 		Name:        f.scope.StreamName(),

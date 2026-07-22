@@ -2,28 +2,36 @@ package redundancy
 
 import "slices"
 
-// State is a process lifecycle state. Only the active state owns the
-// machine's externally visible, decision-producing capabilities.
+// State is what an instance is doing now, as opposed to InstanceRole, which is
+// which instance it is. The two axes are independent: a Standby Instance in
+// StateActive is a machine that has failed over.
+//
+// StateActive and StatePassive are the operational states. The rest are
+// transitional and exist so an operator can tell a process that has not yet
+// contended from one that contended and lost, and a clean stop from a failure.
+//
+// Only StateActive owns the machine's externally visible, decision-producing
+// capabilities.
 type State string
 
 const (
 	// StateStarting is the initial state: the process has launched but has not yet
-	// begun to contend for the machine fence.
+	// begun to contend for Primary Ownership.
 	StateStarting State = "starting"
-	// StateStandby is a process connected to the journal with caught-up local
+	// StatePassive is a process connected to the journal with caught-up local
 	// projections but no public listener, durable domain handlers, or embedded
-	// server. A standby waits for the machine fence and produces no domain
+	// server. A passive instance waits for Primary Ownership and produces no domain
 	// decision.
-	StateStandby State = "standby"
-	// StateActivating is a process that has acquired the fence and is composing its
+	StatePassive State = "passive"
+	// StateActivating is a process that has acquired Primary Ownership and is composing its
 	// active resources, but is not yet serving.
 	StateActivating State = "activating"
-	// StateActive is the process holding the machine's active fence. It owns the
+	// StateActive is the process holding Primary Ownership. It owns the
 	// public API, the durable domain handlers, readiness publication, and the
 	// embedded NATS server.
 	StateActive State = "active"
 	// StateStopping is a process releasing its resources during a clean shutdown,
-	// before it releases the fence.
+	// before it releases Primary Ownership.
 	StateStopping State = "stopping"
 	// StateFailed is a process that stopped on an error and is not active.
 	StateFailed State = "failed"
@@ -35,8 +43,8 @@ const (
 // stopping or failed: a process that gave up its active resources starts a new
 // process to become active again.
 var transitions = map[State][]State{
-	StateStarting:   {StateStandby, StateActivating, StateStopping, StateFailed},
-	StateStandby:    {StateActivating, StateStopping, StateFailed},
+	StateStarting:   {StatePassive, StateActivating, StateStopping, StateFailed},
+	StatePassive:    {StateActivating, StateStopping, StateFailed},
 	StateActivating: {StateActive, StateStopping, StateFailed},
 	StateActive:     {StateStopping, StateFailed},
 	StateStopping:   {StateFailed},
@@ -58,7 +66,7 @@ func (s State) Active() bool { return s == StateActive }
 
 // CanTransition reports whether a process may move directly from s to next. It is
 // how runtime code guards a state change so a process cannot, for example, jump from
-// standby to active without composing its active resources first.
+// passive to active without composing its active resources first.
 func (s State) CanTransition(next State) bool {
 	return slices.Contains(transitions[s], next)
 }

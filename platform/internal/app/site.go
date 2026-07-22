@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/config"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
@@ -41,7 +39,7 @@ type site struct {
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
-	role       redundancy.ProcessRole
+	role       redundancy.InstanceRole
 	observer   *operations.Recorder
 
 	// projector is the node-wide ordered consumer: one loop, from the first
@@ -88,23 +86,16 @@ type service struct {
 // opens no durable handler, publishes no readiness, and binds no listener, so it
 // follows the site's history without producing a decision or holding an
 // active-only capability.
-func open(ctx context.Context, descriptor deployment.Descriptor, cfg *config.Config, active bool, role redundancy.ProcessRole) (*site, error) {
+func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
 	observer := operations.FromContext(ctx)
 	openedAt := time.Now()
 	observer.Emit("platform.site_opening", operations.LevelInfo, "platform.site", "site runtime opening", map[string]any{"active": active})
-	fabricCfg, err := natsConfig(descriptor, cfg)
+	fabricCfg, err := natsConfig(descriptor, cfg, role)
 	if err != nil {
 		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "site configuration failed", map[string]any{operations.AttributeError: err.Error()})
 		return nil, err
 	}
-	// A warm standby never opens the shared journal store or binds the storage
-	// node's listeners; the active process owns those. It reaches the journal as a
-	// client of the active's server, so it follows history without contending for
-	// the storage the fence protects.
-	if !active {
-		fabricCfg = clientOnly(fabricCfg)
-	}
-	logEffectiveFabric(descriptor, fabricCfg)
+	logEffectiveFabric(descriptor, fabricCfg, role)
 	// Open validates the configuration and probes the journal's storage before it
 	// binds a listener, so an unusable data directory or address fails here
 	// rather than half way through starting a server.
@@ -445,21 +436,21 @@ func (r *runner) failure() error {
 	return fmt.Errorf("%s stopped", r.name)
 }
 
-// natsConfig composes the Event Fabric adapter's configuration from the descriptor's
-// derived topology and runtime data paths/timeouts from the configuration file.
+// natsConfig composes the Event Fabric adapter's configuration from the
+// descriptor's per-instance topology and the timeouts and credentials the
+// configuration file carries.
 //
-// It takes no process role. Every role on the machine composes the same
-// configuration from the same descriptor topology; only clientOnly distinguishes
-// a process that does not hold the fence, and it removes ownership rather than
-// selecting a different endpoint.
-func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabric.Config, error) {
-	fabricCfg, err := natsfabric.DefaultConfig(descriptor)
+// It takes the instance role, because every endpoint and the journal store are
+// now that instance's own. Both instances of a machine run their own server, and
+// nothing about this composition is shared between them except the site they
+// join.
+func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundancy.InstanceRole) (natsfabric.Config, error) {
+	fabricCfg, err := natsfabric.DefaultConfig(descriptor, config.Role(role == redundancy.RoleStandby))
 	if err != nil {
 		return natsfabric.Config{}, err
 	}
 	settings := cfg.EventFabric().Nats
 
-	fabricCfg.DataDir = nodeDataDir(settings.DataDir, descriptor)
 	fabricCfg.Username, fabricCfg.Password = cfg.Credentials()
 	fabricCfg.ShutdownTimeout = cfg.ShutdownTimeout()
 
@@ -477,53 +468,27 @@ func natsConfig(descriptor deployment.Descriptor, cfg *config.Config) (natsfabri
 	return fabricCfg, nil
 }
 
-// clientOnly turns a storage node's Event Fabric configuration into a client-only
-// one for a warm standby. A storage node's active process binds the server and owns
-// the JetStream store; its standby must do neither, or two processes would try to
-// bind the same ports and open the same journal directory. The standby keeps the
-// servers it already reaches the journal through and drops everything it would
-// otherwise bind or store.
-//
-// A node that does not store the journal is already a client and is returned
-// unchanged.
-func clientOnly(cfg natsfabric.Config) natsfabric.Config {
-	if !cfg.HostsStorage {
-		return cfg
-	}
-	cfg.HostsStorage = false
-	// cfg.Servers is kept whole and unchanged: the local server first, then every
-	// peer storage server. That list is what the standby reaches the journal
-	// through, and its first entry is the address the local active process is
-	// serving on right now. Narrowing or substituting it here is exactly the bug
-	// this shape exists to prevent, because the standby would then wait on an
-	// address no process is listening on.
-	cfg.ClientAddress = ""
-	cfg.ClusterAddress = ""
-	cfg.Routes = nil
-	cfg.DataDir = ""
-	return cfg
-}
-
 // logEffectiveFabric prints the Event Fabric endpoints this process actually
 // composed, before anything is bound or connected.
 //
-// It exists so the four cases a machine can be in are distinguishable from the
-// process output alone:
+// It exists so the cases a machine can be in are distinguishable from the process
+// output alone. There are fewer of them than there used to be: an instance is
+// either on a storage machine, in which case it runs its own server whether it is
+// Active or Passive, or it is not, in which case it is a client of the machines
+// that are.
 //
-//	active storage server         endpoint=X binds=true  storage=true
-//	client-only local standby     endpoint=X binds=false storage=false, X in servers
-//	client-only non-storage node  endpoint=X binds=false storage=false, X not in servers
-//	storage node after promotion  endpoint=X binds=true  storage=true
+//	storage machine instance      role=R binds=true  storage=true
+//	non-storage machine instance  role=R binds=false storage=false
 //
-// Those look alike in every other log line, and telling them apart after the
-// fact is what a failure to reach the journal actually needs. endpoint is the
-// machine's own address from the descriptor and is printed whether or not this
-// process binds it, so a standby and the active process it follows are visibly
-// talking about the same endpoint.
+// What no longer appears is a client-only local standby, which is the shape that
+// existed only while one server served a whole machine. endpoint is this
+// instance's own address rather than the machine's, because the two instances of
+// a machine no longer share one and a line naming the primary's would describe
+// the wrong process half the time.
 //
 // Every value is a single token so the line can be parsed. No credential is
 // printed, and there is no monitor endpoint to print.
-func logEffectiveFabric(descriptor deployment.Descriptor, cfg natsfabric.Config) {
+func logEffectiveFabric(descriptor config.Descriptor, cfg natsfabric.Config, role redundancy.InstanceRole) {
 	cluster := "none"
 	if len(cfg.Routes) > 0 {
 		cluster = cfg.ClusterAddress
@@ -532,36 +497,34 @@ func logEffectiveFabric(descriptor deployment.Descriptor, cfg natsfabric.Config)
 	if len(cfg.Routes) > 0 {
 		routes = strings.Join(cfg.Routes, ",")
 	}
-	fmt.Printf("platform: event fabric configuration endpoint=%s binds=%t cluster=%s servers=%s routes=%s storage=%t replicas=%d\n",
-		descriptor.EventFabric.Nats.ClientAddress, cfg.ClientAddress != "", cluster,
+	endpoint := "(unresolved)"
+	if nats := instanceOf(descriptor, role).Nats; nats != nil {
+		endpoint = nats.ClientAddress
+	}
+	fmt.Printf("platform: event fabric configuration role=%s endpoint=%s binds=%t cluster=%s servers=%s routes=%s storage=%t replicas=%d\n",
+		role, endpoint, cfg.ClientAddress != "", cluster,
 		strings.Join(cfg.Servers, ","), routes, cfg.HostsStorage, cfg.Replicas)
-}
-
-// nodeDataDir places this node's journal storage in its own subdirectory of the
-// configured data directory, named after the deployment identity the machine was
-// built with.
-//
-// The platform creates it and never removes it: the journal is the site's
-// history, and a runtime that tidied its own storage away could delete the only
-// copy of facts nothing else holds. The subdirectory is what lets one host run
-// several machines, and what stops two machines from ever adopting each other's
-// store.
-func nodeDataDir(dataDir string, descriptor deployment.Descriptor) string {
-	node := strings.Join([]string{
-		descriptor.Project, descriptor.Environment, descriptor.Site, descriptor.Machine,
-	}, "-")
-	return filepath.Join(dataDir, node)
 }
 
 // topology reads the trusted registration topology from the descriptor: this
 // machine, and every machine of its site including itself. A registration needs
 // every one of them to confirm, so the expected set is the site's static
 // membership and never the members that happen to be reachable.
-func topology(descriptor deployment.Descriptor) (self registration.Location, expected []registration.Location) {
+//
+// The descriptor's peers are instances, and a machine that deploys both
+// contributes two of them, so they collapse to machines here. A registration
+// wants one confirmation per machine: exactly one of a machine's instances is
+// Active, and it answers for the machine. Expecting one per instance would wait
+// forever on a Standby Instance that is not serving.
+func topology(descriptor config.Descriptor) (self registration.Location, expected []registration.Location) {
 	self = registration.Location{Machine: descriptor.Machine, IP: descriptor.IP}
-	expected = make([]registration.Location, 0, len(descriptor.EventFabric.Peers)+1)
 	expected = append(expected, self)
-	for _, peer := range descriptor.EventFabric.Peers {
+	seen := map[string]bool{descriptor.Machine: true}
+	for _, peer := range descriptor.Peers {
+		if seen[peer.Machine] {
+			continue
+		}
+		seen[peer.Machine] = true
 		expected = append(expected, registration.Location{Machine: peer.Machine, IP: peer.IP})
 	}
 	return self, expected

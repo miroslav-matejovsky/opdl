@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	builderdeployment "github.com/miroslav-matejovsky/opdl/builder/deployment"
-	platformdeployment "github.com/miroslav-matejovsky/opdl/platform/deployment"
+	platformconfig "github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/utils/jsonfields"
 )
 
@@ -30,7 +30,7 @@ func Run() error {
 // one side without matching the other and it fails.
 func checkContractsMatch() error {
 	builderSig := signature(reflect.TypeFor[builderdeployment.Descriptor]())
-	platformSig := signature(reflect.TypeFor[platformdeployment.Descriptor]())
+	platformSig := signature(reflect.TypeFor[platformconfig.Descriptor]())
 	if builderSig != platformSig {
 		return fmt.Errorf("builder and platform deployment descriptors have diverged:\n  builder:  %s\n  platform: %s", builderSig, platformSig)
 	}
@@ -39,16 +39,35 @@ func checkContractsMatch() error {
 
 // These values are named so the descriptor and its peer topology stay easy to
 // compare without scattering literals through the fixture.
+//
+// The fixture is a two-machine site where the peer stores the journal and this
+// machine does not, and where both machines deploy both instances. That shape
+// exercises what the contract now has to carry: two peers on one machine sharing
+// an ip and differing by port, and a per-instance NATS topology rather than a
+// machine-level one.
 const (
-	site            = "north"
-	machine         = "sensor"
-	machineIP       = "10.0.1.10"
-	peerMachine     = "gateway"
-	peerIP          = "10.0.1.11"
-	clientAddr      = "10.0.1.10:4222"
-	clusterAddr     = "10.0.1.10:6222"
-	peerClientAddr  = "10.0.1.11:4222"
-	peerClusterAddr = "10.0.1.11:6222"
+	site      = "north"
+	machine   = "sensor"
+	machineIP = "10.0.1.10"
+
+	// The api addresses are on loopback and the Event Fabric's are on the machine
+	// ip. That split is the contract: the platform API is machine-local, so it is
+	// resolved onto 127.0.0.1 and a peer carries no api address at all.
+	apiAddr           = "127.0.0.1:8080"
+	runtimeDir        = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
+	clientAddr        = "10.0.1.10:4222"
+	clusterAddr       = "10.0.1.10:6222"
+	standbyAPIAddr    = "127.0.0.1:8081"
+	standbyRuntimeDir = "C:/ProgramData/opdl/customer-a/north/sensor/standby"
+	standbyClient     = "10.0.1.10:4322"
+	standbyCluster    = "10.0.1.10:6322"
+
+	peerMachine        = "gateway"
+	peerIP             = "10.0.1.11"
+	peerClientAddr     = "10.0.1.11:4222"
+	peerClusterAddr    = "10.0.1.11:6222"
+	peerStandbyClient  = "10.0.1.11:4322"
+	peerStandbyCluster = "10.0.1.11:6322"
 )
 
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
@@ -68,71 +87,137 @@ func checkRoundTrip() error {
 }
 
 func checkRoundTripFor(standbyDisabled bool) error {
+	// This machine does not store the journal, so neither of its instances routes
+	// and both reach the journal through the peer machine's two servers.
+	servers := []string{peerClientAddr, peerStandbyClient}
+
+	builtStandby := builderdeployment.Instance{Disabled: true}
+	wantStandby := platformconfig.Instance{Disabled: true}
+	var builtLock *builderdeployment.Lock
+	var wantLock *platformconfig.Lock
+	if !standbyDisabled {
+		builtStandby = builderdeployment.Instance{
+			Disabled:   false,
+			RuntimeDir: standbyRuntimeDir,
+			APIAddress: standbyAPIAddr,
+			Nats: &builderdeployment.Nats{
+				ClientAddress:  standbyClient,
+				ClusterAddress: standbyCluster,
+				Routes:         []string{},
+				Servers:        servers,
+			},
+		}
+		wantStandby = platformconfig.Instance{
+			Disabled:   false,
+			RuntimeDir: standbyRuntimeDir,
+			APIAddress: standbyAPIAddr,
+			Nats: &platformconfig.Nats{
+				ClientAddress:  standbyClient,
+				ClusterAddress: standbyCluster,
+				Routes:         []string{},
+				Servers:        servers,
+			},
+		}
+		builtLock = &builderdeployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
+		wantLock = &platformconfig.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
+	}
+
+	// Peers are ordered by machine name, then Primary before Standby, and include
+	// this machine's own instances.
+	builtPeers := []builderdeployment.Peer{
+		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP,
+			Nats: builderdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
+		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP,
+			Nats: builderdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
+		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP,
+			Nats: builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+	}
+	wantPeers := []platformconfig.Peer{
+		{Site: site, Machine: peerMachine, Role: platformconfig.RolePrimary, IP: peerIP,
+			Nats: platformconfig.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
+		{Site: site, Machine: peerMachine, Role: platformconfig.RoleStandby, IP: peerIP,
+			Nats: platformconfig.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
+		{Site: site, Machine: machine, Role: platformconfig.RolePrimary, IP: machineIP,
+			Nats: platformconfig.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+	}
+	if !standbyDisabled {
+		builtPeers = append(builtPeers, builderdeployment.Peer{
+			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP,
+			Nats: builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
+		})
+		wantPeers = append(wantPeers, platformconfig.Peer{
+			Site: site, Machine: machine, Role: platformconfig.RoleStandby, IP: machineIP,
+			Nats: platformconfig.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
+		})
+	}
+
 	built := builderdeployment.Descriptor{
-		Platform:    "opdl",
-		Project:     "customer-a",
-		Environment: "production",
-		Site:        site,
-		Machine:     machine,
-		Role:        "sensor-node",
-		IP:          machineIP,
-		Services:    []string{"sensor-services", "core-services"},
-		Features:    builderdeployment.Features{Chaos: true},
-		Slots: builderdeployment.Slots{
-			Primary: builderdeployment.Slot{Disabled: false},
-			Standby: builderdeployment.Slot{Disabled: standbyDisabled},
-		},
-		EventFabric: builderdeployment.EventFabric{
-			Nats: builderdeployment.EventFabricNats{
-				ClientAddress:  clientAddr,
-				ClusterAddress: clusterAddr,
-				Routes:         []string{peerClusterAddr},
-				Servers:        []string{clientAddr, peerClientAddr},
+		Platform:       "opdl",
+		Project:        "customer-a",
+		Environment:    "production",
+		Site:           site,
+		Machine:        machine,
+		MachineProfile: "sensor-node",
+		IP:             machineIP,
+		Services:       []string{"sensor-services", "core-services"},
+		Features:       builderdeployment.Features{Chaos: true},
+		Instances: builderdeployment.Instances{
+			Primary: builderdeployment.Instance{
+				Disabled:   false,
+				RuntimeDir: runtimeDir,
+				APIAddress: apiAddr,
+				Nats: &builderdeployment.Nats{
+					ClientAddress:  clientAddr,
+					ClusterAddress: clusterAddr,
+					Routes:         []string{},
+					Servers:        servers,
+				},
 			},
-			Peers: []builderdeployment.EventFabricPeer{
-				{Site: site, Machine: peerMachine, IP: peerIP},
-			},
+			Standby: builtStandby,
 		},
+		Lock:  builtLock,
+		Peers: builtPeers,
 	}
 
 	data, err := json.Marshal(built)
 	if err != nil {
 		return err
 	}
-	if err := checkWireShape(data); err != nil {
+	if err := checkWireShape(data, standbyDisabled); err != nil {
 		return err
 	}
 
-	var got platformdeployment.Descriptor
+	var got platformconfig.Descriptor
 	if err := json.Unmarshal(data, &got); err != nil {
 		return err
 	}
 
-	want := platformdeployment.Descriptor{
-		Platform:    "opdl",
-		Project:     "customer-a",
-		Environment: "production",
-		Site:        site,
-		Machine:     machine,
-		Role:        "sensor-node",
-		IP:          machineIP,
-		Services:    []string{"sensor-services", "core-services"},
-		Features:    platformdeployment.Features{Chaos: true},
-		Slots: platformdeployment.Slots{
-			Primary: platformdeployment.Slot{Disabled: false},
-			Standby: platformdeployment.Slot{Disabled: standbyDisabled},
-		},
-		EventFabric: platformdeployment.EventFabric{
-			Nats: platformdeployment.EventFabricNats{
-				ClientAddress:  clientAddr,
-				ClusterAddress: clusterAddr,
-				Routes:         []string{peerClusterAddr},
-				Servers:        []string{clientAddr, peerClientAddr},
+	want := platformconfig.Descriptor{
+		Platform:       "opdl",
+		Project:        "customer-a",
+		Environment:    "production",
+		Site:           site,
+		Machine:        machine,
+		MachineProfile: "sensor-node",
+		IP:             machineIP,
+		Services:       []string{"sensor-services", "core-services"},
+		Features:       platformconfig.Features{Chaos: true},
+		Instances: platformconfig.Instances{
+			Primary: platformconfig.Instance{
+				Disabled:   false,
+				RuntimeDir: runtimeDir,
+				APIAddress: apiAddr,
+				Nats: &platformconfig.Nats{
+					ClientAddress:  clientAddr,
+					ClusterAddress: clusterAddr,
+					Routes:         []string{},
+					Servers:        servers,
+				},
 			},
-			Peers: []platformdeployment.EventFabricPeer{
-				{Site: site, Machine: peerMachine, IP: peerIP},
-			},
+			Standby: wantStandby,
 		},
+		Lock:  wantLock,
+		Peers: wantPeers,
 	}
 	if !reflect.DeepEqual(got, want) {
 		return fmt.Errorf("builder descriptor did not round-trip into the platform descriptor:\n  got:  %+v\n  want: %+v", got, want)
@@ -147,54 +232,99 @@ func checkRoundTripFor(standbyDisabled bool) error {
 // that is where the distinction exists: once decoded, an omitted "disabled" and
 // an explicit false are the same Go value, and the platform's requirement that
 // the field be stated can only be proven against the bytes.
-func checkWireShape(data []byte) error {
+func checkWireShape(data []byte, standbyDisabled bool) error {
 	var wire map[string]json.RawMessage
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	slots, ok := wire["slots"]
+	instances, ok := wire["instances"]
 	if !ok {
-		return fmt.Errorf("builder descriptor omitted slots")
+		return fmt.Errorf("builder descriptor omitted instances")
 	}
-	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(slots, &policy); err != nil {
+	var byRole map[string]json.RawMessage
+	if err := json.Unmarshal(instances, &byRole); err != nil {
 		return err
 	}
-	for _, slot := range []string{"primary", "standby"} {
-		raw, ok := policy[slot]
+	for _, role := range []string{"primary", "standby"} {
+		raw, ok := byRole[role]
 		if !ok {
-			return fmt.Errorf("builder descriptor omitted slots.%s", slot)
+			return fmt.Errorf("builder descriptor omitted instances.%s", role)
 		}
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &fields); err != nil {
 			return err
 		}
 		if _, ok := fields["disabled"]; !ok {
-			return fmt.Errorf("builder descriptor omitted slots.%s.disabled", slot)
+			return fmt.Errorf("builder descriptor omitted instances.%s.disabled", role)
 		}
-		if _, ok := fields["event_fabric"]; ok {
-			return fmt.Errorf("builder descriptor put event_fabric on slots.%s: NATS endpoints are machine-level and shared by both slots", slot)
+		nats, ok := fields["nats"]
+		if !ok {
+			continue
+		}
+		var natsFields map[string]json.RawMessage
+		if err := json.Unmarshal(nats, &natsFields); err != nil {
+			return err
+		}
+		if _, ok := natsFields["monitor_address"]; ok {
+			return fmt.Errorf("builder descriptor carries instances.%s.nats.monitor_address: the platform runs no NATS monitoring listener", role)
 		}
 	}
 
-	fabric, ok := wire["event_fabric"]
-	if !ok {
-		return fmt.Errorf("builder descriptor omitted event_fabric")
+	// The endpoints an instance binds belong to that instance. A machine-level
+	// NATS or API block would be an endpoint with two owners, which is what the
+	// per-instance shape exists to make impossible.
+	for _, field := range []string{"event_fabric", "nats", "api_address"} {
+		if _, ok := wire[field]; ok {
+			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints belong to an instance", field)
+		}
 	}
-	var fabricFields map[string]json.RawMessage
-	if err := json.Unmarshal(fabric, &fabricFields); err != nil {
+	if err := verifyWireLock(wire, standbyDisabled); err != nil {
 		return err
 	}
-	nats, ok := fabricFields["nats"]
+	peers, ok := wire["peers"]
 	if !ok {
-		return fmt.Errorf("builder descriptor omitted event_fabric.nats")
+		return fmt.Errorf("builder descriptor omitted peers")
 	}
-	var natsFields map[string]json.RawMessage
-	if err := json.Unmarshal(nats, &natsFields); err != nil {
+	return verifyWirePeers(peers)
+}
+
+// verifyWirePeers checks a peer carries no api address.
+//
+// The platform API is bound on loopback, so every peer's api address would be
+// 127.0.0.1 and would point a reader at itself rather than at the peer. Carrying
+// the machine ip instead would be worse: an address no process listens on, stated
+// in the descriptor as though one did. Either way the field cannot be right, so
+// the contract is that it does not exist.
+func verifyWirePeers(peers json.RawMessage) error {
+	var list []map[string]json.RawMessage
+	if err := json.Unmarshal(peers, &list); err != nil {
 		return err
 	}
-	if _, ok := natsFields["monitor_address"]; ok {
-		return fmt.Errorf("builder descriptor carries event_fabric.nats.monitor_address: the platform runs no NATS monitoring listener")
+	for _, peer := range list {
+		if _, ok := peer["api_address"]; ok {
+			return fmt.Errorf("builder descriptor carries peers[].api_address: the platform API is machine-local and a peer's is not reachable")
+		}
+	}
+	return nil
+}
+
+func verifyWireLock(wire map[string]json.RawMessage, standbyDisabled bool) error {
+	if standbyDisabled {
+		if _, ok := wire["lock"]; ok {
+			return fmt.Errorf("builder descriptor carries lock when standby is disabled")
+		}
+		return nil
+	}
+	lockRaw, ok := wire["lock"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted lock when standby is deployed")
+	}
+	var lockFields map[string]json.RawMessage
+	if err := json.Unmarshal(lockRaw, &lockFields); err != nil {
+		return err
+	}
+	if _, ok := lockFields["windows_mutex"]; !ok {
+		return fmt.Errorf("builder descriptor omitted lock.windows_mutex")
 	}
 	return nil
 }

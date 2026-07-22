@@ -16,7 +16,7 @@
 // blueprint stated.
 //
 // The overlay means a build never changes the working tree. Killing a builder
-// cannot leave a customer descriptor in platform/embedded/deployment.json. The
+// cannot leave a customer descriptor in platform/config/deployment.json. The
 // checked-in neutral descriptor therefore remains the source used by normal
 // platform builds and task run.
 package pack

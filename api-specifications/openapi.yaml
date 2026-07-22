@@ -46,6 +46,35 @@ components:
           format: uri
           type: string
       type: object
+    Instance:
+      additionalProperties: false
+      properties:
+        address:
+          description: This instance's own loopback API address.
+          example: 127.0.0.1:8080
+          type: string
+        machine:
+          description: Descriptor machine this instance runs on.
+          example: local-server
+          type: string
+        peer_address:
+          description: The machine's other instance's API address, if one is deployed.
+          example: 127.0.0.1:8081
+          type: string
+        role:
+          description: "Fixed build-time instance role: primary or standby."
+          example: primary
+          type: string
+        state:
+          description: "Current runtime state: active or passive."
+          example: active
+          type: string
+      required:
+        - machine
+        - role
+        - state
+        - address
+      type: object
     PlatformInstanceRegistrationStatus:
       additionalProperties: false
       properties:
@@ -221,6 +250,24 @@ info:
   version: 0.1.0
 openapi: 3.0.3
 paths:
+  /instance:
+    get:
+      description: Answered by every instance in every state, including a Passive one that refuses every domain operation.
+      operationId: getInstance
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Report this instance's identity and state
   /registrations:
     get:
       operationId: listRegistrations

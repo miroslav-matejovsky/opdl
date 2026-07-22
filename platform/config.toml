@@ -5,21 +5,11 @@
 # A user may modify runtime settings without rebuilding the binary or touching the
 # embedded deployment descriptor.
 
-# The host:port address where the platform serves its public registration HTTP API.
-address = "127.0.0.1:8080"
-
 # Maximum duration allowed for reading HTTP request headers before closing the connection.
 read_header_timeout = "5s"
 
 # Maximum duration allowed for graceful server and Event Fabric shutdown when terminating in-flight requests.
 shutdown_timeout = "10s"
-
-# Local runtime directory holding this machine's fence and per-process status
-# files. Required. The primary and standby share it, and it must be on a
-# local filesystem so the OS lock is dropped on process death and enforced
-# exclusively. It is not the journal store: it carries local coordination and
-# diagnostics, not site history.
-instance_dir = ".data/instance"
 
 # Required bound on how long a process's projection may lag the journal before it
 # stops being promotable, and before an active process stops serving rather than
@@ -58,11 +48,17 @@ catch_up_timeout = "30s"
 # are never logged.
 # credentials_file = "/etc/opdl/nats-credentials.toml"
 
-# There are no socket settings here. The Event Fabric's client and cluster
-# addresses, routes, and server list are deployment topology: they are authored
-# as ports in the project blueprint and resolved into the embedded deployment
-# descriptor. Setting them at a site could point a machine at a journal that is
-# not its own, so this file cannot.
+# There are no socket settings here, and no API address or runtime directory
+# either. Everything a single instance binds or writes is deployment topology: it
+# is authored in the project blueprint and resolved onto that instance's record in
+# the embedded deployment descriptor.
+#
+# A machine's two instances read this one file, so an address here would be an
+# address both of them bind, and a runtime directory here would be one they both
+# write into. The API address is authored as api.local_port and resolved onto
+# 127.0.0.1; the runtime directory is authored as runtime_dir. Setting the Event
+# Fabric's addresses at a site could point a machine at a journal that is not its
+# own, so this file cannot do that either.
 #
 # Unknown keys are rejected at load time. A setting this schema does not define
 # is an error rather than a value that is silently ignored, because a silently

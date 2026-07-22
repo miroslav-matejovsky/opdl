@@ -54,16 +54,16 @@ type Ready struct {
 	// HighWater is the journal sequence this node's projections had applied when
 	// it became ready. It is what "caught up" meant for this node at this start.
 	HighWater uint64 `json:"high_water"`
-	// ProcessRole identifies the primary or standby process that became active.
-	ProcessRole string `json:"process_role"`
-	// ProcessState is active because only the fence owner publishes readiness.
+	// InstanceRole identifies the primary or standby process that became active.
+	InstanceRole string `json:"process_role"`
+	// ProcessState is active because only the ownership holder publishes readiness.
 	ProcessState string `json:"process_state"`
 }
 
 // NewReady builds a node's ready event from its fabric's identity and the
 // journal sequence its projections have applied.
 func NewReady(info Info, highWater uint64, processRole string) Ready {
-	return Ready{Info: info, HighWater: highWater, ProcessRole: processRole, ProcessState: "active"}
+	return Ready{Info: info, HighWater: highWater, InstanceRole: processRole, ProcessState: "active"}
 }
 
 // EventType returns the event's stable dotted kind.
@@ -76,15 +76,15 @@ func (Ready) Source() string { return lifecycleSource }
 type Stopping struct {
 	// Adapter is the transport adapter's implementation name.
 	Adapter string `json:"adapter"`
-	// ProcessRole identifies the primary or standby process that is stopping.
-	ProcessRole string `json:"process_role"`
+	// InstanceRole identifies the primary or standby process that is stopping.
+	InstanceRole string `json:"process_role"`
 	// ProcessState records the process lifecycle state at publication.
 	ProcessState string `json:"process_state"`
 }
 
 // NewStopping builds the lifecycle event published during active shutdown.
 func NewStopping(adapter, processRole string) Stopping {
-	return Stopping{Adapter: adapter, ProcessRole: processRole, ProcessState: "stopping"}
+	return Stopping{Adapter: adapter, InstanceRole: processRole, ProcessState: "stopping"}
 }
 
 // EventType returns the event's stable dotted kind.

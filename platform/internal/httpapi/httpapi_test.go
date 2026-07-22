@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/deployment"
+	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
@@ -27,9 +27,33 @@ import (
 // huma serves errors as application/problem+json; the stable machine code the
 // platform sets is carried in detail.
 type problemDetails struct {
-	Status int    `json:"status"`
-	Title  string `json:"title"`
-	Detail string `json:"detail"`
+	Status   int           `json:"status"`
+	Title    string        `json:"title"`
+	Detail   string        `json:"detail"`
+	Instance *api.Instance `json:"instance,omitempty"`
+}
+
+// testInstance is what an Active instance reports about itself in these tests.
+func testInstance() api.Instance {
+	return api.Instance{
+		Machine:     "node-a",
+		Role:        "primary",
+		State:       api.InstanceStateActive,
+		Address:     "127.0.0.1:8080",
+		PeerAddress: "127.0.0.1:8081",
+	}
+}
+
+// testPassiveInstance is the same machine's Standby Instance while it is Passive,
+// pointing back at the Primary Instance that holds ownership.
+func testPassiveInstance() api.Instance {
+	return api.Instance{
+		Machine:     "node-a",
+		Role:        "standby",
+		State:       api.InstanceStatePassive,
+		Address:     "127.0.0.1:8081",
+		PeerAddress: "127.0.0.1:8080",
+	}
 }
 
 // TestHandlerServesAProposalFromPendingToAccepted is the API's side of the
@@ -39,7 +63,7 @@ type problemDetails struct {
 func TestHandlerServesAProposalFromPendingToAccepted(t *testing.T) {
 	site := newSite(t, "node-a", "node-b")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
 	defer srv.Close()
 
 	require.Empty(t, list(t, srv))
@@ -84,9 +108,9 @@ func TestHandlerServesAProposalFromPendingToAccepted(t *testing.T) {
 func TestHandlerAnswersTheSameProposalOnEveryNode(t *testing.T) {
 	site := newSite(t, "node-a", "node-b")
 	nodeA, nodeB := site.start("node-a"), site.start("node-b")
-	origin := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
+	origin := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
 	defer origin.Close()
-	other := httptest.NewServer(httpapi.NewHandler(nodeB.commands, nodeB.queries, false))
+	other := httptest.NewServer(httpapi.NewHandler(nodeB.commands, nodeB.queries, testInstance, false))
 	defer other.Close()
 
 	accepted := propose(t, origin, `{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing"}`)
@@ -110,7 +134,7 @@ func TestHandlerAnswersTheSameProposalOnEveryNode(t *testing.T) {
 func TestHandlerProjectsAConflictRatherThanRefusingIt(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
 	defer srv.Close()
 
 	winner := propose(t, srv, `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`)
@@ -139,7 +163,7 @@ func TestHandlerProjectsAConflictRatherThanRefusingIt(t *testing.T) {
 func TestHandlerAnswersAnExactRetryWithTheSameProposal(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
 	defer srv.Close()
 
 	const body = `{"unit_type": 1, "unit_id": 2, "unit_type_name_advertised": "Worker"}`
@@ -156,7 +180,7 @@ func TestHandlerAnswersAnExactRetryWithTheSameProposal(t *testing.T) {
 func TestHandlerRejectsInvalidOrSpoofedRequests(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
 	defer srv.Close()
 
 	// huma validates the request against the generated schema before the handler
@@ -198,7 +222,7 @@ func TestHandlerRejectsInvalidOrSpoofedRequests(t *testing.T) {
 func TestHandlerReportsAnUnavailableJournal(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
 	defer srv.Close()
 
 	site.journal.breakWith(errors.New("no quorum"))
@@ -219,7 +243,7 @@ func TestHandlerReportsAnUnavailableJournal(t *testing.T) {
 func TestHandlerReturnsMethodErrors(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
 	defer srv.Close()
 
 	// Routing is Go 1.22 ServeMux under huma. It answers a wrong method with 405
@@ -243,7 +267,7 @@ func TestHandlerReturnsMethodErrors(t *testing.T) {
 func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
 	defer srv.Close()
 
 	for _, path := range []string{
@@ -267,7 +291,7 @@ func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 type site struct {
 	t        *testing.T
 	journal  *journal
-	machines []deployment.EventFabricPeer
+	machines []config.Peer
 }
 
 // journal is an ordered, in-process site journal. It stamps each published event
@@ -319,8 +343,9 @@ func newSite(t *testing.T, machines ...string) *site {
 		journal: &journal{t: t, scope: eventfabric.NewSiteScope("test", "development", "local")},
 	}
 	for i, machine := range machines {
-		s.machines = append(s.machines, deployment.EventFabricPeer{
-			Site: "local", Machine: machine, IP: fmt.Sprintf("127.0.0.%d", i+1),
+		s.machines = append(s.machines, config.Peer{
+			Site: "local", Machine: machine, Role: config.RolePrimary,
+			IP: fmt.Sprintf("127.0.0.%d", i+1),
 		})
 	}
 	return s
@@ -344,7 +369,7 @@ func (s *site) start(machine string) *node {
 	n := &node{
 		identity: events.Node{
 			Project: "test", Environment: "development", Site: "local",
-			Machine: self.Machine, Role: "all-in-one",
+			Machine: self.Machine, MachineProfile: "all-in-one",
 		},
 		projection: registration.NewProjection(),
 	}
@@ -519,4 +544,99 @@ func do(t *testing.T, method, url string, body []byte, contentType string) *http
 	response, err := http.DefaultClient.Do(request)
 	require.NoError(t, err)
 	return response
+}
+
+// TestPassiveHandlerAnswersForItself checks the one thing a Passive instance can
+// answer, and the reason it binds a listener at all: what it is, what it is
+// doing, and where the other instance is.
+//
+// None of it comes from the journal, so it is answerable while the instance's
+// projection is still catching up and while it never will.
+func TestPassiveHandlerAnswersForItself(t *testing.T) {
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance))
+	defer srv.Close()
+
+	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+
+	var instance api.Instance
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&instance))
+	require.Equal(t, "standby", instance.Role, "the role is fixed at build time")
+	require.Equal(t, api.InstanceStatePassive, instance.State, "the state is what changes")
+	require.Equal(t, "127.0.0.1:8081", instance.Address)
+	require.Equal(t, "127.0.0.1:8080", instance.PeerAddress, "and where to go instead")
+}
+
+// TestPassiveHandlerRefusesEveryDomainOperation is the ownership rule made
+// visible at the API.
+//
+// A Passive instance holds no ownership and its projection is not authoritative,
+// so answering a domain query from it would make the rule meaningless. It says so
+// with a 503 that names the instance holding ownership, which is a pointer the
+// caller can follow rather than a dead end.
+func TestPassiveHandlerRefusesEveryDomainOperation(t *testing.T) {
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance))
+	defer srv.Close()
+
+	requests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/registrations"},
+		{http.MethodGet, "/registrations"},
+		{http.MethodGet, "/registrations/conflicts"},
+		{http.MethodGet, "/registrations/some-proposal"},
+	}
+	for _, request := range requests {
+		t.Run(request.method+" "+request.path, func(t *testing.T) {
+			response := do(t, request.method, srv.URL+request.path, []byte(`{}`), "application/json")
+			defer func() { _ = response.Body.Close() }()
+
+			require.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
+			require.Equal(t, "application/problem+json", response.Header.Get("Content-Type"),
+				"a Passive refusal parses as the same error shape an Active instance produces")
+
+			var problem problemDetails
+			require.NoError(t, json.NewDecoder(response.Body).Decode(&problem))
+			require.Equal(t, "instance_passive", problem.Title)
+			require.Contains(t, problem.Detail, "127.0.0.1:8080", "the refusal names where to go instead")
+			require.NotNil(t, problem.Instance, "and which instance refused")
+			require.Equal(t, api.InstanceStatePassive, problem.Instance.State)
+		})
+	}
+}
+
+// TestPassiveHandlerStillReportsUnknownPathsAsNotFound checks the refusal is
+// scoped to the operations that exist.
+//
+// A Passive instance that answered 503 to everything would tell a caller with a
+// typo that the platform is temporarily unavailable, and they would retry
+// forever. Refusing is about who serves an operation, not about whether it exists.
+func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance))
+	defer srv.Close()
+
+	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusNotFound, response.StatusCode)
+}
+
+// TestActiveHandlerAnswersTheSameInstanceOperation checks both instances serve
+// the identity operation on one path with one shape, so an operator asks the same
+// question of either and the specification describes one endpoint.
+func TestActiveHandlerAnswersTheSameInstanceOperation(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
+	defer srv.Close()
+
+	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+
+	var instance api.Instance
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&instance))
+	require.Equal(t, api.InstanceStateActive, instance.State)
+	require.Equal(t, "primary", instance.Role)
 }

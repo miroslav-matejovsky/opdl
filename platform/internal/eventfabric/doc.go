@@ -42,11 +42,11 @@
 // second local process that keeps its projections caught up from the journal but
 // holds no active capability. Publishing is active-only: running durable Handlers
 // and stating the node's readiness and stopping lifecycle events belong to the
-// process that holds the machine fence. Those lifecycle payloads carry the
+// instance that holds Primary Ownership. Those lifecycle payloads carry the
 // operational process role and state while their envelope identity remains
 // machine-scoped. A standby runs Projectors only, so it stays current without
 // causing a fact or exposing a second listener. See internal/redundancy for the
-// fence and the ownership rule.
+// lock and the ownership rule.
 //
 // # Delivery guarantees
 //

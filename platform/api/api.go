@@ -16,7 +16,41 @@ const (
 	// RegistrationConflictResolutionResolved means deterministic contender
 	// selection identified the proposal that survives a duplicate claim.
 	RegistrationConflictResolutionResolved = "resolved"
+
+	// InstanceStateActive means this instance holds Primary Ownership and serves
+	// the whole API.
+	InstanceStateActive = "active"
+	// InstanceStatePassive means the machine's other instance holds Primary
+	// Ownership. A Passive instance answers for itself and refuses every domain
+	// operation.
+	InstanceStatePassive = "passive"
 )
+
+// Instance is what one platform instance reports about itself.
+//
+// Every instance serves this for its whole lifetime, whether it is Active or
+// Passive, which is the point of it: an operator can ask a Passive instance what
+// it is and where the other one is, and a Passive instance has no other answer to
+// give. Nothing here comes from the site journal, so it is answerable before the
+// instance's projection has caught up, and while it never will.
+type Instance struct {
+	// Machine is the descriptor machine both of this pair's instances run on.
+	Machine string `json:"machine" doc:"Descriptor machine this instance runs on." example:"local-server"`
+	// Role is the instance's fixed, build-time role: primary or standby. It never
+	// changes, and it is not what decides who serves.
+	Role string `json:"role" doc:"Fixed build-time instance role: primary or standby." example:"primary"`
+	// State is what this instance is doing now: active or passive. It is the half
+	// that changes, and it changes only by Primary Ownership moving.
+	State string `json:"state" doc:"Current runtime state: active or passive." example:"active"`
+	// Address is where this instance serves this API. It is always on loopback.
+	Address string `json:"address" doc:"This instance's own loopback API address." example:"127.0.0.1:8080"`
+	// PeerAddress is where the machine's other instance serves its own API, empty
+	// on a machine that deploys only a Primary Instance.
+	//
+	// While this instance is Passive the other one holds ownership, so this is
+	// where a refused domain request should be sent.
+	PeerAddress string `json:"peer_address,omitempty" doc:"The machine's other instance's API address, if one is deployed." example:"127.0.0.1:8081"`
+}
 
 // RegistrationRequest is the client-supplied request to register one unit.
 // Machine, IP, registration status, and platform-instance progress are supplied
