@@ -131,11 +131,7 @@
 // caused it returns. The journal is the platform's only event storage, and a
 // running service has exactly one event source: the retained site journal.
 //
-// # Migration
-//
-// legacy.go holds the previous wrapper (Node, Meta, Record, StampRecord, and
-// the exported NewID they need) while the pipelines are moved onto Envelope and
-// Factory one at a time. It is temporary scaffolding, not a compatibility
-// surface: nothing new is built on it and it is deleted once the migration
-// completes. See docs/plan/unified-events.
+// Encode and Decode are the one JSON representation of an envelope. Encode
+// validates before it writes, so an event nothing could replay never reaches
+// storage.
 package events

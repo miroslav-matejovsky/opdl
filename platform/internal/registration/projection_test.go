@@ -3,6 +3,7 @@ package registration
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -10,12 +11,36 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
-// apply folds one event into p at the given journal sequence, through the same
-// decode-and-dispatch path the Event Fabric drives.
-func apply(t *testing.T, p *Projection, sequence uint64, event events.Event) {
+// testEnvelope stamps the envelope a journal would have stored for event, as
+// stated by machine's process. Fixtures go through it and it validates what it
+// builds, so no test asserts against an envelope the journal would have refused.
+func testEnvelope(t *testing.T, event events.Event, machine, id string) events.Envelope {
 	t.Helper()
 	data, err := json.Marshal(event)
 	require.NoError(t, err)
+	envelope := events.Envelope{
+		ID:            id,
+		Type:          event.EventType(),
+		SchemaVersion: schemaVersion,
+		OccurredAt:    time.Now().UTC(),
+		Source:        event.EventType().Source(),
+		Severity:      events.SeverityInfo,
+		Origin: events.Origin{
+			Project: testDescriptor.Project, Environment: testDescriptor.Environment,
+			Site: testDescriptor.Site, Machine: machine,
+			MachineProfile: testDescriptor.MachineProfile, ProcessRole: "primary", PID: 1,
+		},
+		Data: data,
+	}
+	require.NoError(t, envelope.Validate())
+	return envelope
+}
+
+// apply folds one event into p at the given journal sequence, through the same
+// decode-and-dispatch path the Event Fabric drives. The stating machine is read
+// from the event itself, so the envelope's origin agrees with its payload.
+func apply(t *testing.T, p *Projection, sequence uint64, event events.Event) {
+	t.Helper()
 	machine := "node-a"
 	switch value := event.(type) {
 	case Proposed:
@@ -27,15 +52,7 @@ func apply(t *testing.T, p *Projection, sequence uint64, event events.Event) {
 	case Accepted:
 		machine = value.OriginMachine
 	}
-	delivery := eventfabric.Delivery{
-		Record: events.Record{Meta: events.Meta{
-			ID:            "event-id",
-			Type:          event.EventType(),
-			SchemaVersion: 1,
-			Node:          events.Node{Machine: machine},
-		}, Data: data},
-		Sequence: sequence,
-	}
+	delivery := eventfabric.Delivery{Envelope: testEnvelope(t, event, machine, "event-id"), Sequence: sequence}
 	require.NoError(t, p.Apply(t.Context(), delivery))
 }
 
@@ -170,15 +187,8 @@ func TestProjectionRejectsAcceptanceOfAConflictLoser(t *testing.T) {
 	apply(t, p, 1, winner)
 	apply(t, p, 2, loser)
 
-	data, err := json.Marshal(NewAccepted(loser))
-	require.NoError(t, err)
-	err = p.Apply(t.Context(), eventfabric.Delivery{
-		Record: events.Record{Meta: events.Meta{
-			ID: "accept-loser", Type: TypeAccepted, SchemaVersion: 1,
-			Node: events.Node{Machine: "node-b"},
-		}, Data: data},
-		Sequence: 3,
-	})
+	accepted := testEnvelope(t, NewAccepted(loser), "node-b", "accept-loser")
+	err := p.Apply(t.Context(), eventfabric.Delivery{Envelope: accepted, Sequence: 3})
 	require.ErrorContains(t, err, "losing proposal")
 }
 
@@ -247,7 +257,7 @@ func TestProjectionTracksTheHighWaterSequence(t *testing.T) {
 func TestProjectionStopsOnAnUnsupportedEvent(t *testing.T) {
 	p := NewProjection()
 	delivery := eventfabric.Delivery{
-		Record:   events.Record{Meta: events.Meta{Type: "platform.registration.unknown", SchemaVersion: 1}, Data: json.RawMessage(`{}`)},
+		Envelope: events.Envelope{Type: "platform.registration.unknown", SchemaVersion: schemaVersion, Data: json.RawMessage(`{}`)},
 		Sequence: 1,
 	}
 	err := p.Apply(t.Context(), delivery)
@@ -257,7 +267,7 @@ func TestProjectionStopsOnAnUnsupportedEvent(t *testing.T) {
 func TestProjectionReportsAnUndecodablePayload(t *testing.T) {
 	p := NewProjection()
 	delivery := eventfabric.Delivery{
-		Record:   events.Record{Meta: events.Meta{Type: TypeProposed, SchemaVersion: 1}, Data: json.RawMessage(`{invalid`)},
+		Envelope: events.Envelope{Type: TypeProposed, SchemaVersion: schemaVersion, Data: json.RawMessage(`{invalid`)},
 		Sequence: 1,
 	}
 	err := p.Apply(t.Context(), delivery)
@@ -267,7 +277,7 @@ func TestProjectionReportsAnUndecodablePayload(t *testing.T) {
 func TestProjectionIgnoresOtherDomainsAndAdvances(t *testing.T) {
 	p := NewProjection()
 	delivery := eventfabric.Delivery{
-		Record:   events.Record{Meta: events.Meta{Type: eventfabric.TypeReady}},
+		Envelope: events.Envelope{Type: eventfabric.TypeReady},
 		Sequence: 4,
 	}
 	require.NoError(t, p.Apply(t.Context(), delivery))
@@ -281,7 +291,7 @@ func TestProjectionWaitAppliedStopsOnProjectionFailure(t *testing.T) {
 	go func() { waited <- p.WaitApplied(t.Context(), 2) }()
 
 	err := p.Apply(t.Context(), eventfabric.Delivery{
-		Record:   events.Record{Meta: events.Meta{Type: TypeProposed, SchemaVersion: 2}},
+		Envelope: events.Envelope{Type: TypeProposed, SchemaVersion: schemaVersion + 1},
 		Sequence: 1,
 	})
 	require.ErrorContains(t, err, "unsupported schema version")

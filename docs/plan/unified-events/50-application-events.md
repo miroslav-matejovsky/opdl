@@ -54,6 +54,10 @@ observer.Record(ctx, SiteOpening{Active: active})
 It accepts only context and an `events.Event`. It does not accept type, level,
 component, message, or attributes.
 
+The recorder needs the `events.Factory` to stamp what it writes. Stage 40
+composes that factory in `internal/app` and passes it to the Event Fabric
+publisher only; this stage passes the same instance to the recorder.
+
 ## Readability rules
 
 - Prefer direct struct literals for payloads with one or two obvious fields.

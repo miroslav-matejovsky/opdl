@@ -126,11 +126,6 @@ func (Rejected) SchemaVersion() int { return schemaVersion }
 // transition: a registration that does not happen is what an operator looks for.
 func (Rejected) Severity() events.Severity { return events.SeverityWarn }
 
-// Tags marks the refusal as an operational anomaly. It states the same thing as
-// Severity and exists only while the stored record carries tags but no
-// severity; it goes when the journal carries envelopes.
-func (Rejected) Tags() []string { return []string{events.TagWarning} }
-
 // StableID returns the identity that makes a restated decision the same fact.
 func (r Rejected) StableID() string { return "registration.decision." + r.DecisionID }
 

@@ -21,13 +21,16 @@ import (
 )
 
 // Fabric is an Event Fabric backed by an embedded NATS server and its JetStream
-// site journal. One runs per platform node. It stamps and publishes events,
-// replays and delivers them to projectors, drives durable per-service handlers,
-// and reports its own readiness through the same journal.
+// site journal. One runs per platform node. It appends completed envelopes,
+// replays and delivers them to projectors, and drives durable per-service
+// handlers.
 type Fabric struct {
-	cfg          Config
-	scope        eventfabric.SiteScope
-	node         events.Node
+	cfg   Config
+	scope eventfabric.SiteScope
+	// machine is this node's deployment machine name. The adapter needs it to
+	// name itself and its durable consumers, not to describe events: which
+	// process stated a fact travels in the envelope's origin.
+	machine      string
 	machineToken string
 	observer     *operations.Recorder
 
@@ -76,7 +79,6 @@ func Open(ctx context.Context, descriptor config.Descriptor, cfg Config) (*Fabri
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	node := events.NodeFromDescriptor(descriptor)
 	scope := eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)
 
 	// Nothing is started for a caller that has already given up: a server torn
@@ -86,8 +88,8 @@ func Open(ctx context.Context, descriptor config.Descriptor, cfg Config) (*Fabri
 	}
 
 	f := &Fabric{
-		cfg: cfg, scope: scope, node: node,
-		machineToken:   eventfabric.SafeToken(node.Machine),
+		cfg: cfg, scope: scope, machine: descriptor.Machine,
+		machineToken:   eventfabric.SafeToken(descriptor.Machine),
 		observer:       operations.FromContext(ctx),
 		activeHandlers: make(map[string]bool),
 	}
@@ -239,7 +241,7 @@ func (f *Fabric) Info() eventfabric.Info {
 	if !f.cfg.HostsStorage {
 		// A machine that runs no server still names itself, so a reader of the
 		// journal can tell which node stated the fact.
-		name = f.node.Machine
+		name = f.machine
 	}
 	return eventfabric.Info{
 		Adapter:      Name,
@@ -250,31 +252,23 @@ func (f *Fabric) Info() eventfabric.Info {
 	}
 }
 
-// Publish stamps event with its envelope, validates it, and appends it to the
-// site journal, returning a receipt once JetStream has durably accepted it. It
-// deduplicates by the event's stable domain identity when it declares one, so a
-// republished fact within the window collapses onto its first acceptance.
-func (f *Fabric) Publish(ctx context.Context, event events.Event) (eventfabric.Receipt, error) {
+// Append validates envelope and appends it to the site journal, returning a
+// receipt once JetStream has durably accepted it. It deduplicates by the event's
+// stable domain identity when it declares one, so a republished fact within the
+// window collapses onto its first acceptance.
+//
+// It takes the envelope as given. The adapter mints no identity, reads no clock,
+// encodes no payload, and sets no causal link: by the time an event reaches
+// here, what happened is already decided, and only where to put it is not.
+func (f *Fabric) Append(ctx context.Context, envelope events.Envelope) (eventfabric.Receipt, error) {
 	if err := f.check(ctx); err != nil {
 		return eventfabric.Receipt{}, err
 	}
-	return f.doPublish(ctx, event)
-}
-
-// doPublish is the publish path without the closed check, so shutdown can state
-// its own stopping event while the connection is still open.
-func (f *Fabric) doPublish(ctx context.Context, event events.Event) (eventfabric.Receipt, error) {
-	id := events.NewID()
-	record, err := events.StampRecord(f.node, id, time.Now(), event)
-	if err != nil {
-		return eventfabric.Receipt{}, fmt.Errorf("nats: stamp %s: %w", event.EventType(), err)
-	}
-	record.CausationID, record.CorrelationID = eventfabric.CausalLinks(ctx)
-	route, err := eventfabric.NewRoute(f.scope, event.EventType())
+	route, err := eventfabric.NewRoute(f.scope, envelope.Type)
 	if err != nil {
 		return eventfabric.Receipt{}, err
 	}
-	data, err := eventfabric.Encode(record)
+	data, err := events.Encode(envelope)
 	if err != nil {
 		return eventfabric.Receipt{}, err
 	}
@@ -282,11 +276,12 @@ func (f *Fabric) doPublish(ctx context.Context, event events.Event) (eventfabric
 	// A fact that declares a stable identity deduplicates on it, so the same
 	// decision recomputed after a redelivery collapses onto its first
 	// acceptance. A fact without one deduplicates only by its occurrence ID,
-	// which recognizes a repeated publish of one record but not a fact
+	// which recognizes a repeated publish of one envelope but not a fact
 	// recomputed from scratch.
+	id := envelope.ID
 	dedupID := id
-	if identified, ok := event.(events.Identified); ok {
-		dedupID = identified.StableID()
+	if envelope.StableID != "" {
+		dedupID = envelope.StableID
 	}
 	ack, err := f.js.Publish(ctx, route.Subject(), data, jetstream.WithMsgID(dedupID))
 	if err != nil {
@@ -297,7 +292,7 @@ func (f *Fabric) doPublish(ctx context.Context, event events.Event) (eventfabric
 		if getErr != nil {
 			return eventfabric.Receipt{}, fmt.Errorf("nats: read duplicate %s at %d: %w", route.Subject(), ack.Sequence, getErr)
 		}
-		accepted, decodeErr := eventfabric.Decode(stored.Data)
+		accepted, decodeErr := events.Decode(stored.Data)
 		if decodeErr != nil {
 			return eventfabric.Receipt{}, decodeErr
 		}
@@ -328,7 +323,7 @@ func (f *Fabric) RunProjector(ctx context.Context, projector eventfabric.Project
 		}
 		err = f.consume(ctx, consumer, func(_ jetstream.Msg, delivery eventfabric.Delivery) error {
 			if err := projector.Apply(ctx, delivery); err != nil {
-				return fmt.Errorf("nats: apply %s at %d: %w", delivery.Record.Type, delivery.Sequence, err)
+				return fmt.Errorf("nats: apply %s at %d: %w", delivery.Envelope.Type, delivery.Sequence, err)
 			}
 			f.applied.Store(delivery.Sequence)
 			return nil
@@ -527,11 +522,14 @@ func handlerPendingError(handler, operation string, err error) error {
 // and the consumer continues; a failure on the last permitted delivery is
 // exhaustion, which stops the consumer so the node can be made unready.
 func (f *Fabric) handle(ctx context.Context, handler eventfabric.Handler, message jetstream.Msg, delivery eventfabric.Delivery) error {
-	if err := handler.Handle(ctx, delivery); err != nil {
+	// Whatever the handler publishes is a consequence of this delivery, so the
+	// cause travels on the context it is given. A handler states facts and never
+	// carries the links itself.
+	if err := handler.Handle(events.WithCause(ctx, delivery.Envelope), delivery); err != nil {
 		attempt := deliveryAttempt(message)
 		if attempt >= uint64(f.cfg.MaxDeliver) {
 			return fmt.Errorf("nats: handler %s on %s at %d after %d attempts: %w: %w",
-				handler.Name(), delivery.Record.Type, delivery.Sequence, attempt, eventfabric.ErrHandlerExhausted, err)
+				handler.Name(), delivery.Envelope.Type, delivery.Sequence, attempt, eventfabric.ErrHandlerExhausted, err)
 		}
 		if nakErr := message.Nak(); nakErr != nil {
 			return fmt.Errorf("nats: handler %s: negative ack: %w", handler.Name(), nakErr)
@@ -791,17 +789,17 @@ func routeSubjects(routes []eventfabric.Route) ([]string, error) {
 }
 
 // toDelivery reads a journal message into an Event Fabric delivery: the stored
-// record and its journal sequence, and nothing about the transport.
+// envelope and its journal sequence, and nothing about the transport.
 func toDelivery(message jetstream.Msg) (eventfabric.Delivery, error) {
 	metadata, err := message.Metadata()
 	if err != nil {
 		return eventfabric.Delivery{}, fmt.Errorf("nats: message metadata: %w", err)
 	}
-	record, err := eventfabric.Decode(message.Data())
+	envelope, err := events.Decode(message.Data())
 	if err != nil {
 		return eventfabric.Delivery{}, err
 	}
-	return eventfabric.Delivery{Record: record, Sequence: metadata.Sequence.Stream}, nil
+	return eventfabric.Delivery{Envelope: envelope, Sequence: metadata.Sequence.Stream}, nil
 }
 
 // deliveryAttempt returns how many times a message has been delivered, or zero

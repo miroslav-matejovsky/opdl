@@ -150,6 +150,33 @@ func TestEnvelopeOmitsUnsetOptionalMetadata(t *testing.T) {
 	}
 }
 
+func TestEncodeRefusesAnIncompleteEnvelope(t *testing.T) {
+	envelope := validEnvelope()
+	envelope.ID = ""
+
+	_, err := Encode(envelope)
+	require.ErrorIs(t, err, ErrInvalidEnvelope, "an unreadable event must not reach storage")
+}
+
+func TestEncodeAndDecodeRoundTripAStoredEnvelope(t *testing.T) {
+	envelope := validEnvelope()
+	envelope.Tags = []string{TagWarning}
+
+	data, err := Encode(envelope)
+	require.NoError(t, err)
+
+	decoded, err := Decode(data)
+	require.NoError(t, err)
+	require.True(t, envelope.OccurredAt.Equal(decoded.OccurredAt))
+	decoded.OccurredAt = envelope.OccurredAt
+	require.Equal(t, envelope, decoded)
+}
+
+func TestDecodeReportsCorruptStorage(t *testing.T) {
+	_, err := Decode([]byte(`{invalid`))
+	require.ErrorContains(t, err, "decode envelope")
+}
+
 func TestEnvelopeSurvivesAJSONRoundTrip(t *testing.T) {
 	envelope := validEnvelope()
 	envelope.CausationID = "id-cause"

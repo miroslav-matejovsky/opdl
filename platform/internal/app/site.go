@@ -11,6 +11,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
@@ -35,7 +36,10 @@ const (
 // registration package is handed a Publisher, a Projector, and a Handler; the
 // HTTP boundary is handed the two services. Neither can reach the transport.
 type site struct {
-	fabric     *natsfabric.Fabric
+	fabric *natsfabric.Fabric
+	// publisher is the node's one way to state a fact: it stamps a typed payload
+	// with this process's envelope factory and appends it to the journal.
+	publisher  eventfabric.Publisher
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
@@ -109,8 +113,17 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 		info.Server, strings.Join(fabricCfg.Servers, ","), info.Journal,
 		info.HostsStorage, info.Replicas)
 
+	// One factory per process stamps every event this node states, so origin and
+	// occurrence identity are decided here and never by a caller or an adapter.
+	factory, err := events.NewFactory(descriptor, role.String())
+	if err != nil {
+		observer.Emit("platform.site_open_failed", operations.LevelError, "platform.site", "event identity failed to compose", map[string]any{operations.AttributeError: err.Error()})
+		return nil, errors.Join(err, fabric.Close(ctx))
+	}
+
 	s := &site{
 		fabric:          fabric,
+		publisher:       eventfabric.NewPublisher(factory, fabric),
 		projection:      registration.NewProjection(),
 		role:            role,
 		observer:        observer,
@@ -132,14 +145,13 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 
 	location, expected := topology(descriptor)
 	scope := eventfabric.NewSiteScope(descriptor.Project, descriptor.Environment, descriptor.Site)
-	publisher := eventfabric.Publisher(fabric)
-	commands, queries, err := registration.Open(publisher, s.projection, location, expected)
+	commands, queries, err := registration.Open(s.publisher, s.projection, location, expected)
 	if err != nil {
 		return nil, errors.Join(err, s.close(ctx))
 	}
 	s.commands, s.queries = commands, queries
 
-	handler, err := registration.NewHandler(publisher, s.projection, location, expected, scope)
+	handler, err := registration.NewHandler(s.publisher, s.projection, location, expected, scope)
 	if err != nil {
 		return nil, errors.Join(err, s.close(ctx))
 	}
@@ -192,7 +204,7 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 		return err
 	}
 
-	receipt, err := s.fabric.Publish(catchUpCtx, eventfabric.NewReady(s.fabric.Info(), s.projection.Sequence(), s.role.String()))
+	receipt, err := s.publisher.Publish(catchUpCtx, eventfabric.NewReady(s.fabric.Info(), s.projection.Sequence(), s.role.String()))
 	if err != nil {
 		return fmt.Errorf("state ready: %w", err)
 	}
@@ -325,7 +337,7 @@ func (s *site) release(ctx context.Context) error {
 	// A node that never said it was ready has nothing to say about stopping. It
 	// would be stating the end of something the site never heard begin.
 	if s.ready {
-		if _, err := s.fabric.Publish(stopCtx, eventfabric.NewStopping(s.fabric.Info().Adapter, s.role.String())); err != nil {
+		if _, err := s.publisher.Publish(stopCtx, eventfabric.NewStopping(s.fabric.Info().Adapter, s.role.String())); err != nil {
 			errs = append(errs, fmt.Errorf("state stopping: %w", err))
 		}
 	}

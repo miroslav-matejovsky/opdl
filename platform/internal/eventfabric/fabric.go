@@ -19,12 +19,22 @@ type Publisher interface {
 	Publish(ctx context.Context, event events.Event) (Receipt, error)
 }
 
-// Fabric is the Event Fabric as runtime composition owns it: the publish side,
+// Appender is the adapter-facing half of publication: it durably appends one
+// already stamped envelope to the site journal. It is deliberately not the
+// business-facing role. An adapter receives a completed fact and decides where
+// it goes; it never decides what the fact says, when it happened, or which
+// process stated it.
+type Appender interface {
+	// Append durably appends envelope to the site journal and returns its Receipt.
+	Append(ctx context.Context, envelope events.Envelope) (Receipt, error)
+}
+
+// Fabric is the Event Fabric as runtime composition owns it: the append side,
 // the projector and handler runners, the journal high-water query, and the
 // health and lifecycle operations. A domain package is never handed a Fabric;
 // it receives the narrow Publisher, Projector, or Handler role it needs.
 type Fabric interface {
-	Publisher
+	Appender
 
 	// RunProjector attaches projector to one continuous ordered consumer, from
 	// the first retained event through live delivery. It returns when ctx is
@@ -97,8 +107,9 @@ type Receipt struct {
 // journal's ordering and deliberately is not copied into the immutable record:
 // the fact does not depend on where the transport placed it.
 type Delivery struct {
-	// Record is the stored event: envelope plus payload.
-	Record events.Record
+	// Envelope is the stored event: its metadata and payload, exactly as the
+	// journal accepted it.
+	Envelope events.Envelope
 	// Sequence is the event's position in the site journal.
 	Sequence uint64
 }

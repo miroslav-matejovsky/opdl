@@ -610,7 +610,7 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 
 	// It follows new journal events: a fact published on the active reaches the
 	// standby's projection.
-	receipt, err := active.fabric.Publish(t.Context(), eventfabric.NewReady(active.fabric.Info(), 0, redundancy.RolePrimary.String()))
+	receipt, err := active.publisher.Publish(t.Context(), eventfabric.NewReady(active.fabric.Info(), 0, redundancy.RolePrimary.String()))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		st, stateErr := standby.fabric.State(t.Context())

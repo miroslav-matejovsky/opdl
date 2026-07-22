@@ -1,7 +1,6 @@
 package registration
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -12,15 +11,7 @@ import (
 
 func delivery(t *testing.T, sequence uint64, event events.Event, machine, id string) eventfabric.Delivery {
 	t.Helper()
-	data, err := json.Marshal(event)
-	require.NoError(t, err)
-	return eventfabric.Delivery{
-		Record: events.Record{Meta: events.Meta{
-			ID: id, Type: event.EventType(), SchemaVersion: 1,
-			Node: events.Node{Machine: machine},
-		}, Data: data},
-		Sequence: sequence,
-	}
+	return eventfabric.Delivery{Envelope: testEnvelope(t, event, machine, id), Sequence: sequence}
 }
 
 func applyDelivery(t *testing.T, projection *Projection, delivery eventfabric.Delivery) {
@@ -28,28 +19,35 @@ func applyDelivery(t *testing.T, projection *Projection, delivery eventfabric.De
 	require.NoError(t, projection.Apply(t.Context(), delivery))
 }
 
+// handle runs one delivery through handler the way the Event Fabric does, with
+// the delivery attached to the context as the cause of whatever the handler
+// publishes. The handler itself knows nothing about that.
+func handle(t *testing.T, handler *Handler, delivery eventfabric.Delivery) error {
+	t.Helper()
+	return handler.Handle(events.WithCause(t.Context(), delivery.Envelope), delivery)
+}
+
 func TestHandlerConfirmsAValidClaimingProposal(t *testing.T) {
 	projection := NewProjection()
-	publisher := &recordingPublisher{}
+	publisher, appender := testPublisher(t)
 	handler, err := NewHandler(publisher, projection, locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	proposed := proposal(42)
 	input := delivery(t, 1, proposed, "node-a", "proposal-event")
 	applyDelivery(t, projection, input)
 
-	require.NoError(t, handler.Handle(t.Context(), input))
-	require.Len(t, publisher.published, 1)
-	confirmed, ok := publisher.published[0].event.(Confirmed)
-	require.True(t, ok)
+	require.NoError(t, handle(t, handler, input))
+	require.Len(t, appender.appended, 1)
+	confirmed := payload[Confirmed](t, appender, 0)
 	require.Equal(t, proposed.ProposalID, confirmed.ProposalID)
 	require.Equal(t, "node-a", confirmed.DecidingMachine)
-	require.Equal(t, "proposal-event", publisher.published[0].causationID)
-	require.Equal(t, "proposal-event", publisher.published[0].correlationID)
+	require.Equal(t, "proposal-event", appender.appended[0].CausationID)
+	require.Equal(t, "proposal-event", appender.appended[0].CorrelationID)
 }
 
 func TestHandlerRejectsAConflictingProposal(t *testing.T) {
 	projection := NewProjection()
-	publisher := &recordingPublisher{}
+	publisher, appender := testPublisher(t)
 	handler, err := NewHandler(publisher, projection, locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	winner := proposal(42)
@@ -62,15 +60,14 @@ func TestHandlerRejectsAConflictingProposal(t *testing.T) {
 	input := delivery(t, 2, loser, "node-b", "loser")
 	applyDelivery(t, projection, input)
 
-	require.NoError(t, handler.Handle(t.Context(), input))
-	rejected, ok := publisher.published[0].event.(Rejected)
-	require.True(t, ok)
+	require.NoError(t, handle(t, handler, input))
+	rejected := payload[Rejected](t, appender, 0)
 	require.Equal(t, ReasonKeyConflict, rejected.Reason)
 }
 
 func TestHandlerRejectsASemanticallyInvalidProposal(t *testing.T) {
 	projection := NewProjection()
-	publisher := &recordingPublisher{}
+	publisher, appender := testPublisher(t)
 	handler, err := NewHandler(publisher, projection, locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	invalid := NewProposed(ProposalIdentity{
@@ -81,15 +78,14 @@ func TestHandlerRejectsASemanticallyInvalidProposal(t *testing.T) {
 	input := delivery(t, 1, invalid, "node-a", "invalid")
 	applyDelivery(t, projection, input)
 
-	require.NoError(t, handler.Handle(t.Context(), input))
-	rejected, ok := publisher.published[0].event.(Rejected)
-	require.True(t, ok)
+	require.NoError(t, handle(t, handler, input))
+	rejected := payload[Rejected](t, appender, 0)
 	require.Equal(t, ReasonInvalidProposal, rejected.Reason)
 }
 
 func TestOriginHandlerAcceptsOnlyAfterEveryConfirmation(t *testing.T) {
 	projection := NewProjection()
-	publisher := &recordingPublisher{}
+	publisher, appender := testPublisher(t)
 	handler, err := NewHandler(publisher, projection, locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	proposed := proposal(42)
@@ -97,22 +93,21 @@ func TestOriginHandlerAcceptsOnlyAfterEveryConfirmation(t *testing.T) {
 
 	first := delivery(t, 2, NewConfirmed(proposed.ProposalID, "node-a"), "node-a", "confirm-a")
 	applyDelivery(t, projection, first)
-	require.NoError(t, handler.Handle(t.Context(), first))
-	require.Empty(t, publisher.published)
+	require.NoError(t, handle(t, handler, first))
+	require.Empty(t, appender.appended)
 
 	second := delivery(t, 3, NewConfirmed(proposed.ProposalID, "node-b"), "node-b", "confirm-b")
 	applyDelivery(t, projection, second)
-	require.NoError(t, handler.Handle(t.Context(), second))
-	require.Len(t, publisher.published, 1)
-	accepted, ok := publisher.published[0].event.(Accepted)
-	require.True(t, ok)
+	require.NoError(t, handle(t, handler, second))
+	require.Len(t, appender.appended, 1)
+	accepted := payload[Accepted](t, appender, 0)
 	require.Equal(t, proposed.ProposalID, accepted.ProposalID)
-	require.Equal(t, "confirm-b", publisher.published[0].causationID)
-	require.Equal(t, "confirm-b", publisher.published[0].correlationID)
+	require.Equal(t, "confirm-b", appender.appended[0].CausationID)
+	require.Equal(t, "confirm-b", appender.appended[0].CorrelationID)
 }
 
 func TestHandlerDeclaresOnlyFiniteRegistrationRoutes(t *testing.T) {
-	handler, err := NewHandler(&recordingPublisher{}, NewProjection(), locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
+	handler, err := NewHandler(anyPublisher(t), NewProjection(), locations()[1], locations(), eventfabric.NewSiteScope("p", "e", "s"))
 	require.NoError(t, err)
 	require.Equal(t, "registration", handler.Name())
 	routes := handler.Routes()

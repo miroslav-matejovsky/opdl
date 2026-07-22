@@ -46,7 +46,11 @@ deps:
     # api is here because composition is what knows which instance this process
     # is: it fills the instance identity both the Active and the Passive handler
     # serve. The domain operations stay behind httpapi.
-    mayDependOn: [api, config, eventfabric, eventfabric-nats, httpapi, operations, redundancy, registration]
+    #
+    # events is here because composition is also what knows which process this
+    # is: it builds the one envelope factory that stamps every event this node
+    # states, and hands out only the publisher composed from it.
+    mayDependOn: [api, config, eventfabric, eventfabric-nats, events, httpapi, operations, redundancy, registration]
   redundancy:
     canUse: [sys, atomicfile, winmutex]
     # Ownership transitions are operational events in their own right: which

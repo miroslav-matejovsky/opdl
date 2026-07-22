@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -312,7 +311,7 @@ type journal struct {
 // node is one machine's registration composition: what it publishes through,
 // what it folds into, and what its HTTP boundary is handed.
 type node struct {
-	identity   events.Node
+	machine    string
 	projection *registration.Projection
 	handler    *registration.Handler
 	commands   *registration.CommandService
@@ -323,15 +322,17 @@ type node struct {
 	consumed uint64
 }
 
-// publisher is one node's narrow publishing capability, stamping its own trusted
-// identity onto everything it states.
-type publisher struct {
-	journal  *journal
-	identity events.Node
-}
-
-func (p publisher) Publish(ctx context.Context, event events.Event) (eventfabric.Receipt, error) {
-	return p.journal.append(ctx, p.identity, event)
+// publisherFor is one node's narrow publishing capability: its own envelope
+// factory, stamping its trusted identity onto everything it states, over the
+// shared journal.
+func publisherFor(t *testing.T, j *journal, machine string) eventfabric.Publisher {
+	t.Helper()
+	factory, err := events.NewFactory(config.Descriptor{
+		Platform: "opdl", Project: "test", Environment: "development", Site: "local",
+		Machine: machine, MachineProfile: "all-in-one",
+	}, "primary")
+	require.NoError(t, err)
+	return eventfabric.NewPublisher(factory, j)
 }
 
 // newSite declares a site of machines and starts none of them. Machine i is at
@@ -366,14 +367,8 @@ func (s *site) start(machine string) *node {
 	}
 	require.NotEmpty(s.t, self.Machine, "%s is not a machine of this site", machine)
 
-	n := &node{
-		identity: events.Node{
-			Project: "test", Environment: "development", Site: "local",
-			Machine: self.Machine, MachineProfile: "all-in-one",
-		},
-		projection: registration.NewProjection(),
-	}
-	pub := publisher{journal: s.journal, identity: n.identity}
+	n := &node{machine: self.Machine, projection: registration.NewProjection()}
+	pub := publisherFor(s.t, s.journal, self.Machine)
 
 	commands, queries, err := registration.Open(pub, n.projection, self, expected)
 	require.NoError(s.t, err)
@@ -403,17 +398,17 @@ func (j *journal) attach(ctx context.Context, n *node) {
 	j.nodes = append(j.nodes, n)
 }
 
-// append orders one event and folds it into every node's projection.
-func (j *journal) append(ctx context.Context, identity events.Node, event events.Event) (eventfabric.Receipt, error) {
+// Append orders one already stamped envelope and folds it into every node's
+// projection, which is the whole of what a journal does to this site.
+func (j *journal) Append(ctx context.Context, envelope events.Envelope) (eventfabric.Receipt, error) {
 	j.mu.Lock()
 	if j.failure != nil {
 		defer j.mu.Unlock()
 		return eventfabric.Receipt{}, j.failure
 	}
-	record, err := events.StampRecord(identity, events.NewID(), time.Now(), event)
-	require.NoError(j.t, err)
+	require.NoError(j.t, envelope.Validate(), "the journal only stores complete envelopes")
 	j.sequence++
-	delivery := eventfabric.Delivery{Record: record, Sequence: j.sequence}
+	delivery := eventfabric.Delivery{Envelope: envelope, Sequence: j.sequence}
 	j.records = append(j.records, delivery)
 	nodes := slices.Clone(j.nodes)
 	j.mu.Unlock()
@@ -421,7 +416,7 @@ func (j *journal) append(ctx context.Context, identity events.Node, event events
 	for _, n := range nodes {
 		require.NoError(j.t, n.projection.Apply(ctx, delivery))
 	}
-	return eventfabric.Receipt{ID: record.ID, Sequence: delivery.Sequence}, nil
+	return eventfabric.Receipt{ID: envelope.ID, Sequence: delivery.Sequence}, nil
 }
 
 // breakWith makes the journal refuse writes, as an unreachable or full one does.
@@ -447,7 +442,9 @@ func (j *journal) settle(ctx context.Context) bool {
 				if !j.routed(n.handler, delivery) {
 					continue
 				}
-				require.NoError(j.t, n.handler.Handle(ctx, delivery))
+				// The Event Fabric attaches the cause before a handler runs, so a
+				// consequence records what produced it without the handler knowing.
+				require.NoError(j.t, n.handler.Handle(events.WithCause(ctx, delivery.Envelope), delivery))
 			}
 		}
 		if !progressed {
@@ -467,7 +464,7 @@ func (j *journal) deliveries() []eventfabric.Delivery {
 // handler what it consumes rather than repeating the answer, so a handler that
 // changed its routes changes what these tests deliver to it.
 func (j *journal) routed(handler *registration.Handler, delivery eventfabric.Delivery) bool {
-	route, err := eventfabric.NewRoute(j.scope, delivery.Record.Type)
+	route, err := eventfabric.NewRoute(j.scope, delivery.Envelope.Type)
 	if err != nil {
 		return false
 	}

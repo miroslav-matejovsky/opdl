@@ -99,3 +99,29 @@ func (e Envelope) Validate() error {
 	}
 	return nil
 }
+
+// Encode renders an envelope as the bytes a writer stores: one compact JSON
+// object. It validates first, so an incomplete envelope is a caller error
+// reported here rather than an unreadable event written to a journal nothing
+// can replay.
+func Encode(envelope Envelope) ([]byte, error) {
+	if err := envelope.Validate(); err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("events: encode envelope %s: %w", envelope.Type, err)
+	}
+	return data, nil
+}
+
+// Decode reads a stored envelope. An envelope that does not decode is storage
+// corruption, not a bad request, so the error is reported for a reader to stop
+// on rather than repaired.
+func Decode(data []byte) (Envelope, error) {
+	var envelope Envelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return Envelope{}, fmt.Errorf("events: decode envelope: %w", err)
+	}
+	return envelope, nil
+}

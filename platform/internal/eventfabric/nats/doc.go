@@ -97,12 +97,16 @@
 // answer. An incompatible journal is still refused immediately, because waiting
 // cannot make it compatible.
 //
-// # Publishing and delivery
+// # Appending and delivery
 //
-// Publish stamps an event's envelope, validates it, and appends it to the
-// journal synchronously through JetStream, returning the assigned sequence in
-// the receipt. It sets the journal deduplication id from the event's stable
-// domain identity when it declares one. A projector runs an ordered consumer
+// Append validates a completed envelope and writes it to the journal
+// synchronously through JetStream, returning the assigned sequence in the
+// receipt. It takes the envelope as given: the adapter mints no identity, reads
+// no clock, and sets no causal link, because a fact is already decided by the
+// time it arrives here. It sets the journal deduplication id from the envelope's
+// stable domain identity when it has one. Before a handler runs, the delivery is
+// attached to its context as the cause, so a handler's consequences record what
+// produced them. A projector runs an ordered consumer
 // from the first retained event and continues live; a handler runs a durable
 // pull consumer filtered by its routes with explicit acknowledgement and bounded
 // redelivery. A decode failure, an unsupported event, or exhausted delivery

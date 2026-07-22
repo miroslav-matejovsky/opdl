@@ -1,7 +1,8 @@
 # Unified platform event model
 
-Status: option A selected. Stages 10 to 30 are implemented; stages 40 to 90 are
-pending.
+Status: option A selected. Stages 10 to 40 are implemented; stages 50 to 90 are
+pending. `internal/operations` still owns the second event model, which stages
+50 to 80 remove.
 
 ## Goal
 

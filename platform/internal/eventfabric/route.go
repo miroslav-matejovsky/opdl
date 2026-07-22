@@ -4,7 +4,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
@@ -15,10 +14,6 @@ import (
 // form. Domain packages pass event types, never raw subjects, so a malformed
 // type is a programming error caught before anything is published.
 var ErrInvalidEventType = errors.New("eventfabric: invalid event type")
-
-// eventTypePrefix is the fixed first token of every OPDL event type. It names
-// the product line and is dropped from the route, which already scopes by site.
-const eventTypePrefix = "platform"
 
 // routePrefix is the fixed first token of every OPDL route. It namespaces every
 // OPDL subject under one root so a shared transport keeps OPDL traffic apart
@@ -41,20 +36,14 @@ type EventType struct {
 }
 
 // ParseEventType splits a platform.<domain>.<fact> event type into its domain
-// and fact. It rejects a type that does not start with the platform prefix, that
-// has any blank token, or that carries more or fewer than three tokens, so a
-// route is only ever built from a well-formed type.
+// and fact, so a route is only ever built from a well-formed type. What "well
+// formed" means belongs to the event model, so the check is the event type's
+// own; this adds only the transport's reason for asking.
 func ParseEventType(eventType events.Type) (EventType, error) {
+	if err := eventType.Validate(); err != nil {
+		return EventType{}, fmt.Errorf("%w: %w", ErrInvalidEventType, err)
+	}
 	tokens := strings.Split(string(eventType), ".")
-	if len(tokens) != 3 {
-		return EventType{}, fmt.Errorf("%w: %q must have exactly three tokens platform.<domain>.<fact>", ErrInvalidEventType, eventType)
-	}
-	if tokens[0] != eventTypePrefix {
-		return EventType{}, fmt.Errorf("%w: %q must start with %q", ErrInvalidEventType, eventType, eventTypePrefix)
-	}
-	if slices.Contains(tokens, "") {
-		return EventType{}, fmt.Errorf("%w: %q has a blank token", ErrInvalidEventType, eventType)
-	}
 	return EventType{Domain: tokens[1], Fact: tokens[2]}, nil
 }
 

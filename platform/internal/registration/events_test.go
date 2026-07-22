@@ -62,9 +62,8 @@ func TestCatalogEventsDeclareTheirContract(t *testing.T) {
 	// A rejection is an operational anomaly; the other three are routine facts
 	// that declare no severity at all.
 	require.Equal(t, events.SeverityWarn, Rejected{}.Severity())
-	require.Equal(t, []string{events.TagWarning}, Rejected{}.Tags())
 	require.NotImplements(t, (*events.Severe)(nil), Accepted{})
-	require.NotImplements(t, (*events.Tagged)(nil), Accepted{})
+	require.NotImplements(t, (*events.Tagged)(nil), Rejected{}, "severity states this, so a tag would repeat it")
 }
 
 func TestEventsDeclareStableIdentitiesForIdenticalFacts(t *testing.T) {
