@@ -1,6 +1,6 @@
 # Unified platform event model
 
-Status: option A selected. Stages 10 and 20 are implemented; stages 30 to 90 are
+Status: option A selected. Stages 10 to 30 are implemented; stages 40 to 90 are
 pending.
 
 ## Goal
