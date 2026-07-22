@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -32,9 +33,9 @@ func testFactory() Factory {
 	return Factory{
 		origin: testOrigin,
 		now:    func() time.Time { return testOccurredAt },
-		newID: func() string {
+		newID: func() (string, error) {
 			stamped++
-			return fmt.Sprintf("id-%d", stamped)
+			return fmt.Sprintf("id-%d", stamped), nil
 		},
 	}
 }
@@ -194,6 +195,15 @@ func TestWrapRefusesAnEventItCannotStamp(t *testing.T) {
 func TestWrapRefusesAnUncomposedFactory(t *testing.T) {
 	_, err := Factory{}.Wrap(t.Context(), plainEvent{})
 	require.ErrorIs(t, err, ErrUncomposedFactory)
+}
+
+func TestWrapReportsOccurrenceIDFailure(t *testing.T) {
+	factory := testFactory()
+	factory.newID = func() (string, error) { return "", errors.New("random source failed") }
+
+	envelope, err := factory.Wrap(t.Context(), plainEvent{})
+	require.ErrorContains(t, err, "random source failed")
+	require.Zero(t, envelope)
 }
 
 // malformedTypeEvent declares a type that is not platform.<source>.<fact>.

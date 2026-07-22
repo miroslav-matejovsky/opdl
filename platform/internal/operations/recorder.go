@@ -111,9 +111,10 @@ func (r *Recorder) Record(ctx context.Context, event events.Event) {
 // thing that writes an event, and it accepts nothing but an envelope, so no
 // other shape can reach a sink.
 //
-// A sink failure is reported to the other sink as plain text, never as an event
-// line: a broken sink is not a fact about the platform, and a reader must be
-// able to decode every event line it finds. It is never recursively recorded.
+// A file failure is reported to stderr as plain text, never as an event line: a
+// broken sink is not a fact about the platform, and recursively recording it
+// would use the same broken sink. A stderr failure has no safe reporting path;
+// the original envelope is still retained in the file when one is configured.
 func (r *Recorder) write(envelope events.Envelope) {
 	data, err := events.Encode(envelope)
 	if err != nil {
@@ -124,9 +125,11 @@ func (r *Recorder) write(envelope events.Envelope) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, err := r.stderr.Write(data); err != nil && r.file != nil {
-		fallbackWrite(r.file, "platform event stderr write failed: error=%v\n", err)
-	}
+	// A broken stderr cannot safely report itself to the JSONL file. Adding a
+	// plain-text diagnostic there would corrupt the canonical event stream, and
+	// creating another event would recurse through the same broken sink. Keep
+	// writing the original envelope to the file instead.
+	_, _ = r.stderr.Write(data)
 	if r.file != nil {
 		if _, err := r.file.Write(data); err != nil {
 			fallbackWrite(r.stderr, "platform event JSONL write failed: path=%s error=%v\n", r.path, err)

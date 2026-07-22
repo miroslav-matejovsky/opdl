@@ -35,7 +35,7 @@ type Factory struct {
 	// fields rather than direct calls so package tests can stamp deterministic
 	// envelopes; no caller outside this package can replace them.
 	now   func() time.Time
-	newID func() string
+	newID func() (string, error)
 }
 
 // NewFactory composes the stamper for this process from the deployment
@@ -98,10 +98,14 @@ func (f Factory) Wrap(ctx context.Context, event Event) (Envelope, error) {
 	if err != nil {
 		return Envelope{}, fmt.Errorf("events: encode %s payload: %w", eventType, err)
 	}
+	id, err := f.newID()
+	if err != nil {
+		return Envelope{}, err
+	}
 	causationID, correlationID := causalLinks(ctx)
 
 	envelope := Envelope{
-		ID:            f.newID(),
+		ID:            id,
 		Type:          eventType,
 		SchemaVersion: schemaVersion,
 		OccurredAt:    f.now().UTC(),

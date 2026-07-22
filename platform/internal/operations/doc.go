@@ -14,9 +14,9 @@
 //
 // Record returns nothing. A process that cannot describe what it is doing must
 // still do it, so a failure to stamp or write is reported to the error stream
-// and never propagated into the operation that caused it. A fact a caller must
-// not lose belongs in the site journal, through the Event Fabric publisher,
-// which fails the operation instead.
+// when that stream is usable and never propagated into the operation that
+// caused it. A fact a caller must not lose belongs in the site journal, through
+// the Event Fabric publisher, which fails the operation instead.
 //
 // Which events exist is not this package's business. Each package declares the
 // facts it can state in its own events.go: internal/app for the runtime,
@@ -26,7 +26,7 @@
 // # One shape on the wire
 //
 // The writer accepts an events.Envelope and nothing else, so every line it
-// produces decodes as one. A broken sink is reported to the other sink as plain
-// text rather than as an event, because a reader must be able to decode every
-// event line it finds, and a failed write is not a fact about the platform.
+// retains decodes as one. A file failure is reported to stderr as plain text. A
+// stderr failure does not add a diagnostic to JSONL because that would corrupt
+// the canonical event stream; the original envelope is still retained there.
 package operations

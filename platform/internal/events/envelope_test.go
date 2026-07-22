@@ -175,6 +175,15 @@ func TestEncodeAndDecodeRoundTripAStoredEnvelope(t *testing.T) {
 func TestDecodeReportsCorruptStorage(t *testing.T) {
 	_, err := Decode([]byte(`{invalid`))
 	require.ErrorContains(t, err, "decode envelope")
+
+	incomplete := validEnvelope()
+	incomplete.Origin.Machine = ""
+	data, err := json.Marshal(incomplete)
+	require.NoError(t, err)
+
+	_, err = Decode(data)
+	require.ErrorIs(t, err, ErrInvalidEnvelope)
+	require.ErrorContains(t, err, "origin machine is required")
 }
 
 func TestEnvelopeSurvivesAJSONRoundTrip(t *testing.T) {

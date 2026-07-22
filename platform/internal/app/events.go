@@ -110,8 +110,6 @@ const (
 	PhaseConfiguration = "configuration"
 	// PhaseEventFabric is opening the transport and its journal.
 	PhaseEventFabric = "event_fabric"
-	// PhaseEventIdentity is composing this process's envelope factory.
-	PhaseEventIdentity = "event_identity"
 	// PhaseStandbyCatchUp is a standby catching its projection up.
 	PhaseStandbyCatchUp = "standby_catch_up"
 	// PhaseActiveReadiness is an active node completing its readiness sequence.

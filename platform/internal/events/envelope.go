@@ -123,5 +123,8 @@ func Decode(data []byte) (Envelope, error) {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return Envelope{}, fmt.Errorf("events: decode envelope: %w", err)
 	}
+	if err := envelope.Validate(); err != nil {
+		return Envelope{}, fmt.Errorf("events: decode envelope: %w", err)
+	}
 	return envelope, nil
 }

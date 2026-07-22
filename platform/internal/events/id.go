@@ -14,8 +14,10 @@ import (
 // It is the factory's generator, not an API. An occurrence identity belongs to
 // the envelope that occurrence produced, so nothing outside this package mints
 // one and then decides what to attach it to.
-func newEventID() string {
+func newEventID() (string, error) {
 	var suffix [8]byte
-	_, _ = rand.Read(suffix[:])
-	return fmt.Sprintf("%020d-%s", time.Now().UnixNano(), hex.EncodeToString(suffix[:]))
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("events: generate occurrence ID: %w", err)
+	}
+	return fmt.Sprintf("%020d-%s", time.Now().UnixNano(), hex.EncodeToString(suffix[:])), nil
 }

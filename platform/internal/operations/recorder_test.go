@@ -166,7 +166,7 @@ func TestRecordIsSafeForConcurrentCallbacks(t *testing.T) {
 	}
 }
 
-func TestRecordReportsABrokenSinkToTheOtherOne(t *testing.T) {
+func TestRecordKeepsJSONLCanonicalWhenStderrIsBroken(t *testing.T) {
 	recorder, _ := openRecorder(t, "primary")
 	recorder.stderr = brokenWriter{}
 	recorder.Record(t.Context(), probe{Detail: "started"})
@@ -175,10 +175,8 @@ func TestRecordReportsABrokenSinkToTheOtherOne(t *testing.T) {
 	fileData, err := os.ReadFile(recorder.Path())
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(fileData)), "\n")
-	require.Len(t, lines, 2)
-	require.Contains(t, lines[0], "stderr write failed",
-		"the terminal fallback reports the broken sink as plain text, not as an event")
-	envelope, err := events.Decode([]byte(lines[1]))
+	require.Len(t, lines, 1, "a sink failure must not add a non-event line to JSONL")
+	envelope, err := events.Decode([]byte(lines[0]))
 	require.NoError(t, err)
 	require.Equal(t, events.Type("platform.test.happened"), envelope.Type,
 		"a broken sink does not stop the working one")
