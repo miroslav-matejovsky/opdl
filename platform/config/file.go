@@ -23,15 +23,7 @@ type file struct {
 	// stops being ready to take over, and before an active process stops serving rather than
 	// answering from a stale view. It is required and must be positive.
 	LagBound    string      `toml:"lag_bound"`
-	Operations  Operations  `toml:"operations"`
 	EventFabric EventFabric `toml:"event_fabric"`
-}
-
-// Operations configures local event retention. Events are always written to the
-// process error stream as one JSON envelope per line; EventDir optionally
-// retains the same lines as JSONL for incident analysis.
-type Operations struct {
-	EventDir string `toml:"event_dir"`
 }
 
 // EventFabric carries per-adapter runtime settings for the Event Fabric. It is
@@ -53,10 +45,10 @@ type EventFabric struct {
 // descriptor when each instance gained its own Event Fabric server: a machine's
 // two instances need two stores, and a single machine-level setting cannot
 // express that without the runtime deriving per-instance paths from it. It is
-// authored per instance in the blueprint as data_dir. A configuration file that
-// still sets event_fabric.nats.data_dir fails at rejectUnknownKeys, which is the
-// intended outcome rather than an oversight: the path it names would not be the
-// path either instance opened.
+// authored per instance in the blueprint as jetstream_store_dir. A
+// configuration file that still sets event_fabric.nats.data_dir fails at
+// rejectUnknownKeys, which is the intended outcome rather than an oversight:
+// the path it names would not be the path either instance opened.
 //
 // None of these changes which machine this is: identity, and therefore a
 // registration's machine and IP, comes from the embedded descriptor alone and is
@@ -115,7 +107,6 @@ func loadFile(path string) (file, error) {
 	if f.LagBound == "" {
 		return file{}, fmt.Errorf("configuration file %s: lag_bound is required", path)
 	}
-	f.Operations.EventDir = strings.TrimSpace(f.Operations.EventDir)
 	nats := &f.EventFabric.Nats
 	nats.StartupTimeout = strings.TrimSpace(nats.StartupTimeout)
 	if nats.StartupTimeout == "" {

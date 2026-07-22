@@ -40,7 +40,7 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 			if err != nil {
 				return api.ProposalAccepted{}, err
 			}
-			return api.ProposalAccepted{ProposalID: receipt.ProposalID, Sequence: receipt.Sequence}, nil
+			return api.ProposalAccepted{ProposalID: receipt.ProposalID}, nil
 		},
 		List:      queries.List,
 		Get:       queries.Get,

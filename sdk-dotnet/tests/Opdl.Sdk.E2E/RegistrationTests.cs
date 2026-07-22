@@ -88,7 +88,6 @@ public class RegistrationTests
         // It deliberately gives a consumer nothing to mistake for a registration.
         Assert.NotNull(proposal);
         Assert.False(string.IsNullOrWhiteSpace(proposal!.ProposalId));
-        Assert.True(proposal.Sequence > 0, "the proposal has a place in the site's history");
         var proposalId = proposal.ProposalId!;
 
         var pending = await nodeA.Registrations[proposalId].GetAsync(cancellationToken: token);

@@ -7,18 +7,6 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //   - platform.event_fabric.ready: a node has connected to its site journal,
 //     caught its projections up, attached its handlers, and is about to serve.
 //   - platform.event_fabric.stopping: a node has begun a clean shutdown.
-//
-// The Event Fabric states its own lifecycle through the same journal it carries
-// domain events on, so there is one ordered history and no second event path to
-// reconcile. It deliberately does not state a completed stop: a closed
-// transport cannot durably record its own close, so the absence of a later
-// ready is the only honest evidence a node stopped.
-//
-// Both events are stated by runtime composition, not by the adapter. Readiness
-// is a conclusion about the whole node — its journal, its projections, and its
-// handlers — and a transport can only report on itself. An adapter that
-// announced itself ready when its connection opened would be stating something
-// it does not know.
 
 const (
 	// TypeReady is stated when a node has connected to its site journal, caught
@@ -34,9 +22,6 @@ const (
 // serve. It carries the fabric's identity and storage disposition, and the
 // journal sequence the node's projections had applied when it concluded it was
 // ready.
-// Which process stated either fact is the envelope's origin, so neither payload
-// repeats the process role, and neither states a process state that its own type
-// already says.
 type Ready struct {
 	Info
 	// HighWater is the journal sequence this node's projections had applied when

@@ -19,16 +19,15 @@ const (
 	// begun to contend for Primary Ownership.
 	StateStarting State = "starting"
 	// StatePassive is a process connected to the journal with caught-up local
-	// projections but no public listener, durable domain handlers, or embedded
-	// server. A passive instance waits for Primary Ownership and produces no domain
-	// decision.
+	// projections but no durable domain handlers or domain-serving API. It may
+	// host its instance's authored Event Fabric server. A passive instance waits
+	// for Primary Ownership and produces no domain decision.
 	StatePassive State = "passive"
 	// StateActivating is a process that has acquired Primary Ownership and is composing its
 	// active resources, but is not yet serving.
 	StateActivating State = "activating"
-	// StateActive is the process holding Primary Ownership. It owns the
-	// public API, the durable domain handlers, readiness publication, and the
-	// embedded NATS server.
+	// StateActive is the process holding Primary Ownership. It owns domain API
+	// serving, durable domain handlers, and readiness publication.
 	StateActive State = "active"
 	// StateStopping is a process releasing its resources during a clean shutdown,
 	// before it releases Primary Ownership.

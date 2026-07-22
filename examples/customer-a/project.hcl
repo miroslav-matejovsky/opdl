@@ -28,17 +28,7 @@ project "customer-a" {
       # has its own: two runtimes writing into one directory would overwrite each
       # other's evidence, and nothing would report it.
       #
-      # data_dir is where this instance's Event Fabric server keeps the site
-      # journal. Each instance has its own for a harder reason than runtime_dir:
-      # each runs its own NATS server, and two servers cannot open one JetStream
-      # store. Only an instance on a machine the site selects for storage opens
-      # it, but every instance authors one, because which machines are selected
-      # is derived from the site and is not a blueprint author's decision.
-      #
-      # It is separate from runtime_dir because the two have nothing in common
-      # operationally: a status file is small and disposable, and the journal is
-      # the site's history on capacity-monitored storage. Here they are on
-      # different volumes for exactly that reason.
+      # data_dir is the general platform data root for this instance.
       #
       # api is the port this instance serves its local API on. It is called
       # local_port because the builder joins it with 127.0.0.1 and never with the
@@ -53,17 +43,15 @@ project "customer-a" {
       # whoever installs the services, so the two fixed instance roles are
       # recognizable and named the same way on every machine.
       #
-      # nats states the ports this instance's Event Fabric server needs open. The
-      # builder joins them with the machine's ip and derives the site's route and
-      # server lists from the site topology.
+      # event_storage states the event fabric topology and storage settings.
       #
       # standby states whether a second platform instance is deployed. This sensor
       # opts out: it is a single-purpose node whose loss is already covered by the
       # site, so a second instance would add a process to operate without adding
       # site availability. Because it opts out, it states nothing further.
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
-        data_dir    = "D:/opdl-journal/customer-a/north/sensor/primary"
+        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary/runtime"
+        data_dir    = "D:/opdl/customer-a/north/sensor/primary"
 
         api {
           local_port = 8080
@@ -75,9 +63,14 @@ project "customer-a" {
           description  = "OPDL platform Primary Instance for machine sensor."
         }
 
-        nats {
-          client_port  = 4222
-          cluster_port = 6222
+        event_storage {
+          eventfabric {
+            nats {
+              client_port         = 4222
+              cluster_port        = 6222
+              jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
+            }
+          }
         }
 
         standby {
@@ -99,8 +92,8 @@ project "customer-a" {
       # ports is the mistake this shape invites. The builder rejects it and names
       # both listeners.
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/primary"
-        data_dir    = "D:/opdl-journal/customer-a/north/local-server/primary"
+        runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/primary/runtime"
+        data_dir    = "D:/opdl/customer-a/north/local-server/primary"
 
         api {
           local_port = 8080
@@ -111,15 +104,20 @@ project "customer-a" {
           display_name = "OPDL customer-a north local-server (Primary Instance)"
         }
 
-        nats {
-          client_port  = 4222
-          cluster_port = 6222
+        event_storage {
+          eventfabric {
+            nats {
+              client_port         = 4222
+              cluster_port        = 6222
+              jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
+            }
+          }
         }
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/standby"
-          data_dir    = "D:/opdl-journal/customer-a/north/local-server/standby"
+          runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/standby/runtime"
+          data_dir    = "D:/opdl/customer-a/north/local-server/standby"
 
           # lock is mandatory when standby is enabled (disabled = false).
           # The machine's two instances contend for this Windows named mutex
@@ -137,9 +135,14 @@ project "customer-a" {
             display_name = "OPDL customer-a north local-server (Standby Instance)"
           }
 
-          nats {
-            client_port  = 4322
-            cluster_port = 6322
+          event_storage {
+            eventfabric {
+              nats {
+                client_port         = 4322
+                cluster_port        = 6322
+                jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
+              }
+            }
           }
         }
       }
@@ -152,8 +155,8 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/primary"
-        data_dir    = "D:/opdl-journal/customer-a/control-room/master/primary"
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/primary/runtime"
+        data_dir    = "D:/opdl/customer-a/control-room/master/primary"
 
         api {
           local_port = 8080
@@ -164,15 +167,20 @@ project "customer-a" {
           display_name = "OPDL customer-a control-room master (Primary Instance)"
         }
 
-        nats {
-          client_port  = 4222
-          cluster_port = 6222
+        event_storage {
+          eventfabric {
+            nats {
+              client_port         = 4222
+              cluster_port        = 6222
+              jetstream_store_dir = "D:/opdl/customer-a/control-room/master/primary/eventfabric/nats"
+            }
+          }
         }
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/standby"
-          data_dir    = "D:/opdl-journal/customer-a/control-room/master/standby"
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/standby/runtime"
+          data_dir    = "D:/opdl/customer-a/control-room/master/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-master"
@@ -187,9 +195,14 @@ project "customer-a" {
             display_name = "OPDL customer-a control-room master (Standby Instance)"
           }
 
-          nats {
-            client_port  = 4322
-            cluster_port = 6322
+          event_storage {
+            eventfabric {
+              nats {
+                client_port         = 4322
+                cluster_port        = 6322
+                jetstream_store_dir = "D:/opdl/customer-a/control-room/master/standby/eventfabric/nats"
+              }
+            }
           }
         }
       }
@@ -200,8 +213,8 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/primary"
-        data_dir    = "D:/opdl-journal/customer-a/control-room/slave/primary"
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/primary/runtime"
+        data_dir    = "D:/opdl/customer-a/control-room/slave/primary"
 
         api {
           local_port = 8080
@@ -212,15 +225,20 @@ project "customer-a" {
           display_name = "OPDL customer-a control-room slave (Primary Instance)"
         }
 
-        nats {
-          client_port  = 4222
-          cluster_port = 6222
+        event_storage {
+          eventfabric {
+            nats {
+              client_port         = 4222
+              cluster_port        = 6222
+              jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/primary/eventfabric/nats"
+            }
+          }
         }
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/standby"
-          data_dir    = "D:/opdl-journal/customer-a/control-room/slave/standby"
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/standby/runtime"
+          data_dir    = "D:/opdl/customer-a/control-room/slave/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-slave"
@@ -235,9 +253,14 @@ project "customer-a" {
             display_name = "OPDL customer-a control-room slave (Standby Instance)"
           }
 
-          nats {
-            client_port  = 4322
-            cluster_port = 6322
+          event_storage {
+            eventfabric {
+              nats {
+                client_port         = 4322
+                cluster_port        = 6322
+                jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/standby/eventfabric/nats"
+              }
+            }
           }
         }
       }
@@ -248,8 +271,8 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/primary"
-        data_dir    = "D:/opdl-journal/customer-a/control-room/integration/primary"
+        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/primary/runtime"
+        data_dir    = "D:/opdl/customer-a/control-room/integration/primary"
 
         api {
           local_port = 8080
@@ -260,15 +283,20 @@ project "customer-a" {
           display_name = "OPDL customer-a control-room integration (Primary Instance)"
         }
 
-        nats {
-          client_port  = 4222
-          cluster_port = 6222
+        event_storage {
+          eventfabric {
+            nats {
+              client_port         = 4222
+              cluster_port        = 6222
+              jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/primary/eventfabric/nats"
+            }
+          }
         }
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/standby"
-          data_dir    = "D:/opdl-journal/customer-a/control-room/integration/standby"
+          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/standby/runtime"
+          data_dir    = "D:/opdl/customer-a/control-room/integration/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-control-room-integration"
@@ -283,9 +311,14 @@ project "customer-a" {
             display_name = "OPDL customer-a control-room integration (Standby Instance)"
           }
 
-          nats {
-            client_port  = 4322
-            cluster_port = 6322
+          event_storage {
+            eventfabric {
+              nats {
+                client_port         = 4322
+                cluster_port        = 6322
+                jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/standby/eventfabric/nats"
+              }
+            }
           }
         }
       }

@@ -51,9 +51,14 @@ project "{{ .Name }}" {
           display_name = "OPDL {{ $.Name }} {{ .Name }} (Primary Instance)"
         }
 
-        nats {
-          client_port  = {{ .ClientPort }}
-          cluster_port = {{ .ClusterPort }}
+        event_storage {
+          eventfabric {
+            nats {
+              client_port         = {{ .ClientPort }}
+              cluster_port        = {{ .ClusterPort }}
+              jetstream_store_dir = "{{ .JetStreamStoreDir }}"
+            }
+          }
         }
 
         standby {
@@ -75,9 +80,14 @@ project "{{ .Name }}" {
             display_name = "OPDL {{ $.Name }} {{ .Name }} (Standby Instance)"
           }
 
-          nats {
-            client_port  = {{ .StandbyClientPort }}
-            cluster_port = {{ .StandbyClusterPort }}
+          event_storage {
+            eventfabric {
+              nats {
+                client_port         = {{ .StandbyClientPort }}
+                cluster_port        = {{ .StandbyClusterPort }}
+                jetstream_store_dir = "{{ .StandbyJetStreamStoreDir }}"
+              }
+            }
           }
 {{- end }}
         }

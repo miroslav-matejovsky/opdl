@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
-	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
+	natsbackend "github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
@@ -36,14 +36,24 @@ const (
 // registration package is handed a Publisher, a Projector, and a Handler; the
 // HTTP boundary is handed the two services. Neither can reach the transport.
 type site struct {
-	fabric *natsfabric.Fabric
-	// publisher is the node's one way to state a fact: it stamps a typed payload
-	// with this process's envelope factory and appends it to the journal.
-	publisher  eventfabric.Publisher
+	fabric *natsbackend.Backend
+	// storagePublisher is the fan-out publisher this site closes on shutdown. It
+	// writes to the process's local record first and this node's transport second,
+	// and closes them in reverse order. Only the transport is really closed: the
+	// record is borrowed from the process and outlives the site. See
+	// storage.Borrowed.
+	storagePublisher *storage.Publisher
+	// publisher is how the node states a fact the site is supposed to hear: it
+	// stamps a typed payload with this process's envelope factory, writes it to
+	// the local record, and appends it to the journal.
+	publisher  events.Publisher
 	projection *registration.Projection
 	commands   *registration.CommandService
 	queries    *registration.QueryService
-	observer   *operations.Recorder
+	// local states what this composition itself is doing. It reaches the local
+	// record and nothing else, because a site that is failing to open is exactly
+	// the one with no journal to describe itself in.
+	local events.Publisher
 
 	// projector is the node-wide ordered consumer: one loop, from the first
 	// retained event through live delivery, so nothing falls in a replay-to-live
@@ -84,53 +94,66 @@ type service struct {
 // not serve, because answering from a projection that has not seen the site's
 // history would be answering for a site this process has not caught up with.
 //
-// When active is false it composes a warm standby: a client-only transport and
-// the continuous projector, caught up to the journal, and nothing else. A standby
-// opens no durable handler, publishes no readiness, and binds no listener, so it
-// follows the site's history without producing a decision or holding an
-// active-only capability.
-func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole, factory events.Factory) (*site, error) {
-	observer := operations.FromContext(ctx)
+// When active is false it composes a warm standby with a continuous projector
+// caught up to the journal. A standby may host its instance's authored NATS
+// server, but it opens no durable handler, publishes no readiness, and serves no
+// domain operation. Event Fabric membership is independent of Primary Ownership.
+func open(ctx context.Context, proc process, active bool) (*site, error) {
+	descriptor, cfg, role := proc.descriptor, proc.cfg, proc.role
 	openedAt := time.Now()
-	observer.Record(ctx, SiteOpening{Active: active})
+	if err := proc.local.Publish(ctx, SiteOpening{Active: active}); err != nil {
+		return nil, err
+	}
+
 	fabricCfg, err := natsConfig(descriptor, cfg, role)
 	if err != nil {
-		observer.Record(ctx, SiteOpenFailed{Phase: PhaseConfiguration, Error: err.Error()})
-		return nil, err
+		return nil, errors.Join(err, proc.local.Publish(ctx, SiteOpenFailed{Phase: PhaseConfiguration, Error: err.Error()}))
 	}
 	logEffectiveFabric(descriptor, fabricCfg, role)
 	// Open validates the configuration and probes the journal's storage before it
 	// binds a listener, so an unusable data directory or address fails here
-	// rather than half way through starting a server.
-	fabric, err := natsfabric.Open(ctx, descriptor, fabricCfg)
+	// rather than half way through starting a server. The adapter states its own
+	// facts through the process-local publisher, never through the fan-out one it
+	// is about to become part of.
+	fabric, err := natsbackend.Open(ctx, descriptor, fabricCfg, proc.local)
 	if err != nil {
-		observer.Record(ctx, SiteOpenFailed{Phase: PhaseEventFabric, Error: err.Error()})
-		return nil, err
+		return nil, errors.Join(err, proc.local.Publish(ctx, SiteOpenFailed{Phase: PhaseEventFabric, Error: err.Error()}))
 	}
 	info := fabric.Info()
 	fmt.Printf("platform: event fabric %s on %s, journal %s (storage=%t replicas=%d)\n",
 		info.Server, strings.Join(fabricCfg.Servers, ","), info.Journal,
 		info.HostsStorage, info.Replicas)
 
+	// Create the fan-out publisher with deterministic backend order: the local
+	// record first, this node's transport second. Close reverses the order, and
+	// closing the borrowed record is a no-op because the process owns it.
+	sp, err := storage.NewPublisher(proc.factory, storage.Borrowed(proc.record), fabric)
+	if err != nil {
+		return nil, errors.Join(err, fabric.Close(ctx))
+	}
 	s := &site{
-		fabric:          fabric,
-		publisher:       eventfabric.NewPublisher(factory, fabric),
-		projection:      registration.NewProjection(),
-		observer:        observer,
-		stopped:         make(chan struct{}),
-		catchUpTimeout:  fabricCfg.CatchUpTimeout,
-		shutdownTimeout: fabricCfg.ShutdownTimeout,
+		fabric:           fabric,
+		storagePublisher: sp,
+		publisher:        sp,
+		projection:       registration.NewProjection(),
+		local:            proc.local,
+		stopped:          make(chan struct{}),
+		catchUpTimeout:   fabricCfg.CatchUpTimeout,
+		shutdownTimeout:  fabricCfg.ShutdownTimeout,
 	}
 
 	if !active {
 		if err := s.startStandby(ctx); err != nil {
-			observer.Record(ctx, SiteOpenFailed{Phase: PhaseStandbyCatchUp, Error: err.Error()})
-			return nil, errors.Join(err, s.close(ctx))
+			return nil, errors.Join(err,
+				s.local.Publish(ctx, SiteOpenFailed{Phase: PhaseStandbyCatchUp, Error: err.Error()}),
+				s.close(ctx))
 		}
-		observer.Record(ctx, StandbyReady{
+		if err := s.local.Publish(ctx, StandbyReady{
 			AppliedSequence: s.projection.Sequence(),
 			DurationMS:      time.Since(openedAt).Milliseconds(),
-		})
+		}); err != nil {
+			return nil, errors.Join(err, s.close(ctx))
+		}
 		return s, nil
 	}
 
@@ -148,13 +171,16 @@ func open(ctx context.Context, descriptor config.Descriptor, cfg *config.Config,
 	}
 
 	if err := s.start(ctx, handler); err != nil {
-		observer.Record(ctx, SiteOpenFailed{Phase: PhaseActiveReadiness, Error: err.Error()})
-		return nil, errors.Join(err, s.close(ctx))
+		return nil, errors.Join(err,
+			s.local.Publish(ctx, SiteOpenFailed{Phase: PhaseActiveReadiness, Error: err.Error()}),
+			s.close(ctx))
 	}
-	observer.Record(ctx, SiteReady{
+	if err := s.local.Publish(ctx, SiteReady{
 		AppliedSequence: s.projection.Sequence(),
 		DurationMS:      time.Since(openedAt).Milliseconds(),
-	})
+	}); err != nil {
+		return nil, errors.Join(err, s.close(ctx))
+	}
 	return s, nil
 }
 
@@ -196,11 +222,15 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 		return err
 	}
 
-	receipt, err := s.publisher.Publish(catchUpCtx, eventfabric.Ready{Info: s.fabric.Info(), HighWater: s.projection.Sequence()})
+	err := s.publisher.Publish(catchUpCtx, eventfabric.Ready{Info: s.fabric.Info(), HighWater: s.projection.Sequence()})
 	if err != nil {
 		return fmt.Errorf("state ready: %w", err)
 	}
-	if err := s.awaitApplied(catchUpCtx, receipt.Sequence, "its own readiness"); err != nil {
+	high, err := s.fabric.HighWater(catchUpCtx)
+	if err != nil {
+		return fmt.Errorf("read readiness high water: %w", err)
+	}
+	if err := s.awaitApplied(catchUpCtx, high, "its own readiness"); err != nil {
 		return err
 	}
 	s.ready = true
@@ -211,10 +241,9 @@ func (s *site) start(ctx context.Context, handler eventfabric.Handler) error {
 // attaches the continuous projector and catches up to the journal's high-water
 // mark, and nothing else.
 //
-// It attaches no durable handler, publishes no readiness, and binds no listener,
-// so a standby follows the site's history without producing a decision. The same
-// projector stays attached for live events, so the standby keeps following after
-// it has caught up.
+// It attaches no durable handler and publishes no readiness, so a standby
+// follows the site's history without producing a decision. The same projector
+// stays attached for live events, so the standby keeps following after catch-up.
 func (s *site) startStandby(ctx context.Context) error {
 	catchUpCtx, cancel := context.WithTimeout(ctx, s.catchUpTimeout)
 	defer cancel()
@@ -238,13 +267,12 @@ func (s *site) catchUp(ctx context.Context, what string) error {
 	if err := s.awaitApplied(ctx, high, what); err != nil {
 		return err
 	}
-	s.observer.Record(ctx, ProjectionCaughtUp{
+	return s.local.Publish(ctx, ProjectionCaughtUp{
 		Phase:           what,
 		HighWater:       high,
 		AppliedSequence: s.projection.Sequence(),
 		DurationMS:      time.Since(started).Milliseconds(),
 	})
-	return nil
 }
 
 // awaitApplied waits for the projection to reach sequence, or for the projector
@@ -321,29 +349,37 @@ func (s *site) close(ctx context.Context) error {
 }
 
 func (s *site) release(ctx context.Context) error {
-	s.observer.Record(ctx, SiteStopping{Ready: s.ready})
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownTimeout)
 	defer cancel()
 
 	var errs []error
+	if err := s.local.Publish(ctx, SiteStopping{Ready: s.ready}); err != nil {
+		errs = append(errs, err)
+	}
 	for _, svc := range s.services {
 		errs = append(errs, svc.runner.stop())
 	}
 	// A node that never said it was ready has nothing to say about stopping. It
 	// would be stating the end of something the site never heard begin.
 	if s.ready {
-		if _, err := s.publisher.Publish(stopCtx, eventfabric.Stopping{Adapter: s.fabric.Info().Adapter}); err != nil {
+		if err := s.publisher.Publish(stopCtx, eventfabric.Stopping{Adapter: s.fabric.Info().Adapter}); err != nil {
 			errs = append(errs, fmt.Errorf("state stopping: %w", err))
 		}
 	}
-	errs = append(errs, s.projector.stop(), s.fabric.Close(stopCtx))
+	// Stop the projector before closing storage: the projector reads from the
+	// NATS connection, and closing NATS underneath a running projector is a
+	// race. The fan-out publisher closes its backends in reverse construction
+	// order, so the transport closes here and the process's borrowed record is
+	// left open for whatever this process still has to say.
+	errs = append(errs, s.projector.stop(), s.storagePublisher.Close(stopCtx))
 	err := errors.Join(errs...)
 	stopped := SiteStopped{}
 	if err != nil {
 		stopped.Error = err.Error()
 	}
-	s.observer.Record(ctx, stopped)
-	return err
+	// The release's own failures matter more than a failure to state that it
+	// happened, so the latter is joined onto them rather than replacing them.
+	return errors.Join(err, s.local.Publish(ctx, stopped))
 }
 
 // readinessError turns an expired readiness bound into the Event Fabric's
@@ -396,6 +432,11 @@ type runner struct {
 
 // run starts loop in the background and reports its stop to the site, so a
 // projector or handler that gives up takes the node's serving with it.
+//
+// The loop's own goroutine states that it stopped, and there is nobody to return
+// a publication failure to: the reason the loop ended is already held in the
+// runner for whoever waits on it. A failure to state it is reported to the
+// process error stream instead.
 func (s *site) run(ctx context.Context, name string, loop func(context.Context) error) *runner {
 	runCtx, cancel := context.WithCancel(ctx)
 	r := &runner{name: name, cancel: cancel, done: make(chan struct{})}
@@ -409,7 +450,7 @@ func (s *site) run(ctx context.Context, name string, loop func(context.Context) 
 		if r.err != nil {
 			stopped.Error = r.err.Error()
 		}
-		s.observer.Record(ctx, stopped)
+		events.BestEffort(s.local).State(ctx, stopped)
 	}()
 	return r
 }
@@ -447,10 +488,10 @@ func (r *runner) failure() error {
 // now that instance's own. Both instances of a machine run their own server, and
 // nothing about this composition is shared between them except the site they
 // join.
-func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundancy.InstanceRole) (natsfabric.Config, error) {
-	fabricCfg, err := natsfabric.DefaultConfig(descriptor, config.Role(role == redundancy.RoleStandby))
+func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundancy.InstanceRole) (natsbackend.Config, error) {
+	fabricCfg, err := natsbackend.DefaultConfig(descriptor, config.Role(role == redundancy.RoleStandby))
 	if err != nil {
-		return natsfabric.Config{}, err
+		return natsbackend.Config{}, err
 	}
 	settings := cfg.EventFabric().Nats
 
@@ -459,12 +500,12 @@ func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundanc
 
 	startupTimeout, err := time.ParseDuration(settings.StartupTimeout)
 	if err != nil {
-		return natsfabric.Config{}, fmt.Errorf("event fabric: startup timeout %q: %w", settings.StartupTimeout, err)
+		return natsbackend.Config{}, fmt.Errorf("event fabric: startup timeout %q: %w", settings.StartupTimeout, err)
 	}
 	fabricCfg.StartupTimeout = startupTimeout
 	catchUpTimeout, err := time.ParseDuration(settings.CatchUpTimeout)
 	if err != nil {
-		return natsfabric.Config{}, fmt.Errorf("event fabric: catch-up timeout %q: %w", settings.CatchUpTimeout, err)
+		return natsbackend.Config{}, fmt.Errorf("event fabric: catch-up timeout %q: %w", settings.CatchUpTimeout, err)
 	}
 	fabricCfg.CatchUpTimeout = catchUpTimeout
 
@@ -491,7 +532,7 @@ func natsConfig(descriptor config.Descriptor, cfg *config.Config, role redundanc
 //
 // Every value is a single token so the line can be parsed. No credential is
 // printed, and there is no monitor endpoint to print.
-func logEffectiveFabric(descriptor config.Descriptor, cfg natsfabric.Config, role redundancy.InstanceRole) {
+func logEffectiveFabric(descriptor config.Descriptor, cfg natsbackend.Config, role redundancy.InstanceRole) {
 	cluster := "none"
 	if len(cfg.Routes) > 0 {
 		cluster = cfg.ClusterAddress

@@ -1,9 +1,10 @@
 // Package app composes and runs the platform runtime.
 //
 // A machine's Primary and Standby Instances contend for one Primary Ownership.
-// Only the owner opens storage, attaches durable handlers, publishes readiness,
-// and serves domain operations. The other process runs a client-only projector in
-// the Passive state.
+// Both instances maintain their authored Event Fabric membership and projection.
+// Only the owner attaches durable handlers, publishes readiness, and serves
+// domain operations. The other process runs only its projector in the Passive
+// state.
 //
 // Both instances bind their own API address for their whole lifetime. A Passive
 // instance answers for itself — what it is, what it is doing, and where the other
@@ -27,14 +28,33 @@
 // # Its own events
 //
 // The runtime states its own facts: what it started, bound, opened, waited for,
-// and stopped. They are declared in events.go and recorded locally through
-// operations.Recorder, not published to the site journal, because they describe
-// one process — and a process that is failing to start is exactly the one that
+// and stopped. They are declared in events.go and stated through the
+// process-local publisher, whose only backend is the mandatory local JSONL
+// record. They do not reach the site journal, because they describe one
+// process — and a process that is failing to start is exactly the one that
 // cannot write to a journal.
 //
-// This package also composes the process's one events.Factory, from the
-// deployment descriptor and the resolved instance role, and passes it to the
-// local recorder and to the Event Fabric publisher. Everything this process
-// states, locally or into the journal, is stamped by that one factory, so a
-// local record and a published event carry the same origin.
+// # Composition owns the publishers
+//
+// This package composes the process's one events.Factory, from the deployment
+// descriptor and the resolved instance role, and the two publishers built on it:
+//
+//   - the process-local publisher, over the mandatory JSONL record alone. It is
+//     what this package, redundancy, and the transport adapter state through.
+//   - the site's fan-out publisher, over that same record first and this node's
+//     transport second. It is what registration and Event Fabric readiness are
+//     handed, and it is how a fact reaches the site.
+//
+// Every producer is given one of them explicitly and none of them reaches for
+// one. Which publisher a component receives decides who hears it, and that
+// decision is made here and nowhere else. No producer knows that JSONL, the
+// Event Fabric, or NATS exist.
+//
+// One factory stamps both, so a local record and a journalled event carry the
+// same origin, and a journalled event is in the local file too, in the order the
+// process stated it.
+//
+// The record is opened before anything else and closed last, because it has to
+// outlive every site the process composes: a machine that fails over composes
+// two.
 package app

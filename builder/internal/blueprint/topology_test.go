@@ -37,19 +37,35 @@ func validMachine() blueprint.Machine {
 		IP:             "10.0.1.10",
 		Services:       []string{"sensor-services"},
 		Platform: &blueprint.Platform{
-			RuntimeDir: "C:/ProgramData/opdl/sensor/primary",
-			DataDir:    "D:/opdl-journal/sensor/primary",
+			RuntimeDir: "C:/ProgramData/opdl/sensor/primary/runtime",
+			DataDir:    "D:/opdl/sensor/primary",
 			API:        &blueprint.API{LocalPort: 8080},
 			WinService: &blueprint.WinService{Name: "primary"},
-			Nats:       &blueprint.Nats{ClientPort: 4222, ClusterPort: 6222},
+			EventStorage: &blueprint.EventStorage{
+				EventFabric: &blueprint.EventFabric{
+					Nats: &blueprint.Nats{
+						ClientPort:        4222,
+						ClusterPort:       6222,
+						JetStreamStoreDir: "D:/opdl/sensor/primary/eventfabric/nats",
+					},
+				},
+			},
 			Standby: &blueprint.Standby{
 				Disabled:   false,
-				RuntimeDir: "C:/ProgramData/opdl/sensor/standby",
-				DataDir:    "D:/opdl-journal/sensor/standby",
+				RuntimeDir: "C:/ProgramData/opdl/sensor/standby/runtime",
+				DataDir:    "D:/opdl/sensor/standby",
 				Lock:       &blueprint.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
 				API:        &blueprint.API{LocalPort: 8081},
 				WinService: &blueprint.WinService{Name: "standby"},
-				Nats:       &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322},
+				EventStorage: &blueprint.EventStorage{
+					EventFabric: &blueprint.EventFabric{
+						Nats: &blueprint.Nats{
+							ClientPort:        4322,
+							ClusterPort:       6322,
+							JetStreamStoreDir: "D:/opdl/sensor/standby/eventfabric/nats",
+						},
+					},
+				},
 			},
 		},
 	}
@@ -66,11 +82,13 @@ func namedMachine(name, ip string) blueprint.Machine {
 	// its own value here: the ownership object, and both per-instance directories.
 	// Sharing a lock across machines is rejected, and sharing a directory is only
 	// safe because two machines are two hosts, which a fixture on one host is not.
-	m.Platform.RuntimeDir = "C:/ProgramData/opdl/" + name + "/primary"
-	m.Platform.DataDir = "D:/opdl-journal/" + name + "/primary"
+	m.Platform.RuntimeDir = "C:/ProgramData/opdl/" + name + "/primary/runtime"
+	m.Platform.DataDir = "D:/opdl/" + name + "/primary"
+	m.Platform.EventStorage.EventFabric.Nats.JetStreamStoreDir = "D:/opdl/" + name + "/primary/eventfabric/nats"
 	m.Platform.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
-	m.Platform.Standby.RuntimeDir = "C:/ProgramData/opdl/" + name + "/standby"
-	m.Platform.Standby.DataDir = "D:/opdl-journal/" + name + "/standby"
+	m.Platform.Standby.RuntimeDir = "C:/ProgramData/opdl/" + name + "/standby/runtime"
+	m.Platform.Standby.DataDir = "D:/opdl/" + name + "/standby"
+	m.Platform.Standby.EventStorage.EventFabric.Nats.JetStreamStoreDir = "D:/opdl/" + name + "/standby/eventfabric/nats"
 	m.Platform.Standby.Lock = &blueprint.Lock{WindowsMutex: `Global\opdl-customer-a-north-` + name}
 	return m
 }
@@ -190,28 +208,48 @@ func TestMachinePlatformStandby(t *testing.T) {
 	})
 	t.Run("standby enabled", func(t *testing.T) {
 		m := machine(t, `platform {
-		  nats {
-		    client_port  = 4222
-		    cluster_port = 6222
+		  event_storage {
+		    eventfabric {
+		      nats {
+		        client_port         = 4222
+		        cluster_port        = 6222
+		        jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
+		      }
+		    }
 		  }
 		  standby {
 		    disabled = false
 		    runtime_dir = "C:/ProgramData/opdl/m1/standby"
-		    data_dir = "D:/opdl-journal/m1/standby"
+		    data_dir = "D:/opdl/m1/standby"
+		    event_storage {
+		      eventfabric {
+		        nats {
+		          client_port         = 4322
+		          cluster_port        = 6322
+		          jetstream_store_dir = "D:/opdl/m1/standby/eventfabric/nats"
+		        }
+		      }
+		    }
 		  }
 		}`)
 		require.NotNil(t, m.Platform)
-		require.NotNil(t, m.Platform.Nats)
-		require.Equal(t, 4222, m.Platform.Nats.ClientPort)
-		require.Equal(t, 6222, m.Platform.Nats.ClusterPort)
+		nats := m.Nats(false)
+		require.NotNil(t, nats)
+		require.Equal(t, 4222, nats.ClientPort)
+		require.Equal(t, 6222, nats.ClusterPort)
 		require.NotNil(t, m.Platform.Standby)
 		require.False(t, m.Platform.Standby.Disabled)
 	})
 	t.Run("standby explicitly disabled", func(t *testing.T) {
 		m := machine(t, `platform {
-		  nats {
-		    client_port  = 4222
-		    cluster_port = 6222
+		  event_storage {
+		    eventfabric {
+		      nats {
+		        client_port         = 4222
+		        cluster_port        = 6222
+		        jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
+		      }
+		    }
 		  }
 		  standby {
 		    disabled = true
@@ -224,11 +262,6 @@ func TestMachinePlatformStandby(t *testing.T) {
 
 // TestMachinePlatformDecodeFailures checks the mandatory parts of the platform
 // subsection are enforced by the decoder itself, before any validation runs.
-//
-// The disabled attribute matters most here. It is a bool, so an omitted one
-// would decode to false and enable redundancy nobody asked for. Requiring it at
-// decode time is what makes that impossible to express rather than merely
-// invalid.
 func TestMachinePlatformDecodeFailures(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -238,9 +271,14 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 		{
 			name: "standby block without disabled attribute",
 			body: `platform {
-			  nats {
-			    client_port  = 4222
-			    cluster_port = 6222
+			  event_storage {
+			    eventfabric {
+			      nats {
+			        client_port         = 4222
+			        cluster_port        = 6222
+			        jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
+			      }
+			    }
 			  }
 			  standby {}
 			}`,
@@ -249,8 +287,13 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 		{
 			name: "nats block without client_port",
 			body: `platform {
-			  nats {
-			    cluster_port = 6222
+			  event_storage {
+			    eventfabric {
+			      nats {
+			        cluster_port        = 6222
+			        jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
+			      }
+			    }
 			  }
 			  standby {
 			    disabled = true
@@ -261,8 +304,13 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 		{
 			name: "nats block without cluster_port",
 			body: `platform {
-			  nats {
-			    client_port = 4222
+			  event_storage {
+			    eventfabric {
+			      nats {
+			        client_port         = 4222
+			        jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
+			      }
+			    }
 			  }
 			  standby {
 			    disabled = true
@@ -378,21 +426,26 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      services = ["core-services"]
 			      platform {
 			        runtime_dir = "C:/ProgramData/opdl/node-1/primary"
-			        data_dir = "D:/opdl-journal/node-1/primary"
+			        data_dir = "D:/opdl/node-1/primary"
 			        api {
 			          local_port = 8080
 			        }
 			        winservice {
 			          name = "primary"
 			        }
-			        nats {
-			          client_port  = 4222
-			          cluster_port = 6222
+			        event_storage {
+			          eventfabric {
+			            nats {
+			              client_port         = 4222
+			              cluster_port        = 6222
+			              jetstream_store_dir = "D:/opdl/node-1/primary/eventfabric/nats"
+			            }
+			          }
 			        }
 			        standby {
 			          disabled = false
 			          runtime_dir = "C:/ProgramData/opdl/node-1/standby"
-			          data_dir = "D:/opdl-journal/node-1/standby"
+			          data_dir = "D:/opdl/node-1/standby"
 			          lock {
 			            windows_mutex = "Global\\dup-north-node-1"
 			          }
@@ -402,9 +455,14 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			          winservice {
 			            name = "standby"
 			          }
-			          nats {
-			            client_port  = 4322
-			            cluster_port = 6322
+			          event_storage {
+			            eventfabric {
+			              nats {
+			                client_port         = 4322
+			                cluster_port        = 6322
+			                jetstream_store_dir = "D:/opdl/node-1/standby/eventfabric/nats"
+			              }
+			            }
 			          }
 			        }
 			      }
@@ -417,21 +475,26 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      services = ["core-services"]
 			      platform {
 			        runtime_dir = "C:/ProgramData/opdl/node-1/primary"
-			        data_dir = "D:/opdl-journal/node-1/primary"
+			        data_dir = "D:/opdl/node-1/primary"
 			        api {
 			          local_port = 8080
 			        }
 			        winservice {
 			          name = "primary"
 			        }
-			        nats {
-			          client_port  = 4222
-			          cluster_port = 6222
+			        event_storage {
+			          eventfabric {
+			            nats {
+			              client_port         = 4222
+			              cluster_port        = 6222
+			              jetstream_store_dir = "D:/opdl/node-1/primary/eventfabric/nats"
+			            }
+			          }
 			        }
 			        standby {
 			          disabled = false
 			          runtime_dir = "C:/ProgramData/opdl/node-1/standby"
-			          data_dir = "D:/opdl-journal/node-1/standby"
+			          data_dir = "D:/opdl/node-1/standby"
 			          lock {
 			            windows_mutex = "Global\\dup-south-node-1"
 			          }
@@ -441,9 +504,14 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			          winservice {
 			            name = "standby"
 			          }
-			          nats {
-			            client_port  = 4322
-			            cluster_port = 6322
+			          event_storage {
+			            eventfabric {
+			              nats {
+			                client_port         = 4322
+			                cluster_port        = 6322
+			                jetstream_store_dir = "D:/opdl/node-1/standby/eventfabric/nats"
+			              }
+			            }
 			          }
 			        }
 			      }
@@ -473,7 +541,7 @@ func disableStandby(p *blueprint.Project) {
 	standby.Lock = nil
 	standby.API = nil
 	standby.WinService = nil
-	standby.Nats = nil
+	standby.EventStorage = nil
 }
 
 // TestStandbyEndpointsAreRejectedWhenNotDeployed checks each block a Standby
@@ -486,7 +554,9 @@ func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 		"runtime_dir": func(s *blueprint.Standby) { s.RuntimeDir = "C:/ProgramData/opdl/sensor/standby" },
 		"api":         func(s *blueprint.Standby) { s.API = &blueprint.API{LocalPort: 8081} },
 		"winservice":  func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
-		"nats":        func(s *blueprint.Standby) { s.Nats = &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322} },
+		"event_storage": func(s *blueprint.Standby) {
+			s.EventStorage = &blueprint.EventStorage{EventFabric: &blueprint.EventFabric{Nats: &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322, JetStreamStoreDir: "D:/opdl/sensor/standby/eventfabric/nats"}}}
+		},
 	}
 	for label, author := range tests {
 		t.Run(label, func(t *testing.T) {
@@ -544,10 +614,14 @@ func TestMachineInstancesMustNotShareARuntimeDir(t *testing.T) {
 // of their listeners mutually exclusive.
 func TestMachineListenersMustNotSharePort(t *testing.T) {
 	tests := map[string]func(*blueprint.Platform){
-		"standby api copies primary api":       func(pl *blueprint.Platform) { pl.Standby.API.LocalPort = pl.API.LocalPort },
-		"standby nats copies primary nats":     func(pl *blueprint.Platform) { pl.Standby.Nats.ClientPort = pl.Nats.ClientPort },
-		"standby cluster copies primary":       func(pl *blueprint.Platform) { pl.Standby.Nats.ClusterPort = pl.Nats.ClusterPort },
-		"api collides with this instance nats": func(pl *blueprint.Platform) { pl.API.LocalPort = pl.Nats.ClientPort },
+		"standby api copies primary api": func(pl *blueprint.Platform) { pl.Standby.API.LocalPort = pl.API.LocalPort },
+		"standby nats copies primary nats": func(pl *blueprint.Platform) {
+			pl.Standby.EventStorage.EventFabric.Nats.ClientPort = pl.EventStorage.EventFabric.Nats.ClientPort
+		},
+		"standby cluster copies primary": func(pl *blueprint.Platform) {
+			pl.Standby.EventStorage.EventFabric.Nats.ClusterPort = pl.EventStorage.EventFabric.Nats.ClusterPort
+		},
+		"api collides with this instance nats": func(pl *blueprint.Platform) { pl.API.LocalPort = pl.EventStorage.EventFabric.Nats.ClientPort },
 	}
 	for label, collide := range tests {
 		t.Run(label, func(t *testing.T) {
@@ -565,17 +639,27 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 		errText string
 	}{
 		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, `machine "sensor": platform block is required`},
-		{"missing nats block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats = nil }, `machine "sensor": platform.nats block is required`},
+		{"missing event_storage block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.EventStorage = nil }, `machine "sensor": platform.event_storage block is required`},
 		{"missing standby block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby = nil }, `machine "sensor": platform.standby block is required`},
 		{"missing standby lock when deployed", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby.Lock = nil }, `machine "sensor": platform.standby.lock block is required when the standby is deployed`},
-		{"zero client port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = 0 }, `platform.nats.client_port must be in range 1-65535, got 0`},
-		{"negative client port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = -1 }, `platform.nats.client_port must be in range 1-65535, got -1`},
-		{"client port above range", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClientPort = 65536 }, `platform.nats.client_port must be in range 1-65535, got 65536`},
-		{"zero cluster port", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterPort = 0 }, `platform.nats.cluster_port must be in range 1-65535, got 0`},
-		{"cluster port above range", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Nats.ClusterPort = 70000 }, `platform.nats.cluster_port must be in range 1-65535, got 70000`},
+		{"zero client port", func(p *blueprint.Project) {
+			p.Sites[0].Machines[0].Platform.EventStorage.EventFabric.Nats.ClientPort = 0
+		}, `platform.event_storage.eventfabric.nats.client_port must be in range 1-65535, got 0`},
+		{"negative client port", func(p *blueprint.Project) {
+			p.Sites[0].Machines[0].Platform.EventStorage.EventFabric.Nats.ClientPort = -1
+		}, `platform.event_storage.eventfabric.nats.client_port must be in range 1-65535, got -1`},
+		{"client port above range", func(p *blueprint.Project) {
+			p.Sites[0].Machines[0].Platform.EventStorage.EventFabric.Nats.ClientPort = 65536
+		}, `platform.event_storage.eventfabric.nats.client_port must be in range 1-65535, got 65536`},
+		{"zero cluster port", func(p *blueprint.Project) {
+			p.Sites[0].Machines[0].Platform.EventStorage.EventFabric.Nats.ClusterPort = 0
+		}, `platform.event_storage.eventfabric.nats.cluster_port must be in range 1-65535, got 0`},
+		{"cluster port above range", func(p *blueprint.Project) {
+			p.Sites[0].Machines[0].Platform.EventStorage.EventFabric.Nats.ClusterPort = 70000
+		}, `platform.event_storage.eventfabric.nats.cluster_port must be in range 1-65535, got 70000`},
 		{"colliding ports", func(p *blueprint.Project) {
-			p.Sites[0].Machines[0].Platform.Nats.ClusterPort = p.Sites[0].Machines[0].Platform.Nats.ClientPort
-		}, `platform.nats.client_port and platform.nats.cluster_port are both 4222`},
+			p.Sites[0].Machines[0].Platform.EventStorage.EventFabric.Nats.ClusterPort = p.Sites[0].Machines[0].Platform.EventStorage.EventFabric.Nats.ClientPort
+		}, `platform.event_storage.eventfabric.nats.client_port and platform.event_storage.eventfabric.nats.cluster_port are both 4222`},
 	}
 
 	for _, tc := range tests {
@@ -693,7 +777,7 @@ func TestWinServiceIdentityFillsDisplayNameDefault(t *testing.T) {
 
 	machine.Platform.Standby.Disabled = true
 	machine.Platform.Standby.API = nil
-	machine.Platform.Standby.Nats = nil
+	machine.Platform.Standby.EventStorage = nil
 	machine.Platform.Standby.WinService = nil
 	require.Nil(t, machine.WinServiceIdentity(true), "an undeployed instance has no service")
 }

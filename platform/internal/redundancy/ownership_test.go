@@ -9,12 +9,22 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
 
 // These cover the ownership lifecycle: which composition runs, in which order,
 // and what happens on each way out. They are about sequencing rather than about
 // the kernel object, which lock_test.go covers.
+
+// stating is the process-local publisher these tests hand Contend. They assert
+// on sequencing rather than on what was stated, so the envelopes go to a backend
+// nobody reads. What was stated is events_test.go's subject.
+func stating(t *testing.T) events.Publisher {
+	t.Helper()
+	publisher, _ := recording(t)
+	return publisher
+}
 
 // recordingRuntime records the order the two compositions ran in, so a test can
 // assert the property the whole state machine exists for: an instance's passive
@@ -86,7 +96,8 @@ func TestContendActivatesImmediatelyWhenOwnershipIsFree(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, lock, runtime.runtime()) }()
+	publisher := stating(t)
+	go func() { done <- redundancy.Contend(ctx, publisher, lock, runtime.runtime()) }()
 
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds,
 		"an uncontested start is an initial activation, not a failover")
@@ -106,7 +117,8 @@ func TestContendWithoutALockIsActiveByConstruction(t *testing.T) {
 	runtime := newRecordingRuntime()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, nil, runtime.runtime()) }()
+	publisher := stating(t)
+	go func() { done <- redundancy.Contend(ctx, publisher, nil, runtime.runtime()) }()
 
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
 	cancel()
@@ -135,7 +147,8 @@ func TestContendRunsPassiveUntilOwnershipIsWon(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, standby, runtime.runtime()) }()
+	publisher := stating(t)
+	go func() { done <- redundancy.Contend(ctx, publisher, standby, runtime.runtime()) }()
 
 	// The standby is passive while the other instance holds ownership.
 	require.Eventually(t, func() bool {
@@ -170,7 +183,8 @@ func TestContendCallsAPrimaryTakingOverAFailback(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, primary, runtime.runtime()) }()
+	publisher := stating(t)
+	go func() { done <- redundancy.Contend(ctx, publisher, primary, runtime.runtime()) }()
 
 	require.Eventually(t, func() bool { return len(runtime.recorded()) == 1 }, 5*time.Second, 10*time.Millisecond)
 	require.NoError(t, holder.Release())
@@ -199,7 +213,8 @@ func TestContendStopsWithoutActivatingWhenTheProcessIsStopped(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, standby, runtime.runtime()) }()
+	publisher := stating(t)
+	go func() { done <- redundancy.Contend(ctx, publisher, standby, runtime.runtime()) }()
 
 	require.Eventually(t, func() bool { return len(runtime.recorded()) == 1 }, 5*time.Second, 10*time.Millisecond)
 	cancel()
@@ -230,7 +245,7 @@ func TestContendReportsAPassiveCompositionThatGivesUp(t *testing.T) {
 	runtime := newRecordingRuntime()
 	runtime.passiveErr = errors.New("projection unavailable")
 
-	err = redundancy.Contend(t.Context(), standby, runtime.runtime())
+	err = redundancy.Contend(t.Context(), stating(t), standby, runtime.runtime())
 	require.ErrorContains(t, err, "projection unavailable")
 	require.Equal(t, []string{"passive start", "passive failed"}, runtime.recorded())
 	require.False(t, standby.Held(), "an instance that gave up waiting holds nothing")
@@ -249,7 +264,8 @@ func TestContendReleasesOwnershipAfterTheActiveCompositionReturns(t *testing.T) 
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, lock, runtime.runtime()) }()
+	publisher := stating(t)
+	go func() { done <- redundancy.Contend(ctx, publisher, lock, runtime.runtime()) }()
 
 	<-runtime.activeKinds
 	require.True(t, lock.Held(), "ownership is held for the whole active composition")
@@ -269,7 +285,7 @@ func TestContendReleasesOwnershipWhenTheActiveCompositionFails(t *testing.T) {
 	runtime := newRecordingRuntime()
 	runtime.activeErr = errors.New("fabric would not open")
 
-	err := redundancy.Contend(t.Context(), lock, runtime.runtime())
+	err := redundancy.Contend(t.Context(), stating(t), lock, runtime.runtime())
 	require.ErrorContains(t, err, "fabric would not open")
 	require.False(t, lock.Held(), "a failed activation still releases ownership")
 }

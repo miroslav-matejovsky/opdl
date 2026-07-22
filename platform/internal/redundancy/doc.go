@@ -11,10 +11,11 @@
 // Primary Ownership. A returning Primary Instance takes ownership back through
 // graceful handover, never by seizing it from a Standby Instance in the Active state.
 //
-// Only the owner may serve domain operations, run durable handlers, publish
-// lifecycle readiness, or host the embedded NATS server and storage. The other
-// instance (whether Primary or Standby) runs a client-only projector in the
-// Passive state, and answers for itself on its own API address.
+// Only the owner may serve domain operations, run durable handlers, or publish
+// lifecycle readiness. Event Fabric membership is independent of ownership: an
+// instance selected for storage runs its authored NATS server in either state.
+// The Passive instance runs only its projector and answers for itself on its own
+// API address.
 //
 // # What this package decides, and what it does not
 //
@@ -24,9 +25,9 @@
 // runtime supplies two functions — one to run while Passive, one to run while
 // Active — and Contend decides when each runs. See ownership.go.
 //
-// The sequencing is the point. The two compositions open the same journal
-// storage and the same node identity, so an overlap is a machine running two of
-// itself, and nothing in the type system prevents it. Contend does: Passive has
+// The sequencing is the point. The Passive and Active compositions of one
+// instance use the same Event Fabric identity and storage. Nothing in the type
+// system prevents them from opening it concurrently. Contend does: Passive has
 // returned before Active is called, and ownership is released only after Active
 // has returned.
 //
@@ -63,13 +64,12 @@
 // while it is Active, so a transfer changes which address serves domain
 // operations rather than moving one address between processes:
 //
-//	both instances are listening, on their own addresses
-//	active closes domain serving and Event Fabric
-//	active embedded NATS stops
-//	active releases ownership
-//	waiter acquires ownership
-//	waiter opens its own embedded NATS
-//	waiter catches up and serves domain operations on the address it already had
+//	both instances listen and maintain their own Event Fabric membership
+//	the active instance closes domain serving and its Event Fabric composition
+//	the active instance releases ownership
+//	the waiter acquires ownership and closes its Passive composition
+//	the waiter opens its Active composition over the same authored membership
+//	the waiter catches up and serves domain operations on its existing API address
 //
 // The ordering is what makes this safe, and it is the same ordering a shared
 // endpoint needed: ownership is released only after the active process has closed
@@ -97,7 +97,13 @@
 // runs the transition is the one that can report it accurately, so it states
 // them itself rather than returning them for a caller to describe.
 //
-// They are recorded locally, through operations.Recorder, and not published. A
-// machine contends for ownership before it has a journal to write to, and an
-// instance that never becomes active never gets one at all.
+// Contend is handed the events.Publisher it states them through, so this package
+// never reaches for one and never chooses where they are stored. Runtime
+// composition gives it the process-local publisher, whose only backend is the
+// local JSONL record: a machine contends for ownership before it has a journal to
+// write to, and an instance that never becomes active never gets one at all.
+//
+// Every statement here is on the startup path, where Contend can return an
+// error, so a failure to state one stops the instance. Ownership that moved with
+// no record that it did is not a state an operator can be asked to reason about.
 package redundancy

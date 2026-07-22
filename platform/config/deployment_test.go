@@ -19,8 +19,10 @@ const completeDescriptor = `{
   "instances": {
     "primary": {
       "disabled": false,
+      "data_dir": ".data/platform/primary",
       "api_address": "127.0.0.1:8080",
       "nats": {
+        "jetstream_store_dir": ".data/journal/primary",
         "client_address": "127.0.0.1:4222",
         "cluster_address": "127.0.0.1:6222",
         "routes": [],
@@ -41,18 +43,13 @@ const completeDescriptor = `{
   ]
 }`
 
-// instances is the instances block every fixture below shares, so a test that
-// removes one part of the descriptor states only the part it removes.
-const instances = `"instances":{"primary":{"disabled":false},"standby":{"disabled":true}}`
+const primaryInstanceJSON = `"primary":{"disabled":false,"data_dir":".data/platform/primary","nats":{"jetstream_store_dir":".data/journal/primary"}}`
+const standbyInstanceJSON = `"standby":{"disabled":false,"data_dir":".data/platform/standby","nats":{"jetstream_store_dir":".data/journal/standby"}}`
+const instances = `"instances":{` + primaryInstanceJSON + `,"standby":{"disabled":true}}`
+const standbyEnabledInstances = `"instances":{` + primaryInstanceJSON + `,` + standbyInstanceJSON + `}`
 
 // TestDescriptorRequiresExplicitDecisions checks the descriptor decoder rejects
 // JSON that leaves a decision to a zero value.
-//
-// Each guarded field has a usable zero: an omitted disabled decodes as false, an
-// omitted peers list decodes as a site of one, so a registration would need no
-// confirmation but its own. Without these checks a truncated or stale descriptor
-// would produce a running machine with a topology nobody wrote, which is strictly
-// worse than a startup error.
 func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 	tests := map[string]struct {
 		json string
@@ -69,11 +66,11 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			err:  "instances.primary is required",
 		},
 		"missing standby instance": {
-			json: `{"instances":{"primary":{"disabled":false}}}`,
+			json: `{"instances":{` + primaryInstanceJSON + `}}`,
 			err:  "instances.standby is required",
 		},
 		"null standby instance": {
-			json: `{"instances":{"primary":{"disabled":false},"standby":null}}`,
+			json: `{"instances":{` + primaryInstanceJSON + `,"standby":null}}`,
 			err:  "instances.standby is required",
 		},
 		"missing primary disabled": {
@@ -81,7 +78,7 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			err:  "instances.primary.disabled is required",
 		},
 		"missing standby disabled": {
-			json: `{"instances":{"primary":{"disabled":false},"standby":{}}}`,
+			json: `{"instances":{` + primaryInstanceJSON + `,"standby":{}}}`,
 			err:  "instances.standby.disabled is required",
 		},
 		"lock when standby disabled": {
@@ -89,15 +86,15 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			err:  "lock is set but instances.standby.disabled is true",
 		},
 		"missing lock when standby enabled": {
-			json: `{"instances":{"primary":{"disabled":false},"standby":{"disabled":false}}}`,
+			json: `{` + standbyEnabledInstances + `}`,
 			err:  "lock is required",
 		},
 		"null lock when standby enabled": {
-			json: `{"instances":{"primary":{"disabled":false},"standby":{"disabled":false}},"lock":null}`,
+			json: `{` + standbyEnabledInstances + `,"lock":null}`,
 			err:  "lock is required",
 		},
 		"missing lock windows_mutex when standby enabled": {
-			json: `{"instances":{"primary":{"disabled":false},"standby":{"disabled":false}},"lock":{}}`,
+			json: `{` + standbyEnabledInstances + `,"lock":{}}`,
 			err:  "lock.windows_mutex is required",
 		},
 		"missing peers": {
@@ -161,13 +158,15 @@ func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
 	  "instances": {
 	    "primary": {
 	      "disabled": false,
+	      "data_dir": ".data/platform/primary",
 	      "api_address": "127.0.0.1:8080",
-	      "nats": {"client_address": "127.0.0.1:4222", "cluster_address": "127.0.0.1:6222", "routes": ["127.0.0.1:6322"], "servers": ["127.0.0.1:4222", "127.0.0.1:4322"]}
+	      "nats": {"jetstream_store_dir": ".data/journal/primary", "client_address": "127.0.0.1:4222", "cluster_address": "127.0.0.1:6222", "routes": ["127.0.0.1:6322"], "servers": ["127.0.0.1:4222", "127.0.0.1:4322"]}
 	    },
 	    "standby": {
 	      "disabled": false,
+	      "data_dir": ".data/platform/standby",
 	      "api_address": "127.0.0.1:8081",
-	      "nats": {"client_address": "127.0.0.1:4322", "cluster_address": "127.0.0.1:6322", "routes": ["127.0.0.1:6222"], "servers": ["127.0.0.1:4322", "127.0.0.1:4222"]}
+	      "nats": {"jetstream_store_dir": ".data/journal/standby", "client_address": "127.0.0.1:4322", "cluster_address": "127.0.0.1:6322", "routes": ["127.0.0.1:6222"], "servers": ["127.0.0.1:4322", "127.0.0.1:4222"]}
 	    }
 	  },
 	  "lock": {"windows_mutex": "Global\\opdl-customer-a-north-sensor"},

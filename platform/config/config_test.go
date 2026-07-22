@@ -73,21 +73,6 @@ catch_up_timeout = "25s"
 	require.Equal(t, "25s", nats.CatchUpTimeout)
 }
 
-func TestLoadReadsOptionalOperationsEventDirectory(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, `read_header_timeout = "5s"
-shutdown_timeout = "10s"
-lag_bound = "30s"
-[operations]
-event_dir = " /var/log/opdl/events "
-[event_fabric.nats]
-startup_timeout = "30s"
-catch_up_timeout = "25s"
-`))
-	require.NoError(t, err)
-	require.Equal(t, "/var/log/opdl/events", cfg.OperationsEventDir())
-	require.Contains(t, cfg.Summary(false), "operations.event_dir /var/log/opdl/events")
-}
-
 // TestLoadRejectsADataDirectory guards the tier boundary the journal's storage
 // moved across.
 //
@@ -104,7 +89,7 @@ func TestLoadRejectsADataDirectory(t *testing.T) {
 shutdown_timeout = "10s"
 lag_bound = "30s"
 [event_fabric.nats]
-data_dir = "/var/lib/opdl/nats"
+data_dir = "D:/opdl/nats"
 startup_timeout = "30s"
 catch_up_timeout = "25s"
 `))
@@ -380,10 +365,8 @@ func TestSummaryShowsConfiguration(t *testing.T) {
 	require.Contains(t, s, "read_header_timeout 5s")
 	require.Contains(t, s, "shutdown_timeout    10s")
 	require.Contains(t, s, "lag_bound           30s")
-	// The journal store is the running instance's, rendered from the descriptor
-	// alongside the rest of its identity, rather than from the configuration
-	// file's Event Fabric section where it used to sit.
-	require.Contains(t, s, "data_dir     .data/journal/primary")
+	require.Contains(t, s, "data_dir     .data/platform/primary")
+	require.Contains(t, s, "jetstream_store_dir .data/journal/primary")
 	require.Contains(t, s, "startup_timeout=30s")
 	require.Contains(t, s, "catch_up_timeout=25s")
 }

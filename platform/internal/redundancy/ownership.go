@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
 // This file is ownership: what holding the lock means at runtime, and the order
@@ -79,11 +79,20 @@ type Runtime struct {
 // Ownership is released after Active returns and before Contend does, so the
 // other instance cannot start composing its active resources while this one is
 // still closing its own.
-func Contend(ctx context.Context, lock *Lock, runtime Runtime) error {
-	observer := operations.FromContext(ctx)
+//
+// publisher is how this package states what it did. Every statement here is on
+// the startup path and this function returns an error, so a failure to state one
+// stops the instance rather than leaving a machine whose ownership moved with no
+// record that it did.
+func Contend(ctx context.Context, publisher events.Publisher, lock *Lock, runtime Runtime) error {
+	if publisher == nil {
+		return errors.New("redundancy: publisher is required")
+	}
 
 	if lock != nil {
-		observer.Record(ctx, LockOpened{Object: lock.Name(), Existed: lock.Existed()})
+		if err := publisher.Publish(ctx, LockOpened{Object: lock.Name(), Existed: lock.Existed()}); err != nil {
+			return err
+		}
 	}
 
 	acquired, err := lock.TryAcquire()
@@ -91,18 +100,24 @@ func Contend(ctx context.Context, lock *Lock, runtime Runtime) error {
 		return err
 	}
 	if acquired.Held {
-		recordAcquired(ctx, observer, lock, acquired)
-		return activate(ctx, lock, runtime, ActivationInitial)
+		if err := stateAcquired(ctx, publisher, lock, acquired); err != nil {
+			return err
+		}
+		return activate(ctx, publisher, lock, runtime, ActivationInitial)
 	}
 
-	observer.Record(ctx, OwnershipWaiting{Object: lock.Name()})
+	if err := publisher.Publish(ctx, OwnershipWaiting{Object: lock.Name()}); err != nil {
+		return err
+	}
 
 	acquired, err = waitWhilePassive(ctx, lock, runtime)
 	if err != nil || !acquired.Held {
 		return err
 	}
-	recordAcquired(ctx, observer, lock, acquired)
-	return activate(ctx, lock, runtime, activationKind(lock.Role()))
+	if err := stateAcquired(ctx, publisher, lock, acquired); err != nil {
+		return err
+	}
+	return activate(ctx, publisher, lock, runtime, activationKind(lock.Role()))
 }
 
 // activationKind names why this instance is taking over after waiting. A Standby
@@ -167,31 +182,35 @@ func waitWhilePassive(ctx context.Context, lock *Lock, runtime Runtime) (Acquisi
 // Release happens here rather than in the caller so that it cannot be forgotten
 // on an error path, and so it always happens after Active has returned, which is
 // the ordering the other instance depends on.
-func activate(ctx context.Context, lock *Lock, runtime Runtime, kind ActivationKind) error {
-	observer := operations.FromContext(ctx)
+//
+// The outcome is stated after Active has returned, so its publication failure is
+// joined with everything else that went wrong rather than replacing it. What
+// happened to ownership is the more important of the two.
+func activate(ctx context.Context, publisher events.Publisher, lock *Lock, runtime Runtime, kind ActivationKind) error {
 	started := time.Now()
-	observer.Record(ctx, ActivationStarted{Kind: kind})
+	if err := publisher.Publish(ctx, ActivationStarted{Kind: kind}); err != nil {
+		return err
+	}
 
 	err := runtime.Active(ctx, kind)
 	releaseErr := lock.Release()
 
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
-		observer.Record(ctx, ActivationFailed{Kind: kind, DurationMS: elapsed, Error: err.Error()})
-		return errors.Join(err, releaseErr)
+		stateErr := publisher.Publish(ctx, ActivationFailed{Kind: kind, DurationMS: elapsed, Error: err.Error()})
+		return errors.Join(err, releaseErr, stateErr)
 	}
-	observer.Record(ctx, ActivationCompleted{Kind: kind, DurationMS: elapsed})
-	return releaseErr
+	return errors.Join(publisher.Publish(ctx, ActivationCompleted{Kind: kind, DurationMS: elapsed}), releaseErr)
 }
 
-// recordAcquired states ownership and how it was obtained. A machine with no
+// stateAcquired states ownership and how it was obtained. A machine with no
 // standby has no lock and nothing to state: it is active by construction, so
 // there was no ownership to take from anyone.
-func recordAcquired(ctx context.Context, observer *operations.Recorder, lock *Lock, acquired Acquisition) {
+func stateAcquired(ctx context.Context, publisher events.Publisher, lock *Lock, acquired Acquisition) error {
 	if lock == nil {
-		return
+		return nil
 	}
-	observer.Record(ctx, OwnershipAcquired{Object: lock.Name(), Abandoned: acquired.Abandoned})
+	return publisher.Publish(ctx, OwnershipAcquired{Object: lock.Name(), Abandoned: acquired.Abandoned})
 }
 
 // There is no branch here for "another process holds ownership on a machine with

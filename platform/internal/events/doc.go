@@ -28,19 +28,37 @@
 //
 // # Where an event goes
 //
-// A domain fact is published to the site journal through the Event Fabric,
-// synchronously, and a failure fails the operation that caused it: an event
-// nobody retained is a fact that did not happen as far as the site is concerned.
+// A producer states a fact through one Publisher and knows nothing else. It
+// passes a payload and a context; the publisher stamps the envelope and stores
+// it. Which backends exist, in what order, and what they are is composition's
+// business, and a producer cannot see it or choose it.
 //
-// A fact about one process is recorded locally through operations.Recorder,
-// best effort. It has to be: connection loss, journal unavailability, and
-// projection failure are exactly the conditions an operator needs to see, so
-// describing them must not depend on the journal being reachable. A process that
-// cannot describe itself must still run.
+// A domain fact goes to a publisher that reaches the site journal, and a failure
+// fails the operation that caused it: an event nobody retained is a fact that
+// did not happen as far as the site is concerned.
 //
-// Both destinations carry this package's Envelope, so an operator decodes one
-// shape wherever an event is read, and neither destination has any say in what
-// an event is.
+// A fact about one process goes to a publisher that reaches only the local
+// record. It has to: connection loss, journal unavailability, and projection
+// failure are exactly the conditions an operator needs to see, so describing
+// them must not depend on the journal being reachable.
+//
+// Every publisher carries this package's Envelope to every backend, so an
+// operator decodes one shape wherever an event is read, and no backend has any
+// say in what an event is.
+//
+// # When a publication fails
+//
+// Publish returns an error and nothing else. What that error means is the
+// caller's to decide, and the platform applies one policy:
+//
+//   - a domain operation propagates the failure;
+//   - a startup or shutdown path returns or joins it, because a process that
+//     could not state what it did has not started or stopped cleanly;
+//   - a path that cannot return one — a background loop, a transport callback —
+//     states through BestEffort, whose Diagnostic reports the failure to the
+//     process error stream;
+//   - nothing discards one silently, and no failure is restated as an event
+//     through the pipeline that just failed.
 //
 // # Event types
 //
@@ -97,8 +115,9 @@
 //
 // The envelope deliberately carries no transport ordering. A shared journal
 // orders events when it accepts them; that sequence is a property of the
-// delivery, not of the immutable fact, and lives on the Event Fabric's receipt
-// and delivery rather than in the envelope.
+// delivery, not of the immutable fact, and lives on the Event Fabric's delivery
+// rather than in the envelope. A producer never sees it: Publish returns an
+// error and nothing else.
 //
 // # Stamping
 //
@@ -114,9 +133,9 @@
 // machine it is not, because it never states one at all.
 //
 // Wrap reports an error rather than stamping a partial envelope. The caller
-// decides what that means, because this package cannot: a required publication
-// fails the operation it belongs to, while a best-effort local record does not.
-// Nothing here logs.
+// decides what that means, because this package cannot. Required paths return or
+// join it; callbacks that cannot return use BestEffort to report it to stderr.
+// Nothing here logs by itself.
 //
 // # Causal links
 //
@@ -147,8 +166,10 @@
 // # Storage
 //
 // This package does not store events. It turns an event into a complete,
-// self-describing envelope; the Event Fabric appends it to the site journal and
-// operations.Recorder writes it to the local stream and file.
+// self-describing envelope; the storage subpackage fans that envelope out to the
+// backends composition configured, which is always the mandatory local JSONL
+// record first and, for a publisher that reaches the site, the Event Fabric
+// after it.
 //
 // The journal is the platform's only event storage in the sense that matters to
 // behavior: a running service reconstructs state from the retained site journal

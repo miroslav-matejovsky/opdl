@@ -4,37 +4,14 @@ import (
 	"context"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 )
 
-// Publisher appends one OPDL event to the site journal. It is the narrow
-// capability a command service is given: it can state a fact, and it learns
-// nothing about consumers, routes, or transport.
-//
-// Publish returns only after the journal has durably accepted and ordered the
-// event. A returning call means the fact is retained and replayable; a failing
-// one means it is not, and the caller must surface that rather than assume the
-// event exists.
-type Publisher interface {
-	// Publish durably appends event to the site journal and returns its Receipt.
-	Publish(ctx context.Context, event events.Event) (Receipt, error)
-}
-
-// Appender is the adapter-facing half of publication: it durably appends one
-// already stamped envelope to the site journal. It is deliberately not the
-// business-facing role. An adapter receives a completed fact and decides where
-// it goes; it never decides what the fact says, when it happened, or which
-// process stated it.
-type Appender interface {
-	// Append durably appends envelope to the site journal and returns its Receipt.
-	Append(ctx context.Context, envelope events.Envelope) (Receipt, error)
-}
-
-// Fabric is the Event Fabric as runtime composition owns it: the append side,
-// the projector and handler runners, the journal high-water query, and the
-// health and lifecycle operations. A domain package is never handed a Fabric;
-// it receives the narrow Publisher, Projector, or Handler role it needs.
+// Fabric is the Event Fabric as runtime composition owns it: the storage backend
+// for writing completed envelopes, the projector and handler runners, the journal
+// high-water query, and health and lifecycle operations.
 type Fabric interface {
-	Appender
+	storage.Backend
 
 	// RunProjector attaches projector to one continuous ordered consumer, from
 	// the first retained event through live delivery. It returns when ctx is
@@ -65,8 +42,7 @@ type Fabric interface {
 	// node's ready event reports about the transport it runs on.
 	Info() Info
 
-	// Close releases the transport. It states nothing: a node's shutdown is
-	// announced by composition, while the journal can still accept the fact.
+	// Close releases the transport.
 	Close(ctx context.Context) error
 }
 
@@ -85,17 +61,6 @@ type Info struct {
 	HostsStorage bool `json:"hosts_storage"`
 	// Replicas is the site journal's replica count.
 	Replicas int `json:"replicas"`
-}
-
-// Receipt is proof the journal durably accepted a published event. It is an
-// acknowledgement, not a source of truth: a lost Receipt after a durable write
-// is a redelivery to reconcile by identity, never a second fact to publish.
-type Receipt struct {
-	// ID is the accepted event's envelope ID.
-	ID string
-	// Sequence is the position the journal assigned the event. It is the site's
-	// common order and is stable for the life of the journal.
-	Sequence uint64
 }
 
 // Delivery is one journal event handed to a Projector or Handler, together with

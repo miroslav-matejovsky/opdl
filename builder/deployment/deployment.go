@@ -119,13 +119,7 @@ type Instance struct {
 	// runtimes writing into one directory would overwrite each other's evidence,
 	// and nothing would report it. It takes no part in the ownership decision.
 	RuntimeDir string `json:"runtime_dir,omitempty"`
-	// DataDir is the instance's own JetStream file store directory.
-	//
-	// It is present on every deployed instance; only an instance on a storage
-	// machine opens it, the same way ClusterAddress is present everywhere and
-	// bound only where there are routes. It is the instance's rather than the
-	// machine's because each instance runs its own Event Fabric server, and two
-	// servers cannot open one store.
+	// DataDir is the instance's own general platform data root.
 	DataDir string `json:"data_dir,omitempty"`
 	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
 	// the instance's authored api local_port.
@@ -214,6 +208,9 @@ type PeerNats struct {
 // runs its own server, so on a storage machine that deploys a standby there are
 // two cluster members on one host and each routes to the other.
 type Nats struct {
+	// JetStreamStoreDir is the directory where this instance's NATS JetStream server
+	// stores its files.
+	JetStreamStoreDir string `json:"jetstream_store_dir,omitempty"`
 	// ClientAddress is where this instance's server serves the client protocol,
 	// derived from the machine ip and the instance's authored client port. It is
 	// present on every instance; only an instance on a storage machine binds it.
@@ -356,13 +353,13 @@ func (d Descriptor) validateEndpoints() error {
 		return fmt.Errorf("instances.primary.runtime_dir and instances.standby.runtime_dir are both %q; the two instances run together and cannot share a runtime directory",
 			d.Instances.Primary.RuntimeDir)
 	}
-	// Each instance runs its own Event Fabric server, and two NATS servers cannot
-	// open one JetStream store. Unlike the runtime directory this does report
-	// itself at startup, but it reports as a store that will not open rather than
-	// as a descriptor naming one directory twice.
 	if d.Instances.Primary.DataDir == d.Instances.Standby.DataDir {
-		return fmt.Errorf("instances.primary.data_dir and instances.standby.data_dir are both %q; each instance runs its own Event Fabric server and two servers cannot open the same JetStream store",
+		return fmt.Errorf("instances.primary.data_dir and instances.standby.data_dir are both %q; the two instances run together and cannot share a platform data directory",
 			d.Instances.Primary.DataDir)
+	}
+	if d.Instances.Primary.Nats.JetStreamStoreDir == d.Instances.Standby.Nats.JetStreamStoreDir {
+		return fmt.Errorf("instances.primary.nats.jetstream_store_dir and instances.standby.nats.jetstream_store_dir are both %q; each instance runs its own Event Fabric server and two servers cannot open the same JetStream store",
+			d.Instances.Primary.Nats.JetStreamStoreDir)
 	}
 	bound := []struct {
 		where   string
@@ -387,7 +384,7 @@ func (d Descriptor) validateEndpoints() error {
 }
 
 // validateInstanceEndpoints checks one deployed instance's own addresses and its
-// runtime directory.
+// directories.
 func validateInstanceEndpoints(prefix string, instance Instance) error {
 	if err := requireAddress(prefix+".api_address", instance.APIAddress); err != nil {
 		return err
@@ -408,6 +405,9 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	}
 	if instance.Nats == nil {
 		return fmt.Errorf("%s.nats is required", prefix)
+	}
+	if strings.TrimSpace(instance.Nats.JetStreamStoreDir) == "" {
+		return fmt.Errorf("%s.nats.jetstream_store_dir is required", prefix)
 	}
 	if err := requireAddress(prefix+".nats.client_address", instance.Nats.ClientAddress); err != nil {
 		return err

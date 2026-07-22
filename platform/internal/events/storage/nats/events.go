@@ -40,10 +40,20 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //
 // These are adapter facts and stay adapter-shaped: server addresses, stream
 // names, consumer attempts. None of it belongs in the common envelope, and none
-// of it is published through the journal these events describe. They are
-// recorded locally, because connection loss and journal unavailability are
-// exactly the conditions under which the journal cannot carry an event about
-// itself.
+// of it is published through the journal these events describe.
+//
+// The adapter states them through the events.Publisher it is constructed with,
+// which runtime composition guarantees is the process-local one rather than the
+// fan-out publisher this backend is part of. Connection loss and journal
+// unavailability are exactly the conditions under which the journal cannot carry
+// an event about itself, so a transport that reported its own faults through
+// itself would go quiet precisely when an operator needed it to speak.
+//
+// Startup and shutdown return a failure to state one of these, because a node
+// that could not write its local record has not started or stopped cleanly. The
+// projector and handler loops and the client callbacks report theirs to the
+// process error stream instead: a node that stopped folding the journal over a
+// missing line would have made the smaller problem into the larger one.
 
 const (
 	// TypeServerStarting is stated when the embedded server begins starting.
@@ -59,7 +69,7 @@ const (
 	TypeClientDisconnected events.Type = "platform.nats.client_disconnected"
 	// TypeClientReconnected is stated when the client is back on a server.
 	TypeClientReconnected events.Type = "platform.nats.client_reconnected"
-	// TypeClientClosed is stated when the connection is closed for good.
+	// TypeClientClosed is stated when the connection was closed for good.
 	TypeClientClosed events.Type = "platform.nats.client_closed"
 	// TypeClientAsyncError is stated for an error no caller received.
 	TypeClientAsyncError events.Type = "platform.nats.client_async_error"
@@ -118,8 +128,8 @@ type ServerStarting struct {
 	ClusterAddress string `json:"cluster_address"`
 	// Routes are the cluster addresses of the site's other storage nodes.
 	Routes []string `json:"routes,omitempty"`
-	// DataDir is where this node keeps the journal it stores.
-	DataDir string `json:"data_dir"`
+	// JetStreamStoreDir is where this node keeps the journal it stores.
+	JetStreamStoreDir string `json:"jetstream_store_dir"`
 }
 
 // EventType returns the event's stable dotted kind.

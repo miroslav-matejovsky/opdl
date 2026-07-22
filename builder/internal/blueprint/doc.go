@@ -17,18 +17,30 @@
 //
 //	  site "north" {
 //	    machine "sensor" {
-//	      role     = "sensor-node"
+//	      profile  = "sensor-node"
 //	      ip       = "10.0.1.10"
 //	      services = ["sensor-services"]
 //
 //	      platform {
-//	        nats {
-//	          client_port  = 4222
-//	          cluster_port = 6222
+//	        data_dir    = "D:/opdl/customer-a/north/sensor/primary"
+//	        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary/runtime"
+//
+//	        api {
+//	          local_port = 8080
+//	        }
+//
+//	        event_storage {
+//	          eventfabric {
+//	            nats {
+//	              client_port         = 4222
+//	              cluster_port        = 6222
+//	              jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
+//	            }
+//	          }
 //	        }
 //
 //	        standby {
-//	          disabled = false
+//	          disabled = true
 //	        }
 //	      }
 //	    }

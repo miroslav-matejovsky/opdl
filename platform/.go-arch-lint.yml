@@ -30,10 +30,11 @@ components:
   config: { in: config }
   app: { in: internal/app }
   events: { in: internal/events }
-  eventfabric: { in: internal/eventfabric }
-  eventfabric-nats: { in: internal/eventfabric/nats }
+  events-storage: { in: internal/events/storage }
+  events-storage-jsonl: { in: internal/events/storage/jsonl }
+  eventfabric: { in: internal/events/storage/eventfabric }
+  events-storage-nats: { in: internal/events/storage/nats }
   httpapi: { in: internal/httpapi }
-  operations: { in: internal/operations }
   redundancy: { in: internal/redundancy }
   registration: { in: internal/registration }
 
@@ -50,7 +51,7 @@ deps:
     # events is here because composition is also what knows which process this
     # is: it builds the one envelope factory that stamps every event this node
     # states, and hands out only the publisher composed from it.
-    mayDependOn: [api, config, eventfabric, eventfabric-nats, events, httpapi, operations, redundancy, registration]
+    mayDependOn: [api, config, eventfabric, events-storage-nats, events, events-storage, events-storage-jsonl, httpapi, redundancy, registration]
   redundancy:
     canUse: [sys, atomicfile, winmutex]
     # Ownership transitions are events in their own right: which instance became
@@ -58,7 +59,7 @@ deps:
     # package that runs the transitions is the one that can report them
     # accurately, so it declares and states them itself rather than returning
     # them for a caller to describe.
-    mayDependOn: [events, operations]
+    mayDependOn: [events]
   # config is a leaf. It carries both tiers of configuration — the deployment
   # descriptor compiled in at build time and the TOML file read at startup — so
   # the packages below depend on it for the machine's identity and topology, and
@@ -67,20 +68,19 @@ deps:
     canUse: [toml]
   events:
     mayDependOn: [config]
+  events-storage:
+    mayDependOn: [events]
+  events-storage-jsonl:
+    mayDependOn: [events, events-storage]
   eventfabric:
     canUse: [stablehash]
-    mayDependOn: [events]
-  eventfabric-nats:
+    mayDependOn: [events, events-storage]
+  events-storage-nats:
     canUse: [nats-server, nats-client]
-    mayDependOn: [config, events, eventfabric, operations]
-
-  # operations is the local event writer: it stamps typed payloads with the
-  # process's envelope factory and serializes them. It owns no events.
-  operations:
-    mayDependOn: [events]
+    mayDependOn: [config, events, events-storage, eventfabric]
   httpapi:
     canUse: [huma]
     mayDependOn: [api, registration]
   registration:
     canUse: [stablehash]
-    mayDependOn: [api, events, eventfabric]
+    mayDependOn: [api, events, events-storage, eventfabric]

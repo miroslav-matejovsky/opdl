@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -11,15 +12,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
-	natsfabric "github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
+	natsbackend "github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/nats"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
@@ -110,23 +114,21 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
 	runtimeRoot := t.TempDir()
-	journalRoot := t.TempDir()
+	dataRoot := t.TempDir()
 	for _, standby := range []bool{false, true} {
 		instance := descriptor.Instances.Get(config.Role(standby))
 		client, cluster := freeAddress(t), freeAddress(t)
+		instanceDataDir := filepath.Join(dataRoot, string(config.Role(standby)))
 		instance.Nats = &config.Nats{
-			ClientAddress:  client,
-			ClusterAddress: cluster,
-			Servers:        []string{client},
-			Routes:         []string{},
+			JetStreamStoreDir: filepath.Join(instanceDataDir, "eventfabric", "nats"),
+			ClientAddress:     client,
+			ClusterAddress:    cluster,
+			Servers:           []string{client},
+			Routes:            []string{},
 		}
 		instance.APIAddress = freeAddress(t)
 		instance.RuntimeDir = filepath.Join(runtimeRoot, string(config.Role(standby)))
-		// Each instance gets its own store, as the resolver gives it one. Two
-		// servers cannot open a shared JetStream store, so a test that let both
-		// point at one directory would fail in a way that says nothing about what
-		// it was testing.
-		instance.DataDir = filepath.Join(journalRoot, string(config.Role(standby)))
+		instance.DataDir = instanceDataDir
 		if standby {
 			descriptor.Instances.Standby = instance
 			continue
@@ -199,13 +201,42 @@ func embeddedDescriptor(t *testing.T) config.Descriptor {
 	return d
 }
 
-// openSite composes a site the way Run does: one envelope factory for the
-// process, stamping everything the node states.
-func openSite(t *testing.T, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
+// newTestProcess composes what Run composes before it opens anything: one
+// envelope factory for the process, the mandatory local record, and the
+// process-local publisher over it.
+//
+// It returns the composition error rather than failing the test, because the
+// local record failing to open is itself something a test asserts about.
+func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Config, role redundancy.InstanceRole) (process, error) {
 	t.Helper()
 	factory, err := events.NewFactory(descriptor, role.String())
 	require.NoError(t, err)
-	return open(t.Context(), descriptor, cfg, active, role, factory)
+	record, err := jsonl.New(instanceOf(descriptor, role).DataDir)
+	if err != nil {
+		return process{}, err
+	}
+	t.Cleanup(func() { _ = record.Close(context.Background()) })
+	local, err := storage.NewPublisher(factory, record)
+	require.NoError(t, err)
+	return process{
+		descriptor: descriptor,
+		cfg:        cfg,
+		role:       role,
+		factory:    factory,
+		local:      local,
+		record:     record,
+	}, nil
+}
+
+// openSite composes a site the way Run does: one process composition, and the
+// site built from it.
+func openSite(t *testing.T, descriptor config.Descriptor, cfg *config.Config, active bool, role redundancy.InstanceRole) (*site, error) {
+	t.Helper()
+	proc, err := newTestProcess(t, descriptor, cfg, role)
+	if err != nil {
+		return nil, err
+	}
+	return open(t.Context(), proc, active)
 }
 
 // openTestSite composes a real Event Fabric on loopback and returns it ready to
@@ -253,7 +284,7 @@ func TestOpenStatesReadyIntoTheJournal(t *testing.T) {
 	// the instance role: a machine runs one server per instance, and two servers
 	// in one cluster cannot share a name.
 	info := s.fabric.Info()
-	require.Equal(t, natsfabric.Name, info.Adapter)
+	require.Equal(t, natsbackend.Name, info.Adapter)
 	require.Equal(t, embeddedDescriptor(t).Machine+"-primary", info.Server)
 	require.NotEmpty(t, info.Journal)
 	require.True(t, info.HostsStorage, "the only machine of a one-machine site stores its journal")
@@ -360,10 +391,11 @@ func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
 		Instances: config.Instances{
 			Primary: config.Instance{Disabled: false, DataDir: "/var/lib/opdl/node-a/primary", Nats: &config.Nats{
-				ClientAddress:  "10.0.1.10:4222",
-				ClusterAddress: "10.0.1.10:6222",
-				Routes:         []string{},
-				Servers:        []string{"10.0.1.10:4222"},
+				JetStreamStoreDir: "/var/lib/opdl/node-a/primary/eventfabric/nats",
+				ClientAddress:     "10.0.1.10:4222",
+				ClusterAddress:    "10.0.1.10:6222",
+				Routes:            []string{},
+				Servers:           []string{"10.0.1.10:4222"},
 			}},
 			Standby: config.Instance{Disabled: true},
 		},
@@ -438,7 +470,7 @@ func TestNatsConfigComposesEachInstanceSeparately(t *testing.T) {
 	// Each reads its own record: its own client name, and its own server list.
 	require.NotEqual(t, primary.ClientName, standby.ClientName,
 		"a machine opens two connections and they must be told apart")
-	require.NotEmpty(t, primary.DataDir, "the storage instance stores its journal somewhere")
+	require.NotEmpty(t, primary.JetStreamStoreDir, "the storage instance stores its journal somewhere")
 	require.NotEqual(t, descriptor.Instances.Primary.DataDir, descriptor.Instances.Standby.DataDir,
 		"the descriptor gives each instance its own store, whichever ends up opening one")
 
@@ -620,11 +652,13 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 
 	// It follows new journal events: a fact published on the active reaches the
 	// standby's projection.
-	receipt, err := active.publisher.Publish(t.Context(), eventfabric.Ready{Info: active.fabric.Info()})
+	err = active.publisher.Publish(t.Context(), eventfabric.Ready{Info: active.fabric.Info()})
+	require.NoError(t, err)
+	high, err := active.fabric.HighWater(t.Context())
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		st, stateErr := standby.fabric.State(t.Context())
-		return stateErr == nil && st.Applied >= receipt.Sequence
+		return stateErr == nil && st.Applied >= high
 	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
 }
 
@@ -642,12 +676,11 @@ func TestRunReportsUnusableConfigFile(t *testing.T) {
 // than when its first event needs writing. The journal is the site's history: a
 // platform that cannot store it must not start and pretend otherwise.
 //
-// It sabotages the descriptor's data directory rather than the configuration
-// file's, because there is no longer one in the file. The store is the
-// instance's own and arrives from its descriptor record, so that is the only
-// place a broken path can now come from. The end-to-end form of this, sabotaging
-// what the blueprint authored and starting the built binary, is the scenario
-// suite's resilience.PlatformRefusesToStartWithoutItsJournalStorage.
+// It sabotages the descriptor's JetStream store directory rather than the
+// configuration file, because the path is authored per instance in the
+// blueprint. The end-to-end form of this, sabotaging what the blueprint authored
+// and starting the built binary, is the scenario suite's
+// resilience.PlatformRefusesToStartWithoutItsJournalStorage.
 func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Event Fabric composition in -short mode")
@@ -661,9 +694,183 @@ func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
 	descriptor := descriptorOnFreePorts(t, cfg)
-	descriptor.Instances.Primary.DataDir = blocked
+	descriptor.Instances.Primary.Nats.JetStreamStoreDir = blocked
 
 	_, err = openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
-	require.ErrorContains(t, err, "data directory")
+	require.ErrorContains(t, err, "JetStream store directory")
 	require.ErrorContains(t, err, "nats:", "the failure names the storage it could not use")
+}
+
+// TestOpenReportsUnusableJsonlDataDir checks a process fails at startup when the
+// local record's data directory cannot be created. The record is mandatory and
+// is opened before anything else, because every fact this process states has to
+// reach it, including the ones about failing to start.
+func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.Load(writeConfig(t, dir))
+	require.NoError(t, err)
+
+	blocked := filepath.Join(dir, "not-a-dir")
+	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
+	descriptor := descriptorOnFreePorts(t, cfg)
+	// Sabotage the DataDir: the JSONL backend will try to create a subdirectory
+	// under it, which will fail because blocked is a file, not a directory.
+	descriptor.Instances.Primary.DataDir = blocked
+
+	_, err = newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
+	require.ErrorContains(t, err, "jsonl:", "the failure identifies the JSONL backend")
+}
+
+// TestPublishedEventsReachBothJsonlAndNats verifies that the fan-out pipeline
+// writes each envelope to the JSONL file and to the NATS journal. Runtime
+// composition is the only place that knows the backend list; no producer
+// chooses backends.
+func TestPublishedEventsReachBothJsonlAndNats(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	desc := descriptorOnFreePorts(t, cfg)
+	jsonlPath := filepath.Join(desc.Instances.Primary.DataDir, "events", "events.jsonl")
+
+	s, err := openSite(t, desc, cfg, true, redundancy.RolePrimary)
+	require.NoError(t, err)
+
+	// Publish one extra event so the JSONL file contains at least our line.
+	err = s.publisher.Publish(t.Context(), SiteOpening{Active: true})
+	require.NoError(t, err)
+
+	// Releasing the site closes the transport. The local record is the process's
+	// and stays open; every Store synced it, so what it holds is already on disk.
+	require.NoError(t, s.close(t.Context()))
+
+	// The JSONL file must exist and contain valid JSON envelopes.
+	f, err := os.Open(jsonlPath)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	require.NoError(t, scanner.Err())
+	require.NotEmpty(t, lines, "JSONL file must contain at least one event line")
+	for _, line := range lines {
+		require.Contains(t, line, `"id"`, "every JSONL line must be a JSON envelope")
+	}
+
+	// The NATS journal also received the events: startup published SiteOpening,
+	// SiteReady, etc., and the projector replayed them into the projection.
+	// The site reached s.ready == true, so the journal is non-empty.
+	require.True(t, s.ready, "site reached readiness, confirming events reached NATS too")
+}
+
+// TestPrimaryAndStandbyWriteSeparateJsonlFiles verifies that each instance
+// writes to its own DataDir, so they never share a JSONL file.
+func TestPrimaryAndStandbyWriteSeparateJsonlFiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping redundant Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	descriptor := deployStandby(descriptorOnFreePorts(t, cfg))
+
+	require.NotEqual(t,
+		descriptor.Instances.Primary.DataDir,
+		descriptor.Instances.Standby.DataDir,
+		"descriptor gives each instance its own DataDir")
+
+	primaryJsonl := filepath.Join(descriptor.Instances.Primary.DataDir, "events", "events.jsonl")
+	standbyJsonl := filepath.Join(descriptor.Instances.Standby.DataDir, "events", "events.jsonl")
+	require.NotEqual(t, primaryJsonl, standbyJsonl,
+		"primary and standby must write to separate JSONL files")
+
+	active, err := openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = active.close(context.Background()) })
+
+	standby, err := openSite(t, descriptor, cfg, false, redundancy.RoleStandby)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = standby.close(context.Background()) })
+
+	// A standby never calls publisher.Publish during startup (no readiness, no
+	// handlers), so publish one explicit event to exercise its JSONL pipeline.
+	require.NoError(t, standby.publisher.Publish(t.Context(), SiteOpening{Active: false}))
+
+	// Release both. Each instance composed its own process record, so the two
+	// files were never one file at any point.
+	require.NoError(t, active.close(t.Context()))
+	require.NoError(t, standby.close(t.Context()))
+
+	// Primary JSONL: non-empty because startup publishes a Ready event.
+	pInfo, err := os.Stat(primaryJsonl)
+	require.NoError(t, err)
+	require.Positive(t, pInfo.Size(), "primary JSONL file must contain events")
+
+	// Standby JSONL: exists and non-empty from the event we published above.
+	sInfo, err := os.Stat(standbyJsonl)
+	require.NoError(t, err)
+	require.Positive(t, sInfo.Size(), "standby JSONL file must contain the event published to it")
+}
+
+// failingRecord is a storage.Backend that refuses everything, which is what an
+// unwritable local record looks like to a producer.
+type failingRecord struct{ err error }
+
+func (b failingRecord) Store(context.Context, events.Envelope) error { return b.err }
+
+func (b failingRecord) Close(context.Context) error { return nil }
+
+// TestSiteOpenReturnsAFailureToStateThatItIsOpening checks the error policy on a
+// startup path: a composition that cannot write its local record does not
+// quietly carry on composing.
+func TestSiteOpenReturnsAFailureToStateThatItIsOpening(t *testing.T) {
+	recordUnwritable := errors.New("jsonl: write events.jsonl: disk is full")
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	descriptor := descriptorOnFreePorts(t, cfg)
+
+	proc, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
+	require.NoError(t, err)
+	local, err := storage.NewPublisher(proc.factory, failingRecord{err: recordUnwritable})
+	require.NoError(t, err)
+	proc.local = local
+
+	_, err = open(t.Context(), proc, true)
+
+	require.ErrorIs(t, err, recordUnwritable,
+		"a site that cannot state that it is opening reports it rather than opening anyway")
+}
+
+// TestTheSiteStatesItsOwnCompositionLocallyAndTheSitesFactsToTheJournal pins
+// which publisher carries what. Composition facts describe one process and go to
+// the local record only; the facts the site is supposed to hear go to both
+// backends. Nothing decides this but runtime composition.
+func TestTheSiteStatesItsOwnCompositionLocallyAndTheSitesFactsToTheJournal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Event Fabric composition in -short mode")
+	}
+	cfg, err := config.Load(writeConfig(t, t.TempDir()))
+	require.NoError(t, err)
+	s, err := openSite(t, descriptorOnFreePorts(t, cfg), cfg, true, redundancy.RolePrimary)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.close(context.Background()) })
+
+	high, err := s.fabric.HighWater(t.Context())
+	require.NoError(t, err)
+
+	require.NoError(t, s.local.Publish(t.Context(), SiteOpening{Active: true}))
+	afterLocal, err := s.fabric.HighWater(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, high, afterLocal, "a fact about this process alone never reaches the journal")
+
+	require.NoError(t, s.publisher.Publish(t.Context(), eventfabric.Stopping{Adapter: natsbackend.Name}))
+	afterJournal, err := s.fabric.HighWater(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, high+1, afterJournal, "a fact the site is supposed to hear reaches the journal")
 }

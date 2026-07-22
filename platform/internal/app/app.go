@@ -10,7 +10,8 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/operations"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
 
@@ -44,11 +45,22 @@ func Run(args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	recorder, err := operations.Open(cfg.OperationsEventDir(), factory)
+	// The local append-only record is opened before anything else this process
+	// does, and it is mandatory: every fact the process states has to reach it,
+	// including the ones about failing to start. It is opened here rather than
+	// with the site because it has to outlive every site the process composes.
+	record, err := jsonl.New(instanceOf(descriptor, role).DataDir)
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, recorder.Close()) }()
+	local, err := storage.NewPublisher(factory, record)
+	if err != nil {
+		return errors.Join(err, record.Close(context.Background()))
+	}
+	// Closing the process publisher closes the record, and it happens last, after
+	// every site has released and every other deferred stop has run.
+	defer func() { runErr = errors.Join(runErr, local.Close(context.Background())) }()
+
 	fmt.Println(cfg.Summary(role == redundancy.RoleStandby))
 	// The service name lets an operator match this process to an entry in the
 	// services list. The platform manages no services; it only reports which one
@@ -64,20 +76,31 @@ func Run(args []string) (runErr error) {
 	// scenario harness ask for a graceful stop. SIGTERM is never raised here.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	ctx = operations.WithRecorder(ctx, recorder)
 
-	recorder.Record(ctx, ProcessStarted{
-		OperationsFile: recorder.Path(),
+	proc := process{
+		descriptor: descriptor,
+		cfg:        cfg,
+		role:       role,
+		factory:    factory,
+		local:      local,
+		record:     record,
+	}
+
+	if err := local.Publish(ctx, ProcessStarted{
+		EventsFile:     record.Path(),
 		StandbyEnabled: !descriptor.Instances.Standby.Disabled,
-	})
+	}); err != nil {
+		return err
+	}
 
-	runErr = runProcess(ctx, cfg, descriptor, role, factory)
+	runErr = runProcess(ctx, proc)
 	stopped := ProcessStopped{}
 	if runErr != nil {
 		stopped.Error = runErr.Error()
 	}
-	recorder.Record(ctx, stopped)
-	return runErr
+	// The run's own outcome is the more important of the two, so a failure to
+	// state that the process stopped is joined onto it rather than replacing it.
+	return errors.Join(runErr, local.Publish(ctx, stopped))
 }
 
 // Serving lives in server.go now, on the listener an instance binds for its whole

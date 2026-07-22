@@ -7,14 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestServerOptionsConfigureNoMonitoringListener checks the embedded server is
-// asked for no HTTP monitoring listener.
-//
-// Zero is what makes NATS start none, so this asserts the absence of a port
-// rather than the presence of a setting. The runtime reads connection, journal
-// high-water, projection progress, and lag through the Event Fabric client API
-// and writes them to its status files, so the monitor would be an extra open
-// port carrying signals the platform already owns.
 func TestServerOptionsConfigureNoMonitoringListener(t *testing.T) {
 	opts, err := serverOptions(Config{
 		ClientName:    "node",
@@ -29,9 +21,6 @@ func TestServerOptionsConfigureNoMonitoringListener(t *testing.T) {
 	require.Empty(t, opts.HTTPHost)
 }
 
-// TestServerOptionsBindTheClientListener checks the client listener is always
-// configured on a storage node: it is how the active process, the local
-// standby, and every non-storage machine of the site reach the journal.
 func TestServerOptionsBindTheClientListener(t *testing.T) {
 	opts, err := serverOptions(Config{
 		ClientName:    "node",
@@ -46,12 +35,6 @@ func TestServerOptionsBindTheClientListener(t *testing.T) {
 	require.True(t, opts.JetStream)
 }
 
-// TestServerOptionsBindTheClusterListenerOnlyWithRoutes checks a configured
-// cluster address is not by itself permission to bind it.
-//
-// A site whose topology selects one storage node has no peer server. Binding a
-// cluster listener there would open a port nothing can connect to, so the
-// listener follows the resolved routes rather than the authored port.
 func TestServerOptionsBindTheClusterListenerOnlyWithRoutes(t *testing.T) {
 	base := Config{
 		ClientName:     "node",

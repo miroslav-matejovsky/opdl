@@ -8,14 +8,14 @@ import (
 	"slices"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 )
 
 // Handler is one node's durable registration decision worker. It consumes only
 // proposed and confirmed registration events and emits a finite consequence.
 type Handler struct {
-	publisher        eventfabric.Publisher
+	publisher        events.Publisher
 	projection       *Projection
 	location         Location
 	locations        map[string]Location
@@ -24,7 +24,7 @@ type Handler struct {
 }
 
 // NewHandler builds one node's registration handler with exact routes.
-func NewHandler(publisher eventfabric.Publisher, projection *Projection, location Location, expected []Location, scope eventfabric.SiteScope) (*Handler, error) {
+func NewHandler(publisher events.Publisher, projection *Projection, location Location, expected []Location, scope eventfabric.SiteScope) (*Handler, error) {
 	if publisher == nil {
 		return nil, errors.New("registration: handler publisher is required")
 	}
@@ -100,7 +100,7 @@ func (h *Handler) handleProposed(ctx context.Context, delivery eventfabric.Deliv
 	} else {
 		consequence = NewRejected(projected.ProposalID, h.location.Machine, reason)
 	}
-	if _, err := h.publisher.Publish(ctx, consequence); err != nil {
+	if err := h.publisher.Publish(ctx, consequence); err != nil {
 		return fmt.Errorf("registration: publish decision for proposal %s: %w", projected.ProposalID, err)
 	}
 	return nil
@@ -119,7 +119,7 @@ func (h *Handler) handleConfirmed(ctx context.Context, delivery eventfabric.Deli
 	if status != StatusPending || !h.projection.AllExpectedConfirmed(proposed.ProposalID) {
 		return nil
 	}
-	if _, err := h.publisher.Publish(ctx, NewAccepted(proposed)); err != nil {
+	if err := h.publisher.Publish(ctx, NewAccepted(proposed)); err != nil {
 		return fmt.Errorf("registration: publish acceptance for proposal %s: %w", proposed.ProposalID, err)
 	}
 	return nil

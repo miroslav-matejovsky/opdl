@@ -76,23 +76,27 @@ type Machine struct {
 type Platform struct {
 	// RuntimeDir is the Primary Instance's local runtime directory. Required.
 	RuntimeDir string `hcl:"runtime_dir,optional"`
-	// DataDir is the Primary Instance's own JetStream file store directory.
-	// Required.
-	//
-	// It is per instance because each instance runs its own Event Fabric server,
-	// and two servers on one host cannot open the same store. It is authored
-	// rather than derived so an operator reads a machine's storage layout off the
-	// blueprint instead of reproducing a naming rule.
+	// DataDir is the Primary Instance's general platform data root. Required.
 	DataDir string `hcl:"data_dir,optional"`
 	// API is the Primary Instance's local API endpoint policy.
 	API *API `hcl:"api,block"`
 	// WinService is the Primary Instance's Windows Service identity.
 	WinService *WinService `hcl:"winservice,block"`
-	// Nats is the Primary Instance's Event Fabric NATS port policy.
-	Nats *Nats `hcl:"nats,block"`
+	// EventStorage is the Primary Instance's event storage policy.
+	EventStorage *EventStorage `hcl:"event_storage,block"`
 	// Standby is the machine's local redundancy policy, and where a deployed
-	// Standby Instance states its own lock, runtime_dir, api, winservice, and nats.
+	// Standby Instance states its own lock, runtime_dir, data_dir, api, winservice, and event_storage.
 	Standby *Standby `hcl:"standby,block"`
+}
+
+// EventStorage is an instance's event storage policy.
+type EventStorage struct {
+	EventFabric *EventFabric `hcl:"eventfabric,block"`
+}
+
+// EventFabric is an instance's Event Fabric storage adapter policy.
+type EventFabric struct {
+	Nats *Nats `hcl:"nats,block"`
 }
 
 // API is one instance's local API endpoint policy.
@@ -185,9 +189,9 @@ func (m Machine) Lock() *Lock {
 // Standby is a machine's local redundancy policy, and the Standby Instance's own
 // policy when one is deployed.
 //
-// A deployed Standby Instance states the same three blocks the Primary Instance
+// A deployed Standby Instance states the same blocks the Primary Instance
 // states directly under platform, because it is an independent runtime and owns
-// its own endpoints. All three are required when it is deployed and rejected when
+// its own endpoints. All are required when it is deployed and rejected when
 // it is not: authoring an endpoint for an instance the machine does not run
 // states a decision that can never take effect, and a reader could not tell it
 // from one that does.
@@ -198,11 +202,8 @@ type Standby struct {
 	// RuntimeDir is the Standby Instance's local runtime directory. It is required
 	// when the Standby Instance is deployed and rejected when it is not.
 	RuntimeDir string `hcl:"runtime_dir,optional"`
-	// DataDir is the Standby Instance's own JetStream file store directory. It is
+	// DataDir is the Standby Instance's general platform data root. It is
 	// required when the Standby Instance is deployed and rejected when it is not.
-	//
-	// It is never the primary's. The two instances run two servers on one host,
-	// and a shared store is the one thing neither of them can survive.
 	DataDir string `hcl:"data_dir,optional"`
 	// Lock is the machine's local ownership lock policy. It is required when the
 	// Standby Instance is deployed and rejected when it is not.
@@ -211,19 +212,13 @@ type Standby struct {
 	API *API `hcl:"api,block"`
 	// WinService is the Standby Instance's Windows Service identity.
 	WinService *WinService `hcl:"winservice,block"`
-	// Nats is the Standby Instance's Event Fabric NATS port policy. Its server is
-	// a cluster member in its own right, so on a storage machine the two instances
-	// run two servers that route to each other.
-	Nats *Nats `hcl:"nats,block"`
+	// EventStorage is the Standby Instance's event storage policy.
+	EventStorage *EventStorage `hcl:"event_storage,block"`
 }
 
-// Nats is one instance's Event Fabric NATS port policy, authored so a blueprint
-// reader sees which ports the machine needs open.
-//
-// Only ports are authored. The builder joins each port with the machine's ip to
-// derive the addresses that reach this instance, and derives the site's route and
-// server lists from the site topology. Authoring those lists directly could
-// silently split a site or point an instance at another site's journal.
+// Nats is one instance's Event Fabric NATS port policy and JetStream storage location,
+// authored so a blueprint reader sees which ports the machine needs open and where
+// JetStream files are stored.
 type Nats struct {
 	// ClientPort is the port this instance's server serves the NATS client
 	// protocol on. It is bound only on a storage machine; every other instance of
@@ -234,6 +229,9 @@ type Nats struct {
 	// the server-to-server route protocol only, and is bound only when the site
 	// has a second storage server to route to.
 	ClusterPort int `hcl:"cluster_port"`
+	// JetStreamStoreDir is the directory where this instance's NATS JetStream server
+	// stores its files. Required.
+	JetStreamStoreDir string `hcl:"jetstream_store_dir,optional"`
 }
 
 // Validate checks a project against the model's structural rules. It fails
@@ -388,7 +386,7 @@ func validatePlatform(machine Machine) error {
 	if machine.Platform.Standby == nil {
 		return fmt.Errorf("machine %q: platform.standby block is required", machine.Name)
 	}
-	if err := validateInstanceEndpoints(machine, "platform", machine.Platform.API, machine.Platform.Nats); err != nil {
+	if err := validateInstanceEndpoints(machine, "platform", machine.Platform.API, machine.Platform.EventStorage); err != nil {
 		return err
 	}
 	if err := validateStandbyEndpoints(machine); err != nil {
@@ -398,6 +396,9 @@ func validatePlatform(machine Machine) error {
 		return err
 	}
 	if err := validateDataDirs(machine); err != nil {
+		return err
+	}
+	if err := validateJetStreamStoreDirs(machine); err != nil {
 		return err
 	}
 	if err := validateMachinePorts(machine); err != nil {
@@ -410,21 +411,34 @@ func validatePlatform(machine Machine) error {
 }
 
 // validateInstanceEndpoints checks one instance states both of its endpoint
-// policies with usable ports.
-func validateInstanceEndpoints(machine Machine, block string, api *API, nats *Nats) error {
+// policies with usable ports and a JetStream store directory.
+func validateInstanceEndpoints(machine Machine, block string, api *API, eventStorage *EventStorage) error {
 	if api == nil {
 		return fmt.Errorf("machine %q: %s.api block is required", machine.Name, block)
 	}
 	if err := validatePort(machine.Name, block+".api.local_port", api.LocalPort); err != nil {
 		return err
 	}
-	if nats == nil {
-		return fmt.Errorf("machine %q: %s.nats block is required", machine.Name, block)
+	if eventStorage == nil {
+		return fmt.Errorf("machine %q: %s.event_storage block is required", machine.Name, block)
 	}
-	if err := validatePort(machine.Name, block+".nats.client_port", nats.ClientPort); err != nil {
+	if eventStorage.EventFabric == nil {
+		return fmt.Errorf("machine %q: %s.event_storage.eventfabric block is required", machine.Name, block)
+	}
+	nats := eventStorage.EventFabric.Nats
+	if nats == nil {
+		return fmt.Errorf("machine %q: %s.event_storage.eventfabric.nats block is required", machine.Name, block)
+	}
+	if err := validatePort(machine.Name, block+".event_storage.eventfabric.nats.client_port", nats.ClientPort); err != nil {
 		return err
 	}
-	return validatePort(machine.Name, block+".nats.cluster_port", nats.ClusterPort)
+	if err := validatePort(machine.Name, block+".event_storage.eventfabric.nats.cluster_port", nats.ClusterPort); err != nil {
+		return err
+	}
+	if strings.TrimSpace(nats.JetStreamStoreDir) == "" {
+		return fmt.Errorf("machine %q: %s.event_storage.eventfabric.nats.jetstream_store_dir is required", machine.Name, block)
+	}
+	return nil
 }
 
 // validateStandbyEndpoints checks a deployed Standby Instance states its own
@@ -433,7 +447,7 @@ func validateInstanceEndpoints(machine Machine, block string, api *API, nats *Na
 func validateStandbyEndpoints(machine Machine) error {
 	standby := machine.Platform.Standby
 	if !standby.Disabled {
-		return validateInstanceEndpoints(machine, "platform.standby", standby.API, standby.Nats)
+		return validateInstanceEndpoints(machine, "platform.standby", standby.API, standby.EventStorage)
 	}
 	if strings.TrimSpace(standby.RuntimeDir) != "" {
 		return fmt.Errorf("machine %q: platform.standby.runtime_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
@@ -447,56 +461,38 @@ func validateStandbyEndpoints(machine Machine) error {
 	if standby.API != nil {
 		return fmt.Errorf("machine %q: platform.standby.api is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
-	if standby.Nats != nil {
-		return fmt.Errorf("machine %q: platform.standby.nats is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	if standby.EventStorage != nil {
+		return fmt.Errorf("machine %q: platform.standby.event_storage is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
 	return nil
 }
 
 // validateRuntimeDirs checks each deployed instance states its own local runtime
 // directory, and that a machine's two instances do not state the same one.
-//
-// The directory holds the instance's status file, which is operational evidence
-// and takes no part in the ownership decision. It is per instance rather than per
-// machine because two independent runtimes writing into one directory is how one
-// instance's evidence overwrites the other's, and that failure is silent: no
-// listener fails to bind and nothing reports an error.
-//
-// Two machines authoring the same directory is not rejected, for the same reason
-// a duplicate windows_mutex across machines is not: two machines are two hosts. It
-// only collides when several machines share a host, which is the scenario
-// harness, and the harness renders a distinct directory per instance.
 func validateRuntimeDirs(machine Machine) error {
 	return validateInstanceDirs(machine, "runtime_dir",
 		machine.Platform.RuntimeDir, machine.Platform.Standby.RuntimeDir,
 		"the two instances run together and cannot share a runtime directory")
 }
 
-// validateDataDirs checks each deployed instance states its own JetStream file
-// store directory, and that a machine's two instances do not state the same one.
-//
-// The store is per instance because each instance runs its own Event Fabric
-// server, and two NATS servers cannot open one JetStream store. Unlike a shared
-// runtime directory, this failure is not silent: the second server fails to open
-// the store. It is rejected here anyway, because a build-time error names the
-// blueprint line to fix and a startup error names a lock file inside a directory.
-//
-// Two machines authoring the same directory is not rejected, for the same reason
-// it is not for runtime_dir: two machines are two hosts, and it only collides when
-// several machines share one, which is the scenario harness.
+// validateDataDirs checks each deployed instance states its own platform data
+// root, and that a machine's two instances do not state the same one.
 func validateDataDirs(machine Machine) error {
 	return validateInstanceDirs(machine, "data_dir",
 		machine.Platform.DataDir, machine.Platform.Standby.DataDir,
+		"the two instances run together and cannot share a platform data directory")
+}
+
+// validateJetStreamStoreDirs checks each deployed instance states its own JetStream
+// file store directory, and that a machine's two instances do not state the same one.
+func validateJetStreamStoreDirs(machine Machine) error {
+	return validateInstanceDirs(machine, "event_storage.eventfabric.nats.jetstream_store_dir",
+		machine.JetStreamStoreDir(false), machine.JetStreamStoreDir(true),
 		"each instance runs its own Event Fabric server and two servers cannot open the same JetStream store")
 }
 
 // validateInstanceDirs checks one per-instance directory attribute: required on
 // the primary, required on a deployed standby, and never the same on both.
-//
-// The two callers differ only in which attribute they name and why sharing it is
-// wrong, so the shape is written once and the reason is passed in. A machine that
-// shares a directory is told which one and what breaks, rather than being told a
-// path is duplicated.
 func validateInstanceDirs(machine Machine, attribute, primaryDir, standbyDir, collision string) error {
 	primary := strings.TrimSpace(primaryDir)
 	if primary == "" {
@@ -517,39 +513,24 @@ func validateInstanceDirs(machine Machine, attribute, primaryDir, standbyDir, co
 
 // validateMachinePorts checks no two listeners on the machine are given the same
 // port.
-//
-// Every port a machine authors is bound on one host at one time: the two
-// instances are independent runtimes that run together, and each binds its own
-// api endpoint and, on a storage machine, its own NATS client and cluster
-// listeners. There is no ownership rule that makes any pair of them mutually
-// exclusive, so a repeated port is a listener that will fail to bind.
-//
-// This is the authoring mistake the six-port shape invites, and copying the
-// primary's block into standby is how it happens, so the message names both
-// listeners rather than only reporting a duplicate.
-//
-// The api ports are held to the same rule even though they are bound on 127.0.0.1
-// while the nats ports are bound on the machine ip, which means an api port
-// repeating a nats port would in fact bind. Being over-strict here fails loudly
-// at build time, keeps a machine's port map readable as one list, and means
-// moving the api off loopback later cannot turn a latent collision into a runtime
-// failure.
 func validateMachinePorts(machine Machine) error {
 	type listener struct {
 		where string
 		port  int
 	}
 	platform := machine.Platform
+	primaryNats := machine.Nats(false)
 	listeners := []listener{
 		{"platform.api.local_port", platform.API.LocalPort},
-		{"platform.nats.client_port", platform.Nats.ClientPort},
-		{"platform.nats.cluster_port", platform.Nats.ClusterPort},
+		{"platform.event_storage.eventfabric.nats.client_port", primaryNats.ClientPort},
+		{"platform.event_storage.eventfabric.nats.cluster_port", primaryNats.ClusterPort},
 	}
 	if !platform.Standby.Disabled {
+		standbyNats := machine.Nats(true)
 		listeners = append(listeners,
 			listener{"platform.standby.api.local_port", platform.Standby.API.LocalPort},
-			listener{"platform.standby.nats.client_port", platform.Standby.Nats.ClientPort},
-			listener{"platform.standby.nats.cluster_port", platform.Standby.Nats.ClusterPort},
+			listener{"platform.standby.event_storage.eventfabric.nats.client_port", standbyNats.ClientPort},
+			listener{"platform.standby.event_storage.eventfabric.nats.cluster_port", standbyNats.ClusterPort},
 		)
 	}
 	taken := make(map[int]string, len(listeners))
@@ -675,6 +656,33 @@ func validatePort(machineName, where string, port int) error {
 	return nil
 }
 
+// Nats returns one instance's authored Nats configuration, or nil when that
+// instance is not deployed or omits it.
+func (m Machine) Nats(standby bool) *Nats {
+	if m.Platform == nil {
+		return nil
+	}
+	if !standby {
+		if m.Platform.EventStorage == nil || m.Platform.EventStorage.EventFabric == nil {
+			return nil
+		}
+		return m.Platform.EventStorage.EventFabric.Nats
+	}
+	if m.Platform.Standby == nil || m.Platform.Standby.Disabled || m.Platform.Standby.EventStorage == nil || m.Platform.Standby.EventStorage.EventFabric == nil {
+		return nil
+	}
+	return m.Platform.Standby.EventStorage.EventFabric.Nats
+}
+
+// JetStreamStoreDir returns one instance's authored JetStream store directory.
+func (m Machine) JetStreamStoreDir(standby bool) string {
+	nats := m.Nats(standby)
+	if nats == nil {
+		return ""
+	}
+	return strings.TrimSpace(nats.JetStreamStoreDir)
+}
+
 // Endpoints resolves one instance's authored endpoint ports, or nil when that
 // instance is not deployed. It is the one place resolution asks a machine which
 // ports an instance owns, so the primary-under-platform and standby-under-standby
@@ -683,12 +691,13 @@ func (m Machine) Endpoints(standby bool) *Endpoints {
 	if m.Platform == nil {
 		return nil
 	}
-	api, nats := m.Platform.API, m.Platform.Nats
+	api := m.Platform.API
+	nats := m.Nats(standby)
 	if standby {
 		if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
 			return nil
 		}
-		api, nats = m.Platform.Standby.API, m.Platform.Standby.Nats
+		api = m.Platform.Standby.API
 	}
 	if api == nil || nats == nil {
 		return nil
@@ -720,8 +729,8 @@ func (m Machine) RuntimeDir(standby bool) string {
 	return strings.TrimSpace(m.Platform.Standby.RuntimeDir)
 }
 
-// DataDir returns one instance's authored JetStream file store directory, or an
-// empty string when that instance is not deployed.
+// DataDir returns one instance's authored general platform data directory, or
+// an empty string when that instance is not deployed.
 func (m Machine) DataDir(standby bool) string {
 	if m.Platform == nil {
 		return ""
