@@ -7,7 +7,7 @@
 //
 //	Blueprint  ->  Builder  ->  Deployment
 //
-// The module is a CLI (cmd/opdl) over two internal stages plus the shared
+// The module is a CLI (cmd) over two internal stages plus the shared
 // deployment contract:
 //
 //	blueprint   authors, decodes, and validates a project's topology from HCL.

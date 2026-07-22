@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/miroslav-matejovsky/opdl/utils/logscan"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/logscan"
 	"github.com/stretchr/testify/require"
 )
 

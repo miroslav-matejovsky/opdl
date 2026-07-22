@@ -4,7 +4,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/miroslav-matejovsky/opdl/utils/processtree"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/processtree"
 )
 
 // Process is a child command under test control: started inside a kill-on-close

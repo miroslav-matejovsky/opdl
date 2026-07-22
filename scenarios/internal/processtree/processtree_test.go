@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/miroslav-matejovsky/opdl/utils/processtree"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/processtree"
 	"github.com/stretchr/testify/require"
 )
 

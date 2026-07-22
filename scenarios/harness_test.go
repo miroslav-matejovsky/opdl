@@ -25,10 +25,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/utils/procrun"
-	"github.com/miroslav-matejovsky/opdl/utils/semaphore"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/procrun"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/semaphore"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/waitfor"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
-	"github.com/miroslav-matejovsky/opdl/utils/waitfor"
 )
 
 // This file is the scenario harness: how a scenario builds a project and runs

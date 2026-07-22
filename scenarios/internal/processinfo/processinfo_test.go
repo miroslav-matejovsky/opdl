@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/miroslav-matejovsky/opdl/utils/processinfo"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/processinfo"
 	"github.com/stretchr/testify/require"
 )
 

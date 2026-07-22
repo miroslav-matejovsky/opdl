@@ -20,8 +20,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/miroslav-matejovsky/opdl/builder/build"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
-	"github.com/miroslav-matejovsky/opdl/builder/internal/pack"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/resolve"
 )
 
@@ -89,7 +89,9 @@ func cmdPlan(args []string) error {
 	return nil
 }
 
-// cmdBuild resolves a plan and assembles a deployment package per machine.
+// cmdBuild resolves a plan and assembles a deployment package per machine. It is
+// a thin wrapper over build.Run: it parses flags, drives the build, and prints
+// what was produced.
 func cmdBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	examples := fs.String("examples", "../examples", "directory holding project blueprints")
@@ -100,29 +102,23 @@ func cmdBuild(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	p, err := loadProject(*examples, fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	plan, err := resolve.Build(p, *platform)
+
+	results, err := build.Run(context.Background(), build.Options{
+		ExamplesDir: *examples,
+		Project:     fs.Arg(0),
+		Platform:    *platform,
+		PlatformDir: *platformDir,
+		OutDir:      *out,
+		GOARCH:      *goarch,
+	})
 	if err != nil {
 		return err
 	}
 
-	packer, err := pack.New(*platformDir, *out, *goarch)
-	if err != nil {
-		return err
+	for _, r := range results {
+		fmt.Printf("built %s -> %s\n", r.Machine, r.Dir)
 	}
-
-	ctx := context.Background()
-	for _, d := range plan.Machines {
-		res, err := packer.BuildMachine(ctx, d)
-		if err != nil {
-			return fmt.Errorf("build %s/%s/%s: %w", d.Project, d.Site, d.Machine, err)
-		}
-		fmt.Printf("built %s -> %s\n", d.Machine, res.Dir)
-	}
-	fmt.Printf("done: %d machine(s)\n", len(plan.Machines))
+	fmt.Printf("done: %d machine(s)\n", len(results))
 	return nil
 }
 

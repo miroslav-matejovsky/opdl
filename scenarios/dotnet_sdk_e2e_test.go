@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/miroslav-matejovsky/opdl/utils/procrun"
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/procrun"
 	"github.com/stretchr/testify/require"
 )
 

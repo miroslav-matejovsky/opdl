@@ -112,7 +112,7 @@ tasks:
     silent: true
     dir: builder
     cmds:
-      - go run ./cmd/opdl build {{.CLI_ARGS}}
+      - go run ./cmd build {{.CLI_ARGS}}
 
   sdk-dotnet:
     desc: Restore, build, and test the .NET SDK (Kiota-generated client).
@@ -126,7 +126,7 @@ tasks:
     silent: true
     dir: builder
     cmds:
-      - go run ./cmd/opdl plan {{.CLI_ARGS}}
+      - go run ./cmd plan {{.CLI_ARGS}}
 
   validate:
     desc: 'Validate project blueprints (all examples if no argument), e.g. `task validate -- customer-a`'
@@ -135,7 +135,7 @@ tasks:
       - pwsh -NoProfile -NonInteractive -File taskfile/validate.ps1 {{.CLI_ARGS}}
 
   integration-tests:
-    desc: Run the platform's integration tests, the ones the unit gate skips with -short
+    desc: Run platform and builder integration tests, the ones the unit gate skips with -short
     silent: true
     cmds:
       - pwsh -NoProfile -NonInteractive -File taskfile/integration-tests.ps1
