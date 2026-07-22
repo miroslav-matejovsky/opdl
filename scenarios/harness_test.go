@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -117,22 +118,15 @@ type machineFixture struct {
 // here rather than in checked-in HCL is what lets the harness reserve ports on
 // the right loopback address before rendering the blueprint that names them.
 var projectFixtures = map[string][]machineFixture{
-	// One machine, one process. The base scenario for build, run, and restart.
-	"scenario": {
-		{name: "node", ip: "127.0.0.1", standbyDisabled: true},
-	},
-	// One machine running both local processes, for the manifest launch contract
-	// and the warm standby failover scenario.
-	"manifest-contract": {
-		{name: "node", ip: "127.0.0.1", standbyDisabled: false},
-	},
-	// Two machines in one site: the smallest topology that forms a real fabric.
-	// Both disable the standby so the scenario isolates site coordination from
-	// local process redundancy.
-	"two-machine": {
-		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
-		{name: "node-b", ip: "127.0.0.2", standbyDisabled: true},
-	},
+	// The base scenario for build, run, and restart.
+	"scenario": minimumSite(),
+	// The manifest launch contract and the warm standby failover scenario. Both
+	// need a machine that deploys two instances, which node-b is.
+	"manifest-contract": minimumSite(),
+	// Site coordination, for scenarios that hold a machine back. node-c is the
+	// site's fourth instance by name, so the storage selection leaves it out and
+	// it can be absent without costing the journal a replica.
+	"two-machine": stagedSite(),
 	// Four machines in one site: three store the journal and route to each other,
 	// and the fourth is a client of theirs. It is the topology that proves why the
 	// cluster port exists and that only the selected three bind it.
@@ -498,29 +492,68 @@ func deploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	return s
 }
 
+// minimumSite is the smallest topology the platform accepts: two machines, with a
+// Standby Instance on one of them, which is three platform instances.
+//
+// Three is the floor because the site journal is a JetStream RAFT group, and a
+// group of two needs both members alive. Two machines is required on top of it
+// because three instances on one host share a failure domain. Every scenario that
+// is not specifically about a larger site uses this, so the suite exercises the
+// shape a real deployment is allowed to have.
+//
+// node-b is the machine with the standby, so a scenario that needs two local
+// instances asks for node-b.
+func minimumSite() []machineFixture {
+	return []machineFixture{
+		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
+		{name: "node-b", ip: "127.0.0.2", standbyDisabled: false},
+	}
+}
+
+// stagedSite is the minimum site plus a machine that stores nothing.
+//
+// A scenario about delivery to an absent machine needs one it can hold back, and
+// on the minimum site there is no such machine: all three of its instances are
+// storage, so any of them missing costs the journal a replica it cannot place.
+// The third machine here is the site's fourth instance by name, which puts it
+// outside the storage selection and makes its absence a site-membership fact
+// rather than a journal one.
+func stagedSite() []machineFixture {
+	return append(minimumSite(), machineFixture{name: "node-c", ip: "127.0.0.3", standbyDisabled: true})
+}
+
 // storageMachines returns the names of the machines that store the site journal,
-// mirroring the platform's own rule: one storage machine for a site smaller than
-// three machines, the first three by sorted name otherwise.
+// mirroring the platform's own rule: storage is selected per platform instance,
+// one instance for a site smaller than three, the first three by sorted instance
+// name otherwise.
 //
 // A scenario derives this the same way the platform does rather than being told,
-// so it cannot quietly disagree with the deployment about who stores what.
-func storageMachines(names []string) []string {
-	sorted := slices.Sorted(slices.Values(names))
+// so it cannot quietly disagree with the deployment about who stores what. The
+// result is machine names because that is what a scenario reaches; a machine is
+// listed when either of its instances was selected.
+func storageMachines(project string) []string {
+	instances := make([]string, 0, len(projectFixtures[project])*2)
+	owner := map[string]string{}
+	for _, fixture := range projectFixtures[project] {
+		for _, role := range []string{"primary", "standby"} {
+			if role == "standby" && fixture.standbyDisabled {
+				continue
+			}
+			key := fixture.name + "-" + role
+			instances = append(instances, key)
+			owner[key] = fixture.name
+		}
+	}
+	sorted := slices.Sorted(slices.Values(instances))
 	count := 1
 	if len(sorted) > 2 {
 		count = 3
 	}
-	return sorted[:min(count, len(sorted))]
-}
-
-// machineNames returns the names of a project's fixture machines.
-func machineNames(project string) []string {
-	fixtures := projectFixtures[project]
-	names := make([]string, 0, len(fixtures))
-	for _, fixture := range fixtures {
-		names = append(names, fixture.name)
+	machines := map[string]bool{}
+	for _, key := range sorted[:min(count, len(sorted))] {
+		machines[owner[key]] = true
 	}
-	return names
+	return slices.Sorted(maps.Keys(machines))
 }
 
 // machine returns one prepared machine of the site by name.
@@ -546,6 +579,37 @@ func (s *site) startAll(ctx context.Context, t *testing.T) {
 	t.Helper()
 	for _, m := range s.machines {
 		m.start(ctx, t)
+		waitForAPI(ctx, t, m)
+	}
+}
+
+// startSite starts every platform instance the site deploys, all at once, and
+// only then waits for each machine's Primary Instance to serve.
+//
+// Every instance, not only the primaries. The journal's replica count is the
+// site's storage instance count, and JetStream cannot place three replicas until
+// three servers are up, so a site started primaries-only sits in "no suitable
+// peers for placement" until it gives up. On the minimum site the third storage
+// instance is a machine's Standby Instance, which makes starting it part of
+// bringing the site up rather than an extra a redundancy scenario opts into.
+// except names machines to leave down, for a scenario whose subject is a machine
+// that is absent. Only a machine outside the storage selection can be held back;
+// holding back a storage instance costs the journal a replica it cannot place.
+func (s *site) startSite(ctx context.Context, t *testing.T, except ...string) {
+	t.Helper()
+	for _, m := range s.machines {
+		if slices.Contains(except, m.name) {
+			continue
+		}
+		m.start(ctx, t)
+		if manifest := readManifest(t, m.binaryPath); manifest.Standby != nil {
+			m.standby = m.startManaged(ctx, t, "standby", manifest.Standby.Args)
+		}
+	}
+	for _, m := range s.machines {
+		if slices.Contains(except, m.name) {
+			continue
+		}
 		waitForAPI(ctx, t, m)
 	}
 }
@@ -592,6 +656,8 @@ type machine struct {
 	binaryPath string
 	configPath string
 	launchArgs []string
+	// standby is this machine's Standby Instance once startSite has started one.
+	standby *managedProcess
 	stopped    bool
 }
 

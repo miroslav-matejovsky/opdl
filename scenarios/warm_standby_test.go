@@ -21,7 +21,11 @@ func TestWarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "manifest-contract")
-	node := deployment.machine(t, "node")
+	node := deployment.machine(t, "node-b")
+	// node-a carries the site's third storage instance. This scenario starts
+	// node-b's two instances itself, from the manifest, so the rest of the site is
+	// brought up here: without it the journal has no quorum to be created in.
+	deployment.startSite(ctx, t, "node-b")
 	manifest := readManifest(t, node.binaryPath)
 	require.NotNil(t, manifest.Standby, "default policy must package a standby launch")
 

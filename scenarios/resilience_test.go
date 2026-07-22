@@ -27,9 +27,11 @@ func TestRestartRebuildsStateFromTheJournal(t *testing.T) {
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "scenario")
-	node := deployment.machine(t, "node")
-	node.start(ctx, t)
-	waitForAPI(ctx, t, node)
+	node := deployment.machine(t, "node-a")
+	// Both machines: a proposal needs a confirmation from every machine of the
+	// site, and the journal's metadata group needs a quorum before either can
+	// finish starting.
+	deployment.startSite(ctx, t)
 
 	accepted := propose(ctx, t, node, `{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Billing","role":"Master"}`)
 	before := waitForRegistrationStatus(ctx, t, node, accepted.ProposalID, "accepted")
@@ -70,7 +72,7 @@ func TestPlatformRefusesToStartWithoutItsJournalStorage(t *testing.T) {
 	outDir := filepath.Join(scenarioDir(t), "out")
 	workDir := filepath.Join(scenarioDir(t), "work")
 	deployment := deploySite(ctx, t, outDir, workDir, "scenario")
-	node := deployment.machine(t, "node")
+	node := deployment.machine(t, "node-a")
 
 	// Put a file where the journal's directory has to be, so creating it cannot
 	// succeed. This is a stand-in for the real cases: no permission, or a full or

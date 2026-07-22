@@ -507,16 +507,16 @@ func (p Peer) String() string { return fmt.Sprintf("%s/%s", p.Machine, p.Role) }
 // would boot pointing at the wrong journal, binding a route it must not bind, or
 // with no server to connect to at all.
 func (d Descriptor) validateNats() error {
-	if err := d.validateInstanceNats("instances.primary", d.Instances.Primary); err != nil {
+	if err := d.validateInstanceNats("instances.primary", RolePrimary, d.Instances.Primary); err != nil {
 		return err
 	}
 	if d.Instances.Standby.Disabled {
 		return nil
 	}
-	return d.validateInstanceNats("instances.standby", d.Instances.Standby)
+	return d.validateInstanceNats("instances.standby", RoleStandby, d.Instances.Standby)
 }
 
-func (d Descriptor) validateInstanceNats(prefix string, instance Instance) error {
+func (d Descriptor) validateInstanceNats(prefix string, role PlatformInstanceRole, instance Instance) error {
 	nats := instance.Nats
 	if len(nats.Servers) == 0 {
 		return fmt.Errorf("%s.nats.servers: at least one server is required", prefix)
@@ -540,22 +540,25 @@ func (d Descriptor) validateInstanceNats(prefix string, instance Instance) error
 	if duplicate, found := firstDuplicate(nats.Routes); found {
 		return fmt.Errorf("%s.nats.routes: %q is listed twice", prefix, duplicate)
 	}
-	return d.validateStorageTopology(prefix, nats)
+	return d.validateStorageTopology(prefix, role, nats)
 }
 
 // validateStorageTopology checks one instance's listener ownership against the
 // storage selection the descriptor implies.
 //
-// Storage is selected by machine, not by instance. A machine is the failure
-// domain: two of a site's journal replicas behind one power supply is not
-// redundancy, so a machine that stores the journal stores one copy however many
-// instances it deploys. Both of its instances run a server, and those two servers
-// route to each other.
-func (d Descriptor) validateStorageTopology(prefix string, nats *Nats) error {
-	storage := StorageMachines(d.siteMachines())
-	if !slices.Contains(storage, d.Machine) {
+// Storage is selected by instance, because an instance is what runs a server.
+// A site of two machines that each deploy a standby has four candidates and can
+// therefore hold a three-member journal; counted by machine it would have two,
+// and a journal of two members needs both alive.
+//
+// This mirrors the rule in the resolver and in the platform's NATS adapter. All
+// three derive the same set from the same site, and this one is what stops a
+// descriptor whose routes disagree with it from ever being built.
+func (d Descriptor) validateStorageTopology(prefix string, role PlatformInstanceRole, nats *Nats) error {
+	storage := StorageInstances(d.siteInstances())
+	if !slices.Contains(storage, instanceKey(d.Machine, role)) {
 		if len(nats.Routes) > 0 {
-			return fmt.Errorf("%s.nats.routes: an instance on a machine that does not store the journal has no cluster to route to", prefix)
+			return fmt.Errorf("%s.nats.routes: an instance that does not store the journal has no cluster to route to", prefix)
 		}
 		if slices.Contains(nats.Servers, nats.ClientAddress) {
 			return fmt.Errorf("%s.nats.servers: lists this instance's own client address %q, which it does not bind", prefix, nats.ClientAddress)
@@ -566,7 +569,7 @@ func (d Descriptor) validateStorageTopology(prefix string, nats *Nats) error {
 	// keeps its client on the local server while that server is up, so an instance
 	// does not route its own traffic through a peer.
 	if nats.Servers[0] != nats.ClientAddress {
-		return fmt.Errorf("%s.nats.servers: an instance on a storage machine must list its own client address %q first, got %q",
+		return fmt.Errorf("%s.nats.servers: a storage instance must list its own client address %q first, got %q",
 			prefix, nats.ClientAddress, nats.Servers[0])
 	}
 	// Every other storage server contributes exactly one route and one server
@@ -580,22 +583,26 @@ func (d Descriptor) validateStorageTopology(prefix string, nats *Nats) error {
 	return nil
 }
 
-// siteMachines returns every machine of this machine's site, including itself.
-// Peers are instances, so a machine that deploys two of them contributes two
-// peers and one machine.
-func (d Descriptor) siteMachines() []string {
-	machines := make([]string, 0, len(d.Peers)+1)
-	machines = append(machines, d.Machine)
+// siteInstances returns every platform instance of this machine's site, named by
+// machine and role. Peers are already instances, so this is the peer list in the
+// identity storage selection works in.
+func (d Descriptor) siteInstances() []string {
+	instances := make([]string, 0, len(d.Peers))
 	for _, peer := range d.Peers {
-		machines = append(machines, peer.Machine)
+		instances = append(instances, instanceKey(peer.Machine, peer.Role))
 	}
-	slices.Sort(machines)
-	return slices.Compact(machines)
+	slices.Sort(instances)
+	return slices.Compact(instances)
 }
 
-// StorageMachines returns the machines of a site that host the site journal,
-// sorted by machine name: one for a site smaller than three machines, the first
-// three otherwise.
+// instanceKey names one platform instance within its site.
+func instanceKey(machine string, role PlatformInstanceRole) string {
+	return machine + "-" + string(role)
+}
+
+// StorageInstances returns the platform instances of a site that host the site
+// journal, sorted by instance name: one for a site smaller than three instances,
+// the first three otherwise.
 //
 // The rule is deterministic by name so every machine of the site derives the
 // same set without coordinating. Three rather than two is what keeps the
@@ -605,8 +612,8 @@ func (d Descriptor) siteMachines() []string {
 // storage machine deploys runs a server, so a site can have more storage servers
 // than storage machines, and replica placement must keep a machine's servers from
 // holding more than one copy.
-func StorageMachines(machines []string) []string {
-	sorted := slices.Clone(machines)
+func StorageInstances(instances []string) []string {
+	sorted := slices.Clone(instances)
 	slices.Sort(sorted)
 	sorted = slices.Compact(sorted)
 	switch {
@@ -619,8 +626,8 @@ func StorageMachines(machines []string) []string {
 	}
 }
 
-// smallSiteMax is the largest site that runs one storage machine. A site with
-// three or more machines runs three.
+// smallSiteMax is the largest site that runs one storage instance. A site with
+// three or more instances runs three.
 const smallSiteMax = 2
 
 // firstDuplicate returns the first repeated value in values.

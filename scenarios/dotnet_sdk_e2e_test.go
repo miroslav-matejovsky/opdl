@@ -52,15 +52,15 @@ func TestDotnetSDKEndToEnd(t *testing.T) {
 	scenariosDir, err := filepath.Abs(".")
 	require.NoError(t, err)
 	outDir := filepath.Join(scenarioDir(t), "out")
-	// Both machines are prepared up front so the .NET test knows where node B will
-	// answer, and started separately so node B is genuinely absent while the
-	// pending assertions run.
+	// Every machine is prepared up front so the .NET test knows where the second
+	// one will answer, and node-c is started separately so it is genuinely absent
+	// while the pending assertions run. node-c is the machine held back because it
+	// stores no journal, so the site works without it.
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
-	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
+	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-c")
 	controlDir := filepath.Join(scenarioDir(t), "control")
 
-	first.start(ctx, t)
-	waitForAPI(ctx, t, first)
+	deployment.startSite(ctx, t, "node-c")
 
 	// The .NET test runs asynchronously: it blocks partway through waiting for
 	// node B, so this scenario has to still be running to start it.

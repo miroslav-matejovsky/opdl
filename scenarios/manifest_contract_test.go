@@ -14,7 +14,11 @@ func TestManifestArgumentsMatchRuntime(t *testing.T) {
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "manifest-contract")
-	node := deployment.machine(t, "node")
+	node := deployment.machine(t, "node-b")
+	// The subtests start node-b's instances one at a time with the manifest's own
+	// arguments. The rest of the site has to be running for either to reach the
+	// journal.
+	deployment.startSite(ctx, t, "node-b")
 	manifest := readManifest(t, node.binaryPath)
 	require.Equal(t, []string{"-instance", "primary"}, manifest.Primary.Args)
 	require.NotNil(t, manifest.Standby)

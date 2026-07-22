@@ -8,21 +8,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBuildAndRunSingleMachine is the bare-minimum end-to-end scenario: drive
-// the builder CLI to build the single machine in the "scenario" example
-// blueprint, then run the resulting platform binary and check it starts its
-// registration API, decides a proposal, and reports its configuration. Both are
-// external processes; nothing here imports builder or platform Go code.
-func TestBuildAndRunSingleMachine(t *testing.T) {
+// TestBuildAndRunMinimumSite is the bare-minimum end-to-end scenario: drive the
+// builder CLI to build the smallest site the platform accepts, then run the
+// resulting platform binaries and check they start their registration API,
+// decide a proposal, and report their configuration. Both are external
+// processes; nothing here imports builder or platform Go code.
+//
+// The minimum is two machines and three platform instances, so "bare minimum" is
+// no longer one process. The machines start together because their journal's
+// metadata group needs a quorum of its three members before any of them can
+// finish starting; node-b's Standby Instance is the third and is not needed for
+// that quorum, so it stays down here.
+func TestBuildAndRunMinimumSite(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "scenario")
-	node := deployment.machine(t, "node")
+	node := deployment.machine(t, "node-a")
 	require.Nil(t, readManifest(t, node.binaryPath).Standby,
 		"an explicit per-machine opt-out must package only the primary launch")
-	node.start(ctx, t)
-	waitForAPI(ctx, t, node)
+	deployment.startSite(ctx, t)
 
 	require.Empty(t, listRegistrations(ctx, t, node),
 		"a site that has registered nothing lists nothing")
@@ -33,18 +38,20 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 		`{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Scenario service","role":"Master"}`)
 	require.Positive(t, accepted.Sequence, "the proposal has a place in the site's history")
 
-	// A one-machine site is its own only expected machine, so it decides on its
-	// own, though still on its own schedule.
+	// Registration wants one confirmation per machine, and the site has two, so
+	// both must agree before a proposal is accepted.
 	status := waitForRegistrationStatus(ctx, t, node, accepted.ProposalID, "accepted")
 	require.Equal(t, accepted.ProposalID, status.ProposalID)
-	require.Equal(t, "node", status.Machine)
+	require.Equal(t, "node-a", status.Machine)
 	require.Equal(t, "127.0.0.1", status.IP)
 	require.Equal(t, "Scenario service", status.UnitTypeNameAdvertised)
 	require.Equal(t, "Master", *status.Role)
-	require.Len(t, status.PlatformInstances, 1)
-	require.Equal(t, "node", status.PlatformInstances[0].Machine)
-	require.Equal(t, "127.0.0.1", status.PlatformInstances[0].IP)
-	require.Equal(t, "accepted", status.PlatformInstances[0].Status)
+	// One confirmation per machine, not per instance: exactly one of a machine's
+	// instances is Active and it answers for the machine.
+	require.Len(t, status.PlatformInstances, 2)
+	for _, instance := range status.PlatformInstances {
+		require.Equal(t, "accepted", instance.Status)
+	}
 
 	require.Equal(t, []registration{status}, listRegistrations(ctx, t, node),
 		"the list and the status endpoint are the same projection")
@@ -66,17 +73,17 @@ func TestBuildAndRunSingleMachine(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, code)
 
 	// The machine reported the configuration it booted with, including where its
-	// journal lives and that it is a site of one.
+	// journal lives and who its site is.
 	//
-	// Membership is read off the peers line rather than a one-member site count.
-	// The count was removed when peers became instances: a machine deploying both
+	// Membership is read off the peers line rather than a member count. The count
+	// was removed when peers became instances: a machine deploying both
 	// contributes two of them, so a number no longer says how many machines a site
 	// has, and the line that lists them does.
 	logs := node.logs()
 	require.Contains(t, logs, "platform configuration")
-	require.Contains(t, logs, "peers        node/primary (127.0.0.1)",
-		"a standalone deployment is a site of one, and names its single instance")
-	require.Contains(t, logs, "data_dir="+filepath.ToSlash(node.sockets.dataDir))
+	require.Contains(t, logs, "peers        node-a/primary (127.0.0.1), node-b/primary (127.0.0.2), node-b/standby (127.0.0.2)",
+		"the site's membership is its instances, and a machine with a standby contributes two")
+	require.Contains(t, logs, "data_dir     "+filepath.ToSlash(node.sockets.dataDir))
 	require.Contains(t, logs, "credentials_file=(none: loopback only)",
 		"a loopback deployment may run unauthenticated, and says so")
 	require.NotContains(t, logs, "events_dir", "local event files are not a runtime path any more")

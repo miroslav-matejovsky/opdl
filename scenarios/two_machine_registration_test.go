@@ -23,12 +23,13 @@ func TestTwoMachineRegistration(t *testing.T) {
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
-	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
+	first, second := deployment.machine(t, "node-a"), deployment.machine(t, "node-c")
 	const request = `{"unit_type":7,"unit_id":42,"unit_type_name_advertised":"Billing","role":"Master"}`
 
-	// Start node-a alone. node-b is in its topology and is not running.
-	first.start(ctx, t)
-	waitForAPI(ctx, t, first)
+	// Start the site's storage instances. node-c is in the topology and is not
+	// running: it stores nothing, so the journal is complete without it while the
+	// site's membership is not.
+	deployment.startSite(ctx, t, "node-c")
 
 	accepted := propose(ctx, t, first, request)
 
@@ -39,10 +40,10 @@ func TestTwoMachineRegistration(t *testing.T) {
 	pending := waitForRegistration(ctx, t, first, accepted.ProposalID,
 		confirmedBy("node-a"), "node-a confirming its own proposal")
 	require.Equal(t, "pending", pending.Status,
-		"the site cannot accept a proposal node-b has not seen, however long node-a waits")
-	require.Equal(t, "pending", pending.instance(t, "node-b").Status,
-		"node-b is expected and offline, which is visible rather than silent")
-	require.Equal(t, "127.0.0.2", pending.instance(t, "node-b").IP)
+		"the site cannot accept a proposal node-c has not seen, however long node-a waits")
+	require.Equal(t, "pending", pending.instance(t, "node-c").Status,
+		"node-c is expected and offline, which is visible rather than silent")
+	require.Equal(t, "127.0.0.3", pending.instance(t, "node-c").IP)
 	require.Equal(t, "node-a", pending.Machine)
 	require.Equal(t, "127.0.0.1", pending.IP)
 

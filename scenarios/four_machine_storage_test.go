@@ -54,7 +54,7 @@ func TestFourMachineStorageTopologyAndFailure(t *testing.T) {
 	// Storage is selected by sorted machine name, so node-a, node-b, and node-c
 	// store the journal and node-d does not. Nothing tells them that: each derives
 	// it from the site membership in its own descriptor.
-	storage := storageMachines(machineNames("four-machine"))
+	storage := storageMachines("four-machine")
 	require.Equal(t, []string{"node-a", "node-b", "node-c"}, storage)
 
 	deployment.startTogether(ctx, t, "node-a", "node-b", "node-c", "node-d")

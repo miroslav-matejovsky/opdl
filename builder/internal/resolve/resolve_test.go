@@ -72,12 +72,29 @@ func localAddr(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 // site builds a site of machinesCount machines named node-1..node-N with
 // sequential ips, declared in reverse name order so a test can tell derived
 // ordering from declaration order.
+//
+// Every machine deploys only a Primary Instance, so the machine count is also the
+// instance count. That means machinesCount must be at least three: the platform's
+// minimum site is two machines and three instances, and a site of one or two
+// single-instance machines is rejected before anything a caller is testing runs.
 func site(name string, machineCount int) blueprint.Site {
 	machines := make([]blueprint.Machine, 0, machineCount)
 	for i := machineCount; i >= 1; i-- {
 		machines = append(machines, machine(fmt.Sprintf("node-%d", i), fmt.Sprintf("10.0.1.%d", i), true))
 	}
 	return blueprint.Site{Name: name, Machines: machines}
+}
+
+// companion is a second machine carrying a Standby Instance, for fixtures whose
+// subject is one machine.
+//
+// The platform's smallest site is two machines and three platform instances, so
+// a site of one machine is rejected before any rule a test is about gets a
+// chance to run. Appending this keeps such a fixture legal without changing what
+// it is testing: it is declared after the machine under test, so that machine
+// stays plan.Machines[0].
+func companion() blueprint.Machine {
+	return machine("companion", "10.0.99.1", false)
 }
 
 func projectOf(sites ...blueprint.Site) *blueprint.Project {
@@ -93,7 +110,7 @@ func projectOf(sites ...blueprint.Site) *blueprint.Project {
 func project() *blueprint.Project {
 	return projectOf(blueprint.Site{
 		Name:     "north",
-		Machines: []blueprint.Machine{sensor()},
+		Machines: []blueprint.Machine{sensor(), companion()},
 	})
 }
 
@@ -116,6 +133,7 @@ func twoSiteProject() *blueprint.Project {
 		}},
 		blueprint.Site{Name: "south", Machines: []blueprint.Machine{
 			machine("south-node", "10.0.2.10", true),
+			machine("south-relay", "10.0.2.11", false),
 		}},
 	)
 }
@@ -136,7 +154,8 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	plan, err := resolve.Build(project(), "acme-opdl")
 	require.NoError(t, err)
 	require.Equal(t, "customer-a", plan.Project)
-	require.Len(t, plan.Machines, 1)
+	// The sensor under test, plus the companion that makes the site a legal size.
+	require.Len(t, plan.Machines, 2)
 
 	m := plan.Machines[0]
 	require.Equal(t, "acme-opdl", m.Platform)
@@ -159,7 +178,7 @@ func TestBuildCopiesStandbyDecision(t *testing.T) {
 		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
 			p := projectOf(blueprint.Site{
 				Name:     "north",
-				Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", disabled)},
+				Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", disabled), companion()},
 			})
 			plan, err := resolve.Build(p, "acme-opdl")
 			require.NoError(t, err)
@@ -191,75 +210,6 @@ func TestBuildStandbyIsPerMachine(t *testing.T) {
 	require.True(t, machineByName(t, reversed, "gateway").Instances.Standby.Disabled)
 }
 
-// TestBuildDerivesOneMemberSiteForSingleInstanceMachine checks a standalone
-// machine that deploys one instance is a valid fabric of one, not a machine with
-// a missing fabric. It stores the journal alone, so it has a server and no route.
-func TestBuildDerivesOneMemberSiteForSingleInstanceMachine(t *testing.T) {
-	plan, err := resolve.Build(project(), "acme-opdl")
-	require.NoError(t, err)
-	d := plan.Machines[0]
-
-	require.Equal(t, &deployment.Nats{
-		ClientAddress:  addr("10.0.1.10", clientPort),
-		ClusterAddress: addr("10.0.1.10", clusterPort),
-		Routes:         []string{},
-		Servers:        []string{addr("10.0.1.10", clientPort)},
-	}, d.Instances.Primary.Nats)
-	require.True(t, d.Instances.Standby.Disabled)
-
-	// The site's membership is the one instance it deploys, and a machine lists
-	// its own instances, so the list is not empty.
-	require.Equal(t, []deployment.Peer{{
-		Site: "north", Machine: "sensor", Role: deployment.RolePrimary, IP: "10.0.1.10",
-		Nats: deployment.PeerNats{
-			ClientAddress:  addr("10.0.1.10", clientPort),
-			ClusterAddress: addr("10.0.1.10", clusterPort),
-		},
-	}}, d.Peers)
-}
-
-// TestBuildDerivesTwoStorageServersOnOneMachine checks the shape a Standby
-// Instance introduces: both instances of a storage machine run a server, and
-// those two servers route to each other. A one-machine site with a standby
-// therefore has a cluster, which it would not have had when the endpoints were
-// machine-level.
-func TestBuildDerivesTwoStorageServersOnOneMachine(t *testing.T) {
-	p := projectOf(blueprint.Site{
-		Name:     "north",
-		Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", false)},
-	})
-	plan, err := resolve.Build(p, "acme-opdl")
-	require.NoError(t, err)
-	d := plan.Machines[0]
-
-	primaryClient := addr("10.0.1.10", clientPort)
-	standbyClient := addr("10.0.1.10", standbyClientPort)
-
-	require.Equal(t, &deployment.Nats{
-		ClientAddress:  primaryClient,
-		ClusterAddress: addr("10.0.1.10", clusterPort),
-		Routes:         []string{addr("10.0.1.10", standbyClusterPort)},
-		Servers:        []string{primaryClient, standbyClient},
-	}, d.Instances.Primary.Nats, "the primary routes to its own machine's standby")
-
-	require.Equal(t, &deployment.Nats{
-		ClientAddress:  standbyClient,
-		ClusterAddress: addr("10.0.1.10", standbyClusterPort),
-		Routes:         []string{addr("10.0.1.10", clusterPort)},
-		Servers:        []string{standbyClient, primaryClient},
-	}, d.Instances.Standby.Nats, "and the standby back to the primary")
-
-	// Each instance serves its own API, on loopback and never on the machine's ip.
-	// Nothing on the machine is shared but the ownership object.
-	require.Equal(t, localAddr(apiPort), d.Instances.Primary.APIAddress)
-	require.Equal(t, localAddr(standbyAPIPort), d.Instances.Standby.APIAddress)
-
-	// And each writes its status file into its own directory.
-	require.Equal(t, runtimeDir("sensor", "primary"), d.Instances.Primary.RuntimeDir)
-	require.Equal(t, runtimeDir("sensor", "standby"), d.Instances.Standby.RuntimeDir)
-	require.Len(t, d.Peers, 2, "a machine that deploys both instances contributes two peers")
-}
-
 // TestBuildDerivesEventFabricPeersFromTheSiteOnly checks the fabric spans exactly one
 // site: a machine's peers are its site's other machines, never another site's,
 // and every machine of a site sees the same membership.
@@ -267,7 +217,7 @@ func TestBuildDerivesEventFabricPeersFromTheSiteOnly(t *testing.T) {
 	plan, err := resolve.Build(twoSiteProject(), "acme-opdl")
 	require.NoError(t, err)
 
-	// Every machine of the site deploys one instance here, so the membership is
+	// The north site's machines each deploy one instance here, so its membership is
 	// three peers ordered by machine name, and it includes this machine's own.
 	sensor := machineByName(t, plan, "sensor")
 	names := make([]string, 0, len(sensor.Peers))
@@ -286,22 +236,26 @@ func TestBuildDerivesEventFabricPeersFromTheSiteOnly(t *testing.T) {
 		Routes:         []string{addr("10.0.1.12", clusterPort), addr("10.0.1.11", clusterPort)},
 	}, sensor.Instances.Primary.Nats)
 
-	// The south machine is alone in its site, so it forms its own fabric and
-	// never meets the north machines.
+	// The south site forms its own fabric and never meets the north machines. Its
+	// membership is its own two machines' three instances, and nothing of north's.
 	south := machineByName(t, plan, "south-node")
-	require.Len(t, south.Peers, 1)
-	require.Equal(t, "south-node", south.Peers[0].Machine)
-	require.Empty(t, south.Instances.Primary.Nats.Routes)
+	southNames := make([]string, 0, len(south.Peers))
+	for _, peer := range south.Peers {
+		require.Equal(t, "south", peer.Site)
+		southNames = append(southNames, peer.Machine+"/"+string(peer.Role))
+	}
+	require.Equal(t, []string{"south-node/primary", "south-relay/primary", "south-relay/standby"}, southNames)
 }
 
 // TestBuildDerivesStorageTopologyBySiteSize checks the listener matrix the
 // contract promises: how many machines store the journal, which of them bind a
 // cluster listener, and what a machine that stores nothing still knows.
 //
-// The cluster listener is the interesting column. A one or two machine site
-// authors a cluster port like every other machine but must resolve no routes,
-// because there is no peer server to route to and binding it would open a port
-// nothing can reach.
+// The cluster listener is the interesting column. Every site the platform accepts
+// has at least three platform instances, so the storage selection is always three
+// and there is always a real cluster; what varies is how many machines are
+// clients of it. The one-storage-node shape the selection still codes for is
+// unreachable through a valid blueprint, which is why it is not a case here.
 func TestBuildDerivesStorageTopologyBySiteSize(t *testing.T) {
 	tests := []struct {
 		siteSize     int
@@ -310,8 +264,6 @@ func TestBuildDerivesStorageTopologyBySiteSize(t *testing.T) {
 		wantServers  int
 		clusterNodes int
 	}{
-		{siteSize: 1, storage: []string{"node-1"}, wantServers: 1, clusterNodes: 0},
-		{siteSize: 2, storage: []string{"node-1"}, wantServers: 1, clusterNodes: 0},
 		{siteSize: 3, storage: []string{"node-1", "node-2", "node-3"}, wantServers: 3, clusterNodes: 3},
 		{siteSize: 4, storage: []string{"node-1", "node-2", "node-3"}, wantServers: 3, clusterNodes: 3},
 	}
@@ -378,10 +330,15 @@ func TestBuildEventFabricOrderIsIndependentOfDeclarationOrder(t *testing.T) {
 // empty JSON array rather than null, so a descriptor reader can tell "resolved
 // to nothing" from "not resolved".
 func TestBuildResolvesEmptyListsAsEmptyArrays(t *testing.T) {
-	plan, err := resolve.Build(project(), "acme-opdl")
+	// A site of four single-instance machines: the first three by name store the
+	// journal, and the fourth routes to nothing. Every valid site has at least
+	// three storage instances, so an empty route list now belongs to an instance
+	// the selection left out rather than to a site too small to cluster.
+	plan, err := resolve.Build(projectOf(site("north", 4)), "acme-opdl")
 	require.NoError(t, err)
-	require.NotNil(t, plan.Machines[0].Instances.Primary.Nats.Routes)
-	require.Empty(t, plan.Machines[0].Instances.Primary.Nats.Routes)
+	client := machineByName(t, plan, "node-4")
+	require.NotNil(t, client.Instances.Primary.Nats.Routes)
+	require.Empty(t, client.Instances.Primary.Nats.Routes)
 }
 
 func TestBuildValidatesBlueprint(t *testing.T) {
@@ -409,7 +366,7 @@ func TestBuildCarriesAuthoredLock(t *testing.T) {
 	t.Run("standby deployed carries lock", func(t *testing.T) {
 		p := projectOf(blueprint.Site{
 			Name:     "north",
-			Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", false)},
+			Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", false), companion()},
 		})
 		plan, err := resolve.Build(p, "acme-opdl")
 		require.NoError(t, err)
@@ -419,7 +376,7 @@ func TestBuildCarriesAuthoredLock(t *testing.T) {
 	t.Run("standby disabled yields nil lock", func(t *testing.T) {
 		p := projectOf(blueprint.Site{
 			Name:     "north",
-			Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", true)},
+			Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", true), companion()},
 		})
 		plan, err := resolve.Build(p, "acme-opdl")
 		require.NoError(t, err)
@@ -432,7 +389,7 @@ func TestBuildCarriesAuthoredLock(t *testing.T) {
 // instance carries none.
 func TestBuildCarriesWinServiceIdentities(t *testing.T) {
 	t.Run("standby deployed", func(t *testing.T) {
-		p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", false)}})
+		p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", false), companion()}})
 		plan, err := resolve.Build(p, "acme-opdl")
 		require.NoError(t, err)
 
@@ -445,7 +402,7 @@ func TestBuildCarriesWinServiceIdentities(t *testing.T) {
 	})
 
 	t.Run("standby not deployed", func(t *testing.T) {
-		p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", true)}})
+		p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", true), companion()}})
 		plan, err := resolve.Build(p, "acme-opdl")
 		require.NoError(t, err)
 

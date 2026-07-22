@@ -620,76 +620,21 @@ func TestActiveAndStandbyRunTogether(t *testing.T) {
 	}, 10*time.Second, 20*time.Millisecond, "the standby did not follow a new journal event")
 }
 
-// TestFailoverAndFailback exercises both ownership transfers.
-// The service-manager action is represented by canceling the active process only
-// after the waiting process reports a caught-up standby status.
-func TestFailoverAndFailback(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping failover integration test in -short mode")
-	}
-	dir := t.TempDir()
-	cfg, err := config.Load(writeConfig(t, dir))
-	require.NoError(t, err)
-	descriptor := descriptorOnFreePorts(t, cfg)
-	// The standby is enabled and nothing else changes. The descriptor now resolves
-	// a NATS topology per instance, but the runtime has not yet been changed to
-	// start the standby's own server: it is still turned client-only and follows
-	// the address the Active instance is serving on. See nats.DefaultConfig.
-	descriptor.Instances.Standby.Disabled = false
-
-	// Each instance has its own API address, so a transfer moves which address
-	// answers rather than moving one address between processes.
-	primaryAPI := descriptor.Instances.Primary.APIAddress
-	standbyAPI := descriptor.Instances.Standby.APIAddress
-	require.NotEqual(t, primaryAPI, standbyAPI)
-
-	primaryCtx, stopPrimary := context.WithCancel(t.Context())
-	primaryDone := make(chan error, 1)
-	go func() { primaryDone <- runProcess(primaryCtx, cfg, descriptor, redundancy.RolePrimary) }()
-	waitForProcessState(t, descriptor, redundancy.RolePrimary, redundancy.StateActive, primaryDone)
-	require.True(t, get(t.Context(), primaryAPI), "the preferred primary did not serve")
-	require.False(t, get(t.Context(), standbyAPI), "nothing is on the standby's address before it starts")
-	requireInstance(t, primaryAPI, "primary", api.InstanceStateActive)
-
-	standbyCtx, stopStandby := context.WithCancel(t.Context())
-	standbyDone := make(chan error, 1)
-	go func() { standbyDone <- runProcess(standbyCtx, cfg, descriptor, redundancy.RoleStandby) }()
-	waitForFailoverReadyStandby(t, descriptor, redundancy.RoleStandby, standbyDone)
-
-	// The Passive instance binds its own address for its whole lifetime, so an
-	// operator can ask it about itself while the other instance is the one
-	// serving. It answers for itself and refuses domain operations.
-	requireInstance(t, standbyAPI, "standby", api.InstanceStatePassive)
-	requirePassiveRefusal(t, standbyAPI, primaryAPI)
-
-	stopPrimary()
-	require.NoError(t, waitProcess(t, primaryDone), "the primary did not stop cleanly")
-	waitForProcessState(t, descriptor, redundancy.RoleStandby, redundancy.StateActive, standbyDone)
-	// The Standby Instance serves on its own address, not the one the Primary
-	// Instance was on. Nothing binds the stopped instance's address.
-	require.True(t, get(t.Context(), standbyAPI), "the Standby Instance did not restore the API after failover")
-	require.False(t, get(t.Context(), primaryAPI), "the Standby Instance took over the Primary Instance's address")
-	// Same address, same listener, different answer: activation swapped the
-	// handler rather than moving the endpoint.
-	requireInstance(t, standbyAPI, "standby", api.InstanceStateActive)
-
-	failbackCtx, stopFailback := context.WithCancel(t.Context())
-	failbackDone := make(chan error, 1)
-	go func() { failbackDone <- runProcess(failbackCtx, cfg, descriptor, redundancy.RolePrimary) }()
-	waitForFailoverReadyStandby(t, descriptor, redundancy.RolePrimary, failbackDone)
-
-	// Failback is operator-initiated: deployment keeps the Primary Instance
-	// preferred by gracefully stopping the Active Standby, and only after the
-	// returning Primary Instance is caught up.
-	stopStandby()
-	require.NoError(t, waitProcess(t, standbyDone), "the Active Standby did not stop cleanly")
-	waitForProcessState(t, descriptor, redundancy.RolePrimary, redundancy.StateActive, failbackDone)
-	require.True(t, get(t.Context(), primaryAPI), "the Primary Instance did not restore the API after failback")
-	require.False(t, get(t.Context(), standbyAPI), "the stopped Standby Instance's address is still answering")
-
-	stopFailback()
-	require.NoError(t, waitProcess(t, failbackDone), "the Primary Instance did not stop cleanly")
-}
+// Failover and failback are not exercised here any more.
+//
+// They were, on one machine running both instances against one shared journal
+// store. That topology no longer exists: each instance has its own store, and the
+// platform's minimum site is two machines and three platform instances, because a
+// journal of fewer than three members cannot lose one and keep quorum. A lone
+// machine's standby therefore has no journal to take over, whatever the ownership
+// says.
+//
+// So the transfer can only be shown with four processes on a site that is a legal
+// size, which makes it a scenario rather than a composition test. See the
+// scenario suite's warm standby failover.
+//
+// The helpers below stay: they read the per-process status files, which is how a
+// scenario and an operator both ask an instance what state it reached.
 
 func waitForProcessState(t *testing.T, descriptor config.Descriptor, role redundancy.InstanceRole, state redundancy.State, done <-chan error) {
 	t.Helper()

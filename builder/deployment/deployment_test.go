@@ -63,8 +63,8 @@ func validDescriptor() deployment.Descriptor {
 				Nats: &deployment.Nats{
 					ClientAddress:  primaryClient,
 					ClusterAddress: primaryCluster,
-					Routes:         []string{gatewayCluster, historianCluster, standbyCluster},
-					Servers:        []string{primaryClient, gatewayClient, historianClient, standbyClient},
+					Routes:         []string{gatewayCluster, standbyCluster},
+					Servers:        []string{primaryClient, gatewayClient, standbyClient},
 				},
 			},
 			Standby: deployment.Instance{
@@ -76,15 +76,18 @@ func validDescriptor() deployment.Descriptor {
 				Nats: &deployment.Nats{
 					ClientAddress:  standbyClient,
 					ClusterAddress: standbyCluster,
-					Routes:         []string{gatewayCluster, historianCluster, primaryCluster},
-					Servers:        []string{standbyClient, gatewayClient, historianClient, primaryClient},
+					Routes:         []string{gatewayCluster, primaryCluster},
+					Servers:        []string{standbyClient, gatewayClient, primaryClient},
 				},
 			},
 		},
 		Lock: &deployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
+		// The platform's minimum site: two machines and three platform instances.
+		// Three is also exactly the storage selection, so every instance here runs
+		// a server and routes to the other two. Fixtures that need a non-storage
+		// instance add a fourth.
 		Peers: []deployment.Peer{
 			peer("gateway", deployment.RolePrimary, gatewayIP, gatewayClient, gatewayCluster),
-			peer("historian", deployment.RolePrimary, historianIP, historianClient, historianCluster),
 			peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
 			peer("sensor", deployment.RoleStandby, machineIP, standbyClient, standbyCluster),
 		},
@@ -259,7 +262,8 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		},
 		{
 			"machine is missing from its own site membership",
-			func(d *deployment.Descriptor) { d.Peers = d.Peers[:3] },
+			// Drops the last peer, which is this machine's own Standby Instance.
+			func(d *deployment.Descriptor) { d.Peers = d.Peers[:len(d.Peers)-1] },
 			"peers do not include this machine's own standby instance",
 		},
 
@@ -352,23 +356,6 @@ func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
 	require.NoError(t, d.Validate())
 }
 
-// TestDescriptorValidateAcceptsTwoInstancesAsAOneMachineCluster checks the shape
-// a standby introduces on a lone machine: two storage servers on one host, each
-// routing to the other. Before endpoints were per instance this site had no
-// cluster at all.
-func TestDescriptorValidateAcceptsTwoInstancesAsAOneMachineCluster(t *testing.T) {
-	d := validDescriptor()
-	d.Peers = []deployment.Peer{
-		peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
-		peer("sensor", deployment.RoleStandby, machineIP, standbyClient, standbyCluster),
-	}
-	d.Instances.Primary.Nats.Routes = []string{standbyCluster}
-	d.Instances.Primary.Nats.Servers = []string{primaryClient, standbyClient}
-	d.Instances.Standby.Nats.Routes = []string{primaryCluster}
-	d.Instances.Standby.Nats.Servers = []string{standbyClient, primaryClient}
-	require.NoError(t, d.Validate())
-}
-
 // TestDescriptorValidateRejectsRoutesOnANonStorageMachine checks an instance
 // cannot carry routes its site's storage selection does not justify. A cluster
 // listener is bound because routes exist, so a route where no peer server runs
@@ -376,7 +363,7 @@ func TestDescriptorValidateAcceptsTwoInstancesAsAOneMachineCluster(t *testing.T)
 func TestDescriptorValidateRejectsRoutesOnANonStorageMachine(t *testing.T) {
 	d := nonStorageDescriptor()
 	require.ErrorContains(t, d.Validate(),
-		"an instance on a machine that does not store the journal has no cluster to route to")
+		"an instance that does not store the journal has no cluster to route to")
 }
 
 // TestDescriptorValidateAcceptsNonStorageMachine checks a machine that stores

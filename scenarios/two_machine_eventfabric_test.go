@@ -14,30 +14,31 @@ import (
 // descriptor, sharing one site journal without being told about each other at
 // runtime.
 //
-// It is the scenario the storage topology exists for. A site smaller than three
-// machines runs JetStream on one deterministic storage node; the other machine
-// runs plain NATS and routes to it. The two are therefore not symmetric, and
-// what is worth proving is that they behave as if they were: either machine can
-// publish, and both project the same site state from the one journal.
+// It is the scenario the storage topology exists for. Storage is selected per
+// platform instance, and this site's first three instances by name are node-a's
+// primary and node-b's two, so node-c stores nothing and routes to the others.
+// Storage and non-storage machines are therefore not symmetric, and what is
+// worth proving is that they behave as if they were: either can publish, and all
+// project the same site state from the one journal.
 //
 // What the site then decides is TestTwoMachineRegistration's subject.
 func TestTwoMachineEventFabric(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	outDir := filepath.Join(scenarioDir(t), "out")
-	// node-a sorts first, so it is the site's storage node and node-b is a client
-	// of it. Nothing told either of them that: both derived it from the same
-	// topology in the blueprint the harness rendered and built.
+	// node-a and node-b hold the journal between them; node-c is a client of
+	// theirs. Nothing told any of them that: all derived it from the same topology
+	// in the blueprint the harness rendered and built.
 	deployment := deploySite(ctx, t, outDir, filepath.Join(scenarioDir(t), "work"), "two-machine")
-	nodeA, nodeB := deployment.machine(t, "node-a"), deployment.machine(t, "node-b")
-	deployment.startAll(ctx, t)
+	nodeA, nodeB := deployment.machine(t, "node-a"), deployment.machine(t, "node-c")
+	deployment.startSite(ctx, t)
 
 	// Each machine reports its own part in the site's storage. This is the whole
 	// asymmetry, and it is derived rather than configured.
-	requireReported(t, nodeA, "storage=true", "node-a sorts first, so it stores the site journal")
-	requireReported(t, nodeB, "storage=false", "node-b routes to the storage node instead")
-	requireReported(t, nodeA, "replicas=1", "a site smaller than three machines runs one replica")
-	requireReported(t, nodeB, "replicas=1")
+	requireReported(t, nodeA, "storage=true", "node-a's primary is among the first three instances by name")
+	requireReported(t, nodeB, "storage=false", "node-c is the fourth, so it routes to the storage instances instead")
+	requireReported(t, nodeA, "replicas=3", "a site of three or more instances replicates its journal three ways")
+	requireReported(t, nodeB, "replicas=3")
 
 	// Both machines bound themselves to the same journal, named from the
 	// deployment scope they share. That is what makes them one site rather than
@@ -50,7 +51,7 @@ func TestTwoMachineEventFabric(t *testing.T) {
 	// topology compiled into the binaries.
 	fromB := propose(ctx, t, nodeB, `{"unit_type":3,"unit_id":9,"unit_type_name_advertised":"Routed"}`)
 	onA := waitForRegistrationStatus(ctx, t, nodeA, fromB.ProposalID, "accepted")
-	require.Equal(t, "node-b", onA.Machine,
+	require.Equal(t, "node-c", onA.Machine,
 		"the storage node projected a proposal the other machine published")
 
 	// And the other way, so neither direction is an accident of who stores what.
