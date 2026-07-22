@@ -21,6 +21,11 @@ import (
 // single method. The stored JSON is unchanged: every existing event's declared
 // source is already its type's middle token.
 
+// NewID returns a time-ordered unique event ID. Factory mints an occurrence
+// identity for every envelope it stamps, so this exists only for the pipelines
+// that still build a Record by hand.
+func NewID() string { return newEventID() }
+
 // Node is the identity of the platform process an event is about: which machine
 // of which deployment stated the fact. Envelope.Origin replaces it and also
 // carries process identity.

@@ -79,6 +79,34 @@
 // delivery, not of the immutable fact, and lives on the Event Fabric's receipt
 // and delivery rather than in the envelope.
 //
+// # Stamping
+//
+// Factory is the one stamper. The runtime composes it once with NewFactory,
+// from the deployment descriptor the platform booted with and the local role of
+// the process, and Wrap turns a payload into a validated envelope:
+//
+//	envelope, err := factory.Wrap(ctx, Accepted{ProposalID: id})
+//
+// Business code passes a payload and a context and nothing else. It never
+// supplies identity, clocks, IDs, JSON, or defaults, which is what makes an
+// origin unforgeable and every envelope consistent: an emitter cannot state a
+// machine it is not, because it never states one at all.
+//
+// Wrap reports an error rather than stamping a partial envelope. The caller
+// decides what that means, because this package cannot: a required publication
+// fails the operation it belongs to, while a best-effort local record does not.
+// Nothing here logs.
+//
+// # Causal links
+//
+// CausationID and CorrelationID say which event's handling produced this one
+// and which workflow both belong to. They are infrastructure, carried on the
+// context: the Event Fabric calls WithCause once before it invokes a handler,
+// and Wrap reads the links from the handler's context.
+//
+// Business handlers never attach or read them. A handler states facts, and what
+// caused it to run is not one of them.
+//
 // # Origin is on every envelope
 //
 // Which process an event came from is an Origin: the deployment identity down
@@ -105,8 +133,9 @@
 //
 // # Migration
 //
-// legacy.go holds the previous wrapper (Node, Meta, Record, StampRecord) while
-// the pipelines are moved onto Envelope one at a time. It is temporary
-// scaffolding, not a compatibility surface: nothing new is built on it and it
-// is deleted once the migration completes. See docs/plan/unified-events.
+// legacy.go holds the previous wrapper (Node, Meta, Record, StampRecord, and
+// the exported NewID they need) while the pipelines are moved onto Envelope and
+// Factory one at a time. It is temporary scaffolding, not a compatibility
+// surface: nothing new is built on it and it is deleted once the migration
+// completes. See docs/plan/unified-events.
 package events
