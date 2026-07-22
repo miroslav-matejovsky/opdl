@@ -115,17 +115,14 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 		instance := descriptor.Instances.Get(config.Role(standby))
 		client, cluster := freeAddress(t), freeAddress(t)
 		instance.Nats = &config.Nats{
-			ClientAddress:  client,
-			ClusterAddress: cluster,
-			Servers:        []string{client},
-			Routes:         []string{},
+			JetStreamStoreDir: filepath.Join(journalRoot, string(config.Role(standby))),
+			ClientAddress:     client,
+			ClusterAddress:    cluster,
+			Servers:           []string{client},
+			Routes:            []string{},
 		}
 		instance.APIAddress = freeAddress(t)
 		instance.RuntimeDir = filepath.Join(runtimeRoot, string(config.Role(standby)))
-		// Each instance gets its own store, as the resolver gives it one. Two
-		// servers cannot open a shared JetStream store, so a test that let both
-		// point at one directory would fail in a way that says nothing about what
-		// it was testing.
 		instance.DataDir = filepath.Join(journalRoot, string(config.Role(standby)))
 		if standby {
 			descriptor.Instances.Standby = instance
@@ -360,10 +357,11 @@ func TestNatsConfigDerivesFromDescriptor(t *testing.T) {
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
 		Instances: config.Instances{
 			Primary: config.Instance{Disabled: false, DataDir: "/var/lib/opdl/node-a/primary", Nats: &config.Nats{
-				ClientAddress:  "10.0.1.10:4222",
-				ClusterAddress: "10.0.1.10:6222",
-				Routes:         []string{},
-				Servers:        []string{"10.0.1.10:4222"},
+				JetStreamStoreDir: "/var/lib/opdl/node-a/primary/eventfabric/nats",
+				ClientAddress:     "10.0.1.10:4222",
+				ClusterAddress:    "10.0.1.10:6222",
+				Routes:            []string{},
+				Servers:           []string{"10.0.1.10:4222"},
 			}},
 			Standby: config.Instance{Disabled: true},
 		},
@@ -661,7 +659,7 @@ func TestOpenReportsUnusableJournalStorage(t *testing.T) {
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
 	descriptor := descriptorOnFreePorts(t, cfg)
-	descriptor.Instances.Primary.DataDir = blocked
+	descriptor.Instances.Primary.Nats.JetStreamStoreDir = blocked
 
 	_, err = openSite(t, descriptor, cfg, true, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "data directory")

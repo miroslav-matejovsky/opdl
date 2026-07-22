@@ -23,15 +23,7 @@ type file struct {
 	// stops being ready to take over, and before an active process stops serving rather than
 	// answering from a stale view. It is required and must be positive.
 	LagBound    string      `toml:"lag_bound"`
-	Operations  Operations  `toml:"operations"`
 	EventFabric EventFabric `toml:"event_fabric"`
-}
-
-// Operations configures local event retention. Events are always written to the
-// process error stream as one JSON envelope per line; EventDir optionally
-// retains the same lines as JSONL for incident analysis.
-type Operations struct {
-	EventDir string `toml:"event_dir"`
 }
 
 // EventFabric carries per-adapter runtime settings for the Event Fabric. It is
@@ -115,7 +107,6 @@ func loadFile(path string) (file, error) {
 	if f.LagBound == "" {
 		return file{}, fmt.Errorf("configuration file %s: lag_bound is required", path)
 	}
-	f.Operations.EventDir = strings.TrimSpace(f.Operations.EventDir)
 	nats := &f.EventFabric.Nats
 	nats.StartupTimeout = strings.TrimSpace(nats.StartupTimeout)
 	if nats.StartupTimeout == "" {

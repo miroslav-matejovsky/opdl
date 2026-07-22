@@ -18,7 +18,6 @@ type Config struct {
 	readHeaderTimeout time.Duration
 	shutdownTimeout   time.Duration
 	lagBound          time.Duration
-	operations        Operations
 	eventFabric       EventFabric
 	username          string
 	password          string
@@ -60,7 +59,6 @@ func Load(configPath string) (*Config, error) {
 		readHeaderTimeout: readHeaderTimeout,
 		shutdownTimeout:   shutdownTimeout,
 		lagBound:          lagBound,
-		operations:        f.Operations,
 		eventFabric:       f.EventFabric,
 	}
 	// Credentials are read here rather than by the adapter: composition owns
@@ -122,10 +120,6 @@ func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
 // it is not ready to take over, and an active process beyond it stops serving.
 func (c *Config) LagBound() time.Duration { return c.lagBound }
 
-// OperationsEventDir returns the optional directory for append-only JSONL
-// operational events. An empty path disables file retention, not stderr events.
-func (c *Config) OperationsEventDir() string { return c.operations.EventDir }
-
 // EventFabric returns the Event Fabric adapter settings from the configuration
 // file. Only runtime composition reads it: it is how a site places the journal's
 // storage and moves the transport's sockets, and no domain package has any
@@ -147,6 +141,7 @@ func (c *Config) Credentials() (username, password string) { return c.username, 
 // it.
 func (c *Config) Summary(standby bool) string {
 	d := c.descriptor
+	inst := d.Instances.Get(Role(standby))
 	var b strings.Builder
 	fmt.Fprintf(&b, "platform configuration (machine=%s):\n", d.Machine)
 	fmt.Fprintf(&b, "  deployment descriptor (embedded, staged by builder):\n")
@@ -160,20 +155,18 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
-	// This instance's own journal store, not the machine's. The two instances open
-	// two stores, so a block that named one path per machine would be telling an
-	// operator to look in a directory the other process is writing.
-	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(d.Instances.Get(Role(standby)).DataDir))
-	// A machine's primary and standby processes contend for one Windows named
-	// mutex, so printing it at startup is how an operator finds which object they
-	// contend for.
+	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(inst.DataDir))
+	jetstreamStore := ""
+	if inst.Nats != nil {
+		jetstreamStore = inst.Nats.JetStreamStoreDir
+	}
+	fmt.Fprintf(&b, "    jetstream_store_dir %s\n", optionalPathSummary(jetstreamStore))
 	fmt.Fprintf(&b, "    lock         %s\n", lockSummary(d.Lock))
 	fmt.Fprintf(&b, "    peers        %s\n", peersSummary(d.Peers))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
 	fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
-	fmt.Fprintf(&b, "    operations.event_dir %s\n", optionalPathSummary(c.operations.EventDir))
 	fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
 	return b.String()
 }

@@ -110,20 +110,22 @@ type renderedMachine struct {
 	Name string
 	IP   string
 	// The Primary Instance's ports and its own runtime directory.
-	APIPort     int
-	RuntimeDir  string
-	DataDir     string
-	ClientPort  int
-	ClusterPort int
+	APIPort           int
+	RuntimeDir        string
+	DataDir           string
+	JetStreamStoreDir string
+	ClientPort        int
+	ClusterPort       int
 	// The Standby Instance's, empty or zero when the machine deploys none. The
 	// two instances run together on one host, so every one of these is its own
 	// listener or directory and none may repeat.
-	StandbyAPIPort     int
-	StandbyRuntimeDir  string
-	StandbyDataDir     string
-	StandbyClientPort  int
-	StandbyClusterPort int
-	StandbyDisabled    bool
+	StandbyAPIPort           int
+	StandbyRuntimeDir        string
+	StandbyDataDir           string
+	StandbyJetStreamStoreDir string
+	StandbyClientPort        int
+	StandbyClusterPort       int
+	StandbyDisabled          bool
 }
 
 // renderedProject is the blueprint template's data.
@@ -259,15 +261,13 @@ func runtimeDirFor(workDir, machine, role string) string {
 	return filepath.ToSlash(filepath.Join(workDir, "instance-"+machine, role))
 }
 
-// dataDirFor is one instance's own JetStream file store directory.
-//
-// It is per instance for a stricter reason than runtimeDirFor's. Two instances
-// sharing a runtime directory overwrite each other's status file silently; two
-// NATS servers cannot open one JetStream store at all, and on this host every
-// deployed instance of a storage machine runs a server. It is kept out of the
-// instance directory so a scenario reading one instance's evidence is not
-// walking a journal to find it.
+// dataDirFor is one instance's own platform data root.
 func dataDirFor(workDir, machine, role string) string {
+	return filepath.ToSlash(filepath.Join(workDir, "data-"+machine, role))
+}
+
+// jetstreamStoreDirFor is one instance's own JetStream file store directory.
+func jetstreamStoreDirFor(workDir, machine, role string) string {
 	return filepath.ToSlash(filepath.Join(workDir, "journal-"+machine, role))
 }
 
@@ -312,19 +312,21 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 		require.NoError(t, err)
 
 		machine := renderedMachine{
-			Name:            fixture.name,
-			IP:              fixture.ip,
-			APIPort:         takeAPIPort(),
-			RuntimeDir:      runtimeDirFor(workDir, fixture.name, "primary"),
-			DataDir:         dataDirFor(workDir, fixture.name, "primary"),
-			ClientPort:      p[0],
-			ClusterPort:     p[1],
-			StandbyDisabled: fixture.standbyDisabled,
+			Name:              fixture.name,
+			IP:                fixture.ip,
+			APIPort:           takeAPIPort(),
+			RuntimeDir:        runtimeDirFor(workDir, fixture.name, "primary"),
+			DataDir:           dataDirFor(workDir, fixture.name, "primary"),
+			JetStreamStoreDir: jetstreamStoreDirFor(workDir, fixture.name, "primary"),
+			ClientPort:        p[0],
+			ClusterPort:       p[1],
+			StandbyDisabled:   fixture.standbyDisabled,
 		}
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
 			machine.StandbyRuntimeDir = runtimeDirFor(workDir, fixture.name, "standby")
 			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, "standby")
+			machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, "standby")
 			machine.StandbyClientPort = p[2]
 			machine.StandbyClusterPort = p[3]
 		}

@@ -173,7 +173,7 @@ func DefaultConfig(descriptor config.Descriptor, role config.PlatformInstanceRol
 		cfg.ServerName = serverName(descriptor.Machine, role)
 		cfg.ClientAddress = nats.ClientAddress
 		cfg.ClusterAddress = nats.ClusterAddress
-		cfg.DataDir = instance.DataDir
+		cfg.DataDir = nats.JetStreamStoreDir
 	}
 	return cfg, nil
 }

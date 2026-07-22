@@ -113,6 +113,28 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 		if _, err := requiredField(instance, "instances."+string(role)+".disabled"); err != nil {
 			return err
 		}
+		var inst struct {
+			Disabled bool `json:"disabled"`
+		}
+		if err := json.Unmarshal(raw, &inst); err != nil {
+			return fmt.Errorf("deployment descriptor: invalid instances.%s: %w", role, err)
+		}
+		if !inst.Disabled {
+			if _, err := requiredField(instance, "instances."+string(role)+".data_dir"); err != nil {
+				return err
+			}
+			natsRaw, err := requiredField(instance, "instances."+string(role)+".nats")
+			if err != nil {
+				return err
+			}
+			var nats map[string]json.RawMessage
+			if err := json.Unmarshal(natsRaw, &nats); err != nil {
+				return fmt.Errorf("deployment descriptor: invalid instances.%s.nats: %w", role, err)
+			}
+			if _, err := requiredField(nats, "instances."+string(role)+".nats.jetstream_store_dir"); err != nil {
+				return err
+			}
+		}
 	}
 
 	var standbyPolicy struct {
@@ -237,13 +259,7 @@ type Instance struct {
 	// runtimes writing into one directory would overwrite each other's evidence.
 	// It takes no part in the ownership decision.
 	RuntimeDir string `json:"runtime_dir,omitempty"`
-	// DataDir is the instance's own JetStream file store directory.
-	//
-	// It is present on every deployed instance; only an instance on a storage
-	// machine opens it, the same way ClusterAddress is present everywhere and
-	// bound only where there are routes. It is the instance's rather than the
-	// machine's because each instance runs its own Event Fabric server, and two
-	// servers cannot open one store.
+	// DataDir is the instance's own general platform data root.
 	DataDir string `json:"data_dir,omitempty"`
 	// APIAddress is where this instance serves its local API. Each instance has
 	// its own and binds it for its whole lifetime, not only while Active.
@@ -303,6 +319,9 @@ type PeerNats struct {
 // own server, so on a storage machine that deploys a standby there are two
 // cluster members on one host and each routes to the other.
 type Nats struct {
+	// JetStreamStoreDir is the directory where this instance's NATS JetStream server
+	// stores its files.
+	JetStreamStoreDir string `json:"jetstream_store_dir,omitempty"`
 	// ClientAddress is where this instance's server serves the NATS client
 	// protocol. It is present on every instance; only an instance on a storage
 	// machine binds it.

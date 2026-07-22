@@ -185,10 +185,11 @@ func peers(site blueprint.Site) []deployment.Peer {
 func instanceNats(site blueprint.Site, machine blueprint.Machine, role deployment.PlatformInstanceRole) deployment.Nats {
 	endpoints := machine.Endpoints(role == deployment.RoleStandby)
 	out := deployment.Nats{
-		ClientAddress:  address(machine.IP, endpoints.ClientPort),
-		ClusterAddress: address(machine.IP, endpoints.ClusterPort),
-		Routes:         []string{},
-		Servers:        []string{},
+		JetStreamStoreDir: machine.JetStreamStoreDir(role == deployment.RoleStandby),
+		ClientAddress:     address(machine.IP, endpoints.ClientPort),
+		ClusterAddress:    address(machine.IP, endpoints.ClusterPort),
+		Routes:            []string{},
+		Servers:           []string{},
 	}
 	storage := siteStorageServers(site)
 	hostsStorage := slices.ContainsFunc(storage, func(s deployment.Peer) bool {

@@ -26,6 +26,10 @@ const (
 	standbyClusterPort = 6322
 )
 
+func jetstreamStoreDir(machine, role string) string {
+	return fmt.Sprintf("D:/opdl/%s/%s/eventfabric/nats", machine, role)
+}
+
 // machine builds a valid machine with the mandatory platform policy filled in.
 func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	standby := &blueprint.Standby{Disabled: standbyDisabled}
@@ -35,7 +39,15 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 		standby.DataDir = dataDir(name, "standby")
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
-		standby.Nats = &blueprint.Nats{ClientPort: standbyClientPort, ClusterPort: standbyClusterPort}
+		standby.EventStorage = &blueprint.EventStorage{
+			EventFabric: &blueprint.EventFabric{
+				Nats: &blueprint.Nats{
+					ClientPort:        standbyClientPort,
+					ClusterPort:       standbyClusterPort,
+					JetStreamStoreDir: jetstreamStoreDir(name, "standby"),
+				},
+			},
+		}
 	}
 	return blueprint.Machine{
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
@@ -44,8 +56,16 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 			DataDir:    dataDir(name, "primary"),
 			API:        &blueprint.API{LocalPort: apiPort},
 			WinService: &blueprint.WinService{Name: name + "-primary"},
-			Nats:       &blueprint.Nats{ClientPort: clientPort, ClusterPort: clusterPort},
-			Standby:    standby,
+			EventStorage: &blueprint.EventStorage{
+				EventFabric: &blueprint.EventFabric{
+					Nats: &blueprint.Nats{
+						ClientPort:        clientPort,
+						ClusterPort:       clusterPort,
+						JetStreamStoreDir: jetstreamStoreDir(name, "primary"),
+					},
+				},
+			},
+			Standby: standby,
 		},
 	}
 }
@@ -226,10 +246,11 @@ func TestBuildDerivesEventFabricPeersFromTheSiteOnly(t *testing.T) {
 	// The site has three machines, so all three store the journal and route to
 	// each other. Storage order is by machine name: archive, gateway, sensor.
 	require.Equal(t, &deployment.Nats{
-		ClientAddress:  addr("10.0.1.10", clientPort),
-		ClusterAddress: addr("10.0.1.10", clusterPort),
-		Servers:        []string{addr("10.0.1.10", clientPort), addr("10.0.1.12", clientPort), addr("10.0.1.11", clientPort)},
-		Routes:         []string{addr("10.0.1.12", clusterPort), addr("10.0.1.11", clusterPort)},
+		JetStreamStoreDir: jetstreamStoreDir("sensor", "primary"),
+		ClientAddress:     addr("10.0.1.10", clientPort),
+		ClusterAddress:    addr("10.0.1.10", clusterPort),
+		Servers:           []string{addr("10.0.1.10", clientPort), addr("10.0.1.12", clientPort), addr("10.0.1.11", clientPort)},
+		Routes:            []string{addr("10.0.1.12", clusterPort), addr("10.0.1.11", clusterPort)},
 	}, sensor.Instances.Primary.Nats)
 
 	// The south site forms its own fabric and never meets the north machines. Its

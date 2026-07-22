@@ -42,12 +42,12 @@ func New(dataDir string) (*Backend, error) {
 	}
 
 	eventsDir := filepath.Join(dataDir, "events")
-	if err := os.MkdirAll(eventsDir, 0755); err != nil {
+	if err := os.MkdirAll(eventsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("jsonl: create events directory %s: %w", eventsDir, err)
 	}
 
 	filePath := filepath.Join(eventsDir, "events.jsonl")
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("jsonl: open events file %s: %w", filePath, err)
 	}
@@ -73,9 +73,9 @@ func (b *Backend) Store(ctx context.Context, envelope events.Envelope) error {
 		return fmt.Errorf("jsonl: %w", err)
 	}
 
-	line := append(data, '\n')
+	data = append(data, '\n')
 
-	if _, err := b.file.Write(line); err != nil {
+	if _, err := b.file.Write(data); err != nil {
 		return fmt.Errorf("jsonl: write %s: %w", b.path, err)
 	}
 

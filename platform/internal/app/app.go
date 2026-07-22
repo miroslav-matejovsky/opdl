@@ -44,7 +44,7 @@ func Run(args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	recorder, err := operations.Open(cfg.OperationsEventDir(), factory)
+	recorder, err := operations.Open("", factory)
 	if err != nil {
 		return err
 	}

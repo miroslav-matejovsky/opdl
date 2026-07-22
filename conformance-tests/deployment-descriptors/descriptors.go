@@ -53,14 +53,18 @@ const (
 	// The api addresses are on loopback and the Event Fabric's are on the machine
 	// ip. That split is the contract: the platform API is machine-local, so it is
 	// resolved onto 127.0.0.1 and a peer carries no api address at all.
-	apiAddr           = "127.0.0.1:8080"
-	runtimeDir        = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
-	clientAddr        = "10.0.1.10:4222"
-	clusterAddr       = "10.0.1.10:6222"
-	standbyAPIAddr    = "127.0.0.1:8081"
-	standbyRuntimeDir = "C:/ProgramData/opdl/customer-a/north/sensor/standby"
-	standbyClient     = "10.0.1.10:4322"
-	standbyCluster    = "10.0.1.10:6322"
+	dataDir                  = "D:/opdl/customer-a/north/sensor/primary"
+	jetstreamStoreDir        = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
+	apiAddr                  = "127.0.0.1:8080"
+	runtimeDir               = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
+	clientAddr               = "10.0.1.10:4222"
+	clusterAddr              = "10.0.1.10:6222"
+	standbyDataDir           = "D:/opdl/customer-a/north/sensor/standby"
+	standbyJetStreamStoreDir = "D:/opdl/customer-a/north/sensor/standby/eventfabric/nats"
+	standbyAPIAddr           = "127.0.0.1:8081"
+	standbyRuntimeDir        = "C:/ProgramData/opdl/customer-a/north/sensor/standby"
+	standbyClient            = "10.0.1.10:4322"
+	standbyCluster           = "10.0.1.10:6322"
 
 	peerMachine        = "gateway"
 	peerIP             = "10.0.1.11"
@@ -98,24 +102,28 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	if !standbyDisabled {
 		builtStandby = builderdeployment.Instance{
 			Disabled:   false,
+			DataDir:    standbyDataDir,
 			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
 			Nats: &builderdeployment.Nats{
-				ClientAddress:  standbyClient,
-				ClusterAddress: standbyCluster,
-				Routes:         []string{},
-				Servers:        servers,
+				JetStreamStoreDir: standbyJetStreamStoreDir,
+				ClientAddress:     standbyClient,
+				ClusterAddress:    standbyCluster,
+				Routes:            []string{},
+				Servers:           servers,
 			},
 		}
 		wantStandby = platformconfig.Instance{
 			Disabled:   false,
+			DataDir:    standbyDataDir,
 			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
 			Nats: &platformconfig.Nats{
-				ClientAddress:  standbyClient,
-				ClusterAddress: standbyCluster,
-				Routes:         []string{},
-				Servers:        servers,
+				JetStreamStoreDir: standbyJetStreamStoreDir,
+				ClientAddress:     standbyClient,
+				ClusterAddress:    standbyCluster,
+				Routes:            []string{},
+				Servers:           servers,
 			},
 		}
 		builtLock = &builderdeployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
@@ -164,13 +172,15 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		Instances: builderdeployment.Instances{
 			Primary: builderdeployment.Instance{
 				Disabled:   false,
+				DataDir:    dataDir,
 				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
 				Nats: &builderdeployment.Nats{
-					ClientAddress:  clientAddr,
-					ClusterAddress: clusterAddr,
-					Routes:         []string{},
-					Servers:        servers,
+					JetStreamStoreDir: jetstreamStoreDir,
+					ClientAddress:     clientAddr,
+					ClusterAddress:    clusterAddr,
+					Routes:            []string{},
+					Servers:           servers,
 				},
 			},
 			Standby: builtStandby,
@@ -205,13 +215,15 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		Instances: platformconfig.Instances{
 			Primary: platformconfig.Instance{
 				Disabled:   false,
+				DataDir:    dataDir,
 				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
 				Nats: &platformconfig.Nats{
-					ClientAddress:  clientAddr,
-					ClusterAddress: clusterAddr,
-					Routes:         []string{},
-					Servers:        servers,
+					JetStreamStoreDir: jetstreamStoreDir,
+					ClientAddress:     clientAddr,
+					ClusterAddress:    clusterAddr,
+					Routes:            []string{},
+					Servers:           servers,
 				},
 			},
 			Standby: wantStandby,

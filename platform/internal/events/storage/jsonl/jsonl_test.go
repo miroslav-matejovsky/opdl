@@ -52,7 +52,7 @@ func TestOpeningCreatesOnlyExpectedSubdirectoryAndFile(t *testing.T) {
 
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
-	defer backend.Close(t.Context())
+	defer func() { _ = backend.Close(t.Context()) }()
 
 	eventsDir := filepath.Join(dataDir, "events")
 	eventsFile := filepath.Join(eventsDir, "events.jsonl")
@@ -75,7 +75,7 @@ func TestOneStoredEnvelopeDecodesWithEventsDecode(t *testing.T) {
 	dataDir := t.TempDir()
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
-	defer backend.Close(t.Context())
+	defer func() { _ = backend.Close(t.Context()) }()
 
 	env := testEnvelope(t, "item-1")
 	err = backend.Store(t.Context(), env)
@@ -97,7 +97,7 @@ func TestSeveralEventsProduceLinesInCallOrder(t *testing.T) {
 	dataDir := t.TempDir()
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
-	defer backend.Close(t.Context())
+	defer func() { _ = backend.Close(t.Context()) }()
 
 	env1 := testEnvelope(t, "item-1")
 	env2 := testEnvelope(t, "item-2")
@@ -129,7 +129,7 @@ func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
 	dataDir := t.TempDir()
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
-	defer backend.Close(t.Context())
+	defer func() { _ = backend.Close(t.Context()) }()
 
 	const count = 50
 	var wg sync.WaitGroup
@@ -166,7 +166,7 @@ func TestInvalidEnvelopesAreRejectedBeforeLineIsWritten(t *testing.T) {
 	dataDir := t.TempDir()
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
-	defer backend.Close(t.Context())
+	defer func() { _ = backend.Close(t.Context()) }()
 
 	invalidEnv := events.Envelope{} // zero envelope is invalid
 	err = backend.Store(t.Context(), invalidEnv)

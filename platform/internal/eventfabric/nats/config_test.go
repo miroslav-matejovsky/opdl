@@ -15,6 +15,9 @@ import (
 // machine's own addresses, the topology it resolved, and the peers that make up
 // its site.
 func descriptorFor(machine, ip string, nats config.Nats, peers ...config.Peer) config.Descriptor {
+	if nats.JetStreamStoreDir == "" {
+		nats.JetStreamStoreDir = "/var/lib/opdl/" + machine + "/primary/eventfabric/nats"
+	}
 	own := config.Peer{
 		Site: "north", Machine: machine, Role: config.RolePrimary, IP: ip,
 		Nats: config.PeerNats{ClientAddress: nats.ClientAddress, ClusterAddress: nats.ClusterAddress},
@@ -34,6 +37,9 @@ func descriptorFor(machine, ip string, nats config.Nats, peers ...config.Peer) c
 // each with its own topology and its own store, the way the resolver does. It is
 // what a machine looks like once every instance runs its own server.
 func descriptorWithStandby(machine, ip string, primary, standby config.Nats, peers ...config.Peer) config.Descriptor {
+	if standby.JetStreamStoreDir == "" {
+		standby.JetStreamStoreDir = "/var/lib/opdl/" + machine + "/standby/eventfabric/nats"
+	}
 	d := descriptorFor(machine, ip, primary, peers...)
 	d.Instances.Standby = config.Instance{
 		Disabled: false,
@@ -187,8 +193,8 @@ func TestDefaultConfigReadsTheRunningInstancesOwnTopology(t *testing.T) {
 	require.Equal(t, "node-a-primary", primary.ServerName)
 	require.Equal(t, "node-a-standby", standby.ServerName)
 	require.NotEqual(t, primary.DataDir, standby.DataDir)
-	require.Equal(t, "/var/lib/opdl/node-a/primary", primary.DataDir)
-	require.Equal(t, "/var/lib/opdl/node-a/standby", standby.DataDir)
+	require.Equal(t, "/var/lib/opdl/node-a/primary/eventfabric/nats", primary.DataDir)
+	require.Equal(t, "/var/lib/opdl/node-a/standby/eventfabric/nats", standby.DataDir)
 
 	// Four instances means a replicated journal, which two machines counted as
 	// machines could never have reached.
