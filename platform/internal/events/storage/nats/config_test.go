@@ -17,7 +17,7 @@ func descriptorFor(machine, ip string, nats config.Nats, peers ...config.Peer) c
 	}
 	own := config.Peer{
 		Site: "north", Machine: machine, Role: config.RolePrimary, IP: ip,
-		Nats: config.PeerNats{ClientAddress: nats.ClientAddress, ClusterAddress: nats.ClusterAddress},
+		Nats: &config.PeerNats{ClientAddress: nats.ClientAddress, ClusterAddress: nats.ClusterAddress},
 	}
 	return config.Descriptor{
 		Project: "customer-a", Environment: "production", Site: "north",
@@ -42,7 +42,7 @@ func descriptorWithStandby(machine, ip string, primary, standby config.Nats, pee
 	}
 	d.Peers = append(d.Peers, config.Peer{
 		Site: "north", Machine: machine, Role: config.RoleStandby, IP: ip,
-		Nats: config.PeerNats{ClientAddress: standby.ClientAddress, ClusterAddress: standby.ClusterAddress},
+		Nats: &config.PeerNats{ClientAddress: standby.ClientAddress, ClusterAddress: standby.ClusterAddress},
 	})
 	return d
 }
@@ -54,7 +54,7 @@ func peer(machine, ip string) config.Peer {
 func peerInstance(machine, ip string, role config.PlatformInstanceRole, client, cluster string) config.Peer {
 	return config.Peer{
 		Site: "north", Machine: machine, Role: role, IP: ip,
-		Nats: config.PeerNats{ClientAddress: client, ClusterAddress: cluster},
+		Nats: &config.PeerNats{ClientAddress: client, ClusterAddress: cluster},
 	}
 }
 

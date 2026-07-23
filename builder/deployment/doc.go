@@ -40,6 +40,13 @@
 // Routes and servers are always arrays, never null, so "resolved to nothing" is
 // distinguishable from "not resolved".
 //
+// The nats record itself is optional, on an instance and on a peer. A machine
+// whose blueprint authors no event storage resolves without one, which is what a
+// deployment with no site journal looks like: the instance binds its API and
+// nothing else, and the runtime refuses every domain operation because it has
+// nowhere to journal a fact or project one from. An absent record and an empty
+// one would read alike, so the absent one is the contract.
+//
 // Validate checks a descriptor is complete enough to deploy. The builder's
 // resolve stage calls it before compiling, so a machine that would not boot is
 // rejected before any binary is produced. Beyond field presence it checks the

@@ -13,11 +13,16 @@ import (
 // BuildAndRunSingleMachine builds the simplest deployment there is and asks the
 // running platform who it is.
 //
-// One machine, one Primary Instance, no standby: a site with nothing to
-// coordinate with and nothing to fail over to. Its journal is a single replica
-// on the one instance that runs, so the whole scenario is one process from build
-// to answer. Nothing here imports platform code; the binary under test is the
-// one the builder produced a moment earlier.
+// One machine, one Primary Instance, no standby, and no event storage: nothing
+// to coordinate with, nothing to fail over to, and no journal. The whole
+// deployment is one process binding one listener, which makes this the floor the
+// rest of the suite would build up from. Nothing here imports platform code; the
+// binary under test is the one the builder produced a moment earlier.
+//
+// A deployment with no journal serves no domain operation, and the scenario
+// checks that too. It is the other half of the same contract: the instance is
+// Active and healthy, and it refuses registrations because there is nowhere to
+// journal them, not because anything is wrong with it.
 func BuildAndRunSingleMachine(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -47,6 +52,16 @@ func BuildAndRunSingleMachine(t *testing.T) {
 		"the instance answers at the address the builder resolved from its authored local_port")
 	require.Empty(t, instance.PeerAddress, "a machine with one instance has no peer to name")
 
+	// A deployment with no journal refuses every domain operation, and says which
+	// of the two reasons it is: this one is about the deployment, not about an
+	// instance that is passive and would point at the one holding ownership.
+	refusal, code := harness.GetProblem(ctx, t, node, "/registrations")
+	require.Equal(t, http.StatusServiceUnavailable, code,
+		"there is no journal to take a registration, and no projection to answer from")
+	require.Equal(t, "no_event_storage", refusal.Title)
+	require.Equal(t, harness.InstanceStateActive, refusal.Instance.State,
+		"the instance refusing is the one that owns the machine, and it is healthy")
+
 	// The machine reported the configuration it booted with. The peers line is
 	// the site's membership, and this site's membership is one instance.
 	logs := node.Output()
@@ -54,6 +69,8 @@ func BuildAndRunSingleMachine(t *testing.T) {
 	require.Contains(t, logs, "peers        node-a/primary (127.0.0.1)",
 		"a single-machine site's membership is its one Primary Instance")
 	require.Contains(t, logs, "data_dir     "+filepath.ToSlash(node.Sockets.DataDir))
-	require.Contains(t, logs, "credentials_file=(none: loopback only)",
-		"a loopback deployment may run unauthenticated, and says so")
+	require.Contains(t, logs, "event_storage (none:",
+		"the startup block says plainly that this deployment has no journal")
+	require.NotContains(t, logs, "event fabric configuration",
+		"a deployment with no event storage starts no Event Fabric to report one")
 }

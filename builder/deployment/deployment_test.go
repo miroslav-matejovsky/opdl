@@ -36,7 +36,7 @@ const (
 func peer(machine string, role deployment.PlatformInstanceRole, ip, client, cluster string) deployment.Peer {
 	return deployment.Peer{
 		Site: "north", Machine: machine, Role: role, IP: ip,
-		Nats: deployment.PeerNats{ClientAddress: client, ClusterAddress: cluster},
+		Nats: &deployment.PeerNats{ClientAddress: client, ClusterAddress: cluster},
 	}
 }
 
@@ -168,9 +168,9 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"is not on the loopback interface",
 		},
 		{
-			"missing nats",
-			func(d *deployment.Descriptor) { d.Instances.Primary.Nats = nil },
-			"instances.primary.nats is required",
+			"nats without a jetstream store",
+			func(d *deployment.Descriptor) { d.Instances.Primary.Nats.JetStreamStoreDir = "" },
+			"instances.primary.nats.jetstream_store_dir is required",
 		},
 		{
 			"instances share an api address",
@@ -328,6 +328,24 @@ func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
 	nats := d.Instances.Primary.Nats
 	nats.Routes = []string{}
 	nats.Servers = []string{primaryClient}
+	require.NoError(t, d.Validate())
+}
+
+// TestDescriptorValidateAcceptsAMachineWithNoEventStorage checks the descriptor
+// a machine that authored no event storage resolves to: one instance that binds
+// its API and nothing else, in a site whose one member runs no Event Fabric.
+//
+// It is the deployment with no journal. The instance serves no domain operation,
+// which is a runtime consequence rather than a descriptor rule, so nothing here
+// is required to describe a server that will never start.
+func TestDescriptorValidateAcceptsAMachineWithNoEventStorage(t *testing.T) {
+	d := validDescriptor()
+	d.Instances.Primary.Nats = nil
+	d.Instances.Standby = deployment.Instance{Disabled: true}
+	d.Lock = nil
+	d.Peers = []deployment.Peer{
+		{Site: "north", Machine: "sensor", Role: deployment.RolePrimary, IP: machineIP},
+	}
 	require.NoError(t, d.Validate())
 }
 

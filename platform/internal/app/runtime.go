@@ -92,6 +92,18 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 	return role, nil
 }
 
+// hasEventStorage reports whether this instance was deployed with a site
+// journal to reach.
+//
+// A machine that authored no platform.event_storage block resolves to a
+// descriptor with no nats record, and an instance with no nats record runs no
+// Event Fabric. That is a whole-deployment property rather than a runtime state:
+// it does not change while the process runs, and both of a machine's instances
+// share it.
+func hasEventStorage(descriptor config.Descriptor, role redundancy.InstanceRole) bool {
+	return instanceOf(descriptor, role).Nats != nil
+}
+
 // instanceIdentity describes this instance to its own API in the given state.
 //
 // Nothing here comes from the journal, so it is answerable from the moment the
@@ -170,6 +182,18 @@ func runProcess(ctx context.Context, proc process) (runErr error) {
 // stops, so this retries until its context ends rather than giving up.
 func runPassive(ctx context.Context, proc process) error {
 	cfg, role := proc.cfg, proc.role
+	// With no journal there is nothing to follow and no readiness to report: this
+	// instance is already as current as it can be, and taking over costs it no
+	// catch-up. It waits for ownership and nothing else.
+	if !hasEventStorage(proc.descriptor, role) {
+		fmt.Printf("platform: %s waiting for Primary Ownership; this deployment has no event storage\n", role)
+		if err := proc.local.Publish(ctx, StandbyWaiting{}); err != nil {
+			return err
+		}
+		<-ctx.Done()
+		return nil
+	}
+
 	site, err := openPassiveSite(ctx, proc)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		// Ownership was won, or the process is stopping, before a projection ever
@@ -253,6 +277,10 @@ func runActive(ctx context.Context, proc process, server *instanceServer, kind r
 	// the record.
 	fmt.Printf("platform: %s started for %s\n", kind, role)
 
+	if !hasEventStorage(descriptor, role) {
+		return runActiveWithoutJournal(ctx, proc, server)
+	}
+
 	site, err := open(ctx, proc, true)
 	if err != nil {
 		return err
@@ -321,6 +349,54 @@ func runActive(ctx context.Context, proc process, server *instanceServer, kind r
 	// This is a shutdown path with an error to return, so the failure to state
 	// that serving stopped is joined onto what actually went wrong rather than
 	// replacing it or being dropped.
+	stateErr := proc.local.Publish(ctx, stopped)
+	if err != nil {
+		return errors.Join(err, stateErr)
+	}
+	return stateErr
+}
+
+// runActiveWithoutJournal serves the Active surface of a deployment that has no
+// event storage, until signaled or until its listener dies.
+//
+// The instance holds Primary Ownership and reports itself active, because it is:
+// it is the machine's serving instance and there is no other. What it serves is
+// bounded by what it has. Every domain operation is a fact to be journalled or a
+// query answered from a projection of one, and this deployment has no journal, so
+// the domain paths are refused with a reason naming the deployment rather than
+// the instance.
+//
+// There is no site to open, no projection to catch up, and no readiness monitor:
+// a lag bound against a journal that does not exist has nothing to measure. That
+// is why this is a separate path rather than a flag threaded through the active
+// composition, which would carry a site-shaped hole from end to end.
+func runActiveWithoutJournal(ctx context.Context, proc process, server *instanceServer) error {
+	cfg, descriptor, role := proc.cfg, proc.descriptor, proc.role
+	address := instanceOf(descriptor, role).APIAddress
+
+	server.serveWith(httpapi.NewJournallessHandler(func() api.Instance {
+		return instanceIdentity(descriptor, role, api.InstanceStateActive)
+	}))
+	fmt.Printf("platform: %s active, serving on %s (no event storage: domain operations are refused)\n", role, address)
+
+	serveErr := proc.local.Publish(ctx, APIActive{Address: address, InstanceState: api.InstanceStateActive})
+	if serveErr == nil {
+		select {
+		case err := <-server.stopped:
+			// The listener died without being asked to. Hand it back so shutdown
+			// does not wait on a channel nothing will write to again.
+			server.stopped <- err
+			serveErr = listenError(err)
+		case <-ctx.Done():
+		}
+	}
+
+	shutdownErr := server.shutdown(cfg.ShutdownTimeout())
+	err := errors.Join(serveErr, shutdownErr)
+	stopped := APIStopped{}
+	if err != nil {
+		stopped.Error = err.Error()
+	}
 	stateErr := proc.local.Publish(ctx, stopped)
 	if err != nil {
 		return errors.Join(err, stateErr)

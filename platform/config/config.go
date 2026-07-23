@@ -156,11 +156,7 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
 	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(inst.DataDir))
-	jetstreamStore := ""
-	if inst.Nats != nil {
-		jetstreamStore = inst.Nats.JetStreamStoreDir
-	}
-	fmt.Fprintf(&b, "    jetstream_store_dir %s\n", optionalPathSummary(jetstreamStore))
+	fmt.Fprintf(&b, "    event_storage %s\n", eventStorageSummary(inst.Nats))
 	fmt.Fprintf(&b, "    lock         %s\n", lockSummary(d.Lock))
 	fmt.Fprintf(&b, "    peers        %s\n", peersSummary(d.Peers))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
@@ -251,4 +247,18 @@ func optionalPathSummary(path string) string {
 		return "(not configured)"
 	}
 	return path
+}
+
+// eventStorageSummary renders where this instance's journal lives, and says so
+// plainly when the deployment has none.
+//
+// The distinction is worth a sentence rather than an empty value: an instance
+// with no event storage is not misconfigured, it is a deployment that serves no
+// domain operations, and an operator reading the startup block should not have
+// to infer that from a blank path.
+func eventStorageSummary(nats *Nats) string {
+	if nats == nil {
+		return "(none: this deployment has no event storage and serves no domain operations)"
+	}
+	return optionalPathSummary(nats.JetStreamStoreDir)
 }

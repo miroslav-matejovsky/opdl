@@ -54,7 +54,11 @@
 // The machine platform subsection carries platform-runtime policy, as opposed to
 // what the machine deploys.
 //
-// nats states the ports this machine's Event Fabric server needs, and is optional. Only ports are
+// nats states the ports this machine's Event Fabric server needs. It is
+// optional, and leaving it out is a deployment decision rather than an omission:
+// a machine with no event storage runs no Event Fabric and has no site journal,
+// so its instance binds its API, reports itself active, and refuses every domain
+// operation. Only ports are
 // authored: the builder joins each with the machine's ip, and derives the site's
 // route and server lists from the site's topology. A blueprint that could state
 // those lists directly could split a site or point a machine at another site's

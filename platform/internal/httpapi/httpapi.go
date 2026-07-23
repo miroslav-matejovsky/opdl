@@ -68,6 +68,43 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 // instance's projection is opened for catch-up so it can take over quickly, and
 // it is never wired to a listener.
 func NewPassiveHandler(instance func() api.Instance) http.Handler {
+	return newRefusingHandler(instance, func(current api.Instance) string {
+		detail := "this instance is passive and does not serve domain operations"
+		if current.PeerAddress != "" {
+			detail += "; the machine's other instance holds Primary Ownership and serves at " + current.PeerAddress
+		}
+		return detail
+	}, "instance_passive")
+}
+
+// NewJournallessHandler returns the handler an instance serves when its
+// deployment has no event storage.
+//
+// It is the same surface as a Passive instance's and refuses for a different
+// reason. This instance does hold Primary Ownership: it is Active, it answers
+// for itself, and there is nothing wrong with it. It has no site journal, and
+// every domain operation is a fact that has to be journalled or a query answered
+// from a projection of one, so there is nothing here to serve them from.
+//
+// The refusal is permanent for the life of the deployment rather than a state
+// that will pass, which is why it names the deployment rather than the instance:
+// a caller that retries elsewhere, or later, gets the same answer.
+func NewJournallessHandler(instance func() api.Instance) http.Handler {
+	return newRefusingHandler(instance, func(api.Instance) string {
+		return "this deployment has no event storage, so it serves no domain operations; " +
+			"author a platform.event_storage block and rebuild to get a site journal"
+	}, "no_event_storage")
+}
+
+// newRefusingHandler builds the surface an instance serves when it answers for
+// itself and refuses everything else: /instance from the live identity, and every
+// domain path with a problem response carrying title and the detail describe
+// renders.
+//
+// The domain paths are registered rather than left out on purpose. An
+// unregistered path answers 404, which says the operation does not exist rather
+// than that it is not served here.
+func newRefusingHandler(instance func() api.Instance, describe func(api.Instance) string, title string) http.Handler {
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	cfg.OpenAPIPath, cfg.DocsPath, cfg.SchemasPath = "", "", ""
@@ -75,33 +112,30 @@ func NewPassiveHandler(instance func() api.Instance) http.Handler {
 
 	for _, pattern := range api.DomainPaths {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
-			refuse(w, instance())
+			current := instance()
+			refuse(w, current, title, describe(current))
 		})
 	}
 	return mux
 }
 
-// refuse answers one domain request on a Passive instance.
+// refuse answers one domain request an instance does not serve.
 //
 // The body is application/problem+json, the same content type huma produces for
-// the Active instance's errors, so a client parses one error shape whichever
+// a serving instance's errors, so a client parses one error shape whichever
 // instance it reached.
-func refuse(w http.ResponseWriter, instance api.Instance) {
-	detail := "this instance is passive and does not serve domain operations"
-	if instance.PeerAddress != "" {
-		detail += "; the machine's other instance holds Primary Ownership and serves at " + instance.PeerAddress
-	}
+func refuse(w http.ResponseWriter, instance api.Instance, title, detail string) {
 	body, err := json.Marshal(problem{
 		Type:   "about:blank",
-		Title:  "instance_passive",
+		Title:  title,
 		Status: http.StatusServiceUnavailable,
 		Detail: detail,
 		// The instance is carried whole so a caller learns which one refused it
-		// without a second request to an instance it already knows is passive.
+		// without a second request to an instance it already knows will refuse.
 		Instance: &instance,
 	})
 	if err != nil {
-		http.Error(w, "instance_passive", http.StatusServiceUnavailable)
+		http.Error(w, title, http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/problem+json")

@@ -130,28 +130,28 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	// this machine's own instances.
 	builtPeers := []builderdeployment.Peer{
 		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP,
-			Nats: builderdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
+			Nats: &builderdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
 		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP,
-			Nats: builderdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
+			Nats: &builderdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
 		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP,
-			Nats: builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+			Nats: &builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
 	}
 	wantPeers := []platformconfig.Peer{
 		{Site: site, Machine: peerMachine, Role: platformconfig.RolePrimary, IP: peerIP,
-			Nats: platformconfig.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
+			Nats: &platformconfig.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
 		{Site: site, Machine: peerMachine, Role: platformconfig.RoleStandby, IP: peerIP,
-			Nats: platformconfig.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
+			Nats: &platformconfig.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
 		{Site: site, Machine: machine, Role: platformconfig.RolePrimary, IP: machineIP,
-			Nats: platformconfig.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+			Nats: &platformconfig.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
 	}
 	if !standbyDisabled {
 		builtPeers = append(builtPeers, builderdeployment.Peer{
 			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP,
-			Nats: builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
+			Nats: &builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 		wantPeers = append(wantPeers, platformconfig.Peer{
 			Site: site, Machine: machine, Role: platformconfig.RoleStandby, IP: machineIP,
-			Nats: platformconfig.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
+			Nats: &platformconfig.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 	}
 

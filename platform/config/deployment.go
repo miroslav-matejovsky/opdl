@@ -106,34 +106,8 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return err
 		}
-		var instance map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &instance); err != nil {
-			return fmt.Errorf("deployment descriptor: invalid instances.%s: %w", role, err)
-		}
-		if _, err := requiredField(instance, "instances."+string(role)+".disabled"); err != nil {
+		if err := validateInstanceFields(role, raw); err != nil {
 			return err
-		}
-		var inst struct {
-			Disabled bool `json:"disabled"`
-		}
-		if err := json.Unmarshal(raw, &inst); err != nil {
-			return fmt.Errorf("deployment descriptor: invalid instances.%s: %w", role, err)
-		}
-		if !inst.Disabled {
-			if _, err := requiredField(instance, "instances."+string(role)+".data_dir"); err != nil {
-				return err
-			}
-			natsRaw, err := requiredField(instance, "instances."+string(role)+".nats")
-			if err != nil {
-				return err
-			}
-			var nats map[string]json.RawMessage
-			if err := json.Unmarshal(natsRaw, &nats); err != nil {
-				return fmt.Errorf("deployment descriptor: invalid instances.%s.nats: %w", role, err)
-			}
-			if _, err := requiredField(nats, "instances."+string(role)+".nats.jetstream_store_dir"); err != nil {
-				return err
-			}
 		}
 	}
 
@@ -158,6 +132,53 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	}
 	*d = Descriptor(decoded)
 	return nil
+}
+
+// validateInstanceFields checks one instance record states the policy a reader
+// must not infer: whether it is deployed at all, and, when it is, where it
+// writes and what it coordinates through.
+func validateInstanceFields(role PlatformInstanceRole, raw json.RawMessage) error {
+	var instance map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &instance); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid instances.%s: %w", role, err)
+	}
+	if _, err := requiredField(instance, "instances."+string(role)+".disabled"); err != nil {
+		return err
+	}
+	var policy struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid instances.%s: %w", role, err)
+	}
+	// An instance that is not deployed carries nothing else, and nothing else is
+	// required of it.
+	if policy.Disabled {
+		return nil
+	}
+	if _, err := requiredField(instance, "instances."+string(role)+".data_dir"); err != nil {
+		return err
+	}
+	return validateInstanceNatsField(role, instance["nats"])
+}
+
+// validateInstanceNatsField checks a deployed instance's event storage record.
+//
+// The record is optional: a machine that authored no event storage deploys an
+// instance with no Event Fabric, which binds its API and serves no domain
+// operation. When it is present it must be usable, because an instance that
+// thinks it has a journal and cannot open one is worse than one that knows it
+// has none.
+func validateInstanceNatsField(role PlatformInstanceRole, raw json.RawMessage) error {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	var nats map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &nats); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid instances.%s.nats: %w", role, err)
+	}
+	_, err := requiredField(nats, "instances."+string(role)+".nats.jetstream_store_dir")
+	return err
 }
 
 // validateLockField verifies the lock block matches the standby status.
@@ -294,8 +315,9 @@ type Peer struct {
 	// IP is the address the peer's machine is reached on. Two peers on one machine
 	// share it and differ by port.
 	IP string `json:"ip"`
-	// Nats are the peer instance's Event Fabric addresses.
-	Nats PeerNats `json:"nats"`
+	// Nats are the peer instance's Event Fabric addresses, absent on a peer whose
+	// machine authored no event storage and so runs no server.
+	Nats *PeerNats `json:"nats,omitempty"`
 }
 
 // PeerNats are one peer instance's Event Fabric addresses.

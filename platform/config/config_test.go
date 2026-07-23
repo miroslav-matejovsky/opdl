@@ -363,7 +363,7 @@ func TestSummaryShowsConfiguration(t *testing.T) {
 	require.Contains(t, s, "shutdown_timeout    10s")
 	require.Contains(t, s, "lag_bound           30s")
 	require.Contains(t, s, "data_dir     .data/platform/primary")
-	require.Contains(t, s, "jetstream_store_dir .data/journal/primary")
+	require.Contains(t, s, "event_storage .data/journal/primary")
 	require.Contains(t, s, "startup_timeout=30s")
 	require.Contains(t, s, "catch_up_timeout=25s")
 }

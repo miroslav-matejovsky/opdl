@@ -183,8 +183,9 @@ type Peer struct {
 	// IP is the address the peer's machine is reached on. Two peers on one machine
 	// share it and differ by port.
 	IP string `json:"ip"`
-	// Nats are the peer instance's Event Fabric addresses.
-	Nats PeerNats `json:"nats"`
+	// Nats are the peer instance's Event Fabric addresses, absent on a peer whose
+	// machine authored no event storage and so runs no server.
+	Nats *PeerNats `json:"nats,omitempty"`
 }
 
 // PeerNats are one peer instance's Event Fabric addresses.
@@ -497,15 +498,25 @@ func (d Descriptor) validateSelfIsPeer() error {
 	return nil
 }
 
-// NatsClient is the peer's NATS client address.
-func (p Peer) NatsClient() string { return p.Nats.ClientAddress }
+// NatsClient is the peer's NATS client address, empty when it runs no server.
+func (p Peer) NatsClient() string {
+	if p.Nats == nil {
+		return ""
+	}
+	return p.Nats.ClientAddress
+}
 
-// NatsCluster is the peer's NATS cluster address.
-func (p Peer) NatsCluster() string { return p.Nats.ClusterAddress }
+// NatsCluster is the peer's NATS cluster address, empty when it runs no server.
+func (p Peer) NatsCluster() string {
+	if p.Nats == nil {
+		return ""
+	}
+	return p.Nats.ClusterAddress
+}
 
 // HasNats reports whether this peer runs an Event Fabric at all. A peer on a
 // machine that authored no event storage does not, and states no address.
-func (p Peer) HasNats() bool { return p.Nats.ClientAddress != "" || p.Nats.ClusterAddress != "" }
+func (p Peer) HasNats() bool { return p.Nats != nil }
 
 // peerListeners is the pair of Event Fabric listeners a peer binds, named for a
 // collision message, or nothing at all when the peer has no event storage.

@@ -63,6 +63,11 @@ type machineFixture struct {
 	ip   string
 	// standbyDisabled opts the machine out of a second local process.
 	standbyDisabled bool
+	// eventStorageDisabled opts the machine out of an Event Fabric entirely, by
+	// authoring no platform.event_storage block. The instance then binds its API
+	// and nothing else, and serves no domain operation because it has no journal
+	// to serve one from.
+	eventStorageDisabled bool
 }
 
 // projectFixtures are the blueprints scenarios build from, keyed by project.
@@ -73,10 +78,11 @@ type machineFixture struct {
 // right loopback address before rendering the blueprint that names them.
 var projectFixtures = map[string][]machineFixture{
 	// The smallest thing the platform runs: one machine deploying one Primary
-	// Instance and no standby. Its journal is a single replica on that instance,
-	// so there is no site to coordinate with and nothing to fail over to.
+	// Instance, with no standby and no event storage. There is no site to
+	// coordinate with, nothing to fail over to, and no journal, so the deployment
+	// is one process that binds one listener.
 	"simple": {
-		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
+		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true, eventStorageDisabled: true},
 	},
 }
 
@@ -100,6 +106,9 @@ type renderedMachine struct {
 	StandbyClientPort        int
 	StandbyClusterPort       int
 	StandbyDisabled          bool
+	// EventStorageDisabled leaves the event_storage block out of both instances,
+	// which is what a deployment with no journal looks like in a blueprint.
+	EventStorageDisabled bool
 }
 
 // renderedProject is the blueprint template's data.
@@ -279,30 +288,40 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 		//
 		// A machine that deploys both instances needs four: each instance runs its
 		// own Event Fabric server. Reserving them in one call is what keeps them
-		// distinct, which the builder requires.
-		wanted := 2
-		if !fixture.standbyDisabled {
-			wanted = 4
+		// distinct, which the builder requires. A machine with no event storage
+		// runs no server and takes none.
+		var p []int
+		if !fixture.eventStorageDisabled {
+			wanted := 2
+			if !fixture.standbyDisabled {
+				wanted = 4
+			}
+			reserved, err := testnet.Take(fixture.ip, wanted)
+			require.NoError(t, err)
+			p = reserved
 		}
-		p, err := testnet.Take(fixture.ip, wanted)
-		require.NoError(t, err)
 
 		machine := renderedMachine{
-			Name:              fixture.name,
-			IP:                fixture.ip,
-			APIPort:           takeAPIPort(),
-			DataDir:           dataDirFor(workDir, fixture.name, RolePrimary),
-			JetStreamStoreDir: jetstreamStoreDirFor(workDir, fixture.name, RolePrimary),
-			ClientPort:        p[0],
-			ClusterPort:       p[1],
-			StandbyDisabled:   fixture.standbyDisabled,
+			Name:                 fixture.name,
+			IP:                   fixture.ip,
+			APIPort:              takeAPIPort(),
+			DataDir:              dataDirFor(workDir, fixture.name, RolePrimary),
+			StandbyDisabled:      fixture.standbyDisabled,
+			EventStorageDisabled: fixture.eventStorageDisabled,
+		}
+		if !fixture.eventStorageDisabled {
+			machine.JetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RolePrimary)
+			machine.ClientPort = p[0]
+			machine.ClusterPort = p[1]
 		}
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
 			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, RoleStandby)
-			machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RoleStandby)
-			machine.StandbyClientPort = p[2]
-			machine.StandbyClusterPort = p[3]
+			if !fixture.eventStorageDisabled {
+				machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RoleStandby)
+				machine.StandbyClientPort = p[2]
+				machine.StandbyClusterPort = p[3]
+			}
 		}
 		data.Machines = append(data.Machines, machine)
 		endpoints[fixture.name] = reservedEndpoints{
@@ -452,16 +471,21 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	for _, fixture := range fixtures {
 		reserved := endpoints[fixture.name]
 		sockets := Sockets{
-			// The Primary Instance's general data root and explicit JetStream
-			// store, matching the paths authored in the blueprint.
-			DataDir:           filepath.FromSlash(dataDirFor(workDir, fixture.name, RolePrimary)),
-			JetStreamStoreDir: filepath.FromSlash(jetstreamStoreDirFor(workDir, fixture.name, RolePrimary)),
+			// The Primary Instance's general data root, matching the path authored
+			// in the blueprint.
+			DataDir: filepath.FromSlash(dataDirFor(workDir, fixture.name, RolePrimary)),
 			// The API address the builder resolved: this machine's authored
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
 			// than at an address it chose, because it no longer chooses one.
-			API:     net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
-			Client:  net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.client)),
-			Cluster: net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.cluster)),
+			API: net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
+		}
+		// A machine with no event storage has no journal and binds no Event Fabric
+		// listener, so it has no address or store directory to carry. Composing
+		// one from the zero port would name a listener nothing opens.
+		if !fixture.eventStorageDisabled {
+			sockets.JetStreamStoreDir = filepath.FromSlash(jetstreamStoreDirFor(workDir, fixture.name, RolePrimary))
+			sockets.Client = net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.client))
+			sockets.Cluster = net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.cluster))
 		}
 		if !fixture.standbyDisabled {
 			sockets.StandbyDataDir = filepath.FromSlash(dataDirFor(workDir, fixture.name, RoleStandby))
