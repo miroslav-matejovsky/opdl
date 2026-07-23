@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -43,15 +42,6 @@ import (
 // every call. A scenario spanning two sites would take it as an argument again.
 const scenarioSite = "local"
 
-const (
-	// markerPollInterval is how often a handshake re-checks for a marker.
-	markerPollInterval = 50 * time.Millisecond
-	// markerWaitTimeout bounds a handshake. It is generous because the process
-	// on the other side is starting a .NET test host before it can reach the
-	// point it signals from.
-	markerWaitTimeout = 90 * time.Second
-)
-
 //go:embed testdata/project.hcl.tmpl
 var projectTemplate string
 
@@ -71,36 +61,22 @@ var (
 type machineFixture struct {
 	name string
 	ip   string
-	// standbyDisabled opts the machine out of a second local process. Scenarios
-	// about site coordination disable it so a failure is about the site rather
-	// than about local redundancy; the warm standby scenario enables it.
+	// standbyDisabled opts the machine out of a second local process.
 	standbyDisabled bool
 }
 
 // projectFixtures are the blueprints scenarios build from, keyed by project.
 //
 // The fixture model is the single source of each machine's name, address, and
-// standby policy; only the NATS ports are decided per run. Keeping the machines
-// here rather than in checked-in HCL is what lets the harness reserve ports on
-// the right loopback address before rendering the blueprint that names them.
+// standby policy; only the ports are decided per run. Keeping the machines here
+// rather than in checked-in HCL is what lets the harness reserve ports on the
+// right loopback address before rendering the blueprint that names them.
 var projectFixtures = map[string][]machineFixture{
-	// The base scenario for build, run, and restart.
-	"scenario": minimumSite(),
-	// The manifest launch contract and the warm standby failover scenario. Both
-	// need a machine that deploys two instances, which node-b is.
-	"manifest-contract": minimumSite(),
-	// Site coordination, for scenarios that hold a machine back. node-c is the
-	// site's fourth instance by name, so the storage selection leaves it out and
-	// it can be absent without costing the journal a replica.
-	"two-machine": stagedSite(),
-	// Four machines in one site: three store the journal and route to each other,
-	// and the fourth is a client of theirs. It is the topology that proves why the
-	// cluster port exists and that only the selected three bind it.
-	"four-machine": {
+	// The smallest thing the platform runs: one machine deploying one Primary
+	// Instance and no standby. Its journal is a single replica on that instance,
+	// so there is no site to coordinate with and nothing to fail over to.
+	"simple": {
 		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
-		{name: "node-b", ip: "127.0.0.2", standbyDisabled: true},
-		{name: "node-c", ip: "127.0.0.3", standbyDisabled: true},
-		{name: "node-d", ip: "127.0.0.4", standbyDisabled: true},
 	},
 }
 
@@ -138,10 +114,10 @@ type renderedProject struct {
 
 // runToken returns a unique token no other build shares.
 //
-// A machine lock is a kernel object in a machine-wide namespace. Several scenarios deliberately build
-// the same project and machine names, and they run in parallel, so without this
-// they would contend for one another's ownership and a standby in one test would
-// wait on a primary in another.
+// A machine lock and a Windows Service name are both kernel objects in a
+// machine-wide namespace. Scenarios may build the same project and machine names
+// and they run in parallel, so without this they would contend for one another's
+// ownership.
 //
 // The token is random rather than derived from the test name so that two
 // concurrent runs of the whole suite on one host also stay isolated.
@@ -176,11 +152,11 @@ var (
 // Layout:
 //
 //	scenarios/.tmp/
-//	  nats/
-//	    FourMachineStorageTopologyAndFailure/
+//	  smoke/
+//	    BuildAndRunSingleMachine/
 //	      blueprints/    rendered project.hcl
 //	      out/           built machine packages and manifests
-//	      work/          config-*.toml, nats-*, instance-*, data-*
+//	      work/          config-*.toml, journal-*, data-*
 //	      control/       marker files
 func scenarioDir(t *testing.T) string {
 	t.Helper()
@@ -416,13 +392,12 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 // what the deployment derived. The runtime configuration contains none of
 // these values.
 //
-// The API address moved into that second group in stage 04, along with each
-// instance's runtime directory. Both are an instance's rather than a machine's,
-// so the descriptor resolves them per instance and the configuration file cannot
-// state either.
+// The API address and each instance's runtime directory are an instance's rather
+// than a machine's, so the descriptor resolves them per instance and the
+// configuration file cannot state either.
 //
 // The two data directories are how a scenario reads what an instance stated:
-// each one holds that instance's events/events.jsonl. See Machine.recordPath.
+// each one holds that instance's events/events.jsonl. See operationEvents.
 //
 // There is no monitor address. The platform runs no NATS monitoring listener;
 // each instance's event record is the local operational surface.
@@ -455,11 +430,11 @@ type Site struct {
 // DeploySite renders the project's blueprint with allocated ports, builds every
 // machine from it, and prepares each one to run.
 //
-// It replaces the older split between building and preparing because the two are
-// no longer independent: the NATS ports are blueprint values now, so they must be
-// chosen before the build rather than handed to the runtime after it. That is the
-// point of the change. A scenario exercises the same contract a customer build
-// does, instead of a runtime override path that no deployment uses.
+// Building and preparing are one call because the two are not independent: the
+// NATS ports are blueprint values, so they must be chosen before the build rather
+// than handed to the runtime after it. That is the point. A scenario exercises
+// the same contract a customer build does, instead of a runtime override path
+// that no deployment uses.
 func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project string) *Site {
 	t.Helper()
 
@@ -497,70 +472,6 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	return s
 }
 
-// minimumSite is the smallest topology the platform accepts: two machines, with a
-// Standby Instance on one of them, which is three platform instances.
-//
-// Three is the floor because the site journal is a JetStream RAFT group, and a
-// group of two needs both members alive. Two machines is required on top of it
-// because three instances on one host share a failure domain. Every scenario that
-// is not specifically about a larger site uses this, so the suite exercises the
-// shape a real deployment is allowed to have.
-//
-// node-b is the machine with the standby, so a scenario that needs two local
-// instances asks for node-b.
-func minimumSite() []machineFixture {
-	return []machineFixture{
-		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
-		{name: "node-b", ip: "127.0.0.2", standbyDisabled: false},
-	}
-}
-
-// stagedSite is the minimum site plus a machine that stores nothing.
-//
-// A scenario about delivery to an absent machine needs one it can hold back, and
-// on the minimum site there is no such machine: all three of its instances are
-// storage, so any of them missing costs the journal a replica it cannot place.
-// The third machine here is the site's fourth instance by name, which puts it
-// outside the storage selection and makes its absence a site-membership fact
-// rather than a journal one.
-func stagedSite() []machineFixture {
-	return append(minimumSite(), machineFixture{name: "node-c", ip: "127.0.0.3", standbyDisabled: true})
-}
-
-// StorageMachines returns the names of the machines that store the site journal,
-// mirroring the platform's own rule: storage is selected per platform instance,
-// one instance for a site smaller than three, the first three by sorted instance
-// name otherwise.
-//
-// A scenario derives this the same way the platform does rather than being told,
-// so it cannot quietly disagree with the deployment about who stores what. The
-// result is machine names because that is what a scenario reaches; a machine is
-// listed when either of its instances was selected.
-func StorageMachines(project string) []string {
-	instances := make([]string, 0, len(projectFixtures[project])*2)
-	owner := map[string]string{}
-	for _, fixture := range projectFixtures[project] {
-		for _, role := range []string{RolePrimary, RoleStandby} {
-			if role == RoleStandby && fixture.standbyDisabled {
-				continue
-			}
-			key := fixture.name + "-" + role
-			instances = append(instances, key)
-			owner[key] = fixture.name
-		}
-	}
-	sorted := slices.Sorted(slices.Values(instances))
-	count := 1
-	if len(sorted) > 2 {
-		count = 3
-	}
-	machines := map[string]bool{}
-	for _, key := range sorted[:min(count, len(sorted))] {
-		machines[owner[key]] = true
-	}
-	return slices.Sorted(maps.Keys(machines))
-}
-
 // Machine returns one prepared machine of the site by name.
 func (s *Site) Machine(t *testing.T, name string) *Machine {
 	t.Helper()
@@ -578,10 +489,11 @@ func (s *Site) Machine(t *testing.T, name string) *Machine {
 //
 // Every instance, not only the primaries. The journal's replica count is the
 // site's storage instance count, and JetStream cannot place three replicas until
-// three servers are up, so a site started primaries-only sits in "no suitable
-// peers for placement" until it gives up. On the minimum site the third storage
-// instance is a machine's Standby Instance, which makes starting it part of
-// bringing the site up rather than an extra a redundancy scenario opts into.
+// three servers are up, so a site whose third storage instance is a machine's
+// Standby Instance would sit in "no suitable peers for placement" if it were
+// started primaries-only. That makes starting the standbys part of bringing a
+// site up rather than an extra a redundancy scenario opts into.
+//
 // except names machines to leave down, for a scenario whose subject is a machine
 // that is absent. Only a machine outside the storage selection can be held back;
 // holding back a storage instance costs the journal a replica it cannot place.
@@ -600,27 +512,7 @@ func (s *Site) StartSite(ctx context.Context, t *testing.T, except ...string) {
 		if slices.Contains(except, m.Name) {
 			continue
 		}
-		WaitForAPI(ctx, t, m)
-	}
-}
-
-// StartTogether starts the named machines at once and only then waits for each
-// to serve.
-//
-// A site with three storage machines cannot be started one at a time. Their
-// journal's metadata group needs a quorum of the three servers before it can
-// create the stream, so the first machine cannot finish starting until the other
-// two are already running. Waiting for each in turn would deadlock on the first.
-func (s *Site) StartTogether(ctx context.Context, t *testing.T, names ...string) {
-	t.Helper()
-	started := make([]*Machine, 0, len(names))
-	for _, name := range names {
-		m := s.Machine(t, name)
-		m.Start(ctx, t)
-		started = append(started, m)
-	}
-	for _, m := range started {
-		WaitForAPI(ctx, t, m)
+		WaitForActiveInstance(ctx, t, m)
 	}
 }
 
@@ -630,13 +522,13 @@ type Machine struct {
 	*procrun.Process
 	// Name is the deployment machine identity.
 	Name string
-	// URL is the base URL of its registration API, known from the moment it is
-	// prepared, whether or not it is running.
+	// URL is the base URL of its API, known from the moment it is prepared,
+	// whether or not it is running.
 	URL string
 	// Sockets are the addresses and storage it was configured with. A restart
 	// reuses them, which is what makes replaying its own journal possible. They
 	// are also where a scenario reads either instance's event record, which is
-	// the only local surface the runtime writes; see recordPath.
+	// the only local surface the runtime writes.
 	Sockets Sockets
 
 	BinaryPath string
@@ -647,57 +539,9 @@ type Machine struct {
 	stopped bool
 }
 
-// Event is one line of an instance's local JSONL record: the envelope fields a
-// scenario reads, and the payload it decodes when it needs one.
-//
-// It is re-declared here, rather than imported, so scenarios consume the
-// packaged runtime as a black box. Only the fields a scenario asserts on are
-// named; a line carries more, and an unnamed field is simply not read.
-type Event struct {
-	Type       string          `json:"type"`
-	OccurredAt time.Time       `json:"occurred_at"`
-	Severity   string          `json:"severity"`
-	Origin     EventOrigin     `json:"origin"`
-	Data       json.RawMessage `json:"data"`
-}
-
-// EventOrigin is which process stated an event. ProcessRole and PID are what
-// distinguish one instance's facts from the other's, and one run of an instance
-// from the next: a restarted instance appends to the same file under a new PID.
-type EventOrigin struct {
-	Machine     string `json:"machine"`
-	ProcessRole string `json:"process_role"`
-	PID         int    `json:"pid"`
-}
-
-// FailoverReadiness is the payload of platform.app.failover_readiness_changed:
-// whether an instance is current enough to be handed the machine, and what its
-// projection looked like when that last changed.
-type FailoverReadiness struct {
-	Ready           bool   `json:"ready"`
-	InstanceState   string `json:"instance_state"`
-	AppliedSequence uint64 `json:"applied_sequence"`
-	HighWater       uint64 `json:"high_water"`
-	Lag             string `json:"lag"`
-	Error           string `json:"error,omitempty"`
-}
-
-// The event types a scenario waits on. They are string literals rather than
-// imported constants for the same reason ProcessStatus used to be re-declared:
-// a scenario asserts against the deployed contract, and a rename that a
-// scenario silently followed would not be a contract at all.
-const (
-	// EventAPIActive is stated when an instance begins serving domain
-	// operations, which is the moment it is Active.
-	EventAPIActive = "platform.app.api_active"
-	// EventFailoverReadinessChanged is stated when an instance becomes, or stops
-	// being, current enough to take over.
-	EventFailoverReadinessChanged = "platform.app.failover_readiness_changed"
-)
-
-// ManagedProcess is one explicitly named primary or standby process. It is used
-// by redundancy scenarios that need to stop one process without stopping the
-// other process of the same machine.
+// ManagedProcess is one explicitly named primary or standby process, for a
+// scenario that needs to stop one process without stopping the other process of
+// the same machine.
 type ManagedProcess struct {
 	*procrun.Process
 	Role string
@@ -716,10 +560,10 @@ func (m *Machine) IsRunning() bool {
 // machine that has died.
 //
 // It is deliberately not the negation of IsRunning. A machine whose processes are
-// launched with StartManaged, as the warm standby scenario does, never has a
-// process of its own, so IsRunning is false for it from the start. Aborting on
-// that would fail every wait against such a machine before the first poll, while
-// the primary and standby serving its endpoint are perfectly healthy.
+// launched with StartManaged never has a process of its own, so IsRunning is
+// false for it from the start. Aborting on that would fail every wait against
+// such a machine before the first poll, while the instances serving its endpoint
+// are perfectly healthy.
 func (m *Machine) Exited() bool {
 	return m.Process != nil && !m.IsRunning()
 }
@@ -742,67 +586,6 @@ func (m *Machine) StartManaged(ctx context.Context, t *testing.T, role string, a
 	return p
 }
 
-// StopGracefully sends the process the operating system's stop signal and waits
-// for it to exit, failing the scenario if it does not.
-func (p *ManagedProcess) StopGracefully(t *testing.T) {
-	t.Helper()
-	if !p.Running() {
-		return
-	}
-	require.NoError(t, p.Stop())
-	err := waitfor.Poll(t.Context(), APIWaitTimeout, 50*time.Millisecond, func() bool {
-		return !p.Running()
-	}, nil)
-	if err != nil {
-		_ = p.Kill()
-		require.FailNowf(t, p.Role+" did not stop", "%s", p.Logs())
-	}
-	_, exitErr := p.Wait()
-	require.NoError(t, exitErr, "%s did not stop cleanly:\n%s", p.Role, p.Logs())
-}
-
-// recordPath is the canonical JSONL event record one of this machine's
-// instances appends to.
-//
-// It composes nothing the runtime does not: each instance's data directory was
-// authored in the blueprint by dataDirFor, and the runtime appends
-// events/events.jsonl inside the directory it was given. Restarts append to the
-// same file, so a run is identified by the PID on each event's origin rather
-// than by the file it is in.
-func (m *Machine) recordPath(role string) string {
-	dir := m.Sockets.DataDir
-	if role == RoleStandby {
-		dir = m.Sockets.StandbyDataDir
-	}
-	return filepath.Join(dir, "events", "events.jsonl")
-}
-
-// readRecord decodes every event one instance has stated so far.
-//
-// A partial trailing line is dropped rather than reported. The runtime appends
-// and syncs one line at a time, so a truncated last line means a read landed
-// between the two, and the next poll sees it whole.
-func (m *Machine) readRecord(role string) ([]Event, error) {
-	data, err := os.ReadFile(m.recordPath(role))
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(string(data), "\n")
-	stated := make([]Event, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var event Event
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
-		stated = append(stated, event)
-	}
-	return stated, nil
-}
-
 // DiagStringer adapts a func into a fmt.Stringer, so a scenario can defer
 // rendering a diagnostic until a wait actually fails.
 type DiagStringer func() string
@@ -821,116 +604,6 @@ func WaitFor(t *testing.T, what string, timeout, interval time.Duration, cond fu
 		}
 		require.FailNowf(t, what+" timed out after "+timeout.String(), "%s", diag.String())
 	}
-}
-
-// WaitActive blocks until a process states that it is serving domain
-// operations, and returns the event that said so.
-//
-// Being Active is the runtime's own statement about itself, made once, at the
-// moment it begins serving. There is no snapshot to poll and no freshness to
-// check: the fact is in the record from then on, and the PID on it is what
-// distinguishes this run of the instance from an earlier one.
-func (m *Machine) WaitActive(t *testing.T, process *ManagedProcess) Event {
-	t.Helper()
-	return m.waitEvent(t, process, "serving", func(event Event) bool {
-		return event.Type == EventAPIActive
-	})
-}
-
-// WaitFailoverReady blocks until a process states that it is Passive and
-// current enough to take the machine over, and returns the event that said so.
-//
-// This is the handover precondition a service manager checks. It is stated on
-// change rather than restated on a timer, so an instance that said it was ready
-// and has said nothing since is still ready.
-func (m *Machine) WaitFailoverReady(t *testing.T, process *ManagedProcess) Event {
-	t.Helper()
-	return m.waitEvent(t, process, "failover ready", func(event Event) bool {
-		if event.Type != EventFailoverReadinessChanged {
-			return false
-		}
-		readiness, err := DecodeFailoverReadiness(event)
-		return err == nil && readiness.Ready && readiness.InstanceState == "passive"
-	})
-}
-
-// DecodeFailoverReadiness decodes a readiness event's payload.
-func DecodeFailoverReadiness(event Event) (FailoverReadiness, error) {
-	var readiness FailoverReadiness
-	err := json.Unmarshal(event.Data, &readiness)
-	return readiness, err
-}
-
-// waitEvent blocks until this machine's record carries an event matching want,
-// stated by this run of this instance.
-//
-// Matching on the origin's PID as well as its role is what makes a wait
-// meaningful across a failover: both instances append to their own files for the
-// whole scenario, and a restarted instance appends to the file its predecessor
-// wrote. Without the PID, a wait for "active" would be satisfied by the run that
-// was killed to cause the failover being waited for.
-func (m *Machine) waitEvent(t *testing.T, process *ManagedProcess, what string, want func(Event) bool) Event {
-	t.Helper()
-	var found Event
-	var readErr error
-
-	cond := func() bool {
-		stated, err := m.readRecord(process.Role)
-		readErr = err
-		if err != nil {
-			return false
-		}
-		for _, event := range stated {
-			if event.Origin.PID == process.PID() && event.Origin.ProcessRole == process.Role && want(event) {
-				found = event
-				return true
-			}
-		}
-		return false
-	}
-	abort := func() (bool, string) {
-		if !process.Running() {
-			out, _ := process.Wait()
-			return true, fmt.Sprintf("%s exited before it was %s:\n%s", process.Role, what, out)
-		}
-		return false, ""
-	}
-	// Logs, not Wait. This renders on timeout, which is precisely the case where
-	// the process is still running, so Wait would block until the whole test
-	// binary times out and the diagnostics would never be printed at all. Logs is
-	// a snapshot of the same buffer and does not block.
-	diag := DiagStringer(func() string {
-		return recordDiagnostics(m, process, what, readErr, process.Logs())
-	})
-
-	WaitFor(t, "process "+process.Role+" being "+what, APIWaitTimeout, markerPollInterval, cond, abort, diag)
-	return found
-}
-
-// recordDiagnostics renders why a process never stated what was waited for:
-// whether it has a record at all, the endpoints it composed, its output, and
-// everything both of the machine's instances did state.
-//
-// The distinction between a missing record and a record that reports an
-// unreachable journal is the one worth preserving. The first means the process
-// never got far enough to open one; the second means it is running and cannot
-// reach the address it was told to use, which is a topology problem rather than
-// a startup one, and the record says which.
-func recordDiagnostics(m *Machine, process *ManagedProcess, want string, readErr error, output string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "machine %s process %s (pid %d) was never %s\n", m.Name, process.Role, process.PID(), want)
-	fmt.Fprintf(&b, "event record: %s\n", m.recordPath(process.Role))
-	switch {
-	case readErr != nil && os.IsNotExist(readErr):
-		b.WriteString("record: never opened\n")
-	case readErr != nil:
-		fmt.Fprintf(&b, "record: unreadable: %v\n", readErr)
-	}
-	fmt.Fprintf(&b, "expected event fabric endpoints: client=%s cluster=%s\n",
-		m.Sockets.Client, m.Sockets.Cluster)
-	fmt.Fprintf(&b, "logs:\n%s", output)
-	fmt.Fprintf(&b, "\noperational events:\n%s", operationEvents(m))
-	return b.String()
 }
 
 // operationEvents reads each deployed instance's canonical JSONL event record.
@@ -993,14 +666,11 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 //
 // The three tolerances are deliberately looser than platform/config.toml's 30s.
 // They bound how long a machine puts up with a slow environment before giving
-// up, and a parallel scenario suite is a slow environment on purpose: several
-// sites start their JetStream clusters at once on one contended host. A
-// four-machine site that loses a storage node has to re-form its metadata group
-// under that load, and with a 30s lag_bound the surviving machines stop serving
-// mid-scenario, which is the platform behaving correctly about a condition the
-// harness created. No scenario asserts on these values, so raising them removes
-// a false failure without weakening anything: a machine that genuinely never
-// catches up still fails, on the assertion that was actually being made.
+// up, and a scenario suite is a slow environment on purpose: it builds the
+// platform and starts it on a contended host. No scenario asserts on these
+// values, so raising them removes a false failure without weakening anything: a
+// machine that genuinely never catches up still fails, on the assertion that was
+// actually being made.
 func platformConfig() []byte {
 	return []byte(`read_header_timeout = "5s"
 shutdown_timeout = "10s"
@@ -1023,16 +693,6 @@ func (m *Machine) Start(ctx context.Context, t *testing.T) {
 	m.stopped = false
 }
 
-// Restart force-stops the machine and starts it again on the same sockets and
-// the same journal storage, which is what makes it the same node coming back
-// rather than a new one.
-func (m *Machine) Restart(ctx context.Context, t *testing.T) {
-	t.Helper()
-	m.Stop()
-	m.Process = nil
-	m.Start(ctx, t)
-}
-
 // Stop force-stops the machine. A graceful child interrupt is not portable, and
 // stopping hard is also the more demanding test: the journal is on disk, so a
 // node that is killed must still come back to the same state.
@@ -1050,43 +710,12 @@ func (m *Machine) Stop() {
 // It does not stop the machine. The output buffer is mutex guarded, so reading
 // it while the process is still writing is safe and is what diagnostics need:
 // stopping a machine in order to find out what it said would destroy the state
-// the failure is about. Use AwaitExit when a scenario means to observe an exit.
+// the failure is about.
 func (m *Machine) Output() string {
 	if m.Process == nil {
 		return "(never started)\n"
 	}
 	return m.Logs()
-}
-
-// AwaitExit blocks until the machine's process exits and returns its output. It
-// is for a scenario about a platform that is supposed to fail to start: waiting
-// is the assertion, and the output is why.
-func (m *Machine) AwaitExit(t *testing.T) string {
-	t.Helper()
-	require.NotNil(t, m.Process, "%s was never started", m.Name)
-	out, _ := m.Wait()
-	m.stopped = true
-	return out
-}
-
-// WaitForMarker blocks until name appears in dir, which is how a scenario waits
-// for something inside another process to reach a point.
-func WaitForMarker(t *testing.T, dir, name string, signaller *procrun.Process, describe func() string) {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	cond := func() bool {
-		_, err := os.Stat(path)
-		return err == nil
-	}
-	abort := func() (bool, string) {
-		if !signaller.Running() {
-			output, err := signaller.Wait()
-			return true, fmt.Sprintf("the process that signals %s exited before writing it (exit: %v):\n%s", name, err, output)
-		}
-		return false, ""
-	}
-	diag := DiagStringer(describe)
-	WaitFor(t, name+" marker", markerWaitTimeout, markerPollInterval, cond, abort, diag)
 }
 
 // Diagnose renders everything worth knowing when a scenario fails: what each
@@ -1124,16 +753,4 @@ func (l lazily) String() string { return l() }
 // Diagnostics renders Diagnose for these machines, at failure time.
 func Diagnostics(machines ...*Machine) fmt.Stringer {
 	return lazily(func() string { return Diagnose(machines) })
-}
-
-// appended renders trailing failure context, and nothing at all when a caller
-// passed none.
-func appended(parts []fmt.Stringer) fmt.Stringer {
-	return lazily(func() string {
-		var b strings.Builder
-		for _, part := range parts {
-			b.WriteString(part.String())
-		}
-		return b.String()
-	})
 }

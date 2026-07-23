@@ -214,16 +214,18 @@ tolerance. A deployment that must tolerate one journal node failure requires at
 least three machines with stable storage on the first three machines by sorted
 name. This protects event history, not service processes.
 
-`scenarios/nats.FourMachineStorageTopologyAndFailure` is the evidence for the
-three-storage-node topology. It builds four machines from one blueprint, and
-proves that exactly the first three by sorted name store the journal and bind a
-cluster listener, that the fourth is client-only and binds nothing, that
-publication through one machine is replayed through another, that the site keeps
-accepting and projecting after one storage machine is stopped, and that the
-stopped machine rejoins its own storage and reconverges to the same state.
+There is currently no scenario evidence for the three-storage-node topology.
+`scenarios/nats.FourMachineStorageTopologyAndFailure` used to be it — it built
+four machines from one blueprint and proved that exactly the first three by
+sorted name store the journal and bind a cluster listener, that the fourth is
+client-only and binds nothing, that publication through one machine is replayed
+through another, that the site keeps accepting and projecting after one storage
+machine is stopped, and that the stopped machine rejoins its own storage and
+reconverges to the same state. It was removed with the rest of the suite; the
+scenarios now cover only the single-machine floor.
 
-A client-only machine's resolved server order is stable. The four-machine
-scenario proves it reconnects and resumes projection after the storage server it
+A client-only machine's resolved server order is stable, and the same removed
+scenario proved it reconnects and resumes projection after the storage server it
 is connected to is killed. The remaining product decision is tracked in
 `docs/backlog/event-fabric.md`: whether the platform should absorb the brief
 window after a storage machine is lost during which the journal's replica group
