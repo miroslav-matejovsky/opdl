@@ -15,11 +15,8 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //
 // Local resources:
 //
-//   - platform.app.status_dir_failed: the runtime status directory could not be
-//     created, so this instance cannot report itself.
 //   - platform.app.lock_open_failed: the Primary Ownership object could not be
 //     opened, so this instance cannot contend for ownership.
-//   - platform.app.status_write_failed: a runtime status file update failed.
 //
 // HTTP API:
 //
@@ -40,6 +37,8 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //     high-water mark.
 //   - platform.app.projection_lag_exceeded: a projection fell further behind the
 //     journal than serving allows.
+//   - platform.app.failover_readiness_changed: an instance became, or stopped
+//     being, current enough to take over.
 //
 // Site:
 //
@@ -68,12 +67,8 @@ const (
 	// TypeProcessStopped is stated last, whatever the outcome.
 	TypeProcessStopped events.Type = "platform.app.process_stopped"
 
-	// TypeStatusDirFailed is stated when the status directory cannot be created.
-	TypeStatusDirFailed events.Type = "platform.app.status_dir_failed"
 	// TypeLockOpenFailed is stated when the ownership object cannot be opened.
 	TypeLockOpenFailed events.Type = "platform.app.lock_open_failed"
-	// TypeStatusWriteFailed is stated when a status file update fails.
-	TypeStatusWriteFailed events.Type = "platform.app.status_write_failed"
 
 	// TypeAPIListenFailed is stated when the instance cannot bind its address.
 	TypeAPIListenFailed events.Type = "platform.app.api_listen_failed"
@@ -94,6 +89,9 @@ const (
 	TypeProjectionCaughtUp events.Type = "platform.app.projection_caught_up"
 	// TypeProjectionLagExceeded is stated when lag crosses the serving bound.
 	TypeProjectionLagExceeded events.Type = "platform.app.projection_lag_exceeded"
+	// TypeFailoverReadinessChanged is stated when an instance's readiness to take
+	// over changes.
+	TypeFailoverReadinessChanged events.Type = "platform.app.failover_readiness_changed"
 
 	// TypeSiteOpening is stated when this node's site composition starts.
 	TypeSiteOpening events.Type = "platform.app.site_opening"
@@ -159,20 +157,6 @@ func (ProcessStopped) EventType() events.Type { return TypeProcessStopped }
 // Severity reports a failed run as an error and a clean stop as routine.
 func (e ProcessStopped) Severity() events.Severity { return failureSeverity(e.Error) }
 
-// StatusDirFailed states that the runtime status directory could not be created.
-type StatusDirFailed struct {
-	// Path is the status file path whose directory could not be created.
-	Path string `json:"path"`
-	// Error is why it could not be created.
-	Error string `json:"error"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (StatusDirFailed) EventType() events.Type { return TypeStatusDirFailed }
-
-// Severity reports an instance that cannot report itself as an error.
-func (StatusDirFailed) Severity() events.Severity { return events.SeverityError }
-
 // LockOpenFailed states that the Primary Ownership object could not be opened.
 type LockOpenFailed struct {
 	// Object is the named kernel object. A named object has no path, so this is
@@ -187,18 +171,6 @@ func (LockOpenFailed) EventType() events.Type { return TypeLockOpenFailed }
 
 // Severity reports an instance that cannot contend for ownership as an error.
 func (LockOpenFailed) Severity() events.Severity { return events.SeverityError }
-
-// StatusWriteFailed states that a runtime status file update failed.
-type StatusWriteFailed struct {
-	// Path is the status file that could not be written.
-	Path string `json:"path"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (StatusWriteFailed) EventType() events.Type { return TypeStatusWriteFailed }
-
-// Severity reports an instance whose reported state has gone stale as an error.
-func (StatusWriteFailed) Severity() events.Severity { return events.SeverityError }
 
 // APIListenFailed states that the instance could not bind its API address.
 type APIListenFailed struct {
@@ -316,6 +288,53 @@ func (ProjectionLagExceeded) EventType() events.Type { return TypeProjectionLagE
 
 // Severity reports an instance that stopped answering as an error.
 func (ProjectionLagExceeded) Severity() events.Severity { return events.SeverityError }
+
+// FailoverReadinessChanged states that an instance became, or stopped being,
+// current enough to take the machine over.
+//
+// It is what a service manager reads before it hands over, and it replaced the
+// status file the runtime used to rewrite once a second. The facts are the same
+// ones; what changed is that they are stated when they change instead of being
+// restated on a timer, so the local record carries readiness transitions rather
+// than a heartbeat.
+//
+// Which instance it is about is the envelope's origin: its role and its PID.
+// Reading the last one an instance stated is reading its current readiness,
+// because an instance that has not restated it has not changed it.
+type FailoverReadinessChanged struct {
+	// Ready reports whether this instance is current enough to take over. An
+	// instance is ready until its projection has been behind the journal for
+	// longer than the deployment's lag bound, or until it cannot ask its Event
+	// Fabric how far behind it is.
+	Ready bool `json:"ready"`
+	// InstanceState is what the instance was doing when readiness changed:
+	// passive while it follows the journal, active while it serves.
+	InstanceState string `json:"instance_state"`
+	// AppliedSequence is the highest journal sequence the projection had applied,
+	// zero when the Event Fabric could not be asked.
+	AppliedSequence uint64 `json:"applied_sequence"`
+	// HighWater is the last sequence the journal had accepted, as this instance
+	// last observed it.
+	HighWater uint64 `json:"high_water"`
+	// Lag is how long the projection had continuously been behind the journal, as
+	// a duration string; "0s" when caught up.
+	Lag string `json:"lag"`
+	// Error is why the Event Fabric could not be asked, empty when it could.
+	Error string `json:"error,omitempty"`
+}
+
+// EventType returns the event's stable dotted kind.
+func (FailoverReadinessChanged) EventType() events.Type { return TypeFailoverReadinessChanged }
+
+// Severity reports a machine that has lost its ready instance as a degradation.
+// A machine still has an active instance either way, but one that can no longer
+// hand over has no redundancy left.
+func (e FailoverReadinessChanged) Severity() events.Severity {
+	if e.Ready {
+		return events.SeverityInfo
+	}
+	return events.SeverityWarn
+}
 
 // SiteOpening states that this node's site composition started.
 type SiteOpening struct {

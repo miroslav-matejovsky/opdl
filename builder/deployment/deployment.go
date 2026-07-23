@@ -114,10 +114,14 @@ type Instance struct {
 	// whoever installs the services; the runtime does not read it and the platform
 	// manages no services.
 	Service *WinService `json:"service,omitempty"`
-	// RuntimeDir is the instance's own local runtime directory, holding its status
-	// file. It is the instance's rather than the machine's: two independent
-	// runtimes writing into one directory would overwrite each other's evidence,
-	// and nothing would report it. It takes no part in the ownership decision.
+	// RuntimeDir is the instance's own local runtime directory. It is the
+	// instance's rather than the machine's, and it takes no part in the ownership
+	// decision.
+	//
+	// Nothing writes into it. It held the per-process status file, and that file
+	// is gone: an instance's role, state, progress, and promotability are facts in
+	// its event record under DataDir. The field is still authored and carried, so
+	// it is dead configuration until it is removed or given a purpose.
 	RuntimeDir string `json:"runtime_dir,omitempty"`
 	// DataDir is the instance's own general platform data root.
 	DataDir string `json:"data_dir,omitempty"`
@@ -346,9 +350,9 @@ func (d Descriptor) validateEndpoints() error {
 	if err := validateInstanceEndpoints("instances.standby", d.Instances.Standby); err != nil {
 		return err
 	}
-	// The two instances write their status files into their own directories. One
-	// directory for both would have them overwriting each other's evidence, and
-	// unlike a shared listener nothing would report it.
+	// One runtime directory for two independent runtimes is rejected for the same
+	// reason one data directory is: they run at the same time and share nothing
+	// local, and unlike a shared listener nothing would report the collision.
 	if d.Instances.Primary.RuntimeDir == d.Instances.Standby.RuntimeDir {
 		return fmt.Errorf("instances.primary.runtime_dir and instances.standby.runtime_dir are both %q; the two instances run together and cannot share a runtime directory",
 			d.Instances.Primary.RuntimeDir)

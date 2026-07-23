@@ -545,9 +545,8 @@ func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 }
 
 // TestRuntimeDirIsRequiredPerDeployedInstance checks each deployed instance
-// states where it writes its status file. An instance without one has nowhere to
-// record what it is doing, and unlike a missing port that is not a failure to
-// bind.
+// states its own local runtime directory. Unlike a missing port, an unstated
+// directory is not a failure to bind, so the blueprint has to reject it.
 func TestRuntimeDirIsRequiredPerDeployedInstance(t *testing.T) {
 	tests := map[string]struct {
 		clear func(*blueprint.Platform)
@@ -576,8 +575,8 @@ func TestRuntimeDirIsRequiredPerDeployedInstance(t *testing.T) {
 }
 
 // TestMachineInstancesMustNotShareARuntimeDir is the quiet half of the six-port
-// mistake. Two instances given one directory both start and both bind, and the
-// only symptom is that each keeps overwriting the other's status file.
+// mistake. Two instances given one local directory both start and both bind,
+// and nothing about the collision is reported.
 func TestMachineInstancesMustNotShareARuntimeDir(t *testing.T) {
 	p := validProject()
 	platform := p.Sites[0].Machines[0].Platform

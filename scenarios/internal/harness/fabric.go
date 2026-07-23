@@ -29,10 +29,10 @@ const fabricConfigPrefix = "platform: event fabric configuration "
 // ParseFabricConfigs extracts every effective Event Fabric configuration a
 // process reported, in the order it reported them.
 //
-// A scenario reads this from the process output rather than from a status file
-// because it is the only place the composed endpoints appear before anything is
-// bound. That ordering is what distinguishes a client-only standby from an
-// active storage server, and a promotion from a fresh start.
+// A scenario reads this from the process output rather than from the event
+// record because it is the only place the composed endpoints appear before
+// anything is bound. That ordering is what distinguishes a client-only standby
+// from an active storage server, and a promotion from a fresh start.
 func ParseFabricConfigs(t *testing.T, role, logs string) []FabricConfig {
 	t.Helper()
 	var configs []FabricConfig

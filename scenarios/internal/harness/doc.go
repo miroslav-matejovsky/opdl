@@ -4,7 +4,7 @@
 // The harness renders a project blueprint with allocated ports, builds every
 // machine of it, prepares each machine to run, and hands scenarios a Site of
 // Machines they start, stop, restart, and question over the platform's public
-// REST API and its local status files. It never imports platform code.
+// REST API and its local event records. It never imports platform code.
 //
 // # How a scenario builds
 //
@@ -46,9 +46,11 @@
 //
 // Domain behavior is checked through the platform's public API: the projected
 // registration state every machine answers from, and the fact that a machine
-// answers at all. Process lifecycle is checked through each role's local atomic
-// status file, which is the deployment-tooling contract but never an ownership
-// lock. The API signal is real rather than a liveness check, since the platform
+// answers at all. Process lifecycle is checked through each instance's local
+// JSONL event record, which is the deployment-tooling contract but never an
+// ownership lock: a scenario waits for the instance to state that it is serving
+// or that it is ready to take over, matched on the PID the fact was stated
+// under. The API signal is real rather than a liveness check, since the platform
 // does not serve until its Event Fabric has connected, its projection has
 // replayed the retained journal, and its handlers have worked through what was
 // waiting for them.
@@ -81,8 +83,8 @@
 // two scenarios of one category do not share anything. The subdirectories are:
 //   - blueprints/: the temporary project.hcl rendered for the build
 //   - out/: the compiled packages and manifests produced by the builder
-//   - work/: runtime configuration files, site journals, status files, and
-//     operational JSONL streams
+//   - work/: runtime configuration files, site journals, and each instance's
+//     operational JSONL event record
 //   - control/: marker files used for coordination (such as in the .NET SDK
 //     scenario)
 //

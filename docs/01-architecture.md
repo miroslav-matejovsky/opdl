@@ -59,7 +59,7 @@ The platform is composed around these boundaries:
 | `internal/events/storage/jsonl` | Writes the mandatory process-local JSONL record under the instance data root. |
 | `internal/events/storage/eventfabric` | Defines ordered replay, delivery, projection, handler, and health capabilities without naming a transport. |
 | `internal/events/storage/nats` | Implements both event storage and Event Fabric with NATS JetStream. |
-| `internal/redundancy` | Owns process roles, lifecycle state, Primary Ownership, projection-lag state, and atomic status files. |
+| `internal/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
 
 NATS libraries are imported only by `internal/events/storage/nats`.
 
@@ -185,9 +185,10 @@ there is no peer server, and binding it would open a port nothing can connect to
 There is no NATS monitoring listener. `HTTPPort` and `HTTPSPort` are left at
 zero, which is what makes the embedded server start none. The runtime reads
 connection state, journal high-water, projection progress, and lag through the
-Event Fabric client API and writes them to per-process status files. It also
-writes process-local events to mandatory JSONL using the same envelope the site
-journal carries, so an operator decodes one shape wherever an event is read.
+Event Fabric client API, and states each change in whether an instance is
+promotable to its process-local record. That record is mandatory JSONL using the
+same envelope the site journal carries, so an operator decodes one shape
+wherever an event is read.
 Those events deliberately do not depend on NATS, so they remain available to
 explain a connection or journal outage. A second unauthenticated HTTP surface would add an
 open port without adding a signal. Any remote operational API is a separate
@@ -357,7 +358,7 @@ filesystem each produced two simultaneous actives, and nothing detected any of
 them. None of the three is expressible now, and an instance's runtime directory
 takes no part in ownership at all. That is what makes it safe for each instance
 to have its own: the directories are operational evidence, so two of them are two
-places to read a status file rather than two ownership scopes.
+places to read an instance's own record rather than two ownership scopes.
 
 An instance that takes ownership also learns how it became free. The kernel reports
 a mutex whose owner died without releasing it as abandoned, so a failover caused
@@ -445,17 +446,25 @@ machine states `platform.standby.disabled`, every descriptor carries explicit
 refuses to decode a descriptor that omits either. A missing decision is a startup
 error rather than a default.
 
-Deployment starts the primary and waits for its local status to become `active`
-before starting the standby. A handover requires a fresh, live standby status
-with `failover_ready=true`, no last error, and a caught-up sequence. The service
-manager then gracefully stops the active process and waits for the other process
-to become `active`. A returning Primary Instance uses this procedure
-to take ownership back. Full machine shutdown stops the primary service and then the standby
-service; the standby may briefly become Active between those operations.
+Deployment starts the primary and waits for it to state `platform.app.api_active`
+before starting the standby. A handover requires the standby's last
+`platform.app.failover_readiness_changed` to say `ready`, from the PID of the
+process that is running now. The service manager then gracefully stops the
+active process and waits for the other process to state `platform.app.api_active`.
+A returning Primary Instance uses this procedure to take ownership back. Full
+machine shutdown stops the primary service and then the standby service; the
+standby may briefly become Active between those operations.
 
-Status files are operational evidence, not ownership. They identify the process
-role and PID and report lifecycle state, projection progress, lag, failover readiness,
-and the last error. Only Primary Ownership makes an instance Active.
+The local record is operational evidence, not ownership. Every event on it
+identifies the process role and PID that stated it, and between them the events
+report lifecycle transitions, projection progress, lag, and failover readiness.
+Only Primary Ownership makes an instance Active.
+
+There is no status file. It reported the same facts as a snapshot rewritten once
+a second, which meant the record and the file could disagree, and a reader had to
+know that a file left behind by a dead process still looked current. Readiness is
+now stated when it changes, and liveness is asked of the instance's own API,
+which is bound in every state.
 
 ### Validation baseline
 

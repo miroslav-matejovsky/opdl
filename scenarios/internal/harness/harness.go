@@ -252,6 +252,17 @@ func apiPortsWanted(fixtures []machineFixture) int {
 	return wanted
 }
 
+// The two instance roles, as the packaged runtime spells them: the -instance
+// launch argument, the directory each instance is authored under, and the
+// process role on every event that instance states.
+const (
+	// RolePrimary is the Primary Instance.
+	RolePrimary = "primary"
+	// RoleStandby is the Standby Instance, deployed only when a machine's
+	// blueprint enables one.
+	RoleStandby = "standby"
+)
+
 // runtimeDirFor is one instance's own local runtime directory.
 //
 // It is per instance and per machine because several machines share this host, so
@@ -315,18 +326,18 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 			Name:              fixture.name,
 			IP:                fixture.ip,
 			APIPort:           takeAPIPort(),
-			RuntimeDir:        runtimeDirFor(workDir, fixture.name, "primary"),
-			DataDir:           dataDirFor(workDir, fixture.name, "primary"),
-			JetStreamStoreDir: jetstreamStoreDirFor(workDir, fixture.name, "primary"),
+			RuntimeDir:        runtimeDirFor(workDir, fixture.name, RolePrimary),
+			DataDir:           dataDirFor(workDir, fixture.name, RolePrimary),
+			JetStreamStoreDir: jetstreamStoreDirFor(workDir, fixture.name, RolePrimary),
 			ClientPort:        p[0],
 			ClusterPort:       p[1],
 			StandbyDisabled:   fixture.standbyDisabled,
 		}
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
-			machine.StandbyRuntimeDir = runtimeDirFor(workDir, fixture.name, "standby")
-			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, "standby")
-			machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, "standby")
+			machine.StandbyRuntimeDir = runtimeDirFor(workDir, fixture.name, RoleStandby)
+			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, RoleStandby)
+			machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RoleStandby)
 			machine.StandbyClientPort = p[2]
 			machine.StandbyClusterPort = p[3]
 		}
@@ -421,11 +432,13 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 // The API address moved into that second group in stage 04, along with each
 // instance's runtime directory. Both are an instance's rather than a machine's,
 // so the descriptor resolves them per instance and the configuration file cannot
-// state either. The runtime directories are not carried here at all: they are
-// derived per role by Machine.statusPath.
+// state either.
+//
+// The two data directories are how a scenario reads what an instance stated:
+// each one holds that instance's events/events.jsonl. See Machine.recordPath.
 //
 // There is no monitor address. The platform runs no NATS monitoring listener;
-// its status files are the local operational surface.
+// each instance's event record is the local operational surface.
 type Sockets struct {
 	DataDir           string
 	StandbyDataDir    string
@@ -479,8 +492,8 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 		sockets := Sockets{
 			// The Primary Instance's general data root and explicit JetStream
 			// store, matching the paths authored in the blueprint.
-			DataDir:           filepath.FromSlash(dataDirFor(workDir, fixture.name, "primary")),
-			JetStreamStoreDir: filepath.FromSlash(jetstreamStoreDirFor(workDir, fixture.name, "primary")),
+			DataDir:           filepath.FromSlash(dataDirFor(workDir, fixture.name, RolePrimary)),
+			JetStreamStoreDir: filepath.FromSlash(jetstreamStoreDirFor(workDir, fixture.name, RolePrimary)),
 			// The API address the builder resolved: this machine's authored
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
 			// than at an address it chose, because it no longer chooses one.
@@ -489,7 +502,7 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 			Cluster: net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.cluster)),
 		}
 		if !fixture.standbyDisabled {
-			sockets.StandbyDataDir = filepath.FromSlash(dataDirFor(workDir, fixture.name, "standby"))
+			sockets.StandbyDataDir = filepath.FromSlash(dataDirFor(workDir, fixture.name, RoleStandby))
 		}
 		s.Machines = append(s.Machines, prepareMachine(t, s, fixture.name, sockets))
 	}
@@ -540,8 +553,8 @@ func StorageMachines(project string) []string {
 	instances := make([]string, 0, len(projectFixtures[project])*2)
 	owner := map[string]string{}
 	for _, fixture := range projectFixtures[project] {
-		for _, role := range []string{"primary", "standby"} {
-			if role == "standby" && fixture.standbyDisabled {
+		for _, role := range []string{RolePrimary, RoleStandby} {
+			if role == RoleStandby && fixture.standbyDisabled {
 				continue
 			}
 			key := fixture.name + "-" + role
@@ -593,7 +606,7 @@ func (s *Site) StartSite(ctx context.Context, t *testing.T, except ...string) {
 		}
 		m.Start(ctx, t)
 		if manifest := ReadManifest(t, m.BinaryPath); manifest.Standby != nil {
-			m.Standby = m.StartManaged(ctx, t, "standby", manifest.Standby.Args)
+			m.Standby = m.StartManaged(ctx, t, RoleStandby, manifest.Standby.Args)
 		}
 	}
 	for _, m := range s.Machines {
@@ -628,19 +641,15 @@ func (s *Site) StartTogether(ctx context.Context, t *testing.T, names ...string)
 // running once started.
 type Machine struct {
 	*procrun.Process
-	// project is part of the compiled deployment identity and local status path.
-	project string
 	// Name is the deployment machine identity.
 	Name string
-	// workDir is the site's scratch space, and the root the blueprint's runtime
-	// directories were rendered under. It is how a scenario finds either
-	// instance's status file; see statusPath.
-	workDir string
 	// URL is the base URL of its registration API, known from the moment it is
 	// prepared, whether or not it is running.
 	URL string
 	// Sockets are the addresses and storage it was configured with. A restart
-	// reuses them, which is what makes replaying its own journal possible.
+	// reuses them, which is what makes replaying its own journal possible. They
+	// are also where a scenario reads either instance's event record, which is
+	// the only local surface the runtime writes; see recordPath.
 	Sockets Sockets
 
 	BinaryPath string
@@ -651,19 +660,53 @@ type Machine struct {
 	stopped bool
 }
 
-// ProcessStatus is the local operational contract deployment tooling reads.
-// It is re-declared here so scenarios consume the packaged runtime as a black
-// box instead of importing platform internals.
-type ProcessStatus struct {
-	Role          string    `json:"role"`
-	State         string    `json:"state"`
-	PID           int       `json:"pid"`
-	Applied       uint64    `json:"applied"`
-	HighWater     uint64    `json:"high_water"`
-	FailoverReady bool      `json:"failover_ready"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	LastError     string    `json:"last_error"`
+// Event is one line of an instance's local JSONL record: the envelope fields a
+// scenario reads, and the payload it decodes when it needs one.
+//
+// It is re-declared here, rather than imported, so scenarios consume the
+// packaged runtime as a black box. Only the fields a scenario asserts on are
+// named; a line carries more, and an unnamed field is simply not read.
+type Event struct {
+	Type       string          `json:"type"`
+	OccurredAt time.Time       `json:"occurred_at"`
+	Severity   string          `json:"severity"`
+	Origin     EventOrigin     `json:"origin"`
+	Data       json.RawMessage `json:"data"`
 }
+
+// EventOrigin is which process stated an event. ProcessRole and PID are what
+// distinguish one instance's facts from the other's, and one run of an instance
+// from the next: a restarted instance appends to the same file under a new PID.
+type EventOrigin struct {
+	Machine     string `json:"machine"`
+	ProcessRole string `json:"process_role"`
+	PID         int    `json:"pid"`
+}
+
+// FailoverReadiness is the payload of platform.app.failover_readiness_changed:
+// whether an instance is current enough to be handed the machine, and what its
+// projection looked like when that last changed.
+type FailoverReadiness struct {
+	Ready           bool   `json:"ready"`
+	InstanceState   string `json:"instance_state"`
+	AppliedSequence uint64 `json:"applied_sequence"`
+	HighWater       uint64 `json:"high_water"`
+	Lag             string `json:"lag"`
+	Error           string `json:"error,omitempty"`
+}
+
+// The event types a scenario waits on. They are string literals rather than
+// imported constants for the same reason ProcessStatus used to be re-declared:
+// a scenario asserts against the deployed contract, and a rename that a
+// scenario silently followed would not be a contract at all.
+const (
+	// EventAPIActive is stated when an instance begins serving domain
+	// operations, which is the moment it is Active.
+	EventAPIActive = "platform.app.api_active"
+	// EventFailoverReadinessChanged is stated when an instance becomes, or stops
+	// being, current enough to take over.
+	EventFailoverReadinessChanged = "platform.app.failover_readiness_changed"
+)
 
 // ManagedProcess is one explicitly named primary or standby process. It is used
 // by redundancy scenarios that need to stop one process without stopping the
@@ -731,26 +774,46 @@ func (p *ManagedProcess) StopGracefully(t *testing.T) {
 	require.NoError(t, exitErr, "%s did not stop cleanly:\n%s", p.Role, p.Logs())
 }
 
-// statusPath is where one of this machine's instances writes its status file.
+// recordPath is the canonical JSONL event record one of this machine's
+// instances appends to.
 //
-// It composes nothing the runtime does not: each instance's runtime directory was
-// authored in the blueprint by runtimeDirFor, and the runtime writes
-// process.status inside the directory it was given. The project, site, and role
-// qualifiers this path used to carry now live in the authored directory itself.
-func (m *Machine) statusPath(role string) string {
-	return filepath.Join(runtimeDirFor(m.workDir, m.Name, role), "process.status")
+// It composes nothing the runtime does not: each instance's data directory was
+// authored in the blueprint by dataDirFor, and the runtime appends
+// events/events.jsonl inside the directory it was given. Restarts append to the
+// same file, so a run is identified by the PID on each event's origin rather
+// than by the file it is in.
+func (m *Machine) recordPath(role string) string {
+	dir := m.Sockets.DataDir
+	if role == RoleStandby {
+		dir = m.Sockets.StandbyDataDir
+	}
+	return filepath.Join(dir, "events", "events.jsonl")
 }
 
-func (m *Machine) readStatus(role string) (ProcessStatus, error) {
-	data, err := os.ReadFile(m.statusPath(role))
+// readRecord decodes every event one instance has stated so far.
+//
+// A partial trailing line is dropped rather than reported. The runtime appends
+// and syncs one line at a time, so a truncated last line means a read landed
+// between the two, and the next poll sees it whole.
+func (m *Machine) readRecord(role string) ([]Event, error) {
+	data, err := os.ReadFile(m.recordPath(role))
 	if err != nil {
-		return ProcessStatus{}, err
+		return nil, err
 	}
-	var status ProcessStatus
-	if err := json.Unmarshal(data, &status); err != nil {
-		return ProcessStatus{}, err
+	lines := strings.Split(string(data), "\n")
+	stated := make([]Event, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event Event
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+		stated = append(stated, event)
 	}
-	return status, nil
+	return stated, nil
 }
 
 // DiagStringer adapts a func into a fmt.Stringer, so a scenario can defer
@@ -773,19 +836,66 @@ func WaitFor(t *testing.T, what string, timeout, interval time.Duration, cond fu
 	}
 }
 
-// WaitStatus blocks until a process reports the expected lifecycle state.
-func (m *Machine) WaitStatus(t *testing.T, process *ManagedProcess, state string, failoverReady bool) ProcessStatus {
+// WaitActive blocks until a process states that it is serving domain
+// operations, and returns the event that said so.
+//
+// Being Active is the runtime's own statement about itself, made once, at the
+// moment it begins serving. There is no snapshot to poll and no freshness to
+// check: the fact is in the record from then on, and the PID on it is what
+// distinguishes this run of the instance from an earlier one.
+func (m *Machine) WaitActive(t *testing.T, process *ManagedProcess) Event {
 	t.Helper()
-	var last ProcessStatus
+	return m.waitEvent(t, process, "serving", func(event Event) bool {
+		return event.Type == EventAPIActive
+	})
+}
+
+// WaitFailoverReady blocks until a process states that it is Passive and
+// current enough to take the machine over, and returns the event that said so.
+//
+// This is the handover precondition a service manager checks. It is stated on
+// change rather than restated on a timer, so an instance that said it was ready
+// and has said nothing since is still ready.
+func (m *Machine) WaitFailoverReady(t *testing.T, process *ManagedProcess) Event {
+	t.Helper()
+	return m.waitEvent(t, process, "failover ready", func(event Event) bool {
+		if event.Type != EventFailoverReadinessChanged {
+			return false
+		}
+		readiness, err := DecodeFailoverReadiness(event)
+		return err == nil && readiness.Ready && readiness.InstanceState == "passive"
+	})
+}
+
+// DecodeFailoverReadiness decodes a readiness event's payload.
+func DecodeFailoverReadiness(event Event) (FailoverReadiness, error) {
+	var readiness FailoverReadiness
+	err := json.Unmarshal(event.Data, &readiness)
+	return readiness, err
+}
+
+// waitEvent blocks until this machine's record carries an event matching want,
+// stated by this run of this instance.
+//
+// Matching on the origin's PID as well as its role is what makes a wait
+// meaningful across a failover: both instances append to their own files for the
+// whole scenario, and a restarted instance appends to the file its predecessor
+// wrote. Without the PID, a wait for "active" would be satisfied by the run that
+// was killed to cause the failover being waited for.
+func (m *Machine) waitEvent(t *testing.T, process *ManagedProcess, what string, want func(Event) bool) Event {
+	t.Helper()
+	var found Event
 	var readErr error
 
 	cond := func() bool {
-		status, err := m.readStatus(process.Role)
+		stated, err := m.readRecord(process.Role)
 		readErr = err
-		if err == nil {
-			last = status
-			if status.Role == process.Role && status.PID == process.PID() && status.State == state &&
-				(!failoverReady || status.FailoverReady) && status.LastError == "" {
+		if err != nil {
+			return false
+		}
+		for _, event := range stated {
+			if event.Origin.PID == process.PID() && event.Origin.ProcessRole == process.Role && want(event) {
+				found = event
 				return true
 			}
 		}
@@ -794,7 +904,7 @@ func (m *Machine) WaitStatus(t *testing.T, process *ManagedProcess, state string
 	abort := func() (bool, string) {
 		if !process.Running() {
 			out, _ := process.Wait()
-			return true, fmt.Sprintf("%s exited before reaching %s:\n%s", process.Role, state, out)
+			return true, fmt.Sprintf("%s exited before it was %s:\n%s", process.Role, what, out)
 		}
 		return false, ""
 	}
@@ -803,36 +913,31 @@ func (m *Machine) WaitStatus(t *testing.T, process *ManagedProcess, state string
 	// binary times out and the diagnostics would never be printed at all. Logs is
 	// a snapshot of the same buffer and does not block.
 	diag := DiagStringer(func() string {
-		return statusDiagnostics(m, process, state, last, readErr, process.Logs())
+		return recordDiagnostics(m, process, what, readErr, process.Logs())
 	})
 
-	WaitFor(t, "process "+process.Role+" reaching state "+state, APIWaitTimeout, markerPollInterval, cond, abort, diag)
-	return last
+	WaitFor(t, "process "+process.Role+" being "+what, APIWaitTimeout, markerPollInterval, cond, abort, diag)
+	return found
 }
 
-// statusDiagnostics renders why a process never reached a state: what it last
-// reported, whether a status file existed at all, the endpoints it composed, and
-// its output.
+// recordDiagnostics renders why a process never stated what was waited for:
+// whether it has a record at all, the endpoints it composed, its output, and
+// everything both of the machine's instances did state.
 //
-// The distinction between a missing status file and a status that reports an
+// The distinction between a missing record and a record that reports an
 // unreachable journal is the one worth preserving. The first means the process
-// never got far enough to write one; the second means it is running and cannot
-// reach the address it was told to use, which is a topology problem rather than a
-// startup one.
-func statusDiagnostics(m *Machine, process *ManagedProcess, want string, last ProcessStatus, readErr error, output string) string {
+// never got far enough to open one; the second means it is running and cannot
+// reach the address it was told to use, which is a topology problem rather than
+// a startup one, and the record says which.
+func recordDiagnostics(m *Machine, process *ManagedProcess, want string, readErr error, output string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "machine %s process %s wanted state %q\n", m.Name, process.Role, want)
-	fmt.Fprintf(&b, "status file: %s\n", m.statusPath(process.Role))
+	fmt.Fprintf(&b, "machine %s process %s (pid %d) was never %s\n", m.Name, process.Role, process.PID(), want)
+	fmt.Fprintf(&b, "event record: %s\n", m.recordPath(process.Role))
 	switch {
 	case readErr != nil && os.IsNotExist(readErr):
-		b.WriteString("status: never written\n")
+		b.WriteString("record: never opened\n")
 	case readErr != nil:
-		fmt.Fprintf(&b, "status: unreadable: %v\n", readErr)
-	default:
-		fmt.Fprintf(&b, "status: %+v\n", last)
-		if last.LastError != "" {
-			fmt.Fprintf(&b, "status last error: %s\n", last.LastError)
-		}
+		fmt.Fprintf(&b, "record: unreadable: %v\n", readErr)
 	}
 	fmt.Fprintf(&b, "expected event fabric endpoints: client=%s cluster=%s\n",
 		m.Sockets.Client, m.Sockets.Cluster)
@@ -883,9 +988,7 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 	require.NoError(t, os.WriteFile(configPath, platformConfig(), 0o644))
 
 	m := &Machine{
-		project:    s.project,
 		Name:       name,
-		workDir:    s.workDir,
 		URL:        "http://" + reserved.API,
 		Sockets:    reserved,
 		BinaryPath: binaryPath,

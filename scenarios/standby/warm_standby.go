@@ -15,8 +15,8 @@ import (
 )
 
 // WarmStandbyFailoverAndPreferredPrimary drives the complete redundant
-// process lifecycle from a built package. Status files are operational evidence;
-// registration assertions stay on the public API.
+// process lifecycle from a built package. Each instance's event record is the
+// operational evidence; registration assertions stay on the public API.
 func WarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -31,7 +31,7 @@ func WarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	require.NotNil(t, manifest.Standby, "default policy must package a standby launch")
 
 	primary := node.StartManaged(ctx, t, primaryInstance, manifest.Primary.Args)
-	node.WaitStatus(t, primary, "active", false)
+	node.WaitActive(t, primary)
 	waitForManagedAPI(ctx, t, node, primary)
 
 	stable := harness.Propose(ctx, t, node,
@@ -40,8 +40,8 @@ func WarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 
 	standbyStarted := time.Now()
 	standby := node.StartManaged(ctx, t, standbyInstance, manifest.Standby.Args)
-	standbyStatus := node.WaitStatus(t, standby, "passive", true)
-	catchUpTime := standbyStatus.UpdatedAt.Sub(standbyStarted)
+	standbyReady := node.WaitFailoverReady(t, standby)
+	catchUpTime := standbyReady.OccurredAt.Sub(standbyStarted)
 	standbyMemory, err := processinfo.ResidentBytes(ctx, standby.PID())
 	require.NoError(t, err)
 
@@ -55,8 +55,8 @@ func WarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	}
 	failoverStarted := time.Now()
 	_ = primary.Kill()
-	failedOverStatus := node.WaitStatus(t, standby, "active", false)
-	failoverTime := failedOverStatus.UpdatedAt.Sub(failoverStarted)
+	failedOver := node.WaitActive(t, standby)
+	failoverTime := failedOver.OccurredAt.Sub(failoverStarted)
 	waitForManagedAPI(ctx, t, node, standby)
 	var gap time.Duration
 	select {
@@ -79,31 +79,31 @@ func WarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	require.Len(t, harness.ListRegistrations(ctx, t, node), 2)
 
 	primaryReturned := node.StartManaged(ctx, t, primaryInstance, manifest.Primary.Args)
-	node.WaitStatus(t, primaryReturned, "passive", true)
+	node.WaitFailoverReady(t, primaryReturned)
 	failbackStarted := time.Now()
 	standby.StopGracefully(t)
-	node.WaitStatus(t, primaryReturned, "active", false)
+	node.WaitActive(t, primaryReturned)
 	waitForManagedAPI(ctx, t, node, primaryReturned)
 	failbackTime := time.Since(failbackStarted)
 
-	// Repeat failover and failback to expose stale status, ownership, listener, or
-	// storage ownership left behind by the first transfer.
+	// Repeat failover and failback to expose ownership, listener, or storage
+	// ownership left behind by the first transfer.
 	standbySecond := node.StartManaged(ctx, t, standbyInstance, manifest.Standby.Args)
-	node.WaitStatus(t, standbySecond, "passive", true)
+	node.WaitFailoverReady(t, standbySecond)
 	_ = primaryReturned.Kill()
-	node.WaitStatus(t, standbySecond, "active", false)
+	node.WaitActive(t, standbySecond)
 	waitForManagedAPI(ctx, t, node, standbySecond)
 
 	primarySecond := node.StartManaged(ctx, t, primaryInstance, manifest.Primary.Args)
-	node.WaitStatus(t, primarySecond, "passive", true)
+	node.WaitFailoverReady(t, primarySecond)
 	standbySecond.StopGracefully(t)
-	node.WaitStatus(t, primarySecond, "active", false)
+	node.WaitActive(t, primarySecond)
 	waitForManagedAPI(ctx, t, node, primarySecond)
 
 	// Terminating a caught-up lock waiter must stop only that process. Context
 	// cancellation of Lock.Acquire is covered by the platform contract tests.
 	cancelledStandby := node.StartManaged(ctx, t, standbyInstance, manifest.Standby.Args)
-	node.WaitStatus(t, cancelledStandby, "passive", true)
+	node.WaitFailoverReady(t, cancelledStandby)
 	_ = cancelledStandby.Kill()
 	require.True(t, primarySecond.Running())
 	waitForManagedAPI(ctx, t, node, primarySecond)
@@ -111,9 +111,9 @@ func WarmStandbyFailoverAndPreferredPrimary(t *testing.T) {
 	// Full machine shutdown is primary-service stop followed by standby-service
 	// stop. The standby may become Active in the bounded interval and must still stop.
 	shutdownStandby := node.StartManaged(ctx, t, standbyInstance, manifest.Standby.Args)
-	node.WaitStatus(t, shutdownStandby, "passive", true)
+	node.WaitFailoverReady(t, shutdownStandby)
 	primarySecond.StopGracefully(t)
-	node.WaitStatus(t, shutdownStandby, "active", false)
+	node.WaitActive(t, shutdownStandby)
 	shutdownStandby.StopGracefully(t)
 	require.False(t, primarySecond.Running())
 	require.False(t, shutdownStandby.Running())

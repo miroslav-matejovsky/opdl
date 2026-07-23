@@ -24,9 +24,9 @@ project "customer-a" {
       # Instance, which is why its blocks need no wrapper, and the Standby
       # Instance is the optional one.
       #
-      # runtime_dir is where this instance writes its status file. Each instance
-      # has its own: two runtimes writing into one directory would overwrite each
-      # other's evidence, and nothing would report it.
+      # runtime_dir is this instance's own local runtime directory. Nothing is
+      # written into it today: what an instance is doing is stated into its event
+      # record under data_dir, not into a status file.
       #
       # data_dir is the general platform data root for this instance.
       #
