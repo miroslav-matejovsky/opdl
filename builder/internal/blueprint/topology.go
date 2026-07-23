@@ -307,9 +307,9 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 }
 
 // validatePlatform checks a machine states every platform policy. None has a
-// default: an omitted api or nats block would leave an instance without an
-// endpoint, and an omitted standby block would make local redundancy depend on
-// what a reader assumed rather than on what the blueprint says.
+// default: an omitted api block would leave an instance without an endpoint,
+// and an omitted standby block would make local redundancy depend on what a
+// reader assumed rather than on what the blueprint says.
 func validatePlatform(machine Machine) error {
 	if machine.Platform == nil {
 		return fmt.Errorf("machine %q: platform block is required", machine.Name)
@@ -338,8 +338,8 @@ func validatePlatform(machine Machine) error {
 	return validateLock(machine)
 }
 
-// validateInstanceEndpoints checks one instance states both of its endpoint
-// policies with usable ports and a JetStream store directory.
+// validateInstanceEndpoints checks one instance states its endpoint
+// policies with usable ports and a JetStream store directory when present.
 func validateInstanceEndpoints(machine Machine, block string, api *API, eventStorage *EventStorage) error {
 	if api == nil {
 		return fmt.Errorf("machine %q: %s.api block is required", machine.Name, block)
@@ -347,13 +347,10 @@ func validateInstanceEndpoints(machine Machine, block string, api *API, eventSto
 	if err := validatePort(machine.Name, block+".api.local_port", api.LocalPort); err != nil {
 		return err
 	}
-	if eventStorage == nil {
-		return fmt.Errorf("machine %q: %s.event_storage block is required", machine.Name, block)
+	if eventStorage == nil || eventStorage.Nats == nil {
+		return nil
 	}
 	nats := eventStorage.Nats
-	if nats == nil {
-		return fmt.Errorf("machine %q: %s.event_storage.nats block is required", machine.Name, block)
-	}
 	if err := validatePort(machine.Name, block+".event_storage.nats.client_port", nats.ClientPort); err != nil {
 		return err
 	}
@@ -400,9 +397,15 @@ func validateDataDirs(machine Machine) error {
 // validateJetStreamStoreDirs checks each deployed instance states its own JetStream
 // file store directory, and that a machine's two instances do not state the same one.
 func validateJetStreamStoreDirs(machine Machine) error {
-	return validateInstanceDirs(machine, "event_storage.nats.jetstream_store_dir",
-		machine.JetStreamStoreDir(false), machine.JetStreamStoreDir(true),
-		"each instance runs its own Event Fabric server and two servers cannot open the same JetStream store")
+	primaryDir := machine.JetStreamStoreDir(false)
+	standbyDir := machine.JetStreamStoreDir(true)
+	if primaryDir == "" || standbyDir == "" || machine.Platform.Standby.Disabled {
+		return nil
+	}
+	if primaryDir == standbyDir {
+		return fmt.Errorf("machine %q: platform.event_storage.nats.jetstream_store_dir and platform.standby.event_storage.nats.jetstream_store_dir are both %q; each instance runs its own Event Fabric server and two servers cannot open the same JetStream store", machine.Name, primaryDir)
+	}
+	return nil
 }
 
 // validateInstanceDirs checks one per-instance directory attribute: required on
@@ -433,19 +436,27 @@ func validateMachinePorts(machine Machine) error {
 		port  int
 	}
 	platform := machine.Platform
-	primaryNats := machine.Nats(false)
 	listeners := []listener{
 		{"platform.api.local_port", platform.API.LocalPort},
-		{"platform.event_storage.nats.client_port", primaryNats.ClientPort},
-		{"platform.event_storage.nats.cluster_port", primaryNats.ClusterPort},
+	}
+	primaryNats := machine.Nats(false)
+	if primaryNats != nil {
+		listeners = append(listeners,
+			listener{"platform.event_storage.nats.client_port", primaryNats.ClientPort},
+			listener{"platform.event_storage.nats.cluster_port", primaryNats.ClusterPort},
+		)
 	}
 	if !platform.Standby.Disabled {
-		standbyNats := machine.Nats(true)
 		listeners = append(listeners,
 			listener{"platform.standby.api.local_port", platform.Standby.API.LocalPort},
-			listener{"platform.standby.event_storage.nats.client_port", standbyNats.ClientPort},
-			listener{"platform.standby.event_storage.nats.cluster_port", standbyNats.ClusterPort},
 		)
+		standbyNats := machine.Nats(true)
+		if standbyNats != nil {
+			listeners = append(listeners,
+				listener{"platform.standby.event_storage.nats.client_port", standbyNats.ClientPort},
+				listener{"platform.standby.event_storage.nats.cluster_port", standbyNats.ClusterPort},
+			)
+		}
 	}
 	taken := make(map[int]string, len(listeners))
 	for _, l := range listeners {
@@ -613,10 +624,16 @@ func (m Machine) Endpoints(standby bool) *Endpoints {
 		}
 		api = m.Platform.Standby.API
 	}
-	if api == nil || nats == nil {
+	if api == nil {
 		return nil
 	}
-	return &Endpoints{APILocalPort: api.LocalPort, ClientPort: nats.ClientPort, ClusterPort: nats.ClusterPort}
+	clientPort := 0
+	clusterPort := 0
+	if nats != nil {
+		clientPort = nats.ClientPort
+		clusterPort = nats.ClusterPort
+	}
+	return &Endpoints{APILocalPort: api.LocalPort, ClientPort: clientPort, ClusterPort: clusterPort}
 }
 
 // Endpoints are one instance's authored listener ports.

@@ -562,7 +562,6 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 		errText string
 	}{
 		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, `machine "sensor": platform block is required`},
-		{"missing event_storage block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.EventStorage = nil }, `machine "sensor": platform.event_storage block is required`},
 		{"missing standby block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby = nil }, `machine "sensor": platform.standby block is required`},
 		{"missing standby lock when deployed", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby.Lock = nil }, `machine "sensor": platform.standby.lock block is required when the standby is deployed`},
 		{"zero client port", func(p *blueprint.Project) {
@@ -592,6 +591,42 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 			require.ErrorContains(t, p.Validate(), tc.errText)
 		})
 	}
+}
+
+func TestProjectValidateOptionalNats(t *testing.T) {
+	t.Run("missing primary event_storage block", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].Machines[0].Platform.EventStorage = nil
+		require.NoError(t, p.Validate())
+		m := p.Sites[0].Machines[0]
+		require.Nil(t, m.Nats(false))
+		ep := m.Endpoints(false)
+		require.NotNil(t, ep)
+		require.Equal(t, 8080, ep.APILocalPort)
+		require.Equal(t, 0, ep.ClientPort)
+		require.Equal(t, 0, ep.ClusterPort)
+	})
+
+	t.Run("missing nats block inside event_storage", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].Machines[0].Platform.EventStorage = &blueprint.EventStorage{Nats: nil}
+		require.NoError(t, p.Validate())
+		m := p.Sites[0].Machines[0]
+		require.Nil(t, m.Nats(false))
+	})
+
+	t.Run("missing standby event_storage block", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].Machines[0].Platform.Standby.EventStorage = nil
+		require.NoError(t, p.Validate())
+		m := p.Sites[0].Machines[0]
+		require.Nil(t, m.Nats(true))
+		ep := m.Endpoints(true)
+		require.NotNil(t, ep)
+		require.Equal(t, 8081, ep.APILocalPort)
+		require.Equal(t, 0, ep.ClientPort)
+		require.Equal(t, 0, ep.ClusterPort)
+	})
 }
 
 // TestMachineLock checks Lock returns nil when standby is disabled or omitted,
