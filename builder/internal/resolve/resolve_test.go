@@ -40,12 +40,10 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 		standby.EventStorage = &blueprint.EventStorage{
-			EventFabric: &blueprint.EventFabric{
-				Nats: &blueprint.Nats{
-					ClientPort:        standbyClientPort,
-					ClusterPort:       standbyClusterPort,
-					JetStreamStoreDir: jetstreamStoreDir(name, "standby"),
-				},
+			Nats: &blueprint.Nats{
+				ClientPort:        standbyClientPort,
+				ClusterPort:       standbyClusterPort,
+				JetStreamStoreDir: jetstreamStoreDir(name, "standby"),
 			},
 		}
 	}
@@ -57,12 +55,10 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 			API:        &blueprint.API{LocalPort: apiPort},
 			WinService: &blueprint.WinService{Name: name + "-primary"},
 			EventStorage: &blueprint.EventStorage{
-				EventFabric: &blueprint.EventFabric{
-					Nats: &blueprint.Nats{
-						ClientPort:        clientPort,
-						ClusterPort:       clusterPort,
-						JetStreamStoreDir: jetstreamStoreDir(name, "primary"),
-					},
+				Nats: &blueprint.Nats{
+					ClientPort:        clientPort,
+					ClusterPort:       clusterPort,
+					JetStreamStoreDir: jetstreamStoreDir(name, "primary"),
 				},
 			},
 			Standby: standby,

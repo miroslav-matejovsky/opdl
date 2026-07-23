@@ -26,9 +26,10 @@ func testEnvelope(t *testing.T, event events.Event, machine, id string) events.E
 		Source:        event.EventType().Source(),
 		Severity:      events.SeverityInfo,
 		Origin: events.Origin{
-			Project: testDescriptor.Project, Environment: testDescriptor.Environment,
-			Site: testDescriptor.Site, Machine: machine,
-			MachineProfile: testDescriptor.MachineProfile, ProcessRole: "primary", PID: 1,
+			Machine:        machine,
+			MachineProfile: testDescriptor.MachineProfile,
+			ProcessRole:    "primary",
+			PID:            1,
 		},
 		Data: data,
 	}

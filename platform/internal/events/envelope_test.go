@@ -10,9 +10,6 @@ import (
 
 // testOrigin is the complete process identity a test envelope carries.
 var testOrigin = Origin{
-	Project:        "scenario",
-	Environment:    "development",
-	Site:           "local",
 	Machine:        "node",
 	MachineProfile: "all-in-one",
 	ProcessRole:    "primary",
@@ -72,13 +69,6 @@ func TestEnvelopeValidateRejectsIncompleteEnvelopes(t *testing.T) {
 		},
 		{name: "missing severity", mutate: func(e *Envelope) { e.Severity = "" }, wantErr: "unknown severity"},
 		{name: "unknown severity", mutate: func(e *Envelope) { e.Severity = "fatal" }, wantErr: "unknown severity"},
-		{name: "missing origin project", mutate: func(e *Envelope) { e.Origin.Project = "" }, wantErr: "origin project is required"},
-		{
-			name:    "missing origin environment",
-			mutate:  func(e *Envelope) { e.Origin.Environment = "" },
-			wantErr: "origin environment is required",
-		},
-		{name: "missing origin site", mutate: func(e *Envelope) { e.Origin.Site = "" }, wantErr: "origin site is required"},
 		{name: "missing origin machine", mutate: func(e *Envelope) { e.Origin.Machine = "" }, wantErr: "origin machine is required"},
 		{
 			name:    "missing origin machine profile",
@@ -127,9 +117,6 @@ func TestEnvelopeEncodesMetadataAndPayloadOnOneLevel(t *testing.T) {
 		"source": "test",
 		"severity": "warn",
 		"origin": {
-			"project": "scenario",
-			"environment": "development",
-			"site": "local",
 			"machine": "node",
 			"machine_profile": "all-in-one",
 			"process_role": "primary",

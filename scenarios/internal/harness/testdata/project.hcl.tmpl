@@ -52,12 +52,10 @@ project "{{ .Name }}" {
         }
 
         event_storage {
-          eventfabric {
-            nats {
-              client_port         = {{ .ClientPort }}
-              cluster_port        = {{ .ClusterPort }}
-              jetstream_store_dir = "{{ .JetStreamStoreDir }}"
-            }
+          nats {
+            client_port         = {{ .ClientPort }}
+            cluster_port        = {{ .ClusterPort }}
+            jetstream_store_dir = "{{ .JetStreamStoreDir }}"
           }
         }
 
@@ -81,12 +79,10 @@ project "{{ .Name }}" {
           }
 
           event_storage {
-            eventfabric {
-              nats {
-                client_port         = {{ .StandbyClientPort }}
-                cluster_port        = {{ .StandbyClusterPort }}
-                jetstream_store_dir = "{{ .StandbyJetStreamStoreDir }}"
-              }
+            nats {
+              client_port         = {{ .StandbyClientPort }}
+              cluster_port        = {{ .StandbyClusterPort }}
+              jetstream_store_dir = "{{ .StandbyJetStreamStoreDir }}"
             }
           }
 {{- end }}

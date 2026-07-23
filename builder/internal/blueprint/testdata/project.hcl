@@ -31,12 +31,10 @@ project "customer-a" {
         }
 
         event_storage {
-          eventfabric {
-            nats {
-              client_port         = 4222
-              cluster_port        = 6222
-              jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
-            }
+          nats {
+            client_port         = 4222
+            cluster_port        = 6222
+            jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
           }
         }
 
@@ -67,12 +65,10 @@ project "customer-a" {
         }
 
         event_storage {
-          eventfabric {
-            nats {
-              client_port         = 4222
-              cluster_port        = 6222
-              jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
-            }
+          nats {
+            client_port         = 4222
+            cluster_port        = 6222
+            jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
           }
         }
 
@@ -94,12 +90,10 @@ project "customer-a" {
           }
 
           event_storage {
-            eventfabric {
-              nats {
-                client_port         = 4322
-                cluster_port        = 6322
-                jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
-              }
+            nats {
+              client_port         = 4322
+              cluster_port        = 6322
+              jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
             }
           }
         }
@@ -125,12 +119,10 @@ project "customer-a" {
         }
 
         event_storage {
-          eventfabric {
-            nats {
-              client_port         = 4222
-              cluster_port        = 6222
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/master/primary/eventfabric/nats"
-            }
+          nats {
+            client_port         = 4222
+            cluster_port        = 6222
+            jetstream_store_dir = "D:/opdl/customer-a/control-room/master/primary/eventfabric/nats"
           }
         }
 
@@ -152,12 +144,10 @@ project "customer-a" {
           }
 
           event_storage {
-            eventfabric {
-              nats {
-                client_port         = 4322
-                cluster_port        = 6322
-                jetstream_store_dir = "D:/opdl/customer-a/control-room/master/standby/eventfabric/nats"
-              }
+            nats {
+              client_port         = 4322
+              cluster_port        = 6322
+              jetstream_store_dir = "D:/opdl/customer-a/control-room/master/standby/eventfabric/nats"
             }
           }
         }
@@ -181,12 +171,10 @@ project "customer-a" {
         }
 
         event_storage {
-          eventfabric {
-            nats {
-              client_port         = 4222
-              cluster_port        = 6222
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/primary/eventfabric/nats"
-            }
+          nats {
+            client_port         = 4222
+            cluster_port        = 6222
+            jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/primary/eventfabric/nats"
           }
         }
 
@@ -208,12 +196,10 @@ project "customer-a" {
           }
 
           event_storage {
-            eventfabric {
-              nats {
-                client_port         = 4322
-                cluster_port        = 6322
-                jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/standby/eventfabric/nats"
-              }
+            nats {
+              client_port         = 4322
+              cluster_port        = 6322
+              jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/standby/eventfabric/nats"
             }
           }
         }
@@ -237,12 +223,10 @@ project "customer-a" {
         }
 
         event_storage {
-          eventfabric {
-            nats {
-              client_port         = 4222
-              cluster_port        = 6222
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/primary/eventfabric/nats"
-            }
+          nats {
+            client_port         = 4222
+            cluster_port        = 6222
+            jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/primary/eventfabric/nats"
           }
         }
 
@@ -264,12 +248,10 @@ project "customer-a" {
           }
 
           event_storage {
-            eventfabric {
-              nats {
-                client_port         = 4322
-                cluster_port        = 6322
-                jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/standby/eventfabric/nats"
-              }
+            nats {
+              client_port         = 4322
+              cluster_port        = 6322
+              jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/standby/eventfabric/nats"
             }
           }
         }

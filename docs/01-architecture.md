@@ -121,12 +121,10 @@ platform {
   }
 
   event_storage {
-    eventfabric {
-      nats {
-        client_port         = 4222
-        cluster_port        = 6222
-        jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
-      }
+    nats {
+      client_port         = 4222
+      cluster_port        = 6222
+      jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
     }
   }
 
@@ -140,12 +138,10 @@ platform {
     }
 
     event_storage {
-      eventfabric {
-        nats {
-          client_port         = 4223
-          cluster_port        = 6223
-          jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
-        }
+      nats {
+        client_port         = 4223
+        cluster_port        = 6223
+        jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
       }
     }
   }

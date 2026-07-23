@@ -3,27 +3,21 @@ package events
 import "fmt"
 
 // Origin is the identity of the platform process that stated a fact: which
-// process, of which machine, of which deployment.
+// process, of which machine.
 //
 // It is constant for a whole process run and is stamped onto every envelope.
 // The shared site journal pools events from several machines and from more than
 // one process per machine, so identity travels with each fact rather than
 // living in a file name a reader may never see.
 //
-// The deployment fields down to MachineProfile are domain identity: they name
-// the machine the fact is about. ProcessRole and PID are operational identity:
-// they name which of that machine's processes wrote it. The distinction
-// matters. A machine may run a primary and a standby process, and domain
-// behavior stays machine-scoped, so registration counts one voter per machine
-// no matter how many processes it runs. Domain code reads Machine; only an
-// operator troubleshooting a specific process reads ProcessRole and PID.
+// Machine and MachineProfile are domain identity: they name the machine the
+// fact is about. ProcessRole and PID are operational identity: they name which
+// of that machine's processes wrote it. The distinction matters. A machine may
+// run a primary and a standby process, and domain behavior stays
+// machine-scoped, so registration counts one voter per machine no matter how
+// many processes it runs. Domain code reads Machine; only an operator
+// troubleshooting a specific process reads ProcessRole and PID.
 type Origin struct {
-	// Project is the deployment project identifier.
-	Project string `json:"project"`
-	// Environment is the deployment environment name.
-	Environment string `json:"environment"`
-	// Site is the deployment site identifier.
-	Site string `json:"site"`
 	// Machine is the deployment machine identifier.
 	Machine string `json:"machine"`
 	// MachineProfile is the machine's purpose, such as "sensor-node".
@@ -43,12 +37,6 @@ type Origin struct {
 func (o Origin) Validate() error {
 	missing := ""
 	switch {
-	case o.Project == "":
-		missing = "project"
-	case o.Environment == "":
-		missing = "environment"
-	case o.Site == "":
-		missing = "site"
 	case o.Machine == "":
 		missing = "machine"
 	case o.MachineProfile == "":

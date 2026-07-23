@@ -30,12 +30,10 @@
 //	        }
 //
 //	        event_storage {
-//	          eventfabric {
-//	            nats {
-//	              client_port         = 4222
-//	              cluster_port        = 6222
-//	              jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
-//	            }
+//	          nats {
+//	            client_port         = 4222
+//	            cluster_port        = 6222
+//	            jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
 //	          }
 //	        }
 //

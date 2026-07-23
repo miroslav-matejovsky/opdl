@@ -32,12 +32,10 @@ project "buildtest" {
         }
 
         event_storage {
-          eventfabric {
-            nats {
-              client_port         = 4222
-              cluster_port        = 6222
-              jetstream_store_dir = "D:/opdl/buildtest/solo/node-a/primary/eventfabric/nats"
-            }
+          nats {
+            client_port         = 4222
+            cluster_port        = 6222
+            jetstream_store_dir = "D:/opdl/buildtest/solo/node-a/primary/eventfabric/nats"
           }
         }
 
@@ -66,12 +64,10 @@ project "buildtest" {
         }
 
         event_storage {
-          eventfabric {
-            nats {
-              client_port         = 4222
-              cluster_port        = 6222
-              jetstream_store_dir = "D:/opdl/buildtest/solo/node-b/primary/eventfabric/nats"
-            }
+          nats {
+            client_port         = 4222
+            cluster_port        = 6222
+            jetstream_store_dir = "D:/opdl/buildtest/solo/node-b/primary/eventfabric/nats"
           }
         }
 
@@ -94,12 +90,10 @@ project "buildtest" {
           }
 
           event_storage {
-            eventfabric {
-              nats {
-                client_port         = 4322
-                cluster_port        = 6322
-                jetstream_store_dir = "D:/opdl/buildtest/solo/node-b/standby/eventfabric/nats"
-              }
+            nats {
+              client_port         = 4322
+              cluster_port        = 6322
+              jetstream_store_dir = "D:/opdl/buildtest/solo/node-b/standby/eventfabric/nats"
             }
           }
         }

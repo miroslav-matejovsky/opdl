@@ -15,6 +15,18 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 )
 
+// testDir returns a directory under .tmp/<TestName> relative to the package
+// source directory. The directory is removed before the test starts so each
+// run begins clean. It is NOT removed on cleanup, leaving files on disk for
+// inspection after a failed run.
+func testDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(".tmp", t.Name())
+	require.NoError(t, os.RemoveAll(dir))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	return dir
+}
+
 var testDescriptor = config.Descriptor{
 	Platform:       "opdl",
 	Project:        "scenario",
@@ -48,7 +60,7 @@ func TestNewValidation(t *testing.T) {
 }
 
 func TestOpeningCreatesOnlyExpectedSubdirectoryAndFile(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testDir(t)
 
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
@@ -72,7 +84,7 @@ func TestOpeningCreatesOnlyExpectedSubdirectoryAndFile(t *testing.T) {
 }
 
 func TestOneStoredEnvelopeDecodesWithEventsDecode(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testDir(t)
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
@@ -94,7 +106,7 @@ func TestOneStoredEnvelopeDecodesWithEventsDecode(t *testing.T) {
 }
 
 func TestSeveralEventsProduceLinesInCallOrder(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testDir(t)
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
@@ -126,7 +138,7 @@ func TestSeveralEventsProduceLinesInCallOrder(t *testing.T) {
 }
 
 func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testDir(t)
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
@@ -135,7 +147,7 @@ func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(count)
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		go func(id int) {
 			defer wg.Done()
 			env := testEnvelope(t, fmt.Sprintf("concurrent-%d", id))
@@ -163,7 +175,7 @@ func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
 }
 
 func TestInvalidEnvelopesAreRejectedBeforeLineIsWritten(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testDir(t)
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
@@ -180,7 +192,7 @@ func TestInvalidEnvelopesAreRejectedBeforeLineIsWritten(t *testing.T) {
 }
 
 func TestCloseIsIdempotentAndStoreAfterCloseFails(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testDir(t)
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
 
@@ -197,7 +209,7 @@ func TestCloseIsIdempotentAndStoreAfterCloseFails(t *testing.T) {
 }
 
 func TestReopeningAppendsRatherThanTruncates(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testDir(t)
 
 	// First run
 	b1, err := jsonl.New(dataDir)
@@ -229,7 +241,7 @@ func TestReopeningAppendsRatherThanTruncates(t *testing.T) {
 }
 
 func TestWindowsPathsWithSpacesWork(t *testing.T) {
-	dataDir := filepath.Join(t.TempDir(), "sub dir with spaces", "data root")
+	dataDir := filepath.Join(testDir(t), "sub dir with spaces", "data root")
 
 	backend, err := jsonl.New(dataDir)
 	require.NoError(t, err)
