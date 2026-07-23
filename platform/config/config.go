@@ -43,13 +43,7 @@ func Load(configPath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	if _, err := validateDuration("[event_fabric.nats] startup_timeout", f.EventFabric.Nats.StartupTimeout); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	if _, err := validateDuration("[event_fabric.nats] catch_up_timeout", f.EventFabric.Nats.CatchUpTimeout); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	lagBound, err := validateLagBound(f.LagBound)
+	lagBound, err := eventStorageSettings(configPath, d, f)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -72,6 +66,57 @@ func Load(configPath string) (*Config, error) {
 		cfg.username, cfg.password = site.Username, site.Password
 	}
 	return cfg, nil
+}
+
+// eventStorageSettings validates the settings that only mean something to a
+// deployment with a site journal, and returns the projection lag bound.
+//
+// lag_bound bounds how far a projection may fall behind the journal, and the two
+// [event_fabric.nats] timeouts bound starting a server and catching up on it.
+// A deployment with no event storage has no journal, no projection, and no
+// server, so all three are settings with nothing to bound. Requiring them there
+// would make an operator write three durations that no code path reads, which is
+// worse than an absent value: it reads like configuration that is in effect.
+//
+// They stay strictly required wherever they do apply, and a value that is stated
+// is validated whether it applies or not. Nothing here is defaulted: a
+// deployment that has a journal must still say what its bounds are.
+func eventStorageSettings(path string, d Descriptor, f file) (lagBound time.Duration, err error) {
+	if !d.HasEventStorage() {
+		// A stated value is still checked, so a file carried over from a
+		// deployment that had a journal fails on a typo rather than being
+		// silently ignored.
+		for _, stated := range []struct{ name, value string }{
+			{"lag_bound", f.LagBound},
+			{"[event_fabric.nats] startup_timeout", f.EventFabric.Nats.StartupTimeout},
+			{"[event_fabric.nats] catch_up_timeout", f.EventFabric.Nats.CatchUpTimeout},
+		} {
+			if stated.value == "" {
+				continue
+			}
+			if _, err := validateDuration(stated.name, stated.value); err != nil {
+				return 0, err
+			}
+		}
+		return 0, nil
+	}
+
+	if f.LagBound == "" {
+		return 0, fmt.Errorf("configuration file %s: lag_bound is required", path)
+	}
+	if f.EventFabric.Nats.StartupTimeout == "" {
+		return 0, fmt.Errorf("configuration file %s: [event_fabric.nats] startup_timeout is required", path)
+	}
+	if f.EventFabric.Nats.CatchUpTimeout == "" {
+		return 0, fmt.Errorf("configuration file %s: [event_fabric.nats] catch_up_timeout is required", path)
+	}
+	if _, err := validateDuration("[event_fabric.nats] startup_timeout", f.EventFabric.Nats.StartupTimeout); err != nil {
+		return 0, err
+	}
+	if _, err := validateDuration("[event_fabric.nats] catch_up_timeout", f.EventFabric.Nats.CatchUpTimeout); err != nil {
+		return 0, err
+	}
+	return validateLagBound(f.LagBound)
 }
 
 func validateDuration(name, s string) (time.Duration, error) {
@@ -162,8 +207,16 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
-	fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
-	fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
+	// The journal's bounds are printed only by a deployment that has one. Showing
+	// "lag_bound 0s" and a line of empty timeouts on a deployment with no event
+	// storage would read as a misconfiguration rather than as three settings that
+	// do not apply.
+	if d.HasEventStorage() {
+		fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
+		fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
+	} else {
+		fmt.Fprint(&b, "    lag_bound, event_fabric.nats  (not applicable: no event storage)")
+	}
 	return b.String()
 }
 

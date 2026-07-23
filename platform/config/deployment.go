@@ -247,6 +247,23 @@ func (i Instances) Service(standby bool) *WinService {
 	return i.Get(Role(standby)).Service
 }
 
+// HasEventStorage reports whether this deployment has a site journal at all:
+// whether any instance the machine deploys runs an Event Fabric.
+//
+// It is asked of the whole descriptor rather than of one instance because a
+// machine's two instances read one configuration file, so a setting the file
+// must carry is one either of them could need. Whether the running instance
+// itself has a journal is a different question, asked per instance.
+func (d Descriptor) HasEventStorage() bool {
+	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
+		instance := d.Instances.Get(role)
+		if !instance.Disabled && instance.Nats != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // WinService is one instance's resolved Windows Service identity.
 //
 // It is a declaration carried for whoever installs the services, not a

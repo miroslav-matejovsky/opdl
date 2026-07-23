@@ -668,8 +668,12 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 	binaryPath := machineBinary(s.outDir, s.project, name)
 	require.FileExists(t, binaryPath)
 
+	// The file carries the journal's bounds only when there is a journal to
+	// bound. A machine with no event storage has no Event Fabric server to start
+	// and no projection to lag, so writing them would be writing settings nothing
+	// reads. The store directory is the harness's own record of that decision.
 	configPath := filepath.Join(s.workDir, "config-"+name+".toml")
-	require.NoError(t, os.WriteFile(configPath, platformConfig(), 0o644))
+	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved.JetStreamStoreDir != ""), 0o644))
 
 	m := &Machine{
 		Name:       name,
@@ -695,10 +699,19 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 // values, so raising them removes a false failure without weakening anything: a
 // machine that genuinely never catches up still fails, on the assertion that was
 // actually being made.
-func platformConfig() []byte {
-	return []byte(`read_header_timeout = "5s"
+//
+// A machine with no event storage gets none of the three. They all bound a site
+// journal, which that deployment does not have, and leaving them out is what
+// proves the runtime does not require them: the scenario's platform binary reads
+// this exact file.
+func platformConfig(eventStorage bool) []byte {
+	config := `read_header_timeout = "5s"
 shutdown_timeout = "10s"
-lag_bound = "2m"
+`
+	if !eventStorage {
+		return []byte(config)
+	}
+	return []byte(config + `lag_bound = "2m"
 [event_fabric.nats]
 startup_timeout = "60s"
 catch_up_timeout = "60s"

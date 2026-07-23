@@ -9,12 +9,28 @@ import (
 )
 
 func TestPlatformConfigContainsOnlyRuntimeSettings(t *testing.T) {
-	config := string(platformConfig())
+	config := string(platformConfig(true))
 
 	require.Contains(t, config, "[event_fabric.nats]")
 	require.NotContains(t, config, "[operations]")
 	require.NotContains(t, config, "event_dir")
 	require.NotContains(t, config, "data_dir")
+}
+
+// TestPlatformConfigOmitsJournalBoundsWithoutEventStorage checks the harness
+// writes a machine only the settings its deployment reads.
+//
+// The three it drops all bound a site journal. A machine with no event storage
+// has none, so a file stating them would be describing something that does not
+// exist, and the scenario would stop being evidence that the runtime does not
+// require them.
+func TestPlatformConfigOmitsJournalBoundsWithoutEventStorage(t *testing.T) {
+	config := string(platformConfig(false))
+
+	require.Contains(t, config, "read_header_timeout")
+	require.Contains(t, config, "shutdown_timeout")
+	require.NotContains(t, config, "lag_bound")
+	require.NotContains(t, config, "[event_fabric.nats]")
 }
 
 func TestOperationEventsReadsPrimaryAndStandbyRecords(t *testing.T) {
