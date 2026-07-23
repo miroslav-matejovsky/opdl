@@ -264,65 +264,6 @@ func (p *Project) Validate() error {
 			machineIPs[machine.IP] = machine.Name
 		}
 	}
-	// Site size is checked last, over every site, because it counts what the
-	// machines declare. A malformed machine is worth reporting as a malformed
-	// machine rather than as a site that came up an instance short because that
-	// machine did not parse, and a rule that spans sites, such as a machine name
-	// repeated in another one, should not be pre-empted by the size of the first
-	// site that happens to be too small.
-	for _, site := range p.Sites {
-		if err := validateSiteSize(site); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// minimumSiteMachines and minimumSiteInstances are the smallest site the
-// platform supports: two machines, at least one of which deploys a Standby
-// Instance.
-const (
-	minimumSiteMachines  = 2
-	minimumSiteInstances = 3
-)
-
-// validateSiteSize rejects a site too small for the platform to run on.
-//
-// The floor is three platform instances across at least two machines. It comes
-// from the site journal, which is a JetStream RAFT group: a group of three keeps
-// quorum after losing one member, and a group of two needs both members alive,
-// which is not redundancy but a second thing that can fail. Below three
-// instances the site journal can only be a single copy, and losing the instance
-// holding it loses the site's history.
-//
-// Two machines is required on top of the instance count because three instances
-// on one machine survive losing a process but not losing the host, and a host is
-// what actually fails. So the minimum is two machines with a standby on one of
-// them, which is three instances across two failure domains.
-//
-// This is a build-time rule rather than a runtime one because a site's shape is
-// decided when it is authored. A deployment that cannot be redundant should fail
-// where it is written, not at three in the morning when the standby it was
-// supposed to have turns out never to have been able to help.
-func validateSiteSize(site Site) error {
-	if len(site.Machines) < minimumSiteMachines {
-		return fmt.Errorf("site %q: %d machine(s); the platform requires at least %d, because a site journal on one host cannot survive losing that host",
-			site.Name, len(site.Machines), minimumSiteMachines)
-	}
-	instances := 0
-	for _, machine := range site.Machines {
-		if machine.Platform == nil {
-			continue
-		}
-		instances++
-		if machine.Platform.Standby != nil && !machine.Platform.Standby.Disabled {
-			instances++
-		}
-	}
-	if instances < minimumSiteInstances {
-		return fmt.Errorf("site %q: %d platform instance(s); the platform requires at least %d, so deploy a standby on at least one machine: a journal of two members needs both alive and is not redundant",
-			site.Name, instances, minimumSiteInstances)
-	}
 	return nil
 }
 

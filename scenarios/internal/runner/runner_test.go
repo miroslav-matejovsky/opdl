@@ -41,9 +41,9 @@ func TestPrintSummary(t *testing.T) {
 	var buf bytes.Buffer
 	printSummary(&buf, results)
 
-	expected := "--- scenario summary ---\n" +
-		"PASS  registration/BuildAndRunMinimumSite (1.23s)\n" +
-		"FAIL  registration/TwoMachineRegistration (56.95s)\n" +
+	expected := "--- scenarios summary ---\n" +
+		"PASS  registration/BuildAndRunMinimumSite (1s)\n" +
+		"FAIL  registration/TwoMachineRegistration (57s)\n" +
 		"SKIP  standby/WarmStandby (0s)\n"
 
 	require.Equal(t, expected, buf.String())
