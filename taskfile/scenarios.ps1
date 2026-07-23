@@ -13,10 +13,11 @@
 # means running the suite by hand behaves exactly like running it from the task.
 . (Join-Path $PSScriptRoot "modules.ps1")
 
-Write-Host "--- scenarios ---"
+# banner is printed by the scenario program itself, so we don't need to print one here
+# Write-Host "--- scenarios ---"
 Push-Location (Join-Path $RepoRoot "scenarios")
 try {
-    go run ./cmd -v
+    go run ./cmd
     if ($LASTEXITCODE -ne 0) {
         throw "scenarios failed (exit $LASTEXITCODE)"
     }

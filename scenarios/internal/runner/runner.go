@@ -2,9 +2,11 @@ package runner
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -35,7 +37,8 @@ type result struct {
 	duration time.Duration
 }
 
-// Run flattens the sets into the standard library test runner and returns a
+// Run prints a startup list of scenarios showing which will run or be skipped,
+// flattens the selected sets into the standard library test runner, and returns a
 // process exit code: 0 when every scenario passed, 1 otherwise.
 //
 // It uses testing.MainStart to get real *testing.T values with working
@@ -45,12 +48,14 @@ type result struct {
 //
 // The caller must have run testing.Init and flag.Parse first, so the test.*
 // flags MainStart reads are registered and populated.
-func Run(sets []Set) int {
+func Run(allSets, selectedSets []Set) int {
+	printStartSummary(os.Stdout, allSets, selectedSets)
+
 	var tests []testing.InternalTest
 	var results []*result
 	var mu sync.Mutex
 
-	for _, set := range sets {
+	for _, set := range selectedSets {
 		for _, scenario := range set.Scenarios {
 			name := set.Package + "/" + scenario.Name
 			res := &result{name: name}
@@ -81,6 +86,29 @@ func Run(sets []Set) int {
 
 	printSummary(os.Stdout, results)
 	return exitCode
+}
+
+func printStartSummary(w io.Writer, allSets, selectedSets []Set) {
+	var runRegexp *regexp.Regexp
+	if f := flag.Lookup("test.run"); f != nil && f.Value.String() != "" {
+		if re, err := regexp.Compile(f.Value.String()); err == nil {
+			runRegexp = re
+		}
+	}
+
+	_, _ = fmt.Fprintln(w, "--- scenarios to run ---")
+	for _, set := range allSets {
+		inSelected := slices.ContainsFunc(selectedSets, func(s Set) bool { return s.Package == set.Package })
+		for _, scenario := range set.Scenarios {
+			name := set.Package + "/" + scenario.Name
+			willRun := inSelected && (runRegexp == nil || runRegexp.MatchString(name))
+			status := "SKIP"
+			if willRun {
+				status = "RUN"
+			}
+			_, _ = fmt.Fprintf(w, "%-4s  %s\n", status, name)
+		}
+	}
 }
 
 func printSummary(w io.Writer, results []*result) {

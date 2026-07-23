@@ -48,3 +48,43 @@ func TestPrintSummary(t *testing.T) {
 
 	require.Equal(t, expected, buf.String())
 }
+
+func TestPrintStartSummary(t *testing.T) {
+	t.Parallel()
+
+	allSets := []Set{
+		{
+			Package: "registration",
+			Scenarios: []Scenario{
+				{Name: "BuildAndRunMinimumSite"},
+				{Name: "TwoMachineRegistration"},
+			},
+		},
+		{
+			Package: "nats",
+			Scenarios: []Scenario{
+				{Name: "TwoMachineEventFabric"},
+			},
+		},
+	}
+
+	selectedSets := []Set{
+		{
+			Package: "registration",
+			Scenarios: []Scenario{
+				{Name: "BuildAndRunMinimumSite"},
+				{Name: "TwoMachineRegistration"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printStartSummary(&buf, allSets, selectedSets)
+
+	expected := "--- scenarios to run ---\n" +
+		"RUN   registration/BuildAndRunMinimumSite\n" +
+		"RUN   registration/TwoMachineRegistration\n" +
+		"SKIP  nats/TwoMachineEventFabric\n"
+
+	require.Equal(t, expected, buf.String())
+}

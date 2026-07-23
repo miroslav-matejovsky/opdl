@@ -68,7 +68,8 @@ func main() {
 	verbose := flag.Bool("v", false, "report each scenario as it runs")
 	flag.Parse()
 
-	sets, err := runner.Select(scenarioSets(), names(*only), names(*skip))
+	allSets := scenarioSets()
+	sets, err := runner.Select(allSets, names(*only), names(*skip))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "scenarios:", err)
 		os.Exit(2)
@@ -103,7 +104,7 @@ func main() {
 		os.Exit(2)
 	}()
 
-	os.Exit(runner.Run(sets))
+	os.Exit(runner.Run(allSets, sets))
 }
 
 // names splits a comma-separated flag value into category names, tolerating
