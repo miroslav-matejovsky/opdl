@@ -45,9 +45,6 @@ func TestNewFactoryCapturesProcessIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, Origin{
-		Project:        "scenario",
-		Environment:    "development",
-		Site:           "local",
 		Machine:        "node",
 		MachineProfile: "all-in-one",
 		ProcessRole:    "primary",
@@ -66,11 +63,6 @@ func TestNewFactoryRejectsAnIncompleteIdentity(t *testing.T) {
 			name:       "missing machine",
 			descriptor: func(d config.Descriptor) config.Descriptor { d.Machine = ""; return d },
 			wantErr:    "origin machine is required",
-		},
-		{
-			name:       "missing site",
-			descriptor: func(d config.Descriptor) config.Descriptor { d.Site = ""; return d },
-			wantErr:    "origin site is required",
 		},
 		{
 			name:       "missing process role",

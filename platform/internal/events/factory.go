@@ -47,9 +47,6 @@ type Factory struct {
 // process would fail to stamp.
 func NewFactory(descriptor config.Descriptor, processRole string) (Factory, error) {
 	origin := Origin{
-		Project:        descriptor.Project,
-		Environment:    descriptor.Environment,
-		Site:           descriptor.Site,
 		Machine:        descriptor.Machine,
 		MachineProfile: descriptor.MachineProfile,
 		ProcessRole:    processRole,
