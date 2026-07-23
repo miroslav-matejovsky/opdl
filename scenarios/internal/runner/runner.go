@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // Scenario is one black-box scenario: a name and the function that runs it. The
@@ -24,6 +27,14 @@ type Set struct {
 	Scenarios []Scenario
 }
 
+type result struct {
+	name     string
+	ran      bool
+	passed   bool
+	skipped  bool
+	duration time.Duration
+}
+
 // Run flattens the sets into the standard library test runner and returns a
 // process exit code: 0 when every scenario passed, 1 otherwise.
 //
@@ -36,16 +47,64 @@ type Set struct {
 // flags MainStart reads are registered and populated.
 func Run(sets []Set) int {
 	var tests []testing.InternalTest
+	var results []*result
+	var mu sync.Mutex
+
 	for _, set := range sets {
 		for _, scenario := range set.Scenarios {
+			name := set.Package + "/" + scenario.Name
+			res := &result{name: name}
+			results = append(results, res)
+
+			fn := scenario.Func
 			tests = append(tests, testing.InternalTest{
-				Name: set.Package + "/" + scenario.Name,
-				F:    scenario.Func,
+				Name: name,
+				F: func(t *testing.T) {
+					start := time.Now()
+					t.Cleanup(func() {
+						dur := time.Since(start)
+						mu.Lock()
+						res.ran = true
+						res.duration = dur
+						res.passed = !t.Failed()
+						res.skipped = t.Skipped()
+						mu.Unlock()
+					})
+					fn(t)
+				},
 			})
 		}
 	}
+
 	m := testing.MainStart(deps{}, tests, nil, nil, nil)
-	return m.Run()
+	exitCode := m.Run()
+
+	printSummary(os.Stdout, results)
+	return exitCode
+}
+
+func printSummary(w io.Writer, results []*result) {
+	var ran []*result
+	for _, res := range results {
+		if res.ran {
+			ran = append(ran, res)
+		}
+	}
+	if len(ran) == 0 {
+		return
+	}
+
+	_, _ = fmt.Fprintln(w, "--- scenario summary ---")
+	for _, res := range ran {
+		status := "PASS"
+		if res.skipped {
+			status = "SKIP"
+		} else if !res.passed {
+			status = "FAIL"
+		}
+		dur := res.duration.Round(10 * time.Millisecond)
+		_, _ = fmt.Fprintf(w, "%-4s  %s (%s)\n", status, res.name, dur)
+	}
 }
 
 // Select narrows the sets to the categories the caller asked for. Every category
