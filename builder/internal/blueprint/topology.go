@@ -91,11 +91,6 @@ type Platform struct {
 
 // EventStorage is an instance's event storage policy.
 type EventStorage struct {
-	EventFabric *EventFabric `hcl:"eventfabric,block"`
-}
-
-// EventFabric is an instance's Event Fabric storage adapter policy.
-type EventFabric struct {
 	Nats *Nats `hcl:"nats,block"`
 }
 
@@ -422,21 +417,18 @@ func validateInstanceEndpoints(machine Machine, block string, api *API, eventSto
 	if eventStorage == nil {
 		return fmt.Errorf("machine %q: %s.event_storage block is required", machine.Name, block)
 	}
-	if eventStorage.EventFabric == nil {
-		return fmt.Errorf("machine %q: %s.event_storage.eventfabric block is required", machine.Name, block)
-	}
-	nats := eventStorage.EventFabric.Nats
+	nats := eventStorage.Nats
 	if nats == nil {
-		return fmt.Errorf("machine %q: %s.event_storage.eventfabric.nats block is required", machine.Name, block)
+		return fmt.Errorf("machine %q: %s.event_storage.nats block is required", machine.Name, block)
 	}
-	if err := validatePort(machine.Name, block+".event_storage.eventfabric.nats.client_port", nats.ClientPort); err != nil {
+	if err := validatePort(machine.Name, block+".event_storage.nats.client_port", nats.ClientPort); err != nil {
 		return err
 	}
-	if err := validatePort(machine.Name, block+".event_storage.eventfabric.nats.cluster_port", nats.ClusterPort); err != nil {
+	if err := validatePort(machine.Name, block+".event_storage.nats.cluster_port", nats.ClusterPort); err != nil {
 		return err
 	}
 	if strings.TrimSpace(nats.JetStreamStoreDir) == "" {
-		return fmt.Errorf("machine %q: %s.event_storage.eventfabric.nats.jetstream_store_dir is required", machine.Name, block)
+		return fmt.Errorf("machine %q: %s.event_storage.nats.jetstream_store_dir is required", machine.Name, block)
 	}
 	return nil
 }
@@ -486,7 +478,7 @@ func validateDataDirs(machine Machine) error {
 // validateJetStreamStoreDirs checks each deployed instance states its own JetStream
 // file store directory, and that a machine's two instances do not state the same one.
 func validateJetStreamStoreDirs(machine Machine) error {
-	return validateInstanceDirs(machine, "event_storage.eventfabric.nats.jetstream_store_dir",
+	return validateInstanceDirs(machine, "event_storage.nats.jetstream_store_dir",
 		machine.JetStreamStoreDir(false), machine.JetStreamStoreDir(true),
 		"each instance runs its own Event Fabric server and two servers cannot open the same JetStream store")
 }
@@ -522,15 +514,15 @@ func validateMachinePorts(machine Machine) error {
 	primaryNats := machine.Nats(false)
 	listeners := []listener{
 		{"platform.api.local_port", platform.API.LocalPort},
-		{"platform.event_storage.eventfabric.nats.client_port", primaryNats.ClientPort},
-		{"platform.event_storage.eventfabric.nats.cluster_port", primaryNats.ClusterPort},
+		{"platform.event_storage.nats.client_port", primaryNats.ClientPort},
+		{"platform.event_storage.nats.cluster_port", primaryNats.ClusterPort},
 	}
 	if !platform.Standby.Disabled {
 		standbyNats := machine.Nats(true)
 		listeners = append(listeners,
 			listener{"platform.standby.api.local_port", platform.Standby.API.LocalPort},
-			listener{"platform.standby.event_storage.eventfabric.nats.client_port", standbyNats.ClientPort},
-			listener{"platform.standby.event_storage.eventfabric.nats.cluster_port", standbyNats.ClusterPort},
+			listener{"platform.standby.event_storage.nats.client_port", standbyNats.ClientPort},
+			listener{"platform.standby.event_storage.nats.cluster_port", standbyNats.ClusterPort},
 		)
 	}
 	taken := make(map[int]string, len(listeners))
@@ -663,15 +655,15 @@ func (m Machine) Nats(standby bool) *Nats {
 		return nil
 	}
 	if !standby {
-		if m.Platform.EventStorage == nil || m.Platform.EventStorage.EventFabric == nil {
+		if m.Platform.EventStorage == nil {
 			return nil
 		}
-		return m.Platform.EventStorage.EventFabric.Nats
+		return m.Platform.EventStorage.Nats
 	}
-	if m.Platform.Standby == nil || m.Platform.Standby.Disabled || m.Platform.Standby.EventStorage == nil || m.Platform.Standby.EventStorage.EventFabric == nil {
+	if m.Platform.Standby == nil || m.Platform.Standby.Disabled || m.Platform.Standby.EventStorage == nil {
 		return nil
 	}
-	return m.Platform.Standby.EventStorage.EventFabric.Nats
+	return m.Platform.Standby.EventStorage.Nats
 }
 
 // JetStreamStoreDir returns one instance's authored JetStream store directory.
