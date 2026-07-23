@@ -19,7 +19,6 @@ project "buildtest" {
       services = ["test-services"]
 
       platform {
-        runtime_dir = "C:/ProgramData/opdl/buildtest/solo/node-a/primary/runtime"
         data_dir    = "D:/opdl/buildtest/solo/node-a/primary"
 
         api {
@@ -51,7 +50,6 @@ project "buildtest" {
       services = ["test-services"]
 
       platform {
-        runtime_dir = "C:/ProgramData/opdl/buildtest/solo/node-b/primary/runtime"
         data_dir    = "D:/opdl/buildtest/solo/node-b/primary"
 
         api {
@@ -73,7 +71,6 @@ project "buildtest" {
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/buildtest/solo/node-b/standby/runtime"
           data_dir    = "D:/opdl/buildtest/solo/node-b/standby"
 
           lock {

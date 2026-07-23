@@ -49,13 +49,10 @@ func TestLoadComposesDescriptorAndAddress(t *testing.T) {
 	require.Equal(t, "mock", d.Machine)
 	require.Equal(t, []string{"core-services"}, d.Services)
 
-	// The address and the runtime directory are the instance's, carried on its own
-	// descriptor record. Config exposes neither: the runtime reads its own
-	// instance's record, so there is one way to reach either value.
+	// The address is the instance's, carried on its own descriptor record.
+	// Config exposes it: the runtime reads its own instance's record.
 	require.Equal(t, "127.0.0.1:8080", d.Instances.Primary.APIAddress)
-	require.Equal(t, ".data/instance/primary", d.Instances.Primary.RuntimeDir)
 	require.Empty(t, d.Instances.Standby.APIAddress, "the mock machine deploys no standby")
-	require.Empty(t, d.Instances.Standby.RuntimeDir)
 }
 
 func TestLoadReadsEventFabricSettings(t *testing.T) {
@@ -366,7 +363,7 @@ func TestSummaryShowsConfiguration(t *testing.T) {
 	require.Contains(t, s, "shutdown_timeout    10s")
 	require.Contains(t, s, "lag_bound           30s")
 	require.Contains(t, s, "data_dir     .data/platform/primary")
-	require.Contains(t, s, "jetstream_store_dir .data/journal/primary")
+	require.Contains(t, s, "event_storage .data/journal/primary")
 	require.Contains(t, s, "startup_timeout=30s")
 	require.Contains(t, s, "catch_up_timeout=25s")
 }

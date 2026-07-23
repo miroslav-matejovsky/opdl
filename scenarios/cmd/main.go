@@ -22,7 +22,7 @@
 //	-v            report each scenario as it runs
 //
 // A scenario's name is category/Scenario, so -run takes either half:
-// -run nats selects a category and -run nats/FourMachine selects within one.
+// -run smoke selects a category and -run smoke/BuildAndRun selects within one.
 // -only and -skip select whole categories and compose with -run.
 package main
 
@@ -38,11 +38,7 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/runner"
-	"github.com/miroslav-matejovsky/opdl/scenarios/nats"
-	"github.com/miroslav-matejovsky/opdl/scenarios/registration"
-	"github.com/miroslav-matejovsky/opdl/scenarios/resilience"
-	"github.com/miroslav-matejovsky/opdl/scenarios/sdk"
-	"github.com/miroslav-matejovsky/opdl/scenarios/standby"
+	"github.com/miroslav-matejovsky/opdl/scenarios/smoke"
 )
 
 func main() {
@@ -68,7 +64,8 @@ func main() {
 	verbose := flag.Bool("v", false, "report each scenario as it runs")
 	flag.Parse()
 
-	sets, err := runner.Select(scenarioSets(), names(*only), names(*skip))
+	allSets := scenarioSets()
+	sets, err := runner.Select(allSets, names(*only), names(*skip))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "scenarios:", err)
 		os.Exit(2)
@@ -103,7 +100,7 @@ func main() {
 		os.Exit(2)
 	}()
 
-	os.Exit(runner.Run(sets))
+	os.Exit(runner.Run(allSets, sets))
 }
 
 // names splits a comma-separated flag value into category names, tolerating
@@ -124,15 +121,11 @@ func names(value string) []string {
 //
 // The order is the default run order, which matters only for the scenarios that
 // do not call t.Parallel. It runs from the smallest deployment outwards, so a
-// broken build fails on the smoke scenario rather than partway through a
-// four-machine one.
+// broken build fails on the smoke scenario rather than partway through a larger
+// one.
 func scenarioSets() []runner.Set {
 	return []runner.Set{
-		registration.Scenarios(),
-		nats.Scenarios(),
-		resilience.Scenarios(),
-		standby.Scenarios(),
-		sdk.Scenarios(),
+		smoke.Scenarios(),
 	}
 }
 

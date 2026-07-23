@@ -74,8 +74,6 @@ type Machine struct {
 // machine is shared between them except the ownership object, which is not a
 // port.
 type Platform struct {
-	// RuntimeDir is the Primary Instance's local runtime directory. Required.
-	RuntimeDir string `hcl:"runtime_dir,optional"`
 	// DataDir is the Primary Instance's general platform data root. Required.
 	DataDir string `hcl:"data_dir,optional"`
 	// API is the Primary Instance's local API endpoint policy.
@@ -85,7 +83,7 @@ type Platform struct {
 	// EventStorage is the Primary Instance's event storage policy.
 	EventStorage *EventStorage `hcl:"event_storage,block"`
 	// Standby is the machine's local redundancy policy, and where a deployed
-	// Standby Instance states its own lock, runtime_dir, data_dir, api, winservice, and event_storage.
+	// Standby Instance states its own lock, data_dir, api, winservice, and event_storage.
 	Standby *Standby `hcl:"standby,block"`
 }
 
@@ -194,9 +192,6 @@ type Standby struct {
 	// Disabled opts the machine out of a second local process. It is required, so
 	// omitting the attribute cannot silently enable or disable redundancy.
 	Disabled bool `hcl:"disabled"`
-	// RuntimeDir is the Standby Instance's local runtime directory. It is required
-	// when the Standby Instance is deployed and rejected when it is not.
-	RuntimeDir string `hcl:"runtime_dir,optional"`
 	// DataDir is the Standby Instance's general platform data root. It is
 	// required when the Standby Instance is deployed and rejected when it is not.
 	DataDir string `hcl:"data_dir,optional"`
@@ -269,65 +264,6 @@ func (p *Project) Validate() error {
 			machineIPs[machine.IP] = machine.Name
 		}
 	}
-	// Site size is checked last, over every site, because it counts what the
-	// machines declare. A malformed machine is worth reporting as a malformed
-	// machine rather than as a site that came up an instance short because that
-	// machine did not parse, and a rule that spans sites, such as a machine name
-	// repeated in another one, should not be pre-empted by the size of the first
-	// site that happens to be too small.
-	for _, site := range p.Sites {
-		if err := validateSiteSize(site); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// minimumSiteMachines and minimumSiteInstances are the smallest site the
-// platform supports: two machines, at least one of which deploys a Standby
-// Instance.
-const (
-	minimumSiteMachines  = 2
-	minimumSiteInstances = 3
-)
-
-// validateSiteSize rejects a site too small for the platform to run on.
-//
-// The floor is three platform instances across at least two machines. It comes
-// from the site journal, which is a JetStream RAFT group: a group of three keeps
-// quorum after losing one member, and a group of two needs both members alive,
-// which is not redundancy but a second thing that can fail. Below three
-// instances the site journal can only be a single copy, and losing the instance
-// holding it loses the site's history.
-//
-// Two machines is required on top of the instance count because three instances
-// on one machine survive losing a process but not losing the host, and a host is
-// what actually fails. So the minimum is two machines with a standby on one of
-// them, which is three instances across two failure domains.
-//
-// This is a build-time rule rather than a runtime one because a site's shape is
-// decided when it is authored. A deployment that cannot be redundant should fail
-// where it is written, not at three in the morning when the standby it was
-// supposed to have turns out never to have been able to help.
-func validateSiteSize(site Site) error {
-	if len(site.Machines) < minimumSiteMachines {
-		return fmt.Errorf("site %q: %d machine(s); the platform requires at least %d, because a site journal on one host cannot survive losing that host",
-			site.Name, len(site.Machines), minimumSiteMachines)
-	}
-	instances := 0
-	for _, machine := range site.Machines {
-		if machine.Platform == nil {
-			continue
-		}
-		instances++
-		if machine.Platform.Standby != nil && !machine.Platform.Standby.Disabled {
-			instances++
-		}
-	}
-	if instances < minimumSiteInstances {
-		return fmt.Errorf("site %q: %d platform instance(s); the platform requires at least %d, so deploy a standby on at least one machine: a journal of two members needs both alive and is not redundant",
-			site.Name, instances, minimumSiteInstances)
-	}
 	return nil
 }
 
@@ -371,9 +307,9 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 }
 
 // validatePlatform checks a machine states every platform policy. None has a
-// default: an omitted api or nats block would leave an instance without an
-// endpoint, and an omitted standby block would make local redundancy depend on
-// what a reader assumed rather than on what the blueprint says.
+// default: an omitted api block would leave an instance without an endpoint,
+// and an omitted standby block would make local redundancy depend on what a
+// reader assumed rather than on what the blueprint says.
 func validatePlatform(machine Machine) error {
 	if machine.Platform == nil {
 		return fmt.Errorf("machine %q: platform block is required", machine.Name)
@@ -385,9 +321,6 @@ func validatePlatform(machine Machine) error {
 		return err
 	}
 	if err := validateStandbyEndpoints(machine); err != nil {
-		return err
-	}
-	if err := validateRuntimeDirs(machine); err != nil {
 		return err
 	}
 	if err := validateDataDirs(machine); err != nil {
@@ -405,8 +338,8 @@ func validatePlatform(machine Machine) error {
 	return validateLock(machine)
 }
 
-// validateInstanceEndpoints checks one instance states both of its endpoint
-// policies with usable ports and a JetStream store directory.
+// validateInstanceEndpoints checks one instance states its endpoint
+// policies with usable ports and a JetStream store directory when present.
 func validateInstanceEndpoints(machine Machine, block string, api *API, eventStorage *EventStorage) error {
 	if api == nil {
 		return fmt.Errorf("machine %q: %s.api block is required", machine.Name, block)
@@ -414,13 +347,10 @@ func validateInstanceEndpoints(machine Machine, block string, api *API, eventSto
 	if err := validatePort(machine.Name, block+".api.local_port", api.LocalPort); err != nil {
 		return err
 	}
-	if eventStorage == nil {
-		return fmt.Errorf("machine %q: %s.event_storage block is required", machine.Name, block)
+	if eventStorage == nil || eventStorage.Nats == nil {
+		return nil
 	}
 	nats := eventStorage.Nats
-	if nats == nil {
-		return fmt.Errorf("machine %q: %s.event_storage.nats block is required", machine.Name, block)
-	}
 	if err := validatePort(machine.Name, block+".event_storage.nats.client_port", nats.ClientPort); err != nil {
 		return err
 	}
@@ -441,9 +371,6 @@ func validateStandbyEndpoints(machine Machine) error {
 	if !standby.Disabled {
 		return validateInstanceEndpoints(machine, "platform.standby", standby.API, standby.EventStorage)
 	}
-	if strings.TrimSpace(standby.RuntimeDir) != "" {
-		return fmt.Errorf("machine %q: platform.standby.runtime_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
-	}
 	if strings.TrimSpace(standby.DataDir) != "" {
 		return fmt.Errorf("machine %q: platform.standby.data_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
@@ -459,14 +386,6 @@ func validateStandbyEndpoints(machine Machine) error {
 	return nil
 }
 
-// validateRuntimeDirs checks each deployed instance states its own local runtime
-// directory, and that a machine's two instances do not state the same one.
-func validateRuntimeDirs(machine Machine) error {
-	return validateInstanceDirs(machine, "runtime_dir",
-		machine.Platform.RuntimeDir, machine.Platform.Standby.RuntimeDir,
-		"the two instances run together and cannot share a runtime directory")
-}
-
 // validateDataDirs checks each deployed instance states its own platform data
 // root, and that a machine's two instances do not state the same one.
 func validateDataDirs(machine Machine) error {
@@ -478,9 +397,15 @@ func validateDataDirs(machine Machine) error {
 // validateJetStreamStoreDirs checks each deployed instance states its own JetStream
 // file store directory, and that a machine's two instances do not state the same one.
 func validateJetStreamStoreDirs(machine Machine) error {
-	return validateInstanceDirs(machine, "event_storage.nats.jetstream_store_dir",
-		machine.JetStreamStoreDir(false), machine.JetStreamStoreDir(true),
-		"each instance runs its own Event Fabric server and two servers cannot open the same JetStream store")
+	primaryDir := machine.JetStreamStoreDir(false)
+	standbyDir := machine.JetStreamStoreDir(true)
+	if primaryDir == "" || standbyDir == "" || machine.Platform.Standby.Disabled {
+		return nil
+	}
+	if primaryDir == standbyDir {
+		return fmt.Errorf("machine %q: platform.event_storage.nats.jetstream_store_dir and platform.standby.event_storage.nats.jetstream_store_dir are both %q; each instance runs its own Event Fabric server and two servers cannot open the same JetStream store", machine.Name, primaryDir)
+	}
+	return nil
 }
 
 // validateInstanceDirs checks one per-instance directory attribute: required on
@@ -511,19 +436,27 @@ func validateMachinePorts(machine Machine) error {
 		port  int
 	}
 	platform := machine.Platform
-	primaryNats := machine.Nats(false)
 	listeners := []listener{
 		{"platform.api.local_port", platform.API.LocalPort},
-		{"platform.event_storage.nats.client_port", primaryNats.ClientPort},
-		{"platform.event_storage.nats.cluster_port", primaryNats.ClusterPort},
+	}
+	primaryNats := machine.Nats(false)
+	if primaryNats != nil {
+		listeners = append(listeners,
+			listener{"platform.event_storage.nats.client_port", primaryNats.ClientPort},
+			listener{"platform.event_storage.nats.cluster_port", primaryNats.ClusterPort},
+		)
 	}
 	if !platform.Standby.Disabled {
-		standbyNats := machine.Nats(true)
 		listeners = append(listeners,
 			listener{"platform.standby.api.local_port", platform.Standby.API.LocalPort},
-			listener{"platform.standby.event_storage.nats.client_port", standbyNats.ClientPort},
-			listener{"platform.standby.event_storage.nats.cluster_port", standbyNats.ClusterPort},
 		)
+		standbyNats := machine.Nats(true)
+		if standbyNats != nil {
+			listeners = append(listeners,
+				listener{"platform.standby.event_storage.nats.client_port", standbyNats.ClientPort},
+				listener{"platform.standby.event_storage.nats.cluster_port", standbyNats.ClusterPort},
+			)
+		}
 	}
 	taken := make(map[int]string, len(listeners))
 	for _, l := range listeners {
@@ -691,10 +624,16 @@ func (m Machine) Endpoints(standby bool) *Endpoints {
 		}
 		api = m.Platform.Standby.API
 	}
-	if api == nil || nats == nil {
+	if api == nil {
 		return nil
 	}
-	return &Endpoints{APILocalPort: api.LocalPort, ClientPort: nats.ClientPort, ClusterPort: nats.ClusterPort}
+	clientPort := 0
+	clusterPort := 0
+	if nats != nil {
+		clientPort = nats.ClientPort
+		clusterPort = nats.ClusterPort
+	}
+	return &Endpoints{APILocalPort: api.LocalPort, ClientPort: clientPort, ClusterPort: clusterPort}
 }
 
 // Endpoints are one instance's authored listener ports.
@@ -704,21 +643,6 @@ type Endpoints struct {
 	APILocalPort int
 	ClientPort   int
 	ClusterPort  int
-}
-
-// RuntimeDir returns one instance's authored local runtime directory, or an empty
-// string when that instance is not deployed.
-func (m Machine) RuntimeDir(standby bool) string {
-	if m.Platform == nil {
-		return ""
-	}
-	if !standby {
-		return strings.TrimSpace(m.Platform.RuntimeDir)
-	}
-	if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
-		return ""
-	}
-	return strings.TrimSpace(m.Platform.Standby.RuntimeDir)
 }
 
 // DataDir returns one instance's authored general platform data directory, or

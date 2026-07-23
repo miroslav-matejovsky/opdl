@@ -1,4 +1,4 @@
-package nats
+package smoke
 
 import "github.com/miroslav-matejovsky/opdl/scenarios/internal/runner"
 
@@ -6,10 +6,9 @@ import "github.com/miroslav-matejovsky/opdl/scenarios/internal/runner"
 // it along with the other categories and hands the lot to the runner.
 func Scenarios() runner.Set {
 	return runner.Set{
-		Package: "nats",
+		Package: "smoke",
 		Scenarios: []runner.Scenario{
-			{Name: "TwoMachineEventFabric", Func: TwoMachineEventFabric},
-			{Name: "FourMachineStorageTopologyAndFailure", Func: FourMachineStorageTopologyAndFailure},
+			{Name: "BuildAndRunSingleMachine", Func: BuildAndRunSingleMachine},
 		},
 	}
 }

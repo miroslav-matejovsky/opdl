@@ -18,16 +18,14 @@ const (
 
 	// The api addresses are on loopback; every Event Fabric address is on the
 	// machine ip. That split is what the descriptor is checked against.
-	primaryAPI        = "127.0.0.1:8080"
-	primaryRuntime    = "C:/ProgramData/opdl/sensor/primary"
-	primaryDataDir    = "D:/opdl-data/sensor/primary"
-	primaryClient     = "10.0.1.10:4222"
-	primaryCluster    = "10.0.1.10:6222"
-	standbyAPI        = "127.0.0.1:8081"
-	standbyRuntimeDir = "C:/ProgramData/opdl/sensor/standby"
-	standbyDataDir    = "D:/opdl-data/sensor/standby"
-	standbyClient     = "10.0.1.10:4322"
-	standbyCluster    = "10.0.1.10:6322"
+	primaryAPI     = "127.0.0.1:8080"
+	primaryDataDir = "D:/opdl-data/sensor/primary"
+	primaryClient  = "10.0.1.10:4222"
+	primaryCluster = "10.0.1.10:6222"
+	standbyAPI     = "127.0.0.1:8081"
+	standbyDataDir = "D:/opdl-data/sensor/standby"
+	standbyClient  = "10.0.1.10:4322"
+	standbyCluster = "10.0.1.10:6322"
 
 	gatewayClient    = "10.0.1.11:4222"
 	gatewayCluster   = "10.0.1.11:6222"
@@ -38,7 +36,7 @@ const (
 func peer(machine string, role deployment.PlatformInstanceRole, ip, client, cluster string) deployment.Peer {
 	return deployment.Peer{
 		Site: "north", Machine: machine, Role: role, IP: ip,
-		Nats: deployment.PeerNats{ClientAddress: client, ClusterAddress: cluster},
+		Nats: &deployment.PeerNats{ClientAddress: client, ClusterAddress: cluster},
 	}
 }
 
@@ -57,7 +55,6 @@ func validDescriptor() deployment.Descriptor {
 			Primary: deployment.Instance{
 				Disabled:   false,
 				Service:    &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
-				RuntimeDir: primaryRuntime,
 				DataDir:    primaryDataDir,
 				APIAddress: primaryAPI,
 				Nats: &deployment.Nats{
@@ -71,7 +68,6 @@ func validDescriptor() deployment.Descriptor {
 			Standby: deployment.Instance{
 				Disabled:   false,
 				Service:    &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
-				RuntimeDir: standbyRuntimeDir,
 				DataDir:    standbyDataDir,
 				APIAddress: standbyAPI,
 				Nats: &deployment.Nats{
@@ -172,21 +168,9 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"is not on the loopback interface",
 		},
 		{
-			"missing runtime dir",
-			func(d *deployment.Descriptor) { d.Instances.Primary.RuntimeDir = "" },
-			"instances.primary.runtime_dir is required",
-		},
-		{
-			"instances share a runtime dir",
-			func(d *deployment.Descriptor) {
-				d.Instances.Standby.RuntimeDir = d.Instances.Primary.RuntimeDir
-			},
-			"cannot share a runtime directory",
-		},
-		{
-			"missing nats",
-			func(d *deployment.Descriptor) { d.Instances.Primary.Nats = nil },
-			"instances.primary.nats is required",
+			"nats without a jetstream store",
+			func(d *deployment.Descriptor) { d.Instances.Primary.Nats.JetStreamStoreDir = "" },
+			"instances.primary.nats.jetstream_store_dir is required",
 		},
 		{
 			"instances share an api address",
@@ -223,17 +207,6 @@ func TestDescriptorValidateFailures(t *testing.T) {
 				d.Instances.Standby.Nats = nil
 			},
 			"instances.standby.api_address is set but the standby is disabled",
-		},
-		{
-			"standby runtime dir while disabled",
-			func(d *deployment.Descriptor) {
-				d.Instances.Standby.Disabled = true
-				d.Lock = nil
-				d.Instances.Standby.Service = nil
-				d.Instances.Standby.APIAddress = ""
-				d.Instances.Standby.Nats = nil
-			},
-			"instances.standby.runtime_dir is set but the standby is disabled",
 		},
 
 		// Peers are instances, and every listener in the site is distinct.
@@ -355,6 +328,24 @@ func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
 	nats := d.Instances.Primary.Nats
 	nats.Routes = []string{}
 	nats.Servers = []string{primaryClient}
+	require.NoError(t, d.Validate())
+}
+
+// TestDescriptorValidateAcceptsAMachineWithNoEventStorage checks the descriptor
+// a machine that authored no event storage resolves to: one instance that binds
+// its API and nothing else, in a site whose one member runs no Event Fabric.
+//
+// It is the deployment with no journal. The instance serves no domain operation,
+// which is a runtime consequence rather than a descriptor rule, so nothing here
+// is required to describe a server that will never start.
+func TestDescriptorValidateAcceptsAMachineWithNoEventStorage(t *testing.T) {
+	d := validDescriptor()
+	d.Instances.Primary.Nats = nil
+	d.Instances.Standby = deployment.Instance{Disabled: true}
+	d.Lock = nil
+	d.Peers = []deployment.Peer{
+		{Site: "north", Machine: "sensor", Role: deployment.RolePrimary, IP: machineIP},
+	}
 	require.NoError(t, d.Validate())
 }
 

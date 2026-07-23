@@ -1,7 +1,6 @@
 package redundancy_test
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
@@ -11,20 +10,16 @@ import (
 func TestStateStringAndValid(t *testing.T) {
 	t.Parallel()
 
-	all := []redundancy.State{
-		redundancy.StateStarting,
-		redundancy.StatePassive,
-		redundancy.StateActivating,
-		redundancy.StateActive,
-		redundancy.StateStopping,
-		redundancy.StateFailed,
-	}
-	for _, s := range all {
+	for _, s := range []redundancy.State{redundancy.StatePassive, redundancy.StateActive} {
 		require.True(t, s.Valid(), "%s should be valid", s)
 		require.NotEmpty(t, s.String())
 	}
 	require.False(t, redundancy.State("running").Valid())
 	require.False(t, redundancy.State("").Valid())
+	// The transitional states the status file used to report are gone. Each of
+	// them is a fact in the local record now, not a token an instance sits in.
+	require.False(t, redundancy.State("activating").Valid())
+	require.False(t, redundancy.State("stopping").Valid())
 }
 
 func TestStateActive(t *testing.T) {
@@ -32,39 +27,14 @@ func TestStateActive(t *testing.T) {
 
 	require.True(t, redundancy.StateActive.Active())
 	require.False(t, redundancy.StatePassive.Active())
-	require.False(t, redundancy.StateActivating.Active())
-	require.False(t, redundancy.StateStopping.Active())
 }
 
-func TestStateCanTransition(t *testing.T) {
+// TestStateTokensMatchTheAPI checks the two tokens an instance reports through
+// its own API are the two this type defines. A reader that correlates the API
+// with the local record must not have to translate between them.
+func TestStateTokensMatchTheAPI(t *testing.T) {
 	t.Parallel()
 
-	allowed := map[redundancy.State][]redundancy.State{
-		redundancy.StateStarting:   {redundancy.StatePassive, redundancy.StateActivating, redundancy.StateStopping, redundancy.StateFailed},
-		redundancy.StatePassive:    {redundancy.StateActivating, redundancy.StateStopping, redundancy.StateFailed},
-		redundancy.StateActivating: {redundancy.StateActive, redundancy.StateStopping, redundancy.StateFailed},
-		redundancy.StateActive:     {redundancy.StateStopping, redundancy.StateFailed},
-		redundancy.StateStopping:   {redundancy.StateFailed},
-		redundancy.StateFailed:     {},
-	}
-	all := []redundancy.State{
-		redundancy.StateStarting, redundancy.StatePassive, redundancy.StateActivating,
-		redundancy.StateActive, redundancy.StateStopping, redundancy.StateFailed,
-	}
-	for from, nexts := range allowed {
-		for _, to := range all {
-			want := slices.Contains(nexts, to)
-			require.Equalf(t, want, from.CanTransition(to), "%s -> %s", from, to)
-		}
-	}
-}
-
-// TestPassiveCannotJumpToActive checks a passive instance must activate first, composing
-// its active resources, before it owns any active capability.
-func TestPassiveCannotJumpToActive(t *testing.T) {
-	t.Parallel()
-
-	require.False(t, redundancy.StatePassive.CanTransition(redundancy.StateActive))
-	require.True(t, redundancy.StatePassive.CanTransition(redundancy.StateActivating))
-	require.True(t, redundancy.StateActivating.CanTransition(redundancy.StateActive))
+	require.Equal(t, "active", redundancy.StateActive.String())
+	require.Equal(t, "passive", redundancy.StatePassive.String())
 }

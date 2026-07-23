@@ -114,11 +114,6 @@ type Instance struct {
 	// whoever installs the services; the runtime does not read it and the platform
 	// manages no services.
 	Service *WinService `json:"service,omitempty"`
-	// RuntimeDir is the instance's own local runtime directory, holding its status
-	// file. It is the instance's rather than the machine's: two independent
-	// runtimes writing into one directory would overwrite each other's evidence,
-	// and nothing would report it. It takes no part in the ownership decision.
-	RuntimeDir string `json:"runtime_dir,omitempty"`
 	// DataDir is the instance's own general platform data root.
 	DataDir string `json:"data_dir,omitempty"`
 	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
@@ -188,8 +183,9 @@ type Peer struct {
 	// IP is the address the peer's machine is reached on. Two peers on one machine
 	// share it and differ by port.
 	IP string `json:"ip"`
-	// Nats are the peer instance's Event Fabric addresses.
-	Nats PeerNats `json:"nats"`
+	// Nats are the peer instance's Event Fabric addresses, absent on a peer whose
+	// machine authored no event storage and so runs no server.
+	Nats *PeerNats `json:"nats,omitempty"`
 }
 
 // PeerNats are one peer instance's Event Fabric addresses.
@@ -332,9 +328,6 @@ func (d Descriptor) validateEndpoints() error {
 		if d.Instances.Standby.APIAddress != "" {
 			return fmt.Errorf("instances.standby.api_address is set but the standby is disabled")
 		}
-		if d.Instances.Standby.RuntimeDir != "" {
-			return fmt.Errorf("instances.standby.runtime_dir is set but the standby is disabled")
-		}
 		if d.Instances.Standby.DataDir != "" {
 			return fmt.Errorf("instances.standby.data_dir is set but the standby is disabled")
 		}
@@ -346,32 +339,26 @@ func (d Descriptor) validateEndpoints() error {
 	if err := validateInstanceEndpoints("instances.standby", d.Instances.Standby); err != nil {
 		return err
 	}
-	// The two instances write their status files into their own directories. One
-	// directory for both would have them overwriting each other's evidence, and
-	// unlike a shared listener nothing would report it.
-	if d.Instances.Primary.RuntimeDir == d.Instances.Standby.RuntimeDir {
-		return fmt.Errorf("instances.primary.runtime_dir and instances.standby.runtime_dir are both %q; the two instances run together and cannot share a runtime directory",
-			d.Instances.Primary.RuntimeDir)
-	}
 	if d.Instances.Primary.DataDir == d.Instances.Standby.DataDir {
 		return fmt.Errorf("instances.primary.data_dir and instances.standby.data_dir are both %q; the two instances run together and cannot share a platform data directory",
 			d.Instances.Primary.DataDir)
 	}
-	if d.Instances.Primary.Nats.JetStreamStoreDir == d.Instances.Standby.Nats.JetStreamStoreDir {
+	primaryNats, standbyNats := d.Instances.Primary.Nats, d.Instances.Standby.Nats
+	if primaryNats != nil && standbyNats != nil &&
+		primaryNats.JetStreamStoreDir == standbyNats.JetStreamStoreDir {
 		return fmt.Errorf("instances.primary.nats.jetstream_store_dir and instances.standby.nats.jetstream_store_dir are both %q; each instance runs its own Event Fabric server and two servers cannot open the same JetStream store",
-			d.Instances.Primary.Nats.JetStreamStoreDir)
+			primaryNats.JetStreamStoreDir)
 	}
-	bound := []struct {
-		where   string
-		address string
-	}{
+	bound := []boundListener{
 		{"instances.primary.api_address", d.Instances.Primary.APIAddress},
-		{"instances.primary.nats.client_address", d.Instances.Primary.Nats.ClientAddress},
-		{"instances.primary.nats.cluster_address", d.Instances.Primary.Nats.ClusterAddress},
 		{"instances.standby.api_address", d.Instances.Standby.APIAddress},
-		{"instances.standby.nats.client_address", d.Instances.Standby.Nats.ClientAddress},
-		{"instances.standby.nats.cluster_address", d.Instances.Standby.Nats.ClusterAddress},
 	}
+	// An instance with no event storage binds no Event Fabric listener, so it
+	// contributes no address here. Listing one would compare two empty strings and
+	// report a collision between two instances that bind nothing.
+	bound = append(bound, natsListeners("instances.primary", primaryNats)...)
+	bound = append(bound, natsListeners("instances.standby", standbyNats)...)
+
 	taken := make(map[string]string, len(bound))
 	for _, listener := range bound {
 		if owner, used := taken[listener.address]; used {
@@ -383,8 +370,32 @@ func (d Descriptor) validateEndpoints() error {
 	return nil
 }
 
+// boundListener is one address a deployed instance opens, named by the
+// descriptor field it came from so a collision can say which two fields clash.
+type boundListener struct {
+	where   string
+	address string
+}
+
+// natsListeners is the pair of Event Fabric listeners an instance binds, or
+// nothing at all when the instance has no event storage.
+func natsListeners(prefix string, nats *Nats) []boundListener {
+	if nats == nil {
+		return nil
+	}
+	return []boundListener{
+		{prefix + ".nats.client_address", nats.ClientAddress},
+		{prefix + ".nats.cluster_address", nats.ClusterAddress},
+	}
+}
+
 // validateInstanceEndpoints checks one deployed instance's own addresses and its
 // directories.
+//
+// The nats block is optional. A machine that authors no event storage deploys an
+// instance that binds its API and nothing else: it has no journal, so it serves
+// no domain operation. Requiring the block here would make that deployment
+// unbuildable rather than merely limited.
 func validateInstanceEndpoints(prefix string, instance Instance) error {
 	if err := requireAddress(prefix+".api_address", instance.APIAddress); err != nil {
 		return err
@@ -397,14 +408,11 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	if err := requireLoopback(prefix+".api_address", instance.APIAddress); err != nil {
 		return err
 	}
-	if strings.TrimSpace(instance.RuntimeDir) == "" {
-		return fmt.Errorf("%s.runtime_dir is required", prefix)
-	}
 	if strings.TrimSpace(instance.DataDir) == "" {
 		return fmt.Errorf("%s.data_dir is required", prefix)
 	}
 	if instance.Nats == nil {
-		return fmt.Errorf("%s.nats is required", prefix)
+		return nil
 	}
 	if strings.TrimSpace(instance.Nats.JetStreamStoreDir) == "" {
 		return fmt.Errorf("%s.nats.jetstream_store_dir is required", prefix)
@@ -441,19 +449,21 @@ func (d Descriptor) validatePeers() error {
 		if net.ParseIP(peer.IP) == nil {
 			return fmt.Errorf("peer %s: ip %q is not a valid IP address", peer, peer.IP)
 		}
-		if err := requireAddress(fmt.Sprintf("peer %s: nats.client_address", peer), peer.NatsClient()); err != nil {
-			return err
-		}
-		if err := requireAddress(fmt.Sprintf("peer %s: nats.cluster_address", peer), peer.NatsCluster()); err != nil {
-			return err
+		// A peer with no event storage binds no Event Fabric listener and states no
+		// address for one. Its membership of the site is still a fact: it is an
+		// instance the site expects to hear from, whatever it coordinates through.
+		if peer.HasNats() {
+			if err := requireAddress(fmt.Sprintf("peer %s: nats.client_address", peer), peer.NatsClient()); err != nil {
+				return err
+			}
+			if err := requireAddress(fmt.Sprintf("peer %s: nats.cluster_address", peer), peer.NatsCluster()); err != nil {
+				return err
+			}
 		}
 		// Every Event Fabric listener in the site is distinct. Two peers on one
 		// machine differ by port, and two machines differ by ip, so a repeat means
 		// an instance would fail to bind or would silently answer for another.
-		for _, listener := range []struct{ what, address string }{
-			{"nats.client_address", peer.NatsClient()},
-			{"nats.cluster_address", peer.NatsCluster()},
-		} {
+		for _, listener := range peerListeners(peer) {
 			if owner, used := addresses[listener.address]; used {
 				return fmt.Errorf("peer %s: %s %q is already used by %s", peer, listener.what, listener.address, owner)
 			}
@@ -488,11 +498,37 @@ func (d Descriptor) validateSelfIsPeer() error {
 	return nil
 }
 
-// NatsClient is the peer's NATS client address.
-func (p Peer) NatsClient() string { return p.Nats.ClientAddress }
+// NatsClient is the peer's NATS client address, empty when it runs no server.
+func (p Peer) NatsClient() string {
+	if p.Nats == nil {
+		return ""
+	}
+	return p.Nats.ClientAddress
+}
 
-// NatsCluster is the peer's NATS cluster address.
-func (p Peer) NatsCluster() string { return p.Nats.ClusterAddress }
+// NatsCluster is the peer's NATS cluster address, empty when it runs no server.
+func (p Peer) NatsCluster() string {
+	if p.Nats == nil {
+		return ""
+	}
+	return p.Nats.ClusterAddress
+}
+
+// HasNats reports whether this peer runs an Event Fabric at all. A peer on a
+// machine that authored no event storage does not, and states no address.
+func (p Peer) HasNats() bool { return p.Nats != nil }
+
+// peerListeners is the pair of Event Fabric listeners a peer binds, named for a
+// collision message, or nothing at all when the peer has no event storage.
+func peerListeners(p Peer) []struct{ what, address string } {
+	if !p.HasNats() {
+		return nil
+	}
+	return []struct{ what, address string }{
+		{"nats.client_address", p.NatsClient()},
+		{"nats.cluster_address", p.NatsCluster()},
+	}
+}
 
 // key orders and identifies a peer: machine first, then Primary before Standby.
 func (p Peer) key() string { return p.Machine + "\x00" + string(p.Role) }
@@ -518,6 +554,11 @@ func (d Descriptor) validateNats() error {
 
 func (d Descriptor) validateInstanceNats(prefix string, role PlatformInstanceRole, instance Instance) error {
 	nats := instance.Nats
+	// No event storage, nothing to check: this instance reaches no journal and
+	// the site's storage selection never considered it.
+	if nats == nil {
+		return nil
+	}
 	if len(nats.Servers) == 0 {
 		return fmt.Errorf("%s.nats.servers: at least one server is required", prefix)
 	}

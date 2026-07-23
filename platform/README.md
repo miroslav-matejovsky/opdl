@@ -13,8 +13,8 @@ is not disabled, a Standby Instance. Every process writes mandatory local JSONL
 and maintains an Event Fabric projection. An instance selected as a storage node
 also runs its own NATS server and JetStream store. Only the holder of Primary
 Ownership opens durable handlers, publishes readiness, and serves domain
-operations. Local status files support service-manager handover and diagnostics
-but never grant ownership.
+operations. The local record is what supports service-manager handover and
+diagnostics; nothing an instance writes locally grants ownership.
 
 Both instances bind their own loopback API address and hold it for their whole
 lifetime. A Passive instance answers `GET /instance` about itself and refuses
@@ -28,11 +28,16 @@ bind their authored server endpoints and open their own JetStream stores;
 client-only instances connect to those servers. Primary Ownership controls
 domain activity, not Event Fabric membership.
 
-There is no NATS monitoring listener. The per-process status files are the
-supported local monitoring surface: they report lifecycle state, projection
-progress against the journal's high-water sequence, lag, promotability, and the
-last error. Every process appends canonical envelopes to
-`<data_dir>/events/events.jsonl`. Process, ownership, and NATS lifecycle events
+There is no NATS monitoring listener. Each instance's own JSONL event record is
+the supported local monitoring surface. Every process appends canonical
+envelopes to `<data_dir>/events/events.jsonl`, and every operational question a
+status file used to answer is a fact in it: which instance and PID stated it,
+what it did (`platform.app.api_active`, `platform.redundancy.ownership_acquired`,
+`platform.app.site_stopping`), and whether it is currently promotable
+(`platform.app.failover_readiness_changed`, carrying projection progress against
+the journal's high-water sequence, lag, and any error). Readiness is stated when
+it changes rather than restated on a timer, so the last one an instance stated
+is its current readiness. Process, ownership, and NATS lifecycle events
 use this local record, so they remain available when the Event Fabric is
 unavailable. Site facts are synchronously fanned out to the same JSONL record and
 the NATS journal.

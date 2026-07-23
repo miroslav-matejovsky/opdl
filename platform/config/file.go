@@ -103,19 +103,14 @@ func loadFile(path string) (file, error) {
 	if f.ShutdownTimeout == "" {
 		return file{}, fmt.Errorf("configuration file %s: shutdown_timeout is required", path)
 	}
+	// lag_bound and the [event_fabric.nats] timeouts are required only of a
+	// deployment that has a journal, so whether they may be empty is not
+	// knowable from the file alone. Load decides it against the descriptor; see
+	// requireEventStorageSettings.
 	f.LagBound = strings.TrimSpace(f.LagBound)
-	if f.LagBound == "" {
-		return file{}, fmt.Errorf("configuration file %s: lag_bound is required", path)
-	}
 	nats := &f.EventFabric.Nats
 	nats.StartupTimeout = strings.TrimSpace(nats.StartupTimeout)
-	if nats.StartupTimeout == "" {
-		return file{}, fmt.Errorf("configuration file %s: [event_fabric.nats] startup_timeout is required", path)
-	}
 	nats.CatchUpTimeout = strings.TrimSpace(nats.CatchUpTimeout)
-	if nats.CatchUpTimeout == "" {
-		return file{}, fmt.Errorf("configuration file %s: [event_fabric.nats] catch_up_timeout is required", path)
-	}
 	// Socket overrides are not required or validated here: what makes an address
 	// usable is the adapter's business, so the composed adapter configuration is
 	// validated at startup, before any listener opens. The instance's data

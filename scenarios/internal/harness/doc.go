@@ -3,8 +3,8 @@
 //
 // The harness renders a project blueprint with allocated ports, builds every
 // machine of it, prepares each machine to run, and hands scenarios a Site of
-// Machines they start, stop, restart, and question over the platform's public
-// REST API and its local status files. It never imports platform code.
+// Machines they start, stop, and question over the platform's public REST API
+// and its local event records. It never imports platform code.
 //
 // # How a scenario builds
 //
@@ -21,10 +21,10 @@
 // platform stays a black box on the build side too, not just at runtime.
 //
 // The supporting packages are all local: internal/procrun runs and supervises
-// the child processes, internal/semaphore bounds the load, internal/waitfor
-// polls, internal/logscan reads what a machine printed, and internal/processinfo
-// measures one. Only testnet, the port allocator, still comes from utils, which
-// platform shares.
+// the child processes, internal/semaphore bounds the load, and internal/waitfor
+// polls. internal/logscan reads what a machine printed and internal/processinfo
+// measures one; both are tooling no current scenario needs. Only testnet, the
+// port allocator, still comes from utils, which platform shares.
 //
 // # Where the NATS ports come from
 //
@@ -44,14 +44,16 @@
 //
 // # Evidence
 //
-// Domain behavior is checked through the platform's public API: the projected
-// registration state every machine answers from, and the fact that a machine
-// answers at all. Process lifecycle is checked through each role's local atomic
-// status file, which is the deployment-tooling contract but never an ownership
-// lock. The API signal is real rather than a liveness check, since the platform
-// does not serve until its Event Fabric has connected, its projection has
+// Behavior is checked through the platform's public API: what an instance
+// reports about itself on /instance, and the fact that it answers at all. That
+// signal is real rather than a liveness check, since an instance does not report
+// itself active until its Event Fabric has connected, its projection has
 // replayed the retained journal, and its handlers have worked through what was
 // waiting for them.
+//
+// Each instance's local JSONL event record is the second source, read into
+// failure diagnostics rather than asserted on. It is the deployment-tooling
+// contract but never an ownership lock.
 //
 // The API and manifest helpers deliberately re-declare the JSON shapes they read
 // instead of importing the platform's or builder's Go types, so a scenario checks
@@ -61,8 +63,8 @@
 // # Concurrency and resource budgeting
 //
 // Scenarios run concurrently under a bounded load budget. Each scenario is not a
-// single unit of work: it compiles Go code, then runs between one and four
-// platform processes, each embedding NATS JetStream and writing a journal to
+// single unit of work: it compiles Go code, then runs one platform process per
+// deployed instance, each embedding NATS JetStream and writing a journal to
 // disk. The harness enforces two independent limits using the internal semaphore
 // package:
 //   - Build concurrency: bounded to 2 concurrent builds.
@@ -81,10 +83,10 @@
 // two scenarios of one category do not share anything. The subdirectories are:
 //   - blueprints/: the temporary project.hcl rendered for the build
 //   - out/: the compiled packages and manifests produced by the builder
-//   - work/: runtime configuration files, site journals, status files, and
-//     operational JSONL streams
-//   - control/: marker files used for coordination (such as in the .NET SDK
-//     scenario)
+//   - work/: runtime configuration files, site journals, and each instance's
+//     operational JSONL event record
+//   - control/: marker files, for a scenario that has to wait for something
+//     inside another process to reach a point
 //
 // Setting OPDL_SCENARIO_TMP relocates the base scratch root, so two runs of the
 // suite can execute concurrently against independent directories.

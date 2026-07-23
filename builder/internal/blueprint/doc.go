@@ -23,7 +23,6 @@
 //
 //	      platform {
 //	        data_dir    = "D:/opdl/customer-a/north/sensor/primary"
-//	        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary/runtime"
 //
 //	        api {
 //	          local_port = 8080
@@ -53,9 +52,13 @@
 // # The platform subsection
 //
 // The machine platform subsection carries platform-runtime policy, as opposed to
-// what the machine deploys. Both of its blocks are mandatory on every machine.
+// what the machine deploys.
 //
-// nats states the ports this machine's Event Fabric server needs. Only ports are
+// nats states the ports this machine's Event Fabric server needs. It is
+// optional, and leaving it out is a deployment decision rather than an omission:
+// a machine with no event storage runs no Event Fabric and has no site journal,
+// so its instance binds its API, reports itself active, and refuses every domain
+// operation. Only ports are
 // authored: the builder joins each with the machine's ip, and derives the site's
 // route and server lists from the site's topology. A blueprint that could state
 // those lists directly could split a site or point a machine at another site's
@@ -85,7 +88,7 @@
 // Validate, which enforces the model's structural rules: identity is present,
 // site and machine names are unique within the project, every machine has a role
 // and a valid IP address, every machine lists at least one service with no
-// duplicates, and every machine states both platform blocks with ports in range
+// duplicates, and every machine states platform blocks with ports in range
 // 1-65535 that differ from each other. Validation fails fast on the first
 // violation, so every downstream consumer can assume a well-formed Project.
 // Translating a Project into deployment descriptors is the builder's job,

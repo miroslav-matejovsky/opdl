@@ -622,6 +622,79 @@ func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, response.StatusCode)
 }
 
+// testJournallessInstance is the only instance of a machine whose deployment
+// authored no event storage. It holds ownership and has no peer to point at.
+func testJournallessInstance() api.Instance {
+	return api.Instance{
+		Machine: "node-a",
+		Role:    "primary",
+		State:   api.InstanceStateActive,
+		Address: "127.0.0.1:8080",
+	}
+}
+
+// TestJournallessHandlerIsActiveAndStillRefusesDomainOperations is the
+// no-event-storage deployment made visible at the API.
+//
+// The two halves are the whole contract. The instance reports itself active
+// because it is: it holds Primary Ownership and there is nothing wrong with it.
+// It still refuses every domain operation, because each one is a fact to be
+// journalled or a query answered from a projection of one, and this deployment
+// has no journal. The refusal names the deployment rather than an instance to go
+// to instead, since there is no such instance and retrying will not help.
+func TestJournallessHandlerIsActiveAndStillRefusesDomainOperations(t *testing.T) {
+	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance))
+	defer srv.Close()
+
+	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+
+	var instance api.Instance
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&instance))
+	require.Equal(t, api.InstanceStateActive, instance.State,
+		"an instance with no journal is not passive; it owns the machine and serves what it can")
+	require.Empty(t, instance.PeerAddress)
+
+	for _, request := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/registrations"},
+		{http.MethodGet, "/registrations"},
+		{http.MethodGet, "/registrations/conflicts"},
+		{http.MethodGet, "/registrations/some-proposal"},
+	} {
+		t.Run(request.method+" "+request.path, func(t *testing.T) {
+			response := do(t, request.method, srv.URL+request.path, []byte(`{}`), "application/json")
+			defer func() { _ = response.Body.Close() }()
+
+			require.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
+			require.Equal(t, "application/problem+json", response.Header.Get("Content-Type"))
+
+			var problem problemDetails
+			require.NoError(t, json.NewDecoder(response.Body).Decode(&problem))
+			require.Equal(t, "no_event_storage", problem.Title,
+				"the reason is the deployment's, not this instance's state")
+			require.Contains(t, problem.Detail, "event_storage",
+				"and it names what to author to get a journal")
+			require.NotNil(t, problem.Instance)
+			require.Equal(t, api.InstanceStateActive, problem.Instance.State)
+		})
+	}
+}
+
+// TestJournallessHandlerStillReportsUnknownPathsAsNotFound checks the refusal is
+// scoped to the operations that exist, for the same reason the Passive one is.
+func TestJournallessHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
+	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance))
+	defer srv.Close()
+
+	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusNotFound, response.StatusCode)
+}
+
 // TestActiveHandlerAnswersTheSameInstanceOperation checks both instances serve
 // the identity operation on one path with one shape, so an operator asks the same
 // question of either and the specification describes one endpoint.

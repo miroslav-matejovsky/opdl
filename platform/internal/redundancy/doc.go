@@ -83,11 +83,22 @@
 // never falls back to an alternate or random port: the endpoint is the instance's
 // identity, not a preference.
 //
-// # Status files
+// # Where an instance's state is read
 //
-// Status files report each instance's role (`primary` or `standby`), state (`active` or `passive`), PID, projection progress, lag,
-// and errors. They are operational evidence and never grant ownership, and the
-// directory holding them takes no part in the ownership decision.
+// Nowhere in this package. There is no status file and no state to poll: every
+// transition is stated as an event by whichever component makes it, and an
+// instance's role and PID travel on each event's origin. This package states the
+// ownership half; runtime composition states the composition half and, once a
+// second, watches its projection and states each change in whether the instance
+// is current enough to be handed the machine.
+//
+// The file this replaced was a live snapshot rewritten once a second, and every
+// field on it is now in the record: role and PID from the origin, lifecycle state
+// from the transition events, and progress, lag, and failover readiness from
+// platform.app.failover_readiness_changed. What it could do that the record
+// cannot is answer "is this still true?" from its own timestamp. A reader that
+// needs that asks the instance's own API, which is bound in every state, rather
+// than reading a file that a dead process leaves behind unchanged.
 //
 // # Events
 //

@@ -5,6 +5,12 @@
 # numbers: several machines share one host and a developer's machine may already
 # hold 4222, so the harness reserves free ports and renders them in.
 #
+# The event_storage block is optional and is left out entirely for a fixture that
+# disables it. A machine with no event_storage runs no Event Fabric: it has no
+# site journal, so its instance binds its API, reports itself active, and refuses
+# every domain operation. That is a deployment shape rather than a degraded one,
+# which is why the block is absent rather than present and empty.
+#
 # The .tmpl extension is deliberate. The builder loads every *.hcl file in a
 # blueprint directory, so an unrendered template must not look like one.
 #
@@ -29,7 +35,7 @@ project "{{ .Name }}" {
         # carries the Standby Instance's. Every port is reserved separately by the
         # harness, because the two instances run together on one host.
         #
-        # runtime_dir and data_dir are per instance for the same reason the ports
+        # data_dir is per instance for the same reason the ports
         # are: several machines share one host here, so the harness renders a
         # distinct directory for every instance of every machine. data_dir needs
         # it most, because two NATS servers cannot open one JetStream store and
@@ -39,7 +45,6 @@ project "{{ .Name }}" {
         # carried into the manifest so the roles are named consistently. The
         # namespace token keeps concurrent scenario runs from naming the same
         # service twice.
-        runtime_dir = "{{ .RuntimeDir }}"
         data_dir    = "{{ .DataDir }}"
 
         api {
@@ -51,6 +56,8 @@ project "{{ .Name }}" {
           display_name = "OPDL {{ $.Name }} {{ .Name }} (Primary Instance)"
         }
 
+{{- if not .EventStorageDisabled }}
+
         event_storage {
           nats {
             client_port         = {{ .ClientPort }}
@@ -58,11 +65,11 @@ project "{{ .Name }}" {
             jetstream_store_dir = "{{ .JetStreamStoreDir }}"
           }
         }
+{{- end }}
 
         standby {
           disabled = {{ .StandbyDisabled }}
 {{- if not .StandbyDisabled }}
-          runtime_dir = "{{ .StandbyRuntimeDir }}"
           data_dir    = "{{ .StandbyDataDir }}"
 
           lock {
@@ -78,6 +85,8 @@ project "{{ .Name }}" {
             display_name = "OPDL {{ $.Name }} {{ .Name }} (Standby Instance)"
           }
 
+{{- if not .EventStorageDisabled }}
+
           event_storage {
             nats {
               client_port         = {{ .StandbyClientPort }}
@@ -85,6 +94,7 @@ project "{{ .Name }}" {
               jetstream_store_dir = "{{ .StandbyJetStreamStoreDir }}"
             }
           }
+{{- end }}
 {{- end }}
         }
       }

@@ -204,22 +204,20 @@ func TestOwnershipAcquireStopsOnCanceledContext(t *testing.T) {
 	require.False(t, standby.Held())
 }
 
-// TestOwnershipIdentityIsIndependentOfTheStatusDirectory is the property the file
-// lock could not provide. Ownership comes from the descriptor's object name, so
-// two processes given different runtime directories still exclude each other.
-// Under the previous ownership they would each have taken their own lock file and
-// both become active.
-func TestOwnershipIdentityIsIndependentOfTheStatusDirectory(t *testing.T) {
+// TestOwnershipIdentityIsIndependentOfTheLocalFilesystem is the property the
+// file lock could not provide. Ownership comes from the descriptor's object
+// name, so two processes given different local directories still exclude each
+// other. Under the previous ownership they would each have taken their own lock
+// file and both become active.
+func TestOwnershipIdentityIsIndependentOfTheLocalFilesystem(t *testing.T) {
 	t.Parallel()
 
 	object := ownershipObject(t)
 	a := openLock(t, object, redundancy.RolePrimary)
 	b := openLock(t, object, redundancy.RoleStandby)
 
-	// Distinct status directories, which is what a misconfigured pair would have.
-	require.NotEqual(t,
-		redundancy.StatusPath(t.TempDir()),
-		redundancy.StatusPath(t.TempDir()))
+	// Distinct local directories, which is what a misconfigured pair would have.
+	require.NotEqual(t, t.TempDir(), t.TempDir())
 
 	acquired, err := a.TryAcquire()
 	require.NoError(t, err)

@@ -1,0 +1,83 @@
+package smoke
+
+import (
+	"net/http"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/miroslav-matejovsky/opdl/scenarios/internal/harness"
+)
+
+// BuildAndRunSingleMachine builds the simplest deployment there is and asks the
+// running platform who it is.
+//
+// One machine, one Primary Instance, no standby, and no event storage: nothing
+// to coordinate with, nothing to fail over to, and no journal. The whole
+// deployment is one process binding one listener, which makes this the floor the
+// rest of the suite would build up from. Nothing here imports platform code; the
+// binary under test is the one the builder produced a moment earlier.
+//
+// A deployment with no journal serves no domain operation, and the scenario
+// checks that too. It is the other half of the same contract: the instance is
+// Active and healthy, and it refuses registrations because there is nowhere to
+// journal them, not because anything is wrong with it.
+func BuildAndRunSingleMachine(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	outDir := filepath.Join(harness.ScenarioDir(t), "out")
+	deployment := harness.DeploySite(ctx, t, outDir, filepath.Join(harness.ScenarioDir(t), "work"), "simple")
+	node := deployment.Machine(t, "node-a")
+
+	// The package is the first observable result: a machine that deploys no
+	// standby must be packaged with only the primary launch, because a launch
+	// record in the manifest is what a service installer would act on.
+	manifest := harness.ReadManifest(t, node.BinaryPath)
+	require.Nil(t, manifest.Standby, "a machine with no standby packages only the primary launch")
+	require.Equal(t, []string{"-instance", "primary"}, manifest.Primary.Args)
+
+	// StartSite waits for the instance to report itself active, which is the
+	// runtime's own statement that it bound its API, brought its Event Fabric up,
+	// and replayed the journal.
+	deployment.StartSite(ctx, t)
+
+	instance, code := harness.GetInstance(ctx, t, node)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, "node-a", instance.Machine, "the instance reports the descriptor machine it was built for")
+	require.Equal(t, harness.RolePrimary, instance.Role, "the role is fixed at build time")
+	require.Equal(t, harness.InstanceStateActive, instance.State,
+		"the only instance of the machine holds Primary Ownership, so it serves")
+	require.Equal(t, node.Sockets.API, instance.Address,
+		"the instance answers at the address the builder resolved from its authored local_port")
+	require.Empty(t, instance.PeerAddress, "a machine with one instance has no peer to name")
+
+	// A deployment with no journal refuses every domain operation, and says which
+	// of the two reasons it is: this one is about the deployment, not about an
+	// instance that is passive and would point at the one holding ownership.
+	refusal, code := harness.GetProblem(ctx, t, node, "/registrations")
+	require.Equal(t, http.StatusServiceUnavailable, code,
+		"there is no journal to take a registration, and no projection to answer from")
+	require.Equal(t, "no_event_storage", refusal.Title)
+	require.Equal(t, harness.InstanceStateActive, refusal.Instance.State,
+		"the instance refusing is the one that owns the machine, and it is healthy")
+
+	// The machine reported the configuration it booted with. The peers line is
+	// the site's membership, and this site's membership is one instance.
+	logs := node.Output()
+	require.Contains(t, logs, "platform configuration")
+	require.Contains(t, logs, "peers        node-a/primary (127.0.0.1)",
+		"a single-machine site's membership is its one Primary Instance")
+	require.Contains(t, logs, "data_dir     "+filepath.ToSlash(node.Sockets.DataDir))
+	require.Contains(t, logs, "event_storage (none:",
+		"the startup block says plainly that this deployment has no journal")
+	require.NotContains(t, logs, "event fabric configuration",
+		"a deployment with no event storage starts no Event Fabric to report one")
+
+	// The configuration file the harness wrote carries neither the journal's lag
+	// bound nor the Event Fabric's timeouts, and the machine started anyway. That
+	// is the evidence the runtime requires them only of a deployment that has a
+	// journal to bound, rather than of every deployment.
+	require.Contains(t, logs, "(not applicable: no event storage)",
+		"settings that bound a journal are reported as not applying, not as empty values")
+}

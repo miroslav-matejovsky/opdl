@@ -24,8 +24,8 @@ const (
 )
 
 // ParseRole parses an instance role. The two values are an operator-visible
-// contract: they are the -instance launch argument, the status file name, and
-// the process role in every event's origin.
+// contract: they are the -instance launch argument, the Windows Service that
+// runs the process, and the process role in every event's origin.
 func ParseRole(s string) (InstanceRole, error) {
 	switch InstanceRole(s) {
 	case RolePrimary, RoleStandby:

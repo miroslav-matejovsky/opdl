@@ -56,13 +56,11 @@ const (
 	dataDir                  = "D:/opdl/customer-a/north/sensor/primary"
 	jetstreamStoreDir        = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
 	apiAddr                  = "127.0.0.1:8080"
-	runtimeDir               = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
 	clientAddr               = "10.0.1.10:4222"
 	clusterAddr              = "10.0.1.10:6222"
 	standbyDataDir           = "D:/opdl/customer-a/north/sensor/standby"
 	standbyJetStreamStoreDir = "D:/opdl/customer-a/north/sensor/standby/eventfabric/nats"
 	standbyAPIAddr           = "127.0.0.1:8081"
-	standbyRuntimeDir        = "C:/ProgramData/opdl/customer-a/north/sensor/standby"
 	standbyClient            = "10.0.1.10:4322"
 	standbyCluster           = "10.0.1.10:6322"
 
@@ -103,7 +101,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		builtStandby = builderdeployment.Instance{
 			Disabled:   false,
 			DataDir:    standbyDataDir,
-			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
 			Nats: &builderdeployment.Nats{
 				JetStreamStoreDir: standbyJetStreamStoreDir,
@@ -116,7 +113,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		wantStandby = platformconfig.Instance{
 			Disabled:   false,
 			DataDir:    standbyDataDir,
-			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
 			Nats: &platformconfig.Nats{
 				JetStreamStoreDir: standbyJetStreamStoreDir,
@@ -134,28 +130,28 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	// this machine's own instances.
 	builtPeers := []builderdeployment.Peer{
 		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP,
-			Nats: builderdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
+			Nats: &builderdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
 		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP,
-			Nats: builderdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
+			Nats: &builderdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
 		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP,
-			Nats: builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+			Nats: &builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
 	}
 	wantPeers := []platformconfig.Peer{
 		{Site: site, Machine: peerMachine, Role: platformconfig.RolePrimary, IP: peerIP,
-			Nats: platformconfig.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
+			Nats: &platformconfig.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
 		{Site: site, Machine: peerMachine, Role: platformconfig.RoleStandby, IP: peerIP,
-			Nats: platformconfig.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
+			Nats: &platformconfig.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
 		{Site: site, Machine: machine, Role: platformconfig.RolePrimary, IP: machineIP,
-			Nats: platformconfig.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+			Nats: &platformconfig.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
 	}
 	if !standbyDisabled {
 		builtPeers = append(builtPeers, builderdeployment.Peer{
 			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP,
-			Nats: builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
+			Nats: &builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 		wantPeers = append(wantPeers, platformconfig.Peer{
 			Site: site, Machine: machine, Role: platformconfig.RoleStandby, IP: machineIP,
-			Nats: platformconfig.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
+			Nats: &platformconfig.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 	}
 
@@ -173,7 +169,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			Primary: builderdeployment.Instance{
 				Disabled:   false,
 				DataDir:    dataDir,
-				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
 				Nats: &builderdeployment.Nats{
 					JetStreamStoreDir: jetstreamStoreDir,
@@ -216,7 +211,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			Primary: platformconfig.Instance{
 				Disabled:   false,
 				DataDir:    dataDir,
-				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
 				Nats: &platformconfig.Nats{
 					JetStreamStoreDir: jetstreamStoreDir,

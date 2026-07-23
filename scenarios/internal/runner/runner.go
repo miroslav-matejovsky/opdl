@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // Scenario is one black-box scenario: a name and the function that runs it. The
@@ -24,7 +27,16 @@ type Set struct {
 	Scenarios []Scenario
 }
 
-// Run flattens the sets into the standard library test runner and returns a
+type result struct {
+	name     string
+	ran      bool
+	passed   bool
+	skipped  bool
+	duration time.Duration
+}
+
+// Run prints a startup list of scenarios showing which will run or be skipped,
+// flattens the selected sets into the standard library test runner, and returns a
 // process exit code: 0 when every scenario passed, 1 otherwise.
 //
 // It uses testing.MainStart to get real *testing.T values with working
@@ -34,18 +46,44 @@ type Set struct {
 //
 // The caller must have run testing.Init and flag.Parse first, so the test.*
 // flags MainStart reads are registered and populated.
-func Run(sets []Set) int {
+func Run(allSets, selectedSets []Set) int {
+	printStartSummary(os.Stdout, allSets, selectedSets)
+
 	var tests []testing.InternalTest
-	for _, set := range sets {
+	var results []*result
+	var mu sync.Mutex
+
+	for _, set := range selectedSets {
 		for _, scenario := range set.Scenarios {
+			name := set.Package + "/" + scenario.Name
+			res := &result{name: name}
+			results = append(results, res)
+
+			fn := scenario.Func
 			tests = append(tests, testing.InternalTest{
-				Name: set.Package + "/" + scenario.Name,
-				F:    scenario.Func,
+				Name: name,
+				F: func(t *testing.T) {
+					start := time.Now()
+					t.Cleanup(func() {
+						dur := time.Since(start)
+						mu.Lock()
+						res.ran = true
+						res.duration = dur
+						res.passed = !t.Failed()
+						res.skipped = t.Skipped()
+						mu.Unlock()
+					})
+					fn(t)
+				},
 			})
 		}
 	}
+
 	m := testing.MainStart(deps{}, tests, nil, nil, nil)
-	return m.Run()
+	exitCode := m.Run()
+
+	printSummary(os.Stdout, results)
+	return exitCode
 }
 
 // Select narrows the sets to the categories the caller asked for. Every category

@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,7 +115,6 @@ catch_up_timeout = "30s"
 func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
-	runtimeRoot := t.TempDir()
 	dataRoot := t.TempDir()
 	for _, standby := range []bool{false, true} {
 		instance := descriptor.Instances.Get(config.Role(standby))
@@ -127,7 +128,6 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 			Routes:            []string{},
 		}
 		instance.APIAddress = freeAddress(t)
-		instance.RuntimeDir = filepath.Join(runtimeRoot, string(config.Role(standby)))
 		instance.DataDir = instanceDataDir
 		if standby {
 			descriptor.Instances.Standby = instance
@@ -547,58 +547,141 @@ func (f fixedStatusFabric) State(context.Context) (eventfabric.State, error) {
 	return f.state, f.err
 }
 
-// TestStartStatusFailsBeforeRuntimeStarts checks a process never serves while its
-// initial status cannot be written. Shutdown and handover tooling must not be
-// given a stale operational view.
-func TestStartStatusFailsBeforeRuntimeStarts(t *testing.T) {
-	blocked := filepath.Join(t.TempDir(), "not-a-directory")
-	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
+// recordingPublisher collects what a component stated, and can be told to fail,
+// so a test can read the record without a storage backend.
+type recordingPublisher struct {
+	mu     sync.Mutex
+	err    error
+	stated []events.Event
+}
 
-	done, err := startStatus(
+func (p *recordingPublisher) Publish(_ context.Context, event events.Event) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.err != nil {
+		return p.err
+	}
+	p.stated = append(p.stated, event)
+	return nil
+}
+
+func (p *recordingPublisher) events() []events.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.stated)
+}
+
+// TestFailoverMonitorFailsBeforeRuntimeStarts checks a process never serves while
+// its readiness cannot be stated. Shutdown and handover tooling read the local
+// record, and an instance missing from it cannot be handed a machine.
+func TestFailoverMonitorFailsBeforeRuntimeStarts(t *testing.T) {
+	publisher := &recordingPublisher{err: errors.New("record unavailable")}
+
+	done, err := startFailoverMonitor(
 		t.Context(),
+		publisher,
 		fixedStatusFabric{state: eventfabric.State{Connected: true, CaughtUp: true}},
-		redundancy.RolePrimary,
 		redundancy.StateActive,
-		filepath.Join(blocked, "primary.status"),
 		30*time.Second,
 		nil,
-		nil,
 	)
-	require.ErrorContains(t, err, "write status")
+	require.ErrorContains(t, err, "record unavailable")
 	require.Nil(t, done)
 }
 
-// TestStartStatusStopsServingAfterFabricStateFailures checks loss of the Event
-// Fabric cannot leave an active process serving an indefinitely stale view.
-func TestStartStatusStopsServingAfterFabricStateFailures(t *testing.T) {
+// TestFailoverMonitorStopsServingAfterFabricStateFailures checks loss of the
+// Event Fabric cannot leave an active process serving an indefinitely stale
+// view, and that the instance says so once rather than on every observation.
+func TestFailoverMonitorStopsServingAfterFabricStateFailures(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	statusPath := filepath.Join(t.TempDir(), "primary.status")
+	publisher := &recordingPublisher{}
 	lagExceeded := make(chan struct{}, 1)
-	done, err := startStatus(
+	done, err := startFailoverMonitor(
 		ctx,
+		publisher,
 		fixedStatusFabric{err: errors.New("event fabric disconnected")},
-		redundancy.RolePrimary,
 		redundancy.StateActive,
-		statusPath,
 		100*time.Millisecond,
-		func() { lagExceeded <- struct{}{} },
-		nil,
+		func() {
+			select {
+			case lagExceeded <- struct{}{}:
+			default:
+			}
+		},
 	)
 	require.NoError(t, err)
 
 	select {
 	case <-lagExceeded:
-	case <-time.After(2 * statusInterval):
+	case <-time.After(2 * monitorInterval):
 		require.FailNow(t, "fabric state failure never exceeded the lag bound")
 	}
-	status, err := redundancy.ReadStatus(statusPath)
-	require.NoError(t, err)
-	require.False(t, status.FailoverReady)
-	require.NotEqual(t, unknownLag, status.Lag)
-	require.Contains(t, status.LastError, "event fabric disconnected")
 
 	cancel()
 	require.NoError(t, <-done)
+
+	// The opening observation is stated whatever it says, and an instance that was
+	// unready from the start and stayed unready has nothing more to state.
+	stated := publisher.events()
+	require.Len(t, stated, 1, "readiness is stated on change, not on a timer: %+v", stated)
+	readiness, ok := stated[0].(FailoverReadinessChanged)
+	require.True(t, ok)
+	require.False(t, readiness.Ready)
+	require.Equal(t, redundancy.StateActive.String(), readiness.InstanceState)
+	require.Contains(t, readiness.Error, "event fabric disconnected")
+}
+
+// TestFailoverMonitorStatesEveryReadinessChange checks the record carries the
+// transitions the status file used to be polled for: an instance that catches up
+// says so, and one that falls behind its bound says that too.
+func TestFailoverMonitorStatesEveryReadinessChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	publisher := &recordingPublisher{}
+	fabric := &togglingFabric{state: eventfabric.State{Connected: true, CaughtUp: true, Applied: 7, HighWater: 7}}
+
+	done, err := startFailoverMonitor(ctx, publisher, fabric, redundancy.StatePassive, time.Nanosecond, nil)
+	require.NoError(t, err)
+
+	// A projection that falls behind for longer than the bound is no longer a
+	// machine anyone can be handed.
+	fabric.set(eventfabric.State{Connected: true, CaughtUp: false, Applied: 7, HighWater: 9})
+	require.Eventually(t, func() bool {
+		return len(publisher.events()) >= 2
+	}, 10*monitorInterval, monitorInterval/4)
+
+	cancel()
+	require.NoError(t, <-done)
+
+	stated := publisher.events()
+	opening := stated[0].(FailoverReadinessChanged)
+	require.True(t, opening.Ready)
+	require.Equal(t, redundancy.StatePassive.String(), opening.InstanceState)
+	require.Equal(t, uint64(7), opening.AppliedSequence)
+
+	lost := stated[1].(FailoverReadinessChanged)
+	require.False(t, lost.Ready)
+	require.Equal(t, uint64(9), lost.HighWater)
+	require.Empty(t, lost.Error, "falling behind is not a failure to ask")
+}
+
+// togglingFabric is a progressFabric a test can move between states while the
+// monitor is observing it.
+type togglingFabric struct {
+	mu    sync.Mutex
+	state eventfabric.State
+}
+
+func (f *togglingFabric) set(state eventfabric.State) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state = state
+}
+
+func (f *togglingFabric) State(context.Context) (eventfabric.State, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.state, nil
 }
 
 // TestActiveAndStandbyRunTogether checks one all-in-one machine can run two

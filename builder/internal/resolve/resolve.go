@@ -91,20 +91,26 @@ func instances(site blueprint.Site, machine blueprint.Machine) deployment.Instan
 // binds. An instance that is not deployed resolves to the disabled record and
 // nothing else, because an endpoint no process will bind would read exactly like
 // one that will.
+//
+// An instance whose machine authored no event storage resolves with no nats
+// record at all, for the same reason: it runs no Event Fabric, so addresses for
+// one would describe a server nothing starts.
 func instance(site blueprint.Site, machine blueprint.Machine, role deployment.PlatformInstanceRole) deployment.Instance {
 	endpoints := machine.Endpoints(role == deployment.RoleStandby)
 	if endpoints == nil {
 		return deployment.Instance{Disabled: true}
 	}
-	nats := instanceNats(site, machine, role)
-	return deployment.Instance{
+	resolved := deployment.Instance{
 		Disabled:   false,
 		Service:    winService(machine, role == deployment.RoleStandby),
-		RuntimeDir: machine.RuntimeDir(role == deployment.RoleStandby),
 		DataDir:    machine.DataDir(role == deployment.RoleStandby),
 		APIAddress: loopbackAddress(endpoints.APILocalPort),
-		Nats:       &nats,
 	}
+	if machine.Nats(role == deployment.RoleStandby) != nil {
+		nats := instanceNats(site, machine, role)
+		resolved.Nats = &nats
+	}
+	return resolved
 }
 
 // winService resolves one instance's Windows Service identity, or nil when that
@@ -150,16 +156,22 @@ func peers(site blueprint.Site) []deployment.Peer {
 			if endpoints == nil {
 				continue
 			}
-			peers = append(peers, deployment.Peer{
+			peer := deployment.Peer{
 				Site:    site.Name,
 				Machine: machine.Name,
 				Role:    role,
 				IP:      machine.IP,
-				Nats: deployment.PeerNats{
+			}
+			// A machine that authored no event storage contributes a member with
+			// no Event Fabric addresses. It is still a peer: site membership is
+			// who the site expects to hear from, not who runs a server.
+			if machine.Nats(role == deployment.RoleStandby) != nil {
+				peer.Nats = &deployment.PeerNats{
 					ClientAddress:  address(machine.IP, endpoints.ClientPort),
 					ClusterAddress: address(machine.IP, endpoints.ClusterPort),
-				},
-			})
+				}
+			}
+			peers = append(peers, peer)
 		}
 	}
 	return peers
@@ -229,7 +241,15 @@ func instanceNats(site blueprint.Site, machine blueprint.Machine, role deploymen
 // three machines, so a two-machine site survives losing one instance but not
 // necessarily one machine. Machine tolerance still needs three machines.
 func siteStorageServers(site blueprint.Site) []deployment.Peer {
-	sorted := slices.Clone(peers(site))
+	// Only an instance that runs an Event Fabric can store the journal. Selecting
+	// by sorted name over every member would otherwise hand a replica to an
+	// instance with no server to place it on.
+	sorted := make([]deployment.Peer, 0, len(site.Machines)*2)
+	for _, peer := range peers(site) {
+		if peer.HasNats() {
+			sorted = append(sorted, peer)
+		}
+	}
 	slices.SortFunc(sorted, func(a, b deployment.Peer) int {
 		return strings.Compare(instanceKey(a), instanceKey(b))
 	})

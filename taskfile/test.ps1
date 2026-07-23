@@ -12,7 +12,7 @@ foreach ($m in $Modules) {
     $outFile = Join-Path $outDir "unit-$m-$ts.log"
     Push-Location (Join-Path $RepoRoot $m)
     try {
-        gotestsum --format pkgname -- -short ./... 2>&1 | Tee-Object -FilePath $outFile
+        gotestsum --hide-summary=skipped --format pkgname -- -short ./... 2>&1 | Tee-Object -FilePath $outFile
         if ($LASTEXITCODE -ne 0) {
             throw "tests failed in module '$m' (exit $LASTEXITCODE)"
         }
