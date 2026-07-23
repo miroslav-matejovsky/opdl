@@ -49,13 +49,10 @@ func TestLoadComposesDescriptorAndAddress(t *testing.T) {
 	require.Equal(t, "mock", d.Machine)
 	require.Equal(t, []string{"core-services"}, d.Services)
 
-	// The address and the runtime directory are the instance's, carried on its own
-	// descriptor record. Config exposes neither: the runtime reads its own
-	// instance's record, so there is one way to reach either value.
+	// The address is the instance's, carried on its own descriptor record.
+	// Config exposes it: the runtime reads its own instance's record.
 	require.Equal(t, "127.0.0.1:8080", d.Instances.Primary.APIAddress)
-	require.Equal(t, ".data/instance/primary", d.Instances.Primary.RuntimeDir)
 	require.Empty(t, d.Instances.Standby.APIAddress, "the mock machine deploys no standby")
-	require.Empty(t, d.Instances.Standby.RuntimeDir)
 }
 
 func TestLoadReadsEventFabricSettings(t *testing.T) {

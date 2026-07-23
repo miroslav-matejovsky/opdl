@@ -74,8 +74,6 @@ type Machine struct {
 // machine is shared between them except the ownership object, which is not a
 // port.
 type Platform struct {
-	// RuntimeDir is the Primary Instance's local runtime directory. Required.
-	RuntimeDir string `hcl:"runtime_dir,optional"`
 	// DataDir is the Primary Instance's general platform data root. Required.
 	DataDir string `hcl:"data_dir,optional"`
 	// API is the Primary Instance's local API endpoint policy.
@@ -85,7 +83,7 @@ type Platform struct {
 	// EventStorage is the Primary Instance's event storage policy.
 	EventStorage *EventStorage `hcl:"event_storage,block"`
 	// Standby is the machine's local redundancy policy, and where a deployed
-	// Standby Instance states its own lock, runtime_dir, data_dir, api, winservice, and event_storage.
+	// Standby Instance states its own lock, data_dir, api, winservice, and event_storage.
 	Standby *Standby `hcl:"standby,block"`
 }
 
@@ -194,9 +192,6 @@ type Standby struct {
 	// Disabled opts the machine out of a second local process. It is required, so
 	// omitting the attribute cannot silently enable or disable redundancy.
 	Disabled bool `hcl:"disabled"`
-	// RuntimeDir is the Standby Instance's local runtime directory. It is required
-	// when the Standby Instance is deployed and rejected when it is not.
-	RuntimeDir string `hcl:"runtime_dir,optional"`
 	// DataDir is the Standby Instance's general platform data root. It is
 	// required when the Standby Instance is deployed and rejected when it is not.
 	DataDir string `hcl:"data_dir,optional"`
@@ -387,9 +382,6 @@ func validatePlatform(machine Machine) error {
 	if err := validateStandbyEndpoints(machine); err != nil {
 		return err
 	}
-	if err := validateRuntimeDirs(machine); err != nil {
-		return err
-	}
 	if err := validateDataDirs(machine); err != nil {
 		return err
 	}
@@ -441,9 +433,6 @@ func validateStandbyEndpoints(machine Machine) error {
 	if !standby.Disabled {
 		return validateInstanceEndpoints(machine, "platform.standby", standby.API, standby.EventStorage)
 	}
-	if strings.TrimSpace(standby.RuntimeDir) != "" {
-		return fmt.Errorf("machine %q: platform.standby.runtime_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
-	}
 	if strings.TrimSpace(standby.DataDir) != "" {
 		return fmt.Errorf("machine %q: platform.standby.data_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
@@ -457,14 +446,6 @@ func validateStandbyEndpoints(machine Machine) error {
 		return fmt.Errorf("machine %q: platform.standby.event_storage is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
 	return nil
-}
-
-// validateRuntimeDirs checks each deployed instance states its own local runtime
-// directory, and that a machine's two instances do not state the same one.
-func validateRuntimeDirs(machine Machine) error {
-	return validateInstanceDirs(machine, "runtime_dir",
-		machine.Platform.RuntimeDir, machine.Platform.Standby.RuntimeDir,
-		"the two instances run together and cannot share a runtime directory")
 }
 
 // validateDataDirs checks each deployed instance states its own platform data
@@ -704,21 +685,6 @@ type Endpoints struct {
 	APILocalPort int
 	ClientPort   int
 	ClusterPort  int
-}
-
-// RuntimeDir returns one instance's authored local runtime directory, or an empty
-// string when that instance is not deployed.
-func (m Machine) RuntimeDir(standby bool) string {
-	if m.Platform == nil {
-		return ""
-	}
-	if !standby {
-		return strings.TrimSpace(m.Platform.RuntimeDir)
-	}
-	if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
-		return ""
-	}
-	return strings.TrimSpace(m.Platform.Standby.RuntimeDir)
 }
 
 // DataDir returns one instance's authored general platform data directory, or

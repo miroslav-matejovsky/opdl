@@ -100,7 +100,6 @@ func instance(site blueprint.Site, machine blueprint.Machine, role deployment.Pl
 	return deployment.Instance{
 		Disabled:   false,
 		Service:    winService(machine, role == deployment.RoleStandby),
-		RuntimeDir: machine.RuntimeDir(role == deployment.RoleStandby),
 		DataDir:    machine.DataDir(role == deployment.RoleStandby),
 		APIAddress: loopbackAddress(endpoints.APILocalPort),
 		Nats:       &nats,

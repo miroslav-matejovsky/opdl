@@ -19,7 +19,6 @@
         "name": "opdl-mock-local-mock-primary",
         "display_name": "OPDL mock local mock (Primary Instance)"
       },
-      "runtime_dir": ".data/instance/primary",
       "data_dir": ".data/platform/primary",
       "api_address": "127.0.0.1:8080",
       "nats": {

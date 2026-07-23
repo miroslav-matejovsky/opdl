@@ -114,15 +114,6 @@ type Instance struct {
 	// whoever installs the services; the runtime does not read it and the platform
 	// manages no services.
 	Service *WinService `json:"service,omitempty"`
-	// RuntimeDir is the instance's own local runtime directory. It is the
-	// instance's rather than the machine's, and it takes no part in the ownership
-	// decision.
-	//
-	// Nothing writes into it. It held the per-process status file, and that file
-	// is gone: an instance's role, state, progress, and promotability are facts in
-	// its event record under DataDir. The field is still authored and carried, so
-	// it is dead configuration until it is removed or given a purpose.
-	RuntimeDir string `json:"runtime_dir,omitempty"`
 	// DataDir is the instance's own general platform data root.
 	DataDir string `json:"data_dir,omitempty"`
 	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
@@ -336,9 +327,6 @@ func (d Descriptor) validateEndpoints() error {
 		if d.Instances.Standby.APIAddress != "" {
 			return fmt.Errorf("instances.standby.api_address is set but the standby is disabled")
 		}
-		if d.Instances.Standby.RuntimeDir != "" {
-			return fmt.Errorf("instances.standby.runtime_dir is set but the standby is disabled")
-		}
 		if d.Instances.Standby.DataDir != "" {
 			return fmt.Errorf("instances.standby.data_dir is set but the standby is disabled")
 		}
@@ -349,13 +337,6 @@ func (d Descriptor) validateEndpoints() error {
 	}
 	if err := validateInstanceEndpoints("instances.standby", d.Instances.Standby); err != nil {
 		return err
-	}
-	// One runtime directory for two independent runtimes is rejected for the same
-	// reason one data directory is: they run at the same time and share nothing
-	// local, and unlike a shared listener nothing would report the collision.
-	if d.Instances.Primary.RuntimeDir == d.Instances.Standby.RuntimeDir {
-		return fmt.Errorf("instances.primary.runtime_dir and instances.standby.runtime_dir are both %q; the two instances run together and cannot share a runtime directory",
-			d.Instances.Primary.RuntimeDir)
 	}
 	if d.Instances.Primary.DataDir == d.Instances.Standby.DataDir {
 		return fmt.Errorf("instances.primary.data_dir and instances.standby.data_dir are both %q; the two instances run together and cannot share a platform data directory",
@@ -400,9 +381,6 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	// cannot be built.
 	if err := requireLoopback(prefix+".api_address", instance.APIAddress); err != nil {
 		return err
-	}
-	if strings.TrimSpace(instance.RuntimeDir) == "" {
-		return fmt.Errorf("%s.runtime_dir is required", prefix)
 	}
 	if strings.TrimSpace(instance.DataDir) == "" {
 		return fmt.Errorf("%s.data_dir is required", prefix)

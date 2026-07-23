@@ -37,7 +37,6 @@ func validMachine() blueprint.Machine {
 		IP:             "10.0.1.10",
 		Services:       []string{"sensor-services"},
 		Platform: &blueprint.Platform{
-			RuntimeDir: "C:/ProgramData/opdl/sensor/primary/runtime",
 			DataDir:    "D:/opdl/sensor/primary",
 			API:        &blueprint.API{LocalPort: 8080},
 			WinService: &blueprint.WinService{Name: "primary"},
@@ -49,8 +48,6 @@ func validMachine() blueprint.Machine {
 				},
 			},
 			Standby: &blueprint.Standby{
-				Disabled:   false,
-				RuntimeDir: "C:/ProgramData/opdl/sensor/standby/runtime",
 				DataDir:    "D:/opdl/sensor/standby",
 				Lock:       &blueprint.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
 				API:        &blueprint.API{LocalPort: 8081},
@@ -78,11 +75,9 @@ func namedMachine(name, ip string) blueprint.Machine {
 	// its own value here: the ownership object, and both per-instance directories.
 	// Sharing a lock across machines is rejected, and sharing a directory is only
 	// safe because two machines are two hosts, which a fixture on one host is not.
-	m.Platform.RuntimeDir = "C:/ProgramData/opdl/" + name + "/primary/runtime"
 	m.Platform.DataDir = "D:/opdl/" + name + "/primary"
 	m.Platform.EventStorage.Nats.JetStreamStoreDir = "D:/opdl/" + name + "/primary/eventfabric/nats"
 	m.Platform.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
-	m.Platform.Standby.RuntimeDir = "C:/ProgramData/opdl/" + name + "/standby/runtime"
 	m.Platform.Standby.DataDir = "D:/opdl/" + name + "/standby"
 	m.Platform.Standby.EventStorage.Nats.JetStreamStoreDir = "D:/opdl/" + name + "/standby/eventfabric/nats"
 	m.Platform.Standby.Lock = &blueprint.Lock{WindowsMutex: `Global\opdl-customer-a-north-` + name}
@@ -213,7 +208,6 @@ func TestMachinePlatformStandby(t *testing.T) {
 		  }
 		  standby {
 		    disabled = false
-		    runtime_dir = "C:/ProgramData/opdl/m1/standby"
 		    data_dir = "D:/opdl/m1/standby"
 		    event_storage {
 		      nats {
@@ -409,7 +403,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			      platform {
-			        runtime_dir = "C:/ProgramData/opdl/node-1/primary"
 			        data_dir = "D:/opdl/node-1/primary"
 			        api {
 			          local_port = 8080
@@ -426,7 +419,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
-			          runtime_dir = "C:/ProgramData/opdl/node-1/standby"
 			          data_dir = "D:/opdl/node-1/standby"
 			          lock {
 			            windows_mutex = "Global\\dup-north-node-1"
@@ -454,7 +446,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.11"
 			      services = ["core-services"]
 			      platform {
-			        runtime_dir = "C:/ProgramData/opdl/node-1/primary"
 			        data_dir = "D:/opdl/node-1/primary"
 			        api {
 			          local_port = 8080
@@ -471,7 +462,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
-			          runtime_dir = "C:/ProgramData/opdl/node-1/standby"
 			          data_dir = "D:/opdl/node-1/standby"
 			          lock {
 			            windows_mutex = "Global\\dup-south-node-1"
@@ -512,7 +502,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 func disableStandby(p *blueprint.Project) {
 	standby := p.Sites[0].Machines[0].Platform.Standby
 	standby.Disabled = true
-	standby.RuntimeDir = ""
 	standby.DataDir = ""
 	standby.Lock = nil
 	standby.API = nil
@@ -526,10 +515,9 @@ func disableStandby(p *blueprint.Project) {
 // take effect, and a reader could not tell it from one that does.
 func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 	tests := map[string]func(*blueprint.Standby){
-		"lock":        func(s *blueprint.Standby) { s.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-standby"} },
-		"runtime_dir": func(s *blueprint.Standby) { s.RuntimeDir = "C:/ProgramData/opdl/sensor/standby" },
-		"api":         func(s *blueprint.Standby) { s.API = &blueprint.API{LocalPort: 8081} },
-		"winservice":  func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
+		"lock":       func(s *blueprint.Standby) { s.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-standby"} },
+		"api":        func(s *blueprint.Standby) { s.API = &blueprint.API{LocalPort: 8081} },
+		"winservice": func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
 		"event_storage": func(s *blueprint.Standby) {
 			s.EventStorage = &blueprint.EventStorage{Nats: &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322, JetStreamStoreDir: "D:/opdl/sensor/standby/eventfabric/nats"}}
 		},
@@ -542,46 +530,6 @@ func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 			require.ErrorContains(t, p.Validate(), "standby is disabled")
 		})
 	}
-}
-
-// TestRuntimeDirIsRequiredPerDeployedInstance checks each deployed instance
-// states its own local runtime directory. Unlike a missing port, an unstated
-// directory is not a failure to bind, so the blueprint has to reject it.
-func TestRuntimeDirIsRequiredPerDeployedInstance(t *testing.T) {
-	tests := map[string]struct {
-		clear func(*blueprint.Platform)
-		want  string
-	}{
-		"primary": {
-			clear: func(pl *blueprint.Platform) { pl.RuntimeDir = "" },
-			want:  "platform.runtime_dir is required",
-		},
-		"standby": {
-			clear: func(pl *blueprint.Platform) { pl.Standby.RuntimeDir = "" },
-			want:  "platform.standby.runtime_dir is required",
-		},
-		"primary is only whitespace": {
-			clear: func(pl *blueprint.Platform) { pl.RuntimeDir = "   " },
-			want:  "platform.runtime_dir is required",
-		},
-	}
-	for label, test := range tests {
-		t.Run(label, func(t *testing.T) {
-			p := validProject()
-			test.clear(p.Sites[0].Machines[0].Platform)
-			require.ErrorContains(t, p.Validate(), test.want)
-		})
-	}
-}
-
-// TestMachineInstancesMustNotShareARuntimeDir is the quiet half of the six-port
-// mistake. Two instances given one local directory both start and both bind,
-// and nothing about the collision is reported.
-func TestMachineInstancesMustNotShareARuntimeDir(t *testing.T) {
-	p := validProject()
-	platform := p.Sites[0].Machines[0].Platform
-	platform.Standby.RuntimeDir = platform.RuntimeDir
-	require.ErrorContains(t, p.Validate(), "cannot share a runtime directory")
 }
 
 // TestMachineListenersMustNotShareAPort is the mistake the six-port shape

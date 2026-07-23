@@ -19,7 +19,6 @@ project "customer-a" {
       # the Primary Instance's; standby is the Standby Instance's. This machine
       # opts out of a standby, so it states that and authors nothing further.
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary/runtime"
         data_dir    = "D:/opdl/customer-a/north/sensor/primary"
 
         api {
@@ -53,7 +52,6 @@ project "customer-a" {
       # every port below is distinct: nothing is shared between them except the
       # ownership object, which is not a port.
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/primary/runtime"
         data_dir    = "D:/opdl/customer-a/north/local-server/primary"
 
         api {
@@ -74,7 +72,6 @@ project "customer-a" {
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/standby/runtime"
           data_dir    = "D:/opdl/customer-a/north/local-server/standby"
 
           lock {
@@ -107,7 +104,6 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/primary/runtime"
         data_dir    = "D:/opdl/customer-a/control-room/master/primary"
 
         api {
@@ -128,7 +124,6 @@ project "customer-a" {
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/master/standby/runtime"
           data_dir    = "D:/opdl/customer-a/control-room/master/standby"
 
           lock {
@@ -159,7 +154,6 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/primary/runtime"
         data_dir    = "D:/opdl/customer-a/control-room/slave/primary"
 
         api {
@@ -180,7 +174,6 @@ project "customer-a" {
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/slave/standby/runtime"
           data_dir    = "D:/opdl/customer-a/control-room/slave/standby"
 
           lock {
@@ -211,7 +204,6 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/primary/runtime"
         data_dir    = "D:/opdl/customer-a/control-room/integration/primary"
 
         api {
@@ -232,7 +224,6 @@ project "customer-a" {
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/control-room/integration/standby/runtime"
           data_dir    = "D:/opdl/customer-a/control-room/integration/standby"
 
           lock {

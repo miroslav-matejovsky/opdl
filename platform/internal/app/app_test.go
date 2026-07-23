@@ -115,7 +115,6 @@ catch_up_timeout = "30s"
 func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
-	runtimeRoot := t.TempDir()
 	dataRoot := t.TempDir()
 	for _, standby := range []bool{false, true} {
 		instance := descriptor.Instances.Get(config.Role(standby))
@@ -129,7 +128,6 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 			Routes:            []string{},
 		}
 		instance.APIAddress = freeAddress(t)
-		instance.RuntimeDir = filepath.Join(runtimeRoot, string(config.Role(standby)))
 		instance.DataDir = instanceDataDir
 		if standby {
 			descriptor.Instances.Standby = instance

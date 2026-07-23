@@ -41,8 +41,8 @@ catch_up_timeout = "30s"
 #
 # A machine's two instances read this one file, so an address here would be an
 # address both of them bind, and a runtime directory here would be one they both
-# write into. The API address is authored as api.local_port and resolved onto
-# 127.0.0.1; the runtime directory is authored as runtime_dir. Setting the Event
+# address both of them bind. The API address is authored as api.local_port and resolved onto
+# 127.0.0.1. Setting the Event
 # Fabric's addresses at a site could point a machine at a journal that is not its
 # own, so this file cannot do that either.
 #

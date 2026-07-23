@@ -23,7 +23,6 @@
 //
 //	      platform {
 //	        data_dir    = "D:/opdl/customer-a/north/sensor/primary"
-//	        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary/runtime"
 //
 //	        api {
 //	          local_port = 8080

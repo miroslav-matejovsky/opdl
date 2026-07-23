@@ -109,9 +109,8 @@ var projectFixtures = map[string][]machineFixture{
 type renderedMachine struct {
 	Name string
 	IP   string
-	// The Primary Instance's ports and its own runtime directory.
+	// The Primary Instance's ports and data directory.
 	APIPort           int
-	RuntimeDir        string
 	DataDir           string
 	JetStreamStoreDir string
 	ClientPort        int
@@ -120,7 +119,6 @@ type renderedMachine struct {
 	// two instances run together on one host, so every one of these is its own
 	// listener or directory and none may repeat.
 	StandbyAPIPort           int
-	StandbyRuntimeDir        string
 	StandbyDataDir           string
 	StandbyJetStreamStoreDir string
 	StandbyClientPort        int
@@ -263,15 +261,6 @@ const (
 	RoleStandby = "standby"
 )
 
-// runtimeDirFor is one instance's own local runtime directory.
-//
-// It is per instance and per machine because several machines share this host, so
-// the isolation the deployed shape gets from two hosts has to be rendered in
-// here, exactly as the per-run mutex name is.
-func runtimeDirFor(workDir, machine, role string) string {
-	return filepath.ToSlash(filepath.Join(workDir, "instance-"+machine, role))
-}
-
 // dataDirFor is one instance's own platform data root.
 func dataDirFor(workDir, machine, role string) string {
 	return filepath.ToSlash(filepath.Join(workDir, "data-"+machine, role))
@@ -326,7 +315,6 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 			Name:              fixture.name,
 			IP:                fixture.ip,
 			APIPort:           takeAPIPort(),
-			RuntimeDir:        runtimeDirFor(workDir, fixture.name, RolePrimary),
 			DataDir:           dataDirFor(workDir, fixture.name, RolePrimary),
 			JetStreamStoreDir: jetstreamStoreDirFor(workDir, fixture.name, RolePrimary),
 			ClientPort:        p[0],
@@ -335,7 +323,6 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 		}
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
-			machine.StandbyRuntimeDir = runtimeDirFor(workDir, fixture.name, RoleStandby)
 			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, RoleStandby)
 			machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RoleStandby)
 			machine.StandbyClientPort = p[2]

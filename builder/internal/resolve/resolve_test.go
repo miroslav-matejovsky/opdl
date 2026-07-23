@@ -35,7 +35,6 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	standby := &blueprint.Standby{Disabled: standbyDisabled}
 	if !standbyDisabled {
 		standby.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-" + name}
-		standby.RuntimeDir = runtimeDir(name, "standby")
 		standby.DataDir = dataDir(name, "standby")
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
@@ -50,7 +49,6 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	return blueprint.Machine{
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
 		Platform: &blueprint.Platform{
-			RuntimeDir: runtimeDir(name, "primary"),
 			DataDir:    dataDir(name, "primary"),
 			API:        &blueprint.API{LocalPort: apiPort},
 			WinService: &blueprint.WinService{Name: name + "-primary"},
@@ -66,14 +64,7 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	}
 }
 
-// runtimeDir is one instance's own local runtime directory.
-func runtimeDir(machine, role string) string {
-	return fmt.Sprintf("C:/ProgramData/opdl/%s/%s", machine, role)
-}
-
-// dataDir is one instance's general platform data root. It is separate
-// from runtimeDir because the two live on different volumes in a real
-// deployment: runtime status is disposable, while platform data is retained.
+// dataDir is one instance's general platform data root.
 func dataDir(machine, role string) string {
 	return fmt.Sprintf("D:/opdl-data/%s/%s", machine, role)
 }

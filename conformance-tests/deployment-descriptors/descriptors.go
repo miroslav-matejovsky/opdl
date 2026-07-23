@@ -56,13 +56,11 @@ const (
 	dataDir                  = "D:/opdl/customer-a/north/sensor/primary"
 	jetstreamStoreDir        = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
 	apiAddr                  = "127.0.0.1:8080"
-	runtimeDir               = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
 	clientAddr               = "10.0.1.10:4222"
 	clusterAddr              = "10.0.1.10:6222"
 	standbyDataDir           = "D:/opdl/customer-a/north/sensor/standby"
 	standbyJetStreamStoreDir = "D:/opdl/customer-a/north/sensor/standby/eventfabric/nats"
 	standbyAPIAddr           = "127.0.0.1:8081"
-	standbyRuntimeDir        = "C:/ProgramData/opdl/customer-a/north/sensor/standby"
 	standbyClient            = "10.0.1.10:4322"
 	standbyCluster           = "10.0.1.10:6322"
 
@@ -103,7 +101,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		builtStandby = builderdeployment.Instance{
 			Disabled:   false,
 			DataDir:    standbyDataDir,
-			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
 			Nats: &builderdeployment.Nats{
 				JetStreamStoreDir: standbyJetStreamStoreDir,
@@ -116,7 +113,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		wantStandby = platformconfig.Instance{
 			Disabled:   false,
 			DataDir:    standbyDataDir,
-			RuntimeDir: standbyRuntimeDir,
 			APIAddress: standbyAPIAddr,
 			Nats: &platformconfig.Nats{
 				JetStreamStoreDir: standbyJetStreamStoreDir,
@@ -173,7 +169,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			Primary: builderdeployment.Instance{
 				Disabled:   false,
 				DataDir:    dataDir,
-				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
 				Nats: &builderdeployment.Nats{
 					JetStreamStoreDir: jetstreamStoreDir,
@@ -216,7 +211,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			Primary: platformconfig.Instance{
 				Disabled:   false,
 				DataDir:    dataDir,
-				RuntimeDir: runtimeDir,
 				APIAddress: apiAddr,
 				Nats: &platformconfig.Nats{
 					JetStreamStoreDir: jetstreamStoreDir,

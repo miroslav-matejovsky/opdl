@@ -17,7 +17,6 @@ goals:
       # the Primary Instance's; standby is the Standby Instance's. This machine
       # opts out of a standby, so it states that and authors nothing further.
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/north/sensor/primary"
 
         api {
           local_port = 8080
@@ -42,7 +41,6 @@ goals:
       # every port below is distinct: nothing is shared between them except the
       # ownership object, which is not a port.
       platform {
-        runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/primary"
 
         api {
           local_port = 8080
@@ -59,7 +57,6 @@ goals:
 
         standby {
           disabled    = false
-          runtime_dir = "C:/ProgramData/opdl/customer-a/north/local-server/standby"
 
           lock {
             windows_mutex = "Global\\opdl-customer-a-north-local-server"

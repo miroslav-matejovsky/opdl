@@ -254,11 +254,6 @@ type Instance struct {
 	// Service is the instance's Windows Service identity, present exactly when the
 	// instance is deployed.
 	Service *WinService `json:"service,omitempty"`
-	// RuntimeDir is the instance's own local runtime directory, holding its status
-	// file. It is the instance's rather than the machine's: two independent
-	// runtimes writing into one directory would overwrite each other's evidence.
-	// It takes no part in the ownership decision.
-	RuntimeDir string `json:"runtime_dir,omitempty"`
 	// DataDir is the instance's own general platform data root.
 	DataDir string `json:"data_dir,omitempty"`
 	// APIAddress is where this instance serves its local API. Each instance has
