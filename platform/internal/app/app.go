@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
@@ -19,6 +20,10 @@ import (
 // loads configuration, validates this process role against the machine
 // ownership, and runs either the active runtime or a warm standby until signaled.
 func Run(args []string) (runErr error) {
+	// Taken before anything is opened, so the uptime the health endpoints report
+	// counts from when the process began rather than from when it became Active.
+	started := time.Now()
+
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
 	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")
 	instance := fs.String("instance", "", "process role: primary or standby")
@@ -81,6 +86,7 @@ func Run(args []string) (runErr error) {
 		descriptor: descriptor,
 		cfg:        cfg,
 		role:       role,
+		started:    started,
 		factory:    factory,
 		local:      local,
 		record:     record,

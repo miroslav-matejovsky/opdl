@@ -46,6 +46,96 @@ components:
           format: uri
           type: string
       type: object
+    HealthHAResponse:
+      additionalProperties: false
+      properties:
+        leaseExpirationUtc:
+          description: Lease expiration timestamp in UTC.
+          example: "2026-07-24T10:15:00Z"
+          type: string
+        leaseState:
+          description: "Lease ownership status: Owned or Unowned."
+          example: Owned
+          type: string
+        ownershipGeneration:
+          description: Ownership generation counter.
+          example: 42
+          format: int64
+          type: integer
+        role:
+          description: "Instance role: Primary or Standby."
+          example: Primary
+          type: string
+        runtimeState:
+          description: "Current runtime state: Active or Passive."
+          example: Active
+          type: string
+      required:
+        - role
+        - runtimeState
+        - leaseState
+        - ownershipGeneration
+      type: object
+    HealthLiveResponse:
+      additionalProperties: false
+      properties:
+        status:
+          description: Process liveness status.
+          example: Healthy
+          type: string
+      required:
+        - status
+      type: object
+    HealthReadyResponse:
+      additionalProperties: false
+      properties:
+        status:
+          description: Operational readiness status.
+          example: Healthy
+          type: string
+      required:
+        - status
+      type: object
+    HealthResponse:
+      additionalProperties: false
+      properties:
+        checks:
+          additionalProperties:
+            type: string
+          description: Dependency health check results.
+          type: object
+        instanceId:
+          description: Instance identifier.
+          example: Primary
+          type: string
+        role:
+          description: "Instance role: Primary or Standby."
+          example: Primary
+          type: string
+        runtimeState:
+          description: "Current runtime state: Active or Passive."
+          example: Active
+          type: string
+        status:
+          description: "Overall health status: Healthy, Degraded, or Unhealthy."
+          example: Healthy
+          type: string
+        uptime:
+          description: Human-readable process uptime.
+          example: 14d 07h 23m
+          type: string
+        version:
+          description: Platform runtime version.
+          example: 0.1.0
+          type: string
+      required:
+        - status
+        - instanceId
+        - role
+        - runtimeState
+        - version
+        - uptime
+      type: object
     Instance:
       additionalProperties: false
       properties:
@@ -243,6 +333,78 @@ info:
   version: 0.1.0
 openapi: 3.0.3
 paths:
+  /health:
+    get:
+      description: Overall health assessment, operational status, dependency status, readiness, and basic redundancy visibility.
+      operationId: getHealth
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Report primary operational health
+  /health/ha:
+    get:
+      description: Redundancy, lease, and primary ownership diagnostics.
+      operationId: getHealthHA
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthHAResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Report high-availability and ownership diagnostics
+  /health/live:
+    get:
+      description: Lightweight check determining whether the process and main execution loop are running.
+      operationId: getHealthLive
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthLiveResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Report process liveness
+  /health/ready:
+    get:
+      description: Check determining whether the instance is capable of serving work.
+      operationId: getHealthReady
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReadyResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Report operational readiness
   /instance:
     get:
       description: Answered by every instance in every state, including a Passive one that refuses every domain operation.

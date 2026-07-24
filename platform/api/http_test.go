@@ -150,6 +150,36 @@ func TestRejectsSchemaViolations(t *testing.T) {
 	require.Empty(t, stub.created, "a schema violation never reaches the handler")
 }
 
+func TestServesHealthEndpoints(t *testing.T) {
+	srv := serve(t, newStub().handlers())
+
+	response := do(t, http.MethodGet, srv.URL+"/health", nil)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var health api.HealthResponse
+	decode(t, response, &health)
+	require.Equal(t, api.HealthStatusHealthy, health.Status)
+	require.Equal(t, "Primary", health.InstanceID)
+
+	response = do(t, http.MethodGet, srv.URL+"/health/live", nil)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var live api.HealthLiveResponse
+	decode(t, response, &live)
+	require.Equal(t, api.HealthStatusHealthy, live.Status)
+
+	response = do(t, http.MethodGet, srv.URL+"/health/ready", nil)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var ready api.HealthReadyResponse
+	decode(t, response, &ready)
+	require.Equal(t, api.HealthStatusHealthy, ready.Status)
+
+	response = do(t, http.MethodGet, srv.URL+"/health/ha", nil)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var ha api.HealthHAResponse
+	decode(t, response, &ha)
+	require.Equal(t, api.InstanceStateActive, ha.RuntimeState)
+	require.Equal(t, api.LeaseStateOwned, ha.LeaseState)
+}
+
 // TestOpenAPIYAMLIsDowngraded anchors OpenAPIYAML and confirms it produces the
 // downgraded 3.0.3 document with the platform's operations.
 func TestOpenAPIYAMLIsDowngraded(t *testing.T) {
@@ -157,7 +187,7 @@ func TestOpenAPIYAMLIsDowngraded(t *testing.T) {
 	require.NoError(t, err)
 	yaml := string(doc)
 	require.Contains(t, yaml, "openapi: 3.0.3")
-	for _, id := range []string{"registerUnit", "listRegistrations", "listRegistrationConflicts", "getRegistrationStatus"} {
+	for _, id := range []string{"registerUnit", "listRegistrations", "listRegistrationConflicts", "getRegistrationStatus", "getHealth", "getHealthLive", "getHealthReady", "getHealthHA"} {
 		require.Contains(t, yaml, "operationId: "+id)
 	}
 	require.NotContains(t, yaml, "$schema", "the schema-link hook is cleared in Config")

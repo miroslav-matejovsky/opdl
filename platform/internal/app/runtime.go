@@ -28,6 +28,10 @@ type process struct {
 	descriptor config.Descriptor
 	cfg        *config.Config
 	role       redundancy.InstanceRole
+	// started is when this process began running. It is the origin the health
+	// endpoints report uptime against, so every instance answers uptime from one
+	// point taken before it opened anything, in every state it later serves.
+	started time.Time
 	// factory stamps every envelope this process produces, local or journalled.
 	factory events.Factory
 	// local is the process-local publisher. Its only backend is record, so a fact
@@ -143,7 +147,7 @@ func runProcess(ctx context.Context, proc process) (runErr error) {
 	address := instanceOf(descriptor, role).APIAddress
 	passive := httpapi.NewPassiveHandler(func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStatePassive)
-	})
+	}, proc.started)
 	server, err := openInstanceServer(ctx, address, proc.cfg.ReadHeaderTimeout(), passive)
 	if err != nil {
 		return errors.Join(err, proc.local.Publish(ctx, APIListenFailed{Address: address, Error: err.Error()}))
@@ -320,6 +324,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, kind r
 	server.serveWith(httpapi.NewHandler(site.commands, site.queries, func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStateActive)
 	},
+		proc.started,
 		// exposeSpec is false: the authoritative OpenAPI artifact is
 		// api-specifications/openapi.yaml in git, not an endpoint on the runtime.
 		false))
@@ -375,7 +380,7 @@ func runActiveWithoutJournal(ctx context.Context, proc process, server *instance
 
 	server.serveWith(httpapi.NewJournallessHandler(func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStateActive)
-	}))
+	}, proc.started))
 	fmt.Printf("platform: %s active, serving on %s (no event storage: domain operations are refused)\n", role, address)
 
 	serveErr := proc.local.Publish(ctx, APIActive{Address: address, InstanceState: api.InstanceStateActive})
