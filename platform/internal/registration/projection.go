@@ -11,7 +11,7 @@ import (
 	"sync"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 )
 
 // Projection is one node's registration read model, rebuilt by folding the site
@@ -112,16 +112,8 @@ func NewProjection() *Projection {
 	}
 }
 
-// Projection applies journal deliveries, so it is an Event Fabric projector.
-var _ eventfabric.Projector = (*Projection)(nil)
-
-// Apply folds one journal delivery into the read model. It decodes the payload
-// for the delivery's event type and dispatches to the matching reducer. An
-// unknown registration event or an undecodable payload is reported so catch-up
-// stops rather than leaving a gap. Events outside registration are ignored but
-// still advance the sequence because one node-wide projector carries all
-// domains.
-func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) error {
+// Apply folds one journal delivery into the read model.
+func (p *Projection) Apply(ctx context.Context, delivery storage.Delivery) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -183,7 +175,7 @@ func (p *Projection) Apply(ctx context.Context, delivery eventfabric.Delivery) e
 // identical proposal ID already seen is an idempotent retry; a different one for
 // a claimed key becomes a contender, and the lowest journal sequence keeps the
 // claim.
-func (p *Projection) applyProposed(delivery eventfabric.Delivery, event Proposed) error {
+func (p *Projection) applyProposed(delivery storage.Delivery, event Proposed) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -207,7 +199,7 @@ func (p *Projection) applyProposed(delivery eventfabric.Delivery, event Proposed
 
 // applyDecision records one node's decision about a proposal, collapsing a
 // redelivered decision onto the entry its decision ID already holds.
-func (p *Projection) applyDecision(delivery eventfabric.Delivery, proposalID string, decided decision, decisionID string) error {
+func (p *Projection) applyDecision(delivery storage.Delivery, proposalID string, decided decision, decisionID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	proposal, ok := p.proposals[proposalID]
@@ -248,7 +240,7 @@ func (p *Projection) applyDecision(delivery eventfabric.Delivery, proposalID str
 }
 
 // applyAccepted records the origin's commit of a proposal.
-func (p *Projection) applyAccepted(delivery eventfabric.Delivery, event Accepted) error {
+func (p *Projection) applyAccepted(delivery storage.Delivery, event Accepted) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	proposal, ok := p.proposals[event.ProposalID]
@@ -518,7 +510,7 @@ func decode(envelope events.Envelope, target events.Event) error {
 	return nil
 }
 
-func validateProposed(delivery eventfabric.Delivery, proposal Proposed) error {
+func validateProposed(delivery storage.Delivery, proposal Proposed) error {
 	if delivery.Envelope.Origin.Machine != proposal.OriginMachine {
 		return fmt.Errorf("registration: proposal %q claims origin %q but envelope states %q", proposal.ProposalID, proposal.OriginMachine, delivery.Envelope.Origin.Machine)
 	}

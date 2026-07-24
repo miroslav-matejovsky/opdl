@@ -2,8 +2,6 @@ package registration
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -58,74 +56,20 @@ func anyPublisher(t *testing.T) events.Publisher {
 	return publisher
 }
 
-// failingPublisher composes a publisher whose backend always refuses.
-func failingPublisher(t *testing.T, cause error) events.Publisher {
-	t.Helper()
-	factory, err := events.NewFactory(testDescriptor, "primary")
-	require.NoError(t, err)
-	pub, err := storage.NewPublisher(factory, &recordingBackend{err: cause})
-	require.NoError(t, err)
-	return pub
-}
-
-// payload decodes the payload of the index-th stored envelope, so a test reads
-// the fact the journal would have stored rather than the struct it passed in.
-func payload[T events.Event](t *testing.T, backend *recordingBackend, index int) T {
-	t.Helper()
-	require.Greater(t, len(backend.stored), index, "no event was published at index %d", index)
-	var event T
-	require.NoError(t, json.Unmarshal(backend.stored[index].Data, &event))
-	require.Equal(t, event.EventType(), backend.stored[index].Type)
-	return event
-}
-
 func locations() []Location {
 	return []Location{{Machine: "node-b", IP: "10.0.1.11"}, {Machine: "node-a", IP: "10.0.1.10"}}
 }
 
-func TestCommandServicePublishesADurableProposal(t *testing.T) {
-	publisher, backend := testPublisher(t)
+func TestCommandServiceReturnsNotImplemented(t *testing.T) {
+	publisher, _ := testPublisher(t)
 	commands, _, err := Open(publisher, NewProjection(), locations()[1], locations())
 	require.NoError(t, err)
 
 	role := api.RoleMaster
-	result, err := commands.Create(t.Context(), api.RegistrationRequest{
+	_, err = commands.Create(t.Context(), api.RegistrationRequest{
 		UnitType: 7, UnitID: 42, UnitTypeNameAdvertised: "Billing", Role: &role,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, result.ProposalID)
-	require.Len(t, backend.stored, 1)
-
-	proposed := payload[Proposed](t, backend, 0)
-	require.Equal(t, result.ProposalID, proposed.ProposalID)
-	require.Equal(t, []string{"node-a", "node-b"}, proposed.ExpectedMachines)
-	require.Equal(t, "node-a", proposed.OriginMachine)
-
-	stamped := backend.stored[0]
-	require.NoError(t, stamped.Validate(), "the command service publishes a journal-valid envelope")
-	require.Equal(t, "node-a", stamped.Origin.Machine, "the origin is the process's, never the caller's")
-	require.Empty(t, stamped.CausationID, "a command begins a chain, so it has no cause")
-	require.Empty(t, stamped.CorrelationID)
-}
-
-func TestCommandServiceRejectsInvalidInputBeforePublishing(t *testing.T) {
-	publisher, backend := testPublisher(t)
-	commands, _, err := Open(publisher, NewProjection(), locations()[1], locations())
-	require.NoError(t, err)
-
-	_, err = commands.Create(t.Context(), api.RegistrationRequest{UnitTypeNameAdvertised: " "})
-	require.ErrorContains(t, err, "blank")
-	require.Empty(t, backend.stored)
-}
-
-func TestCommandServiceClassifiesPublishFailure(t *testing.T) {
-	publisher := failingPublisher(t, errors.New("connection lost"))
-	commands, _, err := Open(publisher, NewProjection(), locations()[1], locations())
-	require.NoError(t, err)
-
-	_, err = commands.Create(t.Context(), api.RegistrationRequest{UnitTypeNameAdvertised: "Worker"})
-	require.ErrorIs(t, err, api.ErrJournalUnavailable)
-	require.ErrorContains(t, err, "connection lost")
+	require.ErrorIs(t, err, api.ErrNotImplemented)
 }
 
 func TestQueryServiceReadsOnlyTheLocalProjection(t *testing.T) {
