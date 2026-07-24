@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
@@ -160,6 +162,70 @@ func RegisterInstance(hapi huma.API, instance func() Instance) {
 	})
 }
 
+// NewHealth builds the health handler funcs the runtime serves, deriving each
+// response from the live instance identity and the process start time. It is
+// read on every request rather than captured once, because Role and State change
+// as Primary Ownership moves.
+//
+// The status is Healthy for now: the platform runs no dependency checks yet, so
+// there is nothing that could report Degraded or Unhealthy. The lease view is the
+// honest one the runtime can give — an Active instance holds ownership, a Passive
+// one does not — without the lease expiration and generation a real lease
+// subsystem would carry.
+func NewHealth(instance func() Instance, started time.Time) Handlers {
+	return Handlers{
+		Health: func() HealthResponse {
+			inst := instance()
+			return HealthResponse{
+				Status:       HealthStatusHealthy,
+				InstanceID:   inst.Role,
+				Role:         inst.Role,
+				RuntimeState: inst.State,
+				Version:      apiVersion,
+				Uptime:       humanizeUptime(time.Since(started)),
+				Checks: map[string]string{
+					"configuration":    HealthStatusHealthy,
+					"internalServices": HealthStatusHealthy,
+				},
+			}
+		},
+		HealthLive: func() HealthLiveResponse {
+			return HealthLiveResponse{Status: HealthStatusHealthy}
+		},
+		HealthReady: func() HealthReadyResponse {
+			return HealthReadyResponse{Status: HealthStatusHealthy}
+		},
+		HealthHA: func() HealthHAResponse {
+			inst := instance()
+			leaseState := LeaseStateUnowned
+			if inst.State == InstanceStateActive {
+				leaseState = LeaseStateOwned
+			}
+			return HealthHAResponse{
+				Role:         inst.Role,
+				RuntimeState: inst.State,
+				LeaseState:   leaseState,
+			}
+		},
+	}
+}
+
+// humanizeUptime renders a process uptime as "<d>d <hh>h <mm>m <ss>s".
+func humanizeUptime(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Round(time.Second)
+	days := d / (24 * time.Hour)
+	d -= days * 24 * time.Hour
+	hours := d / time.Hour
+	d -= hours * time.Hour
+	minutes := d / time.Minute
+	d -= minutes * time.Minute
+	seconds := d / time.Second
+	return fmt.Sprintf("%dd %02dh %02dm %02ds", days, hours, minutes, seconds)
+}
+
 // RegisterHealth attaches the health operations to hapi.
 func RegisterHealth(hapi huma.API, h Handlers) {
 	huma.Register(hapi, huma.Operation{
@@ -260,14 +326,11 @@ func RegisterHealth(hapi huma.API, h Handlers) {
 		if state == InstanceStatePassive {
 			leaseState = LeaseStateUnowned
 		}
-		exp := "2026-07-24T10:15:00Z"
 		return &healthHAOutput{
 			Body: HealthHAResponse{
-				Role:                role,
-				RuntimeState:        state,
-				LeaseState:          leaseState,
-				LeaseExpirationUTC:  &exp,
-				OwnershipGeneration: 1,
+				Role:         role,
+				RuntimeState: state,
+				LeaseState:   leaseState,
 			},
 		}, nil
 	})

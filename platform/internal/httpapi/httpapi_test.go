@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -59,7 +60,7 @@ func testPassiveInstance() api.Instance {
 func TestHandlerRefusesRegistrationCreationWithNotImplemented(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
 	defer srv.Close()
 
 	response := do(t, http.MethodPost, srv.URL+"/registrations",
@@ -69,39 +70,70 @@ func TestHandlerRefusesRegistrationCreationWithNotImplemented(t *testing.T) {
 	require.Equal(t, http.StatusNotImplemented, response.StatusCode)
 }
 
+// TestHandlerServesHealthEndpoints checks that both an Active and a Passive
+// instance answer every health endpoint, and that each answer reports the
+// instance's own live identity rather than a fabricated one: the Active instance
+// owns its lease, the Passive instance does not, and neither invents a lease
+// expiration the runtime has no lease subsystem to give.
 func TestHandlerServesHealthEndpoints(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
 
-	activeSrv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
+	activeSrv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
 	defer activeSrv.Close()
 
-	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance))
+	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now()))
 	defer passiveSrv.Close()
 
-	for _, srv := range []*httptest.Server{activeSrv, passiveSrv} {
-		resp := do(t, http.MethodGet, srv.URL+"/health", nil, "")
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-		require.NoError(t, resp.Body.Close())
-
-		resp = do(t, http.MethodGet, srv.URL+"/health/live", nil, "")
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-		require.NoError(t, resp.Body.Close())
-
-		resp = do(t, http.MethodGet, srv.URL+"/health/ready", nil, "")
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-		require.NoError(t, resp.Body.Close())
-
-		resp = do(t, http.MethodGet, srv.URL+"/health/ha", nil, "")
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-		require.NoError(t, resp.Body.Close())
+	cases := []struct {
+		name      string
+		srv       *httptest.Server
+		instance  api.Instance
+		leaseHeld string
+	}{
+		{"active", activeSrv, testInstance(), api.LeaseStateOwned},
+		{"passive", passiveSrv, testPassiveInstance(), api.LeaseStateUnowned},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var health api.HealthResponse
+			decodeGet(t, tc.srv.URL+"/health", &health)
+			require.Equal(t, api.HealthStatusHealthy, health.Status)
+			require.Equal(t, tc.instance.Role, health.Role)
+			require.Equal(t, tc.instance.State, health.RuntimeState)
+			require.NotEmpty(t, health.Uptime, "uptime is reported from the process start time")
+
+			var live api.HealthLiveResponse
+			decodeGet(t, tc.srv.URL+"/health/live", &live)
+			require.Equal(t, api.HealthStatusHealthy, live.Status)
+
+			var ready api.HealthReadyResponse
+			decodeGet(t, tc.srv.URL+"/health/ready", &ready)
+			require.Equal(t, api.HealthStatusHealthy, ready.Status)
+
+			var ha api.HealthHAResponse
+			decodeGet(t, tc.srv.URL+"/health/ha", &ha)
+			require.Equal(t, tc.instance.Role, ha.Role)
+			require.Equal(t, tc.instance.State, ha.RuntimeState)
+			require.Equal(t, tc.leaseHeld, ha.LeaseState)
+			require.Nil(t, ha.LeaseExpirationUTC, "there is no lease subsystem to expire yet")
+		})
+	}
+}
+
+// decodeGet issues a GET, asserts 200, and decodes the JSON body into target.
+func decodeGet(t *testing.T, url string, target any) {
+	t.Helper()
+	resp := do(t, http.MethodGet, url, nil, "")
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(target))
 }
 
 func TestHandlerReturnsMethodErrors(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
 	defer srv.Close()
 
 	// Routing is Go 1.22 ServeMux under huma. It answers a wrong method with 405
@@ -125,7 +157,7 @@ func TestHandlerReturnsMethodErrors(t *testing.T) {
 func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
 	defer srv.Close()
 
 	for _, path := range []string{
@@ -288,7 +320,7 @@ func do(t *testing.T, method, url string, body []byte, contentType string) *http
 // None of it comes from the journal, so it is answerable while the instance's
 // projection is still catching up and while it never will.
 func TestPassiveHandlerAnswersForItself(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now()))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
@@ -311,7 +343,7 @@ func TestPassiveHandlerAnswersForItself(t *testing.T) {
 // with a 503 that names the instance holding ownership, which is a pointer the
 // caller can follow rather than a dead end.
 func TestPassiveHandlerRefusesEveryDomainOperation(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now()))
 	defer srv.Close()
 
 	requests := []struct {
@@ -349,7 +381,7 @@ func TestPassiveHandlerRefusesEveryDomainOperation(t *testing.T) {
 // typo that the platform is temporarily unavailable, and they would retry
 // forever. Refusing is about who serves an operation, not about whether it exists.
 func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now()))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
@@ -378,7 +410,7 @@ func testJournallessInstance() api.Instance {
 // has no journal. The refusal names the deployment rather than an instance to go
 // to instead, since there is no such instance and retrying will not help.
 func TestJournallessHandlerIsActiveAndStillRefusesDomainOperations(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance))
+	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now()))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
@@ -422,7 +454,7 @@ func TestJournallessHandlerIsActiveAndStillRefusesDomainOperations(t *testing.T)
 // TestJournallessHandlerStillReportsUnknownPathsAsNotFound checks the refusal is
 // scoped to the operations that exist, for the same reason the Passive one is.
 func TestJournallessHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance))
+	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now()))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
@@ -436,7 +468,7 @@ func TestJournallessHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 func TestActiveHandlerAnswersTheSameInstanceOperation(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
