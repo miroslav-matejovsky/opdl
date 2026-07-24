@@ -42,8 +42,12 @@ type LeaseConfig struct {
 	// expired while this instance still believes it is Active.
 	RenewalInterval time.Duration
 	// HealthCheckInterval is how often a Passive instance evaluates promotion and
-	// polls its peer's health.
+	// polls its peer's health, and how often an Active Standby polls the Primary
+	// to decide whether to fail back.
 	HealthCheckInterval time.Duration
+	// FailbackStabilization is how long the Primary must be continuously healthy
+	// before an Active Standby hands ownership back to it. Zero disables failback.
+	FailbackStabilization time.Duration
 }
 
 // Lease is a machine's Primary Ownership handle. It reads and writes the shared
@@ -68,12 +72,9 @@ type Lease struct {
 // record is one lease grant as it is stored on disk. Every field is written and
 // read on one host, so its timestamps and a reader's clock are the same clock.
 type record struct {
-	// Generation is a monotonic counter incremented on every acquisition. It is
-	// the draft's ownership generation / fencing token; this pass reports it but
-	// does not yet enforce it. See docs/plans/redundancy-rest.md.
-	Generation uint64 `json:"generation"`
 	// OwnerRole and OwnerPID identify the holder, for diagnostics and so an owner
-	// recognizes its own grant.
+	// recognizes its own grant. OwnerPID is what distinguishes two instances
+	// writing a free lease at the same instant.
 	OwnerRole string `json:"owner_role"`
 	OwnerPID  int    `json:"owner_pid"`
 	// ExpiresUnixNano is when the grant stops being valid without renewal.
@@ -126,9 +127,9 @@ func OpenLease(cfg LeaseConfig, role InstanceRole) (*Lease, error) {
 // It reads the current grant, and, if there is none or it is free, writes its
 // successor and confirms by re-reading that this instance is the writer that
 // landed. The confirm is what makes two instances writing a free lease at the
-// same instant resolve to one owner without a kernel lock: both write the same
-// next generation, the file ends as one of them, and the loser sees the other's
-// identity on re-read and reports it did not acquire.
+// same instant resolve to one owner without a kernel lock: the two contenders
+// have distinct roles, so each writes its own role, the file ends as one of them,
+// and the loser sees the other's role on re-read and reports it did not acquire.
 func (l *Lease) tryAcquire(now time.Time) (Acquisition, error) {
 	if l == nil {
 		return Acquisition{Held: true}, nil
@@ -141,7 +142,6 @@ func (l *Lease) tryAcquire(now time.Time) (Acquisition, error) {
 		return Acquisition{}, nil // a valid lease is held by the other instance
 	}
 	next := record{
-		Generation:      cur.Generation + 1,
 		OwnerRole:       string(l.role),
 		OwnerPID:        l.pid,
 		ExpiresUnixNano: now.Add(l.cfg.Duration).UnixNano(),
@@ -153,8 +153,8 @@ func (l *Lease) tryAcquire(now time.Time) (Acquisition, error) {
 	if err != nil {
 		return Acquisition{}, err
 	}
-	if confirmed.Generation != next.Generation || confirmed.OwnerPID != l.pid {
-		return Acquisition{}, nil // another instance's write landed last; it owns
+	if confirmed.OwnerRole != string(l.role) {
+		return Acquisition{}, nil // the other instance's write landed last; it owns
 	}
 	l.setOwned(next)
 	// Ownership taken from a grant that lapsed without a clean release is a
@@ -179,7 +179,7 @@ func (l *Lease) renew(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	if !exists || cur.Generation != owned.Generation || cur.OwnerPID != l.pid {
+	if !exists || cur.OwnerRole != owned.OwnerRole {
 		l.markLost()
 		return errOwnershipLost
 	}
@@ -212,7 +212,7 @@ func (l *Lease) release() error {
 	if err != nil {
 		return err
 	}
-	if !exists || cur.Generation != owned.Generation || cur.OwnerPID != l.pid {
+	if !exists || cur.OwnerRole != owned.OwnerRole {
 		return nil // ownership already moved on; nothing to release
 	}
 	released := cur
@@ -286,17 +286,14 @@ func (l *Lease) File() string {
 type LeaseView struct {
 	// Held reports whether this instance holds Primary Ownership now.
 	Held bool
-	// Generation is the ownership generation of this instance's grant, zero when
-	// it holds none or is Active by construction.
-	Generation uint64
 	// Expiry is when this instance's grant lapses, the zero time when it holds
 	// none or is Active by construction.
 	Expiry time.Time
 }
 
 // View reports this instance's current ownership for the /health/ha endpoint. A
-// nil Lease is Active by construction: it holds ownership with no expiry and no
-// generation, because there is no lease to grant or expire.
+// nil Lease is Active by construction: it holds ownership with no expiry, because
+// there is no lease to grant or expire.
 func (l *Lease) View() LeaseView {
 	if l == nil {
 		return LeaseView{Held: true}
@@ -306,7 +303,7 @@ func (l *Lease) View() LeaseView {
 	if !l.held {
 		return LeaseView{}
 	}
-	return LeaseView{Held: true, Generation: l.owned.Generation, Expiry: time.Unix(0, l.owned.ExpiresUnixNano)}
+	return LeaseView{Held: true, Expiry: time.Unix(0, l.owned.ExpiresUnixNano)}
 }
 
 // readRecord reads the lease file. It reports exists=false for an absent file,

@@ -1,9 +1,23 @@
 # Lease-based Primary Ownership
 
-Status: implemented — the lease and health-gated promotion below are in the
-code, and the Windows named mutex is gone. What this pass deliberately left out
-(failback, fencing-token enforcement, and a few hardenings) is recorded in
-[redundancy-rest.md](redundancy-rest.md).
+Status: implemented — the lease, health-gated promotion, and automatic failback
+are in the code, and the Windows named mutex is gone. This document is the
+original design and is kept for the reasoning behind it;
+[redundancy-rest.md](redundancy-rest.md) is the authoritative current state and
+what is left.
+
+Two things below diverge from what shipped, so read them as history rather than
+as the code:
+
+- **No ownership generation / fencing token.** The design proposed a monotonic
+  generation as a fencing token. It was removed: the owner identity is the
+  instance's fixed role (a machine's two instances always differ), which is what
+  distinguishes grants, and nothing downstream consumes a fencing token. Every
+  "generation" reference below is gone from the code, including
+  `ownershipGeneration` on `/health/ha`.
+- **Failback is automatic only.** There is no manual policy. An Active Standby
+  hands back to a returning healthy Primary after the stabilization window; see
+  [redundancy-rest.md](redundancy-rest.md) for how (step-down-and-restart).
 
 This document is the design: it replaces the machine's non-expiring Windows named
 mutex with a lease-based Primary Ownership mechanism, and gates promotion on peer

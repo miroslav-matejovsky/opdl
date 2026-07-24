@@ -26,10 +26,6 @@ const peerHealthTimeout = time.Second
 // A machine that deploys no Standby Instance carries no lease, so this returns the
 // zero config, which OpenLease turns into a nil Lease that is Active by
 // construction.
-//
-// The descriptor's failback_stabilization is not read here: this pass implements
-// no failback, so nothing would act on it. It is carried in the descriptor for
-// when failback lands; see docs/plans/redundancy-rest.md.
 func leaseConfigOf(descriptor config.Descriptor) (redundancy.LeaseConfig, error) {
 	lease := descriptor.Lease
 	if lease == nil {
@@ -47,20 +43,25 @@ func leaseConfigOf(descriptor config.Descriptor) (redundancy.LeaseConfig, error)
 	if err != nil {
 		return redundancy.LeaseConfig{File: lease.File}, fmt.Errorf("lease health_check_interval %q: %w", lease.HealthCheckInterval, err)
 	}
+	failback, err := time.ParseDuration(lease.FailbackStabilization)
+	if err != nil {
+		return redundancy.LeaseConfig{File: lease.File}, fmt.Errorf("lease failback_stabilization %q: %w", lease.FailbackStabilization, err)
+	}
 	return redundancy.LeaseConfig{
-		File:                lease.File,
-		Duration:            duration,
-		RenewalInterval:     renewal,
-		HealthCheckInterval: healthCheck,
+		File:                  lease.File,
+		Duration:              duration,
+		RenewalInterval:       renewal,
+		HealthCheckInterval:   healthCheck,
+		FailbackStabilization: failback,
 	}, nil
 }
 
 // leaseViewOf renders this instance's ownership for the /health/ha endpoint. It is
 // nil-safe: a standby-less machine holds ownership by construction, with no
-// expiry and no generation.
+// expiry.
 func leaseViewOf(lease *redundancy.Lease) api.LeaseView {
 	view := lease.View()
-	out := api.LeaseView{Owned: view.Held, Generation: int64(view.Generation)}
+	out := api.LeaseView{Owned: view.Held}
 	if !view.Expiry.IsZero() {
 		expiry := view.Expiry.UTC().Format(time.RFC3339)
 		out.ExpirationUTC = &expiry

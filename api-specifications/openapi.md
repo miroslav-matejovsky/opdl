@@ -62,7 +62,6 @@ OK
 {
    "leaseExpirationUtc": "2026-07-24T10:15:00Z",
    "leaseState": "Owned",
-   "ownershipGeneration": 42,
    "role": "Primary",
    "runtimeState": "Active"
 }
@@ -72,7 +71,6 @@ OK
 
 - `leaseExpirationUtc` *(string)* Lease expiration timestamp in UTC.
 - `leaseState` *(string, required)* Lease ownership status: Owned or Unowned.
-- `ownershipGeneration` *(integer, required)* Ownership generation counter.
 - `role` *(string, required)* Instance role: Primary or Standby.
 - `runtimeState` *(string, required)* Current runtime state: Active or Passive.
 

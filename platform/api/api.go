@@ -201,6 +201,4 @@ type HealthHAResponse struct {
 	LeaseState string `json:"leaseState" doc:"Lease ownership status: Owned or Unowned." example:"Owned"`
 	// LeaseExpirationUTC is an optional ISO-8601 timestamp for lease expiration in UTC.
 	LeaseExpirationUTC *string `json:"leaseExpirationUtc,omitempty" doc:"Lease expiration timestamp in UTC." example:"2026-07-24T10:15:00Z"`
-	// OwnershipGeneration is the ownership generation counter.
-	OwnershipGeneration int64 `json:"ownershipGeneration" doc:"Ownership generation counter." example:"42"`
 }

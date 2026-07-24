@@ -17,6 +17,8 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //     renew its lease but has not yet had to step down.
 //   - platform.redundancy.stepped_down: an Active instance stopped being Active
 //     because it lost or could no longer keep its lease.
+//   - platform.redundancy.failback_initiated: an Active Standby began handing
+//     ownership back to a returning healthy Primary.
 //   - platform.redundancy.activation_started / _failed / _completed: the active
 //     composition began, did not complete, or ran and gave ownership back.
 //
@@ -40,6 +42,9 @@ const (
 	// TypeSteppedDown is stated when an Active instance stops being Active because
 	// it lost or could no longer keep its lease.
 	TypeSteppedDown events.Type = "platform.redundancy.stepped_down"
+	// TypeFailbackInitiated is stated when an Active Standby begins handing
+	// ownership back to a returning healthy Primary.
+	TypeFailbackInitiated events.Type = "platform.redundancy.failback_initiated"
 	// TypeActivationStarted is stated when the active composition begins.
 	TypeActivationStarted events.Type = "platform.redundancy.activation_started"
 	// TypeActivationFailed is stated when the active composition fails.
@@ -67,8 +72,8 @@ type OwnershipWaiting struct {
 // EventType returns the event's stable dotted kind.
 func (OwnershipWaiting) EventType() events.Type { return TypeOwnershipWaiting }
 
-// OwnershipAcquired states that this process holds Primary Ownership, at which
-// generation, and how it obtained it.
+// OwnershipAcquired states that this process holds Primary Ownership and how it
+// obtained it.
 //
 // Abandoned is the point of the event. An abandoned lease means the previous owner
 // died and let its lease lapse rather than handing it over, so an operator can
@@ -76,8 +81,6 @@ func (OwnershipWaiting) EventType() events.Type { return TypeOwnershipWaiting }
 type OwnershipAcquired struct {
 	// File is the ownership lease this instance now holds.
 	File string `json:"file"`
-	// Generation is the ownership generation of the grant this instance took.
-	Generation uint64 `json:"generation"`
 	// Abandoned reports that ownership was taken from a lease that lapsed without a
 	// clean release, rather than from one handed over.
 	Abandoned bool `json:"abandoned"`
@@ -134,6 +137,13 @@ func (SteppedDown) EventType() events.Type { return TypeSteppedDown }
 // Severity reports a step-down as a warning: the machine failed over, which is
 // worth an operator's attention but is the redundancy working, not breaking.
 func (SteppedDown) Severity() events.Severity { return events.SeverityWarn }
+
+// FailbackInitiated states that an Active Standby has begun handing ownership
+// back to a returning healthy Primary under the Preferred Primary policy.
+type FailbackInitiated struct{}
+
+// EventType returns the event's stable dotted kind.
+func (FailbackInitiated) EventType() events.Type { return TypeFailbackInitiated }
 
 // ActivationStarted states that the active composition began.
 type ActivationStarted struct {

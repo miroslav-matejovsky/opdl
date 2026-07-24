@@ -46,13 +46,13 @@
 // alive holder: a hung process kept its ownership until its service manager
 // killed it. The lease trades the kernel guarantee for a bounded failover — a
 // hung owner stops renewing and loses ownership on expiry — and keeps split-brain
-// out by four combined means: the two instances share one host's clock, so an
+// out by three combined means: the two instances share one host's clock, so an
 // expiry means the same instant to both; an owner that cannot renew steps down
-// before its lease could lapse from a promoter's view; a promoter takes over only
-// when the peer is also unhealthy; and every acquisition bumps an ownership
-// generation a stale owner reads on its way back. See docs/plans/README.md for
-// the safety argument, and docs/plans/redundancy-rest.md for what is deferred
-// (failback, and fencing-token enforcement).
+// before its lease could lapse from a promoter's view; and a promoter takes over
+// only when the peer is also unhealthy. Under the Preferred Primary policy an
+// Active Standby also hands ownership back once the Primary has been healthy for a
+// stabilization window. See docs/plans/README.md for the safety argument, and
+// docs/plans/redundancy-rest.md for what is deferred.
 //
 // # Per-instance endpoints and transfer ordering
 //

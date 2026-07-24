@@ -97,7 +97,7 @@ func Contend(ctx context.Context, publisher events.Publisher, lease *Lease, deps
 	// A machine with no standby has no lease and nothing to contend for: it is
 	// Active by construction, so there was no ownership to take from anyone.
 	if lease == nil {
-		return activate(ctx, publisher, nil, runtime, ActivationInitial)
+		return activate(ctx, publisher, nil, deps, runtime, ActivationInitial)
 	}
 
 	if err := publisher.Publish(ctx, LeaseOpened{File: lease.File()}); err != nil {
@@ -109,10 +109,10 @@ func Contend(ctx context.Context, publisher events.Publisher, lease *Lease, deps
 		return err
 	}
 	if acquired.Held {
-		if err := publisher.Publish(ctx, OwnershipAcquired{File: lease.File(), Generation: lease.View().Generation, Abandoned: acquired.Abandoned}); err != nil {
+		if err := publisher.Publish(ctx, OwnershipAcquired{File: lease.File(), Abandoned: acquired.Abandoned}); err != nil {
 			return err
 		}
-		return activate(ctx, publisher, lease, runtime, ActivationInitial)
+		return activate(ctx, publisher, lease, deps, runtime, ActivationInitial)
 	}
 
 	if err := publisher.Publish(ctx, OwnershipWaiting{File: lease.File()}); err != nil {
@@ -123,10 +123,10 @@ func Contend(ctx context.Context, publisher events.Publisher, lease *Lease, deps
 	if err != nil || !acquired.Held {
 		return err
 	}
-	if err := publisher.Publish(ctx, OwnershipAcquired{File: lease.File(), Generation: lease.View().Generation, Abandoned: acquired.Abandoned}); err != nil {
+	if err := publisher.Publish(ctx, OwnershipAcquired{File: lease.File(), Abandoned: acquired.Abandoned}); err != nil {
 		return err
 	}
-	return activate(ctx, publisher, lease, runtime, activationKind(lease.Role()))
+	return activate(ctx, publisher, lease, deps, runtime, activationKind(lease.Role()))
 }
 
 // activationKind names why this instance is taking over after waiting. A Standby
@@ -217,7 +217,11 @@ func evaluatePromotion(ctx context.Context, publisher events.Publisher, lease *L
 // alive, it cancels serving so this instance stops being Active before a promoter
 // could see the lease lapsed. Release happens after Active has returned, which is
 // the ordering the other instance depends on.
-func activate(ctx context.Context, publisher events.Publisher, lease *Lease, runtime Runtime, kind ActivationKind) error {
+//
+// An Active Standby also runs a failback watcher: once the returning Primary has
+// been healthy for the stabilization window, it stops serving and releases, so
+// the preferred Primary reclaims ownership. See startFailback.
+func activate(ctx context.Context, publisher events.Publisher, lease *Lease, deps Deps, runtime Runtime, kind ActivationKind) error {
 	started := time.Now()
 	if err := publisher.Publish(ctx, ActivationStarted{Kind: kind}); err != nil {
 		return err
@@ -226,15 +230,21 @@ func activate(ctx context.Context, publisher events.Publisher, lease *Lease, run
 	activeCtx, stopActive := context.WithCancel(ctx)
 	defer stopActive()
 
-	var renewalDone <-chan struct{}
+	var renewalDone, failbackDone <-chan struct{}
 	if lease != nil {
 		renewalDone = startRenewal(activeCtx, publisher, lease, stopActive)
+		if lease.Role() == RoleStandby && deps.PeerHealthy != nil && lease.cfg.FailbackStabilization > 0 {
+			failbackDone = startFailback(activeCtx, publisher, lease, deps, stopActive)
+		}
 	}
 
 	err := runtime.Active(activeCtx, kind)
 	stopActive()
 	if renewalDone != nil {
 		<-renewalDone
+	}
+	if failbackDone != nil {
+		<-failbackDone
 	}
 	releaseErr := lease.release()
 
@@ -244,6 +254,53 @@ func activate(ctx context.Context, publisher events.Publisher, lease *Lease, run
 		return errors.Join(err, releaseErr, stateErr)
 	}
 	return errors.Join(publisher.Publish(ctx, ActivationCompleted{Kind: kind, DurationMS: elapsed}), releaseErr)
+}
+
+// startFailback hands ownership back to a returning healthy Primary.
+//
+// It runs only on an Active Standby: an instance that took over after the Primary
+// failed. Under the Preferred Primary policy the Primary should end up Active, so
+// once its health endpoint has reported it able to serve for an uninterrupted
+// FailbackStabilization window, this Standby steps down — it stops serving, which
+// leads activate to release the lease, and the process leaves so its service
+// manager restarts it Passive while the Primary reclaims ownership.
+//
+// The stabilization window resets the moment the Primary looks unhealthy again, so
+// a Primary that is only intermittently reachable does not trigger a handover that
+// would immediately fail back the other way. Failback is automatic; there is no
+// manual mode.
+//
+// Stepping down by exiting mirrors the renewal loop's step-down. Rejoining as
+// Passive in place, without the restart, is the same refactor that item needs;
+// see docs/plans/redundancy-rest.md.
+func startFailback(ctx context.Context, publisher events.Publisher, lease *Lease, deps Deps, stepDown func()) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(lease.cfg.HealthCheckInterval)
+		defer ticker.Stop()
+		var healthySince time.Time
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !deps.PeerHealthy(ctx) {
+					healthySince = time.Time{} // the Primary is not back yet; reset the window
+					continue
+				}
+				if healthySince.IsZero() {
+					healthySince = time.Now()
+				}
+				if time.Since(healthySince) >= lease.cfg.FailbackStabilization {
+					events.BestEffort(publisher).State(ctx, FailbackInitiated{})
+					stepDown()
+					return
+				}
+			}
+		}
+	}()
+	return done
 }
 
 // startRenewal extends the lease every renewal interval for as long as ctx runs,

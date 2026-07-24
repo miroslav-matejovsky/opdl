@@ -42,17 +42,17 @@ func TestRedundancyEventsDeclareTheirContract(t *testing.T) {
 		},
 		{
 			name:     "ownership handed over",
-			event:    redundancy.OwnershipAcquired{File: "D:/opdl/lease", Generation: 7},
+			event:    redundancy.OwnershipAcquired{File: "D:/opdl/lease"},
 			wantType: redundancy.TypeOwnershipAcquired,
 			want:     events.SeverityInfo,
-			wantJSON: `{"file":"D:/opdl/lease","generation":7,"abandoned":false}`,
+			wantJSON: `{"file":"D:/opdl/lease","abandoned":false}`,
 		},
 		{
 			name:     "ownership taken from a lapsed lease",
-			event:    redundancy.OwnershipAcquired{File: "D:/opdl/lease", Generation: 8, Abandoned: true},
+			event:    redundancy.OwnershipAcquired{File: "D:/opdl/lease", Abandoned: true},
 			wantType: redundancy.TypeOwnershipAcquired,
 			want:     events.SeverityWarn,
-			wantJSON: `{"file":"D:/opdl/lease","generation":8,"abandoned":true}`,
+			wantJSON: `{"file":"D:/opdl/lease","abandoned":true}`,
 		},
 		{
 			name:     "promotion declined",
@@ -74,6 +74,13 @@ func TestRedundancyEventsDeclareTheirContract(t *testing.T) {
 			wantType: redundancy.TypeSteppedDown,
 			want:     events.SeverityWarn,
 			wantJSON: `{"reason":"ownership was taken over"}`,
+		},
+		{
+			name:     "failback initiated",
+			event:    redundancy.FailbackInitiated{},
+			wantType: redundancy.TypeFailbackInitiated,
+			want:     events.SeverityInfo,
+			wantJSON: `{}`,
 		},
 		{
 			name:     "activation started",
@@ -152,7 +159,6 @@ func TestContendRecordsTheOwnershipLifecycle(t *testing.T) {
 	require.NoError(t, json.Unmarshal(acquired.Data, &payload))
 	require.False(t, payload.Abandoned)
 	require.Equal(t, lease.File(), payload.File)
-	require.Equal(t, uint64(1), payload.Generation, "the first grant on a fresh lease is generation 1")
 
 	var completed redundancy.ActivationCompleted
 	require.NoError(t, json.Unmarshal(envelopes[3].Data, &completed))

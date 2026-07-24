@@ -171,8 +171,6 @@ type LeaseView struct {
 	// ExpirationUTC is when the lease lapses, an ISO-8601 UTC timestamp, nil when
 	// this instance holds no lease or is Active by construction.
 	ExpirationUTC *string
-	// Generation is the ownership generation of this instance's grant.
-	Generation int64
 }
 
 // NewHealth builds the health handler funcs the runtime serves, deriving each
@@ -220,11 +218,10 @@ func NewHealth(instance func() Instance, started time.Time, leaseView func() Lea
 				leaseState = LeaseStateOwned
 			}
 			return HealthHAResponse{
-				Role:                inst.Role,
-				RuntimeState:        inst.State,
-				LeaseState:          leaseState,
-				LeaseExpirationUTC:  view.ExpirationUTC,
-				OwnershipGeneration: view.Generation,
+				Role:               inst.Role,
+				RuntimeState:       inst.State,
+				LeaseState:         leaseState,
+				LeaseExpirationUTC: view.ExpirationUTC,
 			}
 		},
 	}

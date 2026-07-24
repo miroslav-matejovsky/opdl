@@ -23,7 +23,7 @@ func testLeaseConfig(t *testing.T) LeaseConfig {
 	}
 }
 
-func TestLeaseAcquiresAFreeFileAndStartsAtGenerationOne(t *testing.T) {
+func TestLeaseAcquiresAFreeFile(t *testing.T) {
 	t.Parallel()
 
 	lease, err := OpenLease(testLeaseConfig(t), RolePrimary)
@@ -38,11 +38,10 @@ func TestLeaseAcquiresAFreeFileAndStartsAtGenerationOne(t *testing.T) {
 
 	view := lease.View()
 	require.True(t, view.Held)
-	require.Equal(t, uint64(1), view.Generation)
 	require.WithinDuration(t, now.Add(lease.cfg.Duration), view.Expiry, time.Millisecond)
 }
 
-func TestLeaseRenewExtendsExpiryWithoutChangingGeneration(t *testing.T) {
+func TestLeaseRenewExtendsExpiry(t *testing.T) {
 	t.Parallel()
 
 	lease, err := OpenLease(testLeaseConfig(t), RolePrimary)
@@ -55,11 +54,10 @@ func TestLeaseRenewExtendsExpiryWithoutChangingGeneration(t *testing.T) {
 	require.NoError(t, lease.renew(later))
 
 	view := lease.View()
-	require.Equal(t, uint64(1), view.Generation, "renewal keeps the same grant")
 	require.WithinDuration(t, later.Add(lease.cfg.Duration), view.Expiry, time.Millisecond)
 }
 
-func TestLeaseTakeoverOfAnExpiredGrantIsAbandonedAndBumpsGeneration(t *testing.T) {
+func TestLeaseTakeoverOfAnExpiredGrantIsAbandoned(t *testing.T) {
 	t.Parallel()
 
 	cfg := testLeaseConfig(t)
@@ -82,7 +80,7 @@ func TestLeaseTakeoverOfAnExpiredGrantIsAbandonedAndBumpsGeneration(t *testing.T
 	require.NoError(t, err)
 	require.True(t, acquired.Held)
 	require.True(t, acquired.Abandoned, "a lapsed grant was not handed over")
-	require.Equal(t, uint64(2), standby.View().Generation, "a takeover bumps the generation")
+	require.True(t, standby.Held())
 }
 
 func TestLeaseReleaseFreesTheGrantForThePeer(t *testing.T) {

@@ -235,6 +235,68 @@ func TestContendDoesNotPromoteWhileThePeerIsHealthy(t *testing.T) {
 	<-holderDone
 }
 
+// TestContendStandbyFailsBackToAHealthyPrimary checks the automatic failback: an
+// Active Standby whose peer (the Primary) has been healthy for the stabilization
+// window steps down on its own, so the preferred Primary can reclaim ownership.
+// Contend returns without the context being canceled, which is the step-down the
+// service manager restarts the Standby Passive after.
+func TestContendStandbyFailsBackToAHealthyPrimary(t *testing.T) {
+	t.Parallel()
+
+	cfg := leaseConfig(t)
+	cfg.FailbackStabilization = 60 * time.Millisecond
+	standby := openLease(t, cfg, redundancy.RoleStandby)
+
+	runtime := newRecordingRuntime()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- redundancy.Contend(ctx, stating(t), standby, healthyPeer, runtime.runtime()) }()
+
+	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds, "the standby takes the free lease")
+
+	// The Primary is healthy, so once the stabilization window passes the standby
+	// hands ownership back by stepping down of its own accord.
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the standby did not fail back to the healthy primary")
+	}
+	require.Equal(t, []string{"active start", "active stop"}, runtime.recorded())
+	require.False(t, standby.Held(), "the standby released the lease on failback")
+}
+
+// TestContendDoesNotFailBackToAnUnhealthyPeer checks the stabilization gate: an
+// Active Standby whose peer is not answering does not hand ownership back, because
+// there is no healthy Primary to hand it to.
+func TestContendDoesNotFailBackToAnUnhealthyPeer(t *testing.T) {
+	t.Parallel()
+
+	cfg := leaseConfig(t)
+	cfg.FailbackStabilization = 60 * time.Millisecond
+	standby := openLease(t, cfg, redundancy.RoleStandby)
+
+	runtime := newRecordingRuntime()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- redundancy.Contend(ctx, stating(t), standby, unhealthyPeer, runtime.runtime()) }()
+
+	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
+
+	// Several stabilization windows pass with no healthy peer; the standby stays
+	// Active rather than stepping down into an empty handover.
+	select {
+	case err := <-done:
+		t.Fatalf("the standby failed back with no healthy primary to take over: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	require.True(t, standby.Held(), "the standby keeps ownership while its peer is down")
+
+	cancel()
+	<-done
+}
+
 // TestContendCallsAPrimaryTakingOverAFailback checks the activation kind is
 // derived from which instance won, not from how it won.
 func TestContendCallsAPrimaryTakingOverAFailback(t *testing.T) {
