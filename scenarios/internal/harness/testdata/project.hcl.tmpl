@@ -72,12 +72,16 @@ project "{{ .Name }}" {
 {{- if not .StandbyDisabled }}
           data_dir    = "{{ .StandbyDataDir }}"
 
+          # The lease timings are deliberately much shorter than a production
+          # blueprint's: a redundancy scenario waits out real lapses and real
+          # stabilization windows, and at production pace one failover-and-back
+          # would take a minute of wall clock without testing anything more.
           lease {
             file                   = "{{ .LeaseFile }}"
-            duration               = "15s"
-            renewal_interval       = "5s"
-            health_check_interval  = "2s"
-            failback_stabilization = "30s"
+            duration               = "2s"
+            renewal_interval       = "500ms"
+            health_check_interval  = "250ms"
+            failback_stabilization = "2s"
           }
 
           api {

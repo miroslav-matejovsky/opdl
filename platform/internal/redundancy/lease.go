@@ -25,7 +25,11 @@ import (
 // this safe is that a machine's two instances are two processes on one host: they
 // share a clock and a filesystem, so an expiry compared against the local clock
 // means the same instant to both, and there is no skew or partition to reason
-// about. See docs/plans for the finalization plan and its accepted limitations.
+// about. Two limitations are accepted deliberately: acquisition is
+// write-then-confirm rather than a true compare-and-swap (the health gate and
+// pre-expiry step-down make the race practically unreachable on one host), and
+// expiry uses the wall clock, so a large backward clock step during a takeover
+// window is unguarded.
 
 // LeaseConfig is the machine's resolved lease policy: where ownership is recorded
 // and the timings that govern how it is held and turned over. It is derived from

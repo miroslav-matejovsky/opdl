@@ -93,6 +93,33 @@ func fetchInstance(ctx context.Context, m *Machine) (Instance, int, error) {
 	return getJSON[Instance](ctx, m.URL+"/instance")
 }
 
+// FetchInstanceAt returns the instance record served at baseURL, the status
+// code, and any transport failure. It reports rather than asserts, so it is
+// safe inside a poll — a redundancy scenario polls both of a machine's
+// instances at their own addresses, and either may legitimately be down.
+func FetchInstanceAt(ctx context.Context, baseURL string) (Instance, int, error) {
+	return getJSON[Instance](ctx, baseURL+"/instance")
+}
+
+// Health is the observable shape of GET /health: the primary operational health
+// assessment every instance serves in every state.
+type Health struct {
+	// Status is Healthy, Degraded, or Unhealthy.
+	Status string `json:"status"`
+	// Role is the instance's fixed role, Primary or Standby spelled as the
+	// runtime reports it.
+	Role string `json:"role"`
+	// RuntimeState is the instance's current state, active or passive.
+	RuntimeState string `json:"runtimeState"`
+}
+
+// FetchHealthAt returns the health assessment served at baseURL, the status
+// code, and any transport failure. Like FetchInstanceAt it reports rather than
+// asserts, so it is safe inside a poll.
+func FetchHealthAt(ctx context.Context, baseURL string) (Health, int, error) {
+	return getJSON[Health](ctx, baseURL+"/health")
+}
+
 // GetInstance returns one machine's instance record and the status code it
 // answered with. A machine that does not answer at all is a failure here, so
 // this is for the test goroutine; a poll wants fetchInstance.
@@ -118,15 +145,22 @@ type Problem struct {
 	Instance Instance `json:"instance"`
 }
 
-// GetProblem issues a GET the machine is expected to refuse, and decodes the
-// problem body it answered with along with the status code.
+// GetProblem issues a GET the machine's Primary Instance is expected to refuse,
+// and decodes the problem body it answered with along with the status code.
 //
 // A refusal is part of the platform's contract rather than a transport failure,
 // so the body is decoded and returned. Only a request that got no answer at all
 // fails the scenario here.
 func GetProblem(ctx context.Context, t *testing.T, m *Machine, path string) (problem Problem, code int) {
 	t.Helper()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, m.URL+path, http.NoBody)
+	return GetProblemAt(ctx, t, m, m.URL, path)
+}
+
+// GetProblemAt is GetProblem against an explicit instance address, for asking a
+// machine's Standby Instance the question at its own endpoint.
+func GetProblemAt(ctx context.Context, t *testing.T, m *Machine, baseURL, path string) (problem Problem, code int) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, http.NoBody)
 	require.NoError(t, err)
 	response, err := http.DefaultClient.Do(request)
 	require.NoErrorf(t, err, "%s did not answer %s:%s", m.Name, path, Diagnostics(m))

@@ -52,8 +52,9 @@
 // before its lease could lapse from a promoter's view; and a promoter takes over
 // only when the peer is also unhealthy. Under the Preferred Primary policy an
 // Active Standby also hands ownership back once the Primary has been healthy for a
-// stabilization window. See docs/plans for the finalization plan and what
-// remains.
+// stabilization window, and hands over in place: it re-enters the Passive state
+// without the process exiting, so a Passive instance keeps answering its health
+// endpoints.
 //
 // # Per-instance endpoints and transfer ordering
 //

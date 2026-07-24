@@ -12,8 +12,6 @@ implementation stages.
 
 Additional material:
 
-- [Plans](plans/README.md) contains proposed work not yet implemented, reviewed
-  before any code is written.
 - [Drafts](drafts) contains work-in-progress models and requirements that are
   not yet formal specifications.
 - [Backlog](backlog/README.md) contains deferred, actionable work.
