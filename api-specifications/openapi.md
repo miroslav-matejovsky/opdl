@@ -126,6 +126,10 @@ Unprocessable Entity
 
 Internal Server Error
 
+#### 501 Response
+
+Not Implemented
+
 #### 503 Response
 
 Service Unavailable

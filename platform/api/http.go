@@ -139,10 +139,13 @@ func Register(hapi huma.API, h Handlers) {
 		Path:          PathRegistrations,
 		Summary:       "Propose a unit registration",
 		DefaultStatus: http.StatusAccepted,
-		Errors:        []int{http.StatusBadRequest, http.StatusServiceUnavailable},
+		Errors:        []int{http.StatusBadRequest, http.StatusNotImplemented, http.StatusServiceUnavailable},
 	}, func(ctx context.Context, in *registerUnitInput) (*proposalAcceptedOutput, error) {
 		accepted, err := h.Create(ctx, in.Body)
 		if err != nil {
+			if errors.Is(err, ErrNotImplemented) {
+				return nil, huma.Error501NotImplemented("not_implemented")
+			}
 			// A journal that will not take the proposal is the one failure the
 			// client can act on: nothing was recorded, so retrying is safe.
 			// Everything else the command service refuses is the request's own

@@ -62,22 +62,7 @@ func Open(publisher events.Publisher, projection *Projection, location Location,
 // Create validates request and durably publishes its proposal. A successful
 // return means only that asynchronous site processing may begin.
 func (s *CommandService) Create(ctx context.Context, request api.RegistrationRequest) (ProposalReceipt, error) {
-	if err := validateRequest(request); err != nil {
-		return ProposalReceipt{}, err
-	}
-	proposed := NewProposed(ProposalIdentity{
-		UnitType:               request.UnitType,
-		UnitID:                 request.UnitID,
-		UnitTypeNameAdvertised: request.UnitTypeNameAdvertised,
-		Role:                   stringValue(request.Role),
-		OriginMachine:          s.location.Machine,
-		OriginIP:               s.location.IP,
-		ExpectedMachines:       s.expectedMachines,
-	})
-	if err := s.publisher.Publish(ctx, proposed); err != nil {
-		return ProposalReceipt{}, fmt.Errorf("%w: publish proposal %s: %w", api.ErrJournalUnavailable, proposed.ProposalID, err)
-	}
-	return ProposalReceipt{ProposalID: proposed.ProposalID}, nil
+	return ProposalReceipt{}, api.ErrNotImplemented
 }
 
 // Get returns one proposal by its canonical proposal ID.
@@ -201,16 +186,6 @@ func validateTopology(self Location, expected []Location) (locations map[string]
 	return locations, machines, nil
 }
 
-func validateRequest(request api.RegistrationRequest) error {
-	if strings.TrimSpace(request.UnitTypeNameAdvertised) == "" {
-		return errors.New("registration: unit type name advertised is blank")
-	}
-	if request.Role != nil && *request.Role != api.RoleMaster && *request.Role != api.RoleSlave {
-		return fmt.Errorf("registration: role %q is invalid", *request.Role)
-	}
-	return nil
-}
-
 func validateLocation(location Location) error {
 	if strings.TrimSpace(location.Machine) == "" {
 		return errors.New("location machine is blank")
@@ -219,13 +194,6 @@ func validateLocation(location Location) error {
 		return fmt.Errorf("location IP %q is invalid", location.IP)
 	}
 	return nil
-}
-
-func stringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func optionalString(value string) *string {

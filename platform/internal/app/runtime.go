@@ -11,7 +11,6 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
@@ -424,10 +423,16 @@ func awaitStop(ctx context.Context, site *site, server *instanceServer) error {
 	return nil
 }
 
+type fabricState struct {
+	Applied   uint64
+	HighWater uint64
+	CaughtUp  bool
+}
+
 // progressFabric is the part of an Event Fabric the monitor reads: how far this
 // instance's projection has applied of the journal, and whether it is caught up.
 type progressFabric interface {
-	State(context.Context) (eventfabric.State, error)
+	State(context.Context) (fabricState, error)
 }
 
 // startFailoverMonitor watches this instance's projection and states every change

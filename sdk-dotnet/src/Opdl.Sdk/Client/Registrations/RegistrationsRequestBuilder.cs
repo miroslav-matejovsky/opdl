@@ -86,6 +86,7 @@ namespace Opdl.Sdk.Client.Registrations
         /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 400 status code</exception>
         /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 422 status code</exception>
         /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 500 status code</exception>
+        /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 501 status code</exception>
         /// <exception cref="global::Opdl.Sdk.Client.Models.ErrorModel">When receiving a 503 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -103,6 +104,7 @@ namespace Opdl.Sdk.Client.Registrations
                 { "400", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
                 { "422", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
                 { "500", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
+                { "501", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
                 { "503", global::Opdl.Sdk.Client.Models.ErrorModel.CreateFromDiscriminatorValue },
             };
             return await RequestAdapter.SendAsync<global::Opdl.Sdk.Client.Models.ProposalAccepted>(requestInfo, global::Opdl.Sdk.Client.Models.ProposalAccepted.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);

@@ -17,8 +17,6 @@ excludeFiles:
 vendors:
   toml: { in: "github.com/BurntSushi/toml**" }
   huma: { in: "github.com/danielgtaylor/huma/v2**" }
-  nats-server: { in: "github.com/nats-io/nats-server/v2/**" }
-  nats-client: { in: "github.com/nats-io/nats.go**" }
   sys: { in: "golang.org/x/sys/**" }
   atomicfile: { in: "github.com/miroslav-matejovsky/opdl/utils/atomicfile" }
   winmutex: { in: "github.com/miroslav-matejovsky/opdl/utils/winmutex" }
@@ -32,8 +30,6 @@ components:
   events: { in: internal/events }
   events-storage: { in: internal/events/storage }
   events-storage-jsonl: { in: internal/events/storage/jsonl }
-  eventfabric: { in: internal/events/storage/eventfabric }
-  events-storage-nats: { in: internal/events/storage/nats }
   httpapi: { in: internal/httpapi }
   redundancy: { in: internal/redundancy }
   registration: { in: internal/registration }
@@ -51,7 +47,7 @@ deps:
     # events is here because composition is also what knows which process this
     # is: it builds the one envelope factory that stamps every event this node
     # states, and hands out only the publisher composed from it.
-    mayDependOn: [api, config, eventfabric, events-storage-nats, events, events-storage, events-storage-jsonl, httpapi, redundancy, registration]
+    mayDependOn: [api, config, events, events-storage, events-storage-jsonl, httpapi, redundancy, registration]
   redundancy:
     canUse: [sys, atomicfile, winmutex]
     # Ownership transitions are events in their own right: which instance became
@@ -72,15 +68,9 @@ deps:
     mayDependOn: [events]
   events-storage-jsonl:
     mayDependOn: [events, events-storage]
-  eventfabric:
-    canUse: [stablehash]
-    mayDependOn: [events, events-storage]
-  events-storage-nats:
-    canUse: [nats-server, nats-client]
-    mayDependOn: [config, events, events-storage, eventfabric]
   httpapi:
     canUse: [huma]
     mayDependOn: [api, registration]
   registration:
     canUse: [stablehash]
-    mayDependOn: [api, events, events-storage, eventfabric]
+    mayDependOn: [api, events, events-storage]

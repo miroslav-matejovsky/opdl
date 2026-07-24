@@ -1,7 +1,6 @@
-```text
 Architecture Overview
 
-The platform uses a Fixed-Role Primary/Standby availability architecture.
+The platform uses a Fixed-Role Primary/Standby availability architecture operating under a Preferred Primary policy.
 
 Two predefined platform processes run on every machine:
 
@@ -10,9 +9,9 @@ Two predefined platform processes run on every machine:
 
 These roles are static, intentional, and operationally well-known. This is not a leader-election architecture, distributed consensus system, quorum-based system, or peer-to-peer ownership model. The instances are not equal participants competing for ownership.
 
-The platform operates under a Preferred Primary policy. The Primary Instance is the preferred operational instance and should be Active whenever it is healthy and available. The Standby Instance exists to provide local high availability, failure recovery, maintenance flexibility, and upgrade continuity.
+The Primary Instance is the preferred operational instance and should be Active whenever it is healthy and eligible to own Primary Ownership. The Standby Instance exists to provide local high availability, failure recovery, maintenance flexibility, and upgrade continuity.
 
-Roles and runtime state are treated as separate concepts.
+Roles and runtime state are separate concepts.
 
 Roles:
 - Primary Instance
@@ -27,9 +26,9 @@ Under normal conditions:
 - Primary Instance → Active
 - Standby Instance → Passive
 
-The authoritative ownership mechanism is a Windows Named Mutex. The mutex represents Primary Ownership and serves as the single source of truth for local instance ownership.
+Primary Ownership is determined through a Windows Named Mutex.
 
-Ownership terminology:
+Ownership Terminology:
 
 - Primary Ownership
 - Ownership Acquisition
@@ -37,26 +36,90 @@ Ownership terminology:
 - Ownership Release
 - Ownership Transfer
 
-Ownership rules:
+Ownership Rules:
 
 - Mutex Owner → Active Instance
 - Non-Owner → Passive Instance
+- Only one mutex owner may exist at a time
 
-The platform does not use lock files, marker files, shared filesystem state, or filesystem-based coordination mechanisms.
+Ownership Characteristics:
 
-During a failover event:
+- Windows Named Mutex is the authoritative ownership mechanism
+- Health checks are not the ownership mechanism
+- Ownership decisions are based exclusively on mutex ownership
+- Runtime state is derived from ownership state
+- Ownership decisions are never based solely on peer communication state
+
+Health Check Policy:
+
+- Use health checks only for promotion decisions
+- Do not use health checks as the primary ownership mechanism
+- Health checks determine whether ownership acquisition or ownership transfer is permitted
+- Health checks do not establish ownership
+- Health status is exposed through standard health endpoints
+
+Promotion Logic
+
+Each instance periodically:
+
+- Validates mutex ownership
+- Checks peer health through the health endpoint
+- Evaluates promotion eligibility
+
+Active Instance:
+
+- Owns Primary Ownership through the Windows Named Mutex
+- Operates in Active state
+- Serves platform responsibilities
+
+Passive Instance:
+
+- Does not own Primary Ownership
+- Operates in Passive state
+- Monitors peer health
+- Evaluates failover conditions
+
+Failover Conditions
+
+The Passive Instance may acquire Primary Ownership only when:
+
+- Primary Ownership is no longer held
+- The peer is determined to be unhealthy
+
+If both conditions are satisfied:
+
+- Ownership Acquisition occurs
+- The instance becomes Active
+
+Failover Sequence:
 
 - Primary Instance becomes unavailable
 - Windows releases the mutex
+- Standby Instance detects ownership availability
+- Standby Instance validates promotion conditions
 - Standby Instance acquires Primary Ownership
 - Standby Instance transitions to Active
 
-During a failback event:
+Failback Sequence:
 
 - Primary Instance becomes healthy again
-- Ownership is transferred back according to the configured failback policy
+- The configured failback policy determines whether ownership transfer is allowed
+- Ownership Transfer occurs
+- Primary Instance acquires Primary Ownership
 - Primary Instance transitions to Active
 - Standby Instance transitions to Passive
+
+Split-Brain Protection
+
+The Windows Named Mutex provides exclusive ownership enforcement.
+
+Protection Rules:
+
+- Only the mutex owner may operate as Active
+- Non-owners must remain Passive
+- Ownership is validated before Active operations are performed
+- Ownership loss requires immediate transition to Passive state
+- Active state without valid ownership is prohibited
 
 Each instance operates as an independent runtime with:
 
@@ -68,14 +131,12 @@ Each instance operates as an independent runtime with:
 - Independent configuration context
 - Independent network ports
 
-The only shared resource between instances is the Windows Named Mutex used for Primary Ownership.
+Communication Principles:
 
-Communication principles:
-
-- Service-to-platform commands, queries, configuration, and health operations use the existing local API.
-- Platform-to-service notifications and events use Windows Named Pipes.
-- Optional Primary/Standby coordination, diagnostics, or health visibility may also use Windows Named Pipes.
-- Ownership decisions must always be based on Windows Named Mutex ownership and never on inter-process communication state.
+- Service-to-platform commands, queries, configuration, and health operations use the existing local API
+- Health visibility uses standard health endpoints
+- Ownership decisions must always be based on Windows Named Mutex ownership
+- Inter-process communication must never be used as an ownership authority
 
 Preferred Terminology
 
@@ -103,7 +164,7 @@ Transitions:
 Ownership Mechanism:
 - Windows Named Mutex
 
-Avoid using:
+Avoid Using:
 
 - Leader
 - Follower
@@ -114,5 +175,4 @@ Avoid using:
 - Distributed Lock
 - Leadership Token
 
-The architecture should be described as a Fixed-Role Primary/Standby platform operating under a Preferred Primary policy, with Windows Named Mutex providing authoritative Primary Ownership and local high availability.
-```
+The architecture should be described as a Fixed-Role Primary/Standby platform operating under a Preferred Primary policy, with Windows Named Mutex providing authoritative Primary Ownership, health-gated promotion decisions, split-brain protection, and local high availability.

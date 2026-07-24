@@ -1,5 +1,7 @@
 package api
 
+import "errors"
+
 const (
 	// RoleMaster identifies the master role a registered unit may advertise.
 	RoleMaster = "Master"
@@ -51,6 +53,9 @@ type Instance struct {
 	// where a refused domain request should be sent.
 	PeerAddress string `json:"peer_address,omitempty" doc:"The machine's other instance's API address, if one is deployed." example:"127.0.0.1:8081"`
 }
+
+// ErrNotImplemented indicates that a requested operation is not implemented.
+var ErrNotImplemented = errors.New("api: operation not implemented")
 
 // RegistrationRequest is the client-supplied request to register one unit.
 // Machine, IP, registration status, and platform-instance progress are supplied
