@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Descriptor is one machine's deployment definition as the platform consumes it:
@@ -35,9 +36,9 @@ type Descriptor struct {
 	// Instances is this machine's Primary and Standby Instances. Both records are
 	// always present.
 	Instances Instances `json:"instances"`
-	// Lock is the machine's resolved local ownership lock. Present only when the
-	// Standby Instance is deployed; omitted on a standby-less machine.
-	Lock *Lock `json:"lock,omitempty"`
+	// Lease is the machine's resolved local Primary Ownership lease. Present only
+	// when the Standby Instance is deployed; omitted on a standby-less machine.
+	Lease *Lease `json:"lease,omitempty"`
 	// Peers are the platform instances that make up this machine's site,
 	// including this machine's own.
 	Peers []Peer `json:"peers"`
@@ -61,20 +62,32 @@ func Role(standby bool) PlatformInstanceRole {
 	return RolePrimary
 }
 
-// Lock is the machine's resolved local ownership lock: the Windows named mutex
-// its primary and standby processes contend for, and which exactly one of them
-// holds at a time.
+// Lease is the machine's resolved local Primary Ownership lease: the shared
+// machine-wide file its primary and standby processes record ownership in, and
+// the timings that govern how ownership is held, renewed, and turned over.
 //
-// Object is fully derived by the builder from an authored lock policy and a digest
-// of the machine's whole identity. The runtime trusts it as identity, exactly as
-// it trusts the rest of the descriptor, and never composes one of its own.
+// Every field is derived by the builder from the machine's authored standby
+// policy. The runtime trusts them as identity, exactly as it trusts the rest of
+// the descriptor, and never composes a lease of its own.
 //
-// It is carried in the descriptor rather than derived at runtime because a named
-// kernel object is not visible to ordinary tools the way a lock file is. An
-// operator reading deployment.json can see which object a machine contends for.
-type Lock struct {
-	// WindowsMutex is the ownership object's name, including its Global\ prefix.
-	WindowsMutex string `json:"windows_mutex"`
+// It is carried in the descriptor rather than derived at runtime because the file
+// path and the failover timings are deployment policy an operator must be able to
+// read in deployment.json. The durations are Go duration strings ("15s", "5s");
+// the platform parses them at startup.
+type Lease struct {
+	// File is the machine-wide lease file both instances read and write, an
+	// absolute path on a local filesystem.
+	File string `json:"file"`
+	// Duration is how long a granted lease is valid without renewal.
+	Duration string `json:"duration"`
+	// RenewalInterval is how often the owner extends the lease.
+	RenewalInterval string `json:"renewal_interval"`
+	// HealthCheckInterval is how often a Passive instance evaluates promotion and
+	// polls its peer's health.
+	HealthCheckInterval string `json:"health_check_interval"`
+	// FailbackStabilization is how long a returning Primary must be continuously
+	// healthy before an Active Standby hands ownership back to it.
+	FailbackStabilization string `json:"failback_stabilization"`
 }
 
 // UnmarshalJSON decodes a descriptor and requires every resolved decision it
@@ -85,7 +98,7 @@ type Lock struct {
 // would decode as false and silently deploy redundancy nobody asked for; an
 // omitted peers list would decode as a site of one, so a registration would need
 // no confirmation but its own; an omitted lock.windows_mutex would decode as an empty
-// ownership mutex name, and a machine whose two instances contend for nothing
+// ownership record, and a machine whose two instances coordinate through nothing
 // has no ownership at all when standby is enabled. Failing here turns a truncated or stale descriptor
 // into a startup error instead of a running machine with the wrong topology.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
@@ -117,7 +130,7 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(instanceFields[string(RoleStandby)], &standbyPolicy); err != nil {
 		return fmt.Errorf("deployment descriptor: invalid instances.standby: %w", err)
 	}
-	if err := validateLockField(fields, standbyPolicy.Disabled); err != nil {
+	if err := validateLeaseField(fields, standbyPolicy.Disabled); err != nil {
 		return err
 	}
 
@@ -181,24 +194,43 @@ func validateInstanceNatsField(role PlatformInstanceRole, raw json.RawMessage) e
 	return err
 }
 
-// validateLockField verifies the lock block matches the standby status.
-func validateLockField(fields map[string]json.RawMessage, standbyDisabled bool) error {
+// validateLeaseField verifies the lease block matches the standby status: absent
+// on a standby-less machine, and present with a file and every timing when a
+// standby is deployed. The durations are checked for validity here so a truncated
+// or hand-edited descriptor fails at load rather than when ownership is first
+// decided.
+func validateLeaseField(fields map[string]json.RawMessage, standbyDisabled bool) error {
 	if standbyDisabled {
-		if _, present := fields["lock"]; present {
-			return fmt.Errorf("deployment descriptor: lock is set but instances.standby.disabled is true; omit lock when no standby is deployed")
+		if _, present := fields["lease"]; present {
+			return fmt.Errorf("deployment descriptor: lease is set but instances.standby.disabled is true; omit lease when no standby is deployed")
 		}
 		return nil
 	}
-	lockField, err := requiredField(fields, "lock")
+	leaseField, err := requiredField(fields, "lease")
 	if err != nil {
 		return err
 	}
-	var lockFields map[string]json.RawMessage
-	if err := json.Unmarshal(lockField, &lockFields); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid lock: %w", err)
+	var leaseFields map[string]json.RawMessage
+	if err := json.Unmarshal(leaseField, &leaseFields); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid lease: %w", err)
 	}
-	_, err = requiredField(lockFields, "lock.windows_mutex")
-	return err
+	if _, err := requiredField(leaseFields, "lease.file"); err != nil {
+		return err
+	}
+	for _, field := range []string{"duration", "renewal_interval", "health_check_interval", "failback_stabilization"} {
+		raw, err := requiredField(leaseFields, "lease."+field)
+		if err != nil {
+			return err
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return fmt.Errorf("deployment descriptor: invalid lease.%s: %w", field, err)
+		}
+		if _, err := time.ParseDuration(value); err != nil {
+			return fmt.Errorf("deployment descriptor: lease.%s %q is not a valid duration: %w", field, value, err)
+		}
+	}
+	return nil
 }
 
 // requiredField returns fields[name]'s value, treating both an absent key and an

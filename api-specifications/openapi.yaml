@@ -57,11 +57,6 @@ components:
           description: "Lease ownership status: Owned or Unowned."
           example: Owned
           type: string
-        ownershipGeneration:
-          description: Ownership generation counter.
-          example: 42
-          format: int64
-          type: integer
         role:
           description: "Instance role: Primary or Standby."
           example: Primary
@@ -74,7 +69,6 @@ components:
         - role
         - runtimeState
         - leaseState
-        - ownershipGeneration
       type: object
     HealthLiveResponse:
       additionalProperties: false

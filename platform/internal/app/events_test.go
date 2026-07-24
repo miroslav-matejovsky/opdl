@@ -28,7 +28,7 @@ func TestApplicationEventsDeclareTheirContract(t *testing.T) {
 			wantType: TypeProcessStopped,
 			want:     events.SeverityError,
 		},
-		{name: "lock open failed", event: LockOpenFailed{}, wantType: TypeLockOpenFailed, want: events.SeverityError},
+		{name: "lease open failed", event: LeaseOpenFailed{}, wantType: TypeLeaseOpenFailed, want: events.SeverityError},
 		{name: "api listen failed", event: APIListenFailed{}, wantType: TypeAPIListenFailed, want: events.SeverityError},
 		{name: "api listening", event: APIListening{}, wantType: TypeAPIListening, want: events.SeverityInfo},
 		{name: "api active", event: APIActive{}, wantType: TypeAPIActive, want: events.SeverityInfo},

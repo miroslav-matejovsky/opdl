@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/runner"
+	"github.com/miroslav-matejovsky/opdl/scenarios/redundancy"
 	"github.com/miroslav-matejovsky/opdl/scenarios/smoke"
 )
 
@@ -126,6 +127,7 @@ func names(value string) []string {
 func scenarioSets() []runner.Set {
 	return []runner.Set{
 		smoke.Scenarios(),
+		redundancy.Scenarios(),
 	}
 }
 

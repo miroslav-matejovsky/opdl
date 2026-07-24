@@ -162,17 +162,27 @@ func RegisterInstance(hapi huma.API, instance func() Instance) {
 	})
 }
 
+// LeaseView is what the runtime tells the health API about this instance's
+// Primary Ownership. The runtime fills it from the redundancy package's lease so
+// the api package need not depend on it.
+type LeaseView struct {
+	// Owned reports whether this instance currently holds the lease.
+	Owned bool
+	// ExpirationUTC is when the lease lapses, an ISO-8601 UTC timestamp, nil when
+	// this instance holds no lease or is Active by construction.
+	ExpirationUTC *string
+}
+
 // NewHealth builds the health handler funcs the runtime serves, deriving each
-// response from the live instance identity and the process start time. It is
-// read on every request rather than captured once, because Role and State change
-// as Primary Ownership moves.
+// response from the live instance identity, the process start time, and the
+// current lease. It is read on every request rather than captured once, because
+// Role, State, and the lease change as Primary Ownership moves.
 //
 // The status is Healthy for now: the platform runs no dependency checks yet, so
-// there is nothing that could report Degraded or Unhealthy. The lease view is the
-// honest one the runtime can give — an Active instance holds ownership, a Passive
-// one does not — without the lease expiration and generation a real lease
-// subsystem would carry.
-func NewHealth(instance func() Instance, started time.Time) Handlers {
+// there is nothing that could report Degraded or Unhealthy. leaseView may be nil,
+// in which case /health/ha derives ownership from the runtime state alone — the
+// shape spec generation and boundary tests use.
+func NewHealth(instance func() Instance, started time.Time, leaseView func() LeaseView) Handlers {
 	return Handlers{
 		Health: func() HealthResponse {
 			inst := instance()
@@ -197,14 +207,21 @@ func NewHealth(instance func() Instance, started time.Time) Handlers {
 		},
 		HealthHA: func() HealthHAResponse {
 			inst := instance()
+			// Without a lease view, fall back to the runtime state: an Active
+			// instance owns, a Passive one does not.
+			view := LeaseView{Owned: inst.State == InstanceStateActive}
+			if leaseView != nil {
+				view = leaseView()
+			}
 			leaseState := LeaseStateUnowned
-			if inst.State == InstanceStateActive {
+			if view.Owned {
 				leaseState = LeaseStateOwned
 			}
 			return HealthHAResponse{
-				Role:         inst.Role,
-				RuntimeState: inst.State,
-				LeaseState:   leaseState,
+				Role:               inst.Role,
+				RuntimeState:       inst.State,
+				LeaseState:         leaseState,
+				LeaseExpirationUTC: view.ExpirationUTC,
 			}
 		},
 	}

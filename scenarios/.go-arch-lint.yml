@@ -34,6 +34,7 @@ components:
   semaphore: { in: internal/semaphore }
   waitfor: { in: internal/waitfor }
   smoke: { in: smoke }
+  redundancy: { in: redundancy }
 
 # A component with no entry here depends on nothing outside the standard
 # library. That covers the root documentation package, the runner, and every
@@ -43,7 +44,7 @@ deps:
   # package is reached from here and from nowhere else, which is what keeps the
   # categories independent of each other.
   cmd:
-    mayDependOn: [runner, smoke]
+    mayDependOn: [runner, smoke, redundancy]
 
   # The harness is the only component that builds anything or starts a platform
   # process. No category package may do either directly, which is what makes the
@@ -60,6 +61,10 @@ deps:
   smoke:
     canUse: [testify]
     mayDependOn: [harness, runner]
+
+  redundancy:
+    canUse: [testify]
+    mayDependOn: [harness, runner, waitfor]
 
   procrun:
     mayDependOn: [processtree]

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Descriptor is one machine's deployment definition: everything the platform
@@ -37,9 +38,9 @@ type Descriptor struct {
 	// Instances is this machine's Primary and Standby Instances. Both records are
 	// always present.
 	Instances Instances `json:"instances"`
-	// Lock is the machine's resolved local ownership lock. Present only when the
-	// Standby Instance is deployed; omitted on a standby-less machine.
-	Lock *Lock `json:"lock,omitempty"`
+	// Lease is the machine's resolved local Primary Ownership lease. Present only
+	// when the Standby Instance is deployed; omitted on a standby-less machine.
+	Lease *Lease `json:"lease,omitempty"`
 	// Peers are the platform instances that make up this machine's site.
 	Peers []Peer `json:"peers"`
 }
@@ -57,21 +58,80 @@ const (
 	RoleStandby PlatformInstanceRole = "standby"
 )
 
-// Lock is the machine's resolved local ownership lock: the Windows named mutex
-// its two instances contend for, and which exactly one of them holds at a time.
+// Lease is the machine's resolved local Primary Ownership lease: the shared
+// machine-wide file its two instances record ownership in, and the timings that
+// govern how ownership is held, renewed, and turned over.
 //
-// It is recorded here rather than derived at runtime because a named kernel object
-// is not visible to ordinary tools the way a lock file is. An operator reading
-// deployment.json can see exactly which object a machine will contend for.
+// It is recorded here rather than derived at runtime because the file path and
+// the failover timings are deployment policy an operator must be able to read in
+// deployment.json, exactly as the lock's kernel object name was.
 //
-// It is the machine's, not an instance's: it is the one thing the two instances
-// share, and sharing it is what makes exactly one of them Active. It is present
-// only when the Standby Instance is deployed (Instances.Standby.Disabled is false);
-// on a standby-less machine, there is no lock and no contention.
-type Lock struct {
-	// WindowsMutex is the machine-wide kernel object name, including its Global\
-	// namespace prefix.
-	WindowsMutex string `json:"windows_mutex"`
+// It is the machine's, not an instance's: the lease file is the one thing the two
+// instances share, and it is what makes exactly one of them Active. It is present
+// only when the Standby Instance is deployed (Instances.Standby.Disabled is
+// false); on a standby-less machine, there is no lease and no contention.
+//
+// The durations are Go duration strings ("15s", "5s"), validated by the builder
+// and parsed by the platform at startup.
+type Lease struct {
+	// File is the machine-wide lease file both instances read and write, an
+	// absolute path on a local filesystem.
+	File string `json:"file"`
+	// Duration is how long a granted lease is valid without renewal.
+	Duration string `json:"duration"`
+	// RenewalInterval is how often the owner extends the lease.
+	RenewalInterval string `json:"renewal_interval"`
+	// HealthCheckInterval is how often a Passive instance evaluates promotion and
+	// polls its peer's health.
+	HealthCheckInterval string `json:"health_check_interval"`
+	// FailbackStabilization is how long a returning Primary must be continuously
+	// healthy before an Active Standby hands ownership back to it.
+	FailbackStabilization string `json:"failback_stabilization"`
+}
+
+// validate checks a resolved lease is complete and its timings are usable. It is
+// called only when a Standby Instance is deployed; a standby-less machine has no
+// lease at all.
+func (l *Lease) validate() error {
+	if l == nil {
+		return fmt.Errorf("lease is required when instances.standby.disabled is false")
+	}
+	if strings.TrimSpace(l.File) == "" {
+		return fmt.Errorf("lease.file is required")
+	}
+	duration, err := validateLeaseDuration("lease.duration", l.Duration)
+	if err != nil {
+		return err
+	}
+	renewal, err := validateLeaseDuration("lease.renewal_interval", l.RenewalInterval)
+	if err != nil {
+		return err
+	}
+	if _, err := validateLeaseDuration("lease.health_check_interval", l.HealthCheckInterval); err != nil {
+		return err
+	}
+	if _, err := validateLeaseDuration("lease.failback_stabilization", l.FailbackStabilization); err != nil {
+		return err
+	}
+	if renewal >= duration {
+		return fmt.Errorf("lease.renewal_interval %s must be shorter than lease.duration %s", l.RenewalInterval, l.Duration)
+	}
+	return nil
+}
+
+// validateLeaseDuration parses one lease duration and requires it to be positive.
+func validateLeaseDuration(field, value string) (time.Duration, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, fmt.Errorf("%s is required", field)
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s %q is not a valid duration: %w", field, value, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s %s must be positive", field, d)
+	}
+	return d, nil
 }
 
 // Features are the capability switches carried from the project onto a machine.
@@ -255,15 +315,12 @@ func (d Descriptor) Validate() error {
 		return fmt.Errorf("at least one service is required")
 	}
 	if d.Instances.Standby.Disabled {
-		if d.Lock != nil {
-			return fmt.Errorf("lock is set but instances.standby.disabled is true; omit lock when no standby is deployed")
+		if d.Lease != nil {
+			return fmt.Errorf("lease is set but instances.standby.disabled is true; omit lease when no standby is deployed")
 		}
 	} else {
-		if d.Lock == nil {
-			return fmt.Errorf("lock is required when instances.standby.disabled is false")
-		}
-		if strings.TrimSpace(d.Lock.WindowsMutex) == "" {
-			return fmt.Errorf("lock.windows_mutex is required")
+		if err := d.Lease.validate(); err != nil {
+			return err
 		}
 	}
 	if d.Instances.Primary.Disabled {

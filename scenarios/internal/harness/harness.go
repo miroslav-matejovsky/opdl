@@ -84,6 +84,13 @@ var projectFixtures = map[string][]machineFixture{
 	"simple": {
 		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true, eventStorageDisabled: true},
 	},
+	// The local redundancy pair: one machine deploying both instances, with no
+	// event storage. Two processes share one lease file and one health contract,
+	// which is the whole subject of the redundancy scenarios; a journal would add
+	// startup time without adding anything they assert.
+	"redundancy": {
+		{name: "node-a", ip: "127.0.0.1", eventStorageDisabled: true},
+	},
 }
 
 // renderedMachine is one machine's template data: its fixture identity plus the
@@ -106,6 +113,9 @@ type renderedMachine struct {
 	StandbyClientPort        int
 	StandbyClusterPort       int
 	StandbyDisabled          bool
+	// LeaseFile is the machine-wide Primary Ownership lease file both instances
+	// share, set only when the machine deploys a standby.
+	LeaseFile string
 	// EventStorageDisabled leaves the event_storage block out of both instances,
 	// which is what a deployment with no journal looks like in a blueprint.
 	EventStorageDisabled bool
@@ -125,7 +135,7 @@ type renderedProject struct {
 //
 // A machine lock and a Windows Service name are both kernel objects in a
 // machine-wide namespace. Scenarios may build the same project and machine names
-// and they run in parallel, so without this they would contend for one another's
+// and they run in parallel, so without this they would compete for one another's
 // ownership.
 //
 // The token is random rather than derived from the test name so that two
@@ -146,8 +156,13 @@ type reservedEndpoints struct {
 	// with 127.0.0.1, never with the machine's ip, so these are reserved on
 	// 127.0.0.1 for every machine however many loopback addresses the site uses.
 	apiPort int
-	client  int
-	cluster int
+	// standbyAPIPort is the Standby Instance's own loopback API port, zero on a
+	// machine that deploys no standby. Each instance binds its own address for
+	// its whole lifetime, which is what lets a scenario ask a Passive instance
+	// about itself.
+	standbyAPIPort int
+	client         int
+	cluster        int
 }
 
 var (
@@ -256,6 +271,12 @@ func jetstreamStoreDirFor(workDir, machine, role string) string {
 	return filepath.ToSlash(filepath.Join(workDir, "journal-"+machine, role))
 }
 
+// leaseFileFor is a machine's Primary Ownership lease file, shared by its two
+// instances and by nothing else.
+func leaseFileFor(workDir, machine string) string {
+	return filepath.ToSlash(filepath.Join(workDir, "data-"+machine, "lease"))
+}
+
 // stageBlueprint allocates each machine's ports from the testnet pool, names each
 // instance's runtime directory, and renders the project's blueprint into a
 // temporary blueprint root.
@@ -317,6 +338,7 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
 			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, RoleStandby)
+			machine.LeaseFile = leaseFileFor(workDir, fixture.name)
 			if !fixture.eventStorageDisabled {
 				machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RoleStandby)
 				machine.StandbyClientPort = p[2]
@@ -325,9 +347,10 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 		}
 		data.Machines = append(data.Machines, machine)
 		endpoints[fixture.name] = reservedEndpoints{
-			apiPort: machine.APIPort,
-			client:  machine.ClientPort,
-			cluster: machine.ClusterPort,
+			apiPort:        machine.APIPort,
+			standbyAPIPort: machine.StandbyAPIPort,
+			client:         machine.ClientPort,
+			cluster:        machine.ClusterPort,
 		}
 	}
 
@@ -425,11 +448,14 @@ type Sockets struct {
 	StandbyDataDir    string
 	JetStreamStoreDir string
 
-	// API, Client, and Cluster are the blueprint's, for reaching a machine and
-	// for assertions. Nothing writes them to a config file.
-	API     string
-	Client  string
-	Cluster string
+	// API, StandbyAPI, Client, and Cluster are the blueprint's, for reaching a
+	// machine and for assertions. Nothing writes them to a config file.
+	// StandbyAPI is the Standby Instance's own address, empty on a machine that
+	// deploys no standby; each instance binds its own for its whole lifetime.
+	API        string
+	StandbyAPI string
+	Client     string
+	Cluster    string
 }
 
 // Site is the machines of one built project under a scenario's control.
@@ -489,6 +515,7 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 		}
 		if !fixture.standbyDisabled {
 			sockets.StandbyDataDir = filepath.FromSlash(dataDirFor(workDir, fixture.name, RoleStandby))
+			sockets.StandbyAPI = net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.standbyAPIPort))
 		}
 		s.Machines = append(s.Machines, prepareMachine(t, s, fixture.name, sockets))
 	}
@@ -546,9 +573,12 @@ type Machine struct {
 	*procrun.Process
 	// Name is the deployment machine identity.
 	Name string
-	// URL is the base URL of its API, known from the moment it is prepared,
-	// whether or not it is running.
+	// URL is the base URL of the Primary Instance's API, known from the moment
+	// the machine is prepared, whether or not it is running.
 	URL string
+	// StandbyURL is the base URL of the Standby Instance's own API, empty on a
+	// machine that deploys no standby.
+	StandbyURL string
 	// Sockets are the addresses and storage it was configured with. A restart
 	// reuses them, which is what makes replaying its own journal possible. They
 	// are also where a scenario reads either instance's event record, which is
@@ -683,6 +713,9 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 		configPath: configPath,
 		LaunchArgs: ReadManifest(t, binaryPath).Primary.Args,
 	}
+	if reserved.StandbyAPI != "" {
+		m.StandbyURL = "http://" + reserved.StandbyAPI
+	}
 	t.Cleanup(m.Stop)
 	return m
 }
@@ -695,7 +728,7 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 // The three tolerances are deliberately looser than platform/config.toml's 30s.
 // They bound how long a machine puts up with a slow environment before giving
 // up, and a scenario suite is a slow environment on purpose: it builds the
-// platform and starts it on a contended host. No scenario asserts on these
+// platform and starts it on a busy host. No scenario asserts on these
 // values, so raising them removes a false failure without weakening anything: a
 // machine that genuinely never catches up still fails, on the assertion that was
 // actually being made.

@@ -73,8 +73,12 @@ project "buildtest" {
           disabled    = false
           data_dir    = "D:/opdl/buildtest/solo/node-b/standby"
 
-          lock {
-            windows_mutex = "Global\\opdl-buildtest-solo-node-b"
+          lease {
+            file                   = "D:/opdl/buildtest/solo/node-b/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {

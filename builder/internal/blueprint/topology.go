@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 // The hcl struct tags map HCL attributes and blocks onto fields. The "label"
@@ -156,27 +157,42 @@ type WinService struct {
 	Description string `hcl:"description,optional"`
 }
 
-// maxLockWindowsMutex bounds the authored Windows named mutex kernel object name.
-const maxLockWindowsMutex = 260
-
-// Lock is a machine's local ownership lock policy.
+// Lease is a machine's local Primary Ownership lease policy.
 //
-// A machine's primary and standby processes contend for one Windows named mutex,
-// authored explicitly so an operator reading the blueprint or descriptor sees the
-// exact kernel object name.
-type Lock struct {
-	// WindowsMutex is the machine-wide kernel object name, which must start with
-	// Global\.
-	WindowsMutex string `hcl:"windows_mutex"`
+// A machine's primary and standby processes coordinate Primary Ownership through
+// a lease record in a shared machine-wide file rather than a kernel object. The
+// file path and the lease timings are authored here so an operator reading the
+// blueprint sees exactly where ownership is recorded and how quickly it turns
+// over.
+//
+// The durations are HCL strings in Go's duration syntax ("15s", "5s"). They are
+// carried through the descriptor unparsed and validated by the builder; the
+// platform parses them at startup.
+type Lease struct {
+	// File is the machine-wide lease file both instances read and write. It is an
+	// absolute path on a local filesystem, shared by the machine's two instances
+	// and by nothing else.
+	File string `hcl:"file"`
+	// Duration is how long a granted lease is valid without renewal.
+	Duration string `hcl:"duration"`
+	// RenewalInterval is how often the owner extends the lease. It must be well
+	// below Duration.
+	RenewalInterval string `hcl:"renewal_interval"`
+	// HealthCheckInterval is how often a Passive instance evaluates promotion and
+	// polls its peer's health.
+	HealthCheckInterval string `hcl:"health_check_interval"`
+	// FailbackStabilization is how long a returning Primary must be continuously
+	// healthy before an Active Standby hands ownership back to it.
+	FailbackStabilization string `hcl:"failback_stabilization"`
 }
 
-// Lock returns the machine's authored ownership lock policy, or nil when the
-// blueprint does not deploy a standby or states no lock.
-func (m Machine) Lock() *Lock {
+// Lease returns the machine's authored ownership lease policy, or nil when the
+// blueprint does not deploy a standby or states no lease.
+func (m Machine) Lease() *Lease {
 	if m.Platform == nil || m.Platform.Standby == nil || m.Platform.Standby.Disabled {
 		return nil
 	}
-	return m.Platform.Standby.Lock
+	return m.Platform.Standby.Lease
 }
 
 // Standby is a machine's local redundancy policy, and the Standby Instance's own
@@ -195,9 +211,9 @@ type Standby struct {
 	// DataDir is the Standby Instance's general platform data root. It is
 	// required when the Standby Instance is deployed and rejected when it is not.
 	DataDir string `hcl:"data_dir,optional"`
-	// Lock is the machine's local ownership lock policy. It is required when the
-	// Standby Instance is deployed and rejected when it is not.
-	Lock *Lock `hcl:"lock,block"`
+	// Lease is the machine's local Primary Ownership lease policy. It is required
+	// when the Standby Instance is deployed and rejected when it is not.
+	Lease *Lease `hcl:"lease,block"`
 	// API is the Standby Instance's local API endpoint policy.
 	API *API `hcl:"api,block"`
 	// WinService is the Standby Instance's Windows Service identity.
@@ -335,7 +351,7 @@ func validatePlatform(machine Machine) error {
 	if err := validateWinServices(machine); err != nil {
 		return err
 	}
-	return validateLock(machine)
+	return validateLease(machine)
 }
 
 // validateInstanceEndpoints checks one instance states its endpoint
@@ -374,8 +390,8 @@ func validateStandbyEndpoints(machine Machine) error {
 	if strings.TrimSpace(standby.DataDir) != "" {
 		return fmt.Errorf("machine %q: platform.standby.data_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
-	if standby.Lock != nil {
-		return fmt.Errorf("machine %q: platform.standby.lock is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	if standby.Lease != nil {
+		return fmt.Errorf("machine %q: platform.standby.lease is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
 	if standby.API != nil {
 		return fmt.Errorf("machine %q: platform.standby.api is set but the standby is disabled; remove it or deploy the standby", machine.Name)
@@ -545,33 +561,61 @@ func (m Machine) WinServiceIdentity(standby bool) *WinService {
 	return &resolved
 }
 
-// validateLock checks the ownership lock is authored on a standby machine and
-// omitted on a standby-disabled machine.
-func validateLock(machine Machine) error {
+// validateLease checks the Primary Ownership lease is authored on a standby
+// machine and omitted on a standby-disabled machine, and that its file and
+// timings are usable.
+func validateLease(machine Machine) error {
 	standby := machine.Platform.Standby
 	if standby.Disabled {
 		return nil
 	}
-	if standby.Lock == nil {
-		return fmt.Errorf("machine %q: platform.standby.lock block is required when the standby is deployed", machine.Name)
+	if standby.Lease == nil {
+		return fmt.Errorf("machine %q: platform.standby.lease block is required when the standby is deployed", machine.Name)
 	}
-	name := standby.Lock.WindowsMutex
-	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("machine %q: platform.standby.lock.windows_mutex is required", machine.Name)
+	lease := standby.Lease
+	file := strings.TrimSpace(lease.File)
+	if file == "" {
+		return fmt.Errorf("machine %q: platform.standby.lease.file is required", machine.Name)
 	}
-	if name != strings.TrimSpace(name) {
-		return fmt.Errorf("machine %q: platform.standby.lock.windows_mutex %q must not have leading or trailing whitespace", machine.Name, name)
+	if lease.File != file {
+		return fmt.Errorf("machine %q: platform.standby.lease.file %q must not have leading or trailing whitespace", machine.Name, lease.File)
 	}
-	if len(name) > maxLockWindowsMutex {
-		return fmt.Errorf("machine %q: platform.standby.lock.windows_mutex %q is longer than %d characters", machine.Name, name, maxLockWindowsMutex)
+	duration, err := validateLeaseDuration(machine.Name, "duration", lease.Duration)
+	if err != nil {
+		return err
 	}
-	if !strings.HasPrefix(name, "Global\\") {
-		return fmt.Errorf("machine %q: platform.standby.lock.windows_mutex %q must start with Global\\", machine.Name, name)
+	renewal, err := validateLeaseDuration(machine.Name, "renewal_interval", lease.RenewalInterval)
+	if err != nil {
+		return err
 	}
-	if strings.ContainsAny(name[len("Global\\"):], `\/`) {
-		return fmt.Errorf("machine %q: platform.standby.lock.windows_mutex %q must not contain slashes or backslashes after Global\\", machine.Name, name)
+	if _, err := validateLeaseDuration(machine.Name, "health_check_interval", lease.HealthCheckInterval); err != nil {
+		return err
+	}
+	if _, err := validateLeaseDuration(machine.Name, "failback_stabilization", lease.FailbackStabilization); err != nil {
+		return err
+	}
+	// Renewal must fit comfortably inside the lease so at least two attempts land
+	// before expiry; the platform derives its step-down grace from the difference.
+	if renewal >= duration {
+		return fmt.Errorf("machine %q: platform.standby.lease.renewal_interval %s must be shorter than duration %s", machine.Name, lease.RenewalInterval, lease.Duration)
 	}
 	return nil
+}
+
+// validateLeaseDuration parses one authored lease duration and requires it to be
+// a positive Go duration.
+func validateLeaseDuration(machineName, attribute, value string) (time.Duration, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, fmt.Errorf("machine %q: platform.standby.lease.%s is required", machineName, attribute)
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("machine %q: platform.standby.lease.%s %q is not a valid duration: %w", machineName, attribute, value, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("machine %q: platform.standby.lease.%s %s must be positive", machineName, attribute, d)
+	}
+	return d, nil
 }
 
 func validatePort(machineName, where string, port int) error {

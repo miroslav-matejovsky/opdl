@@ -79,7 +79,7 @@ func validDescriptor() deployment.Descriptor {
 				},
 			},
 		},
-		Lock: &deployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
+		Lease: validLease(),
 		// The platform's minimum site: two machines and three platform instances.
 		// Three is also exactly the storage selection, so every instance here runs
 		// a server and routes to the other two. Fixtures that need a non-storage
@@ -89,6 +89,17 @@ func validDescriptor() deployment.Descriptor {
 			peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
 			peer("sensor", deployment.RoleStandby, machineIP, standbyClient, standbyCluster),
 		},
+	}
+}
+
+// validLease is the resolved Primary Ownership lease a standby machine carries.
+func validLease() *deployment.Lease {
+	return &deployment.Lease{
+		File:                  "D:/opdl/customer-a/north/sensor/lease",
+		Duration:              "15s",
+		RenewalInterval:       "5s",
+		HealthCheckInterval:   "2s",
+		FailbackStabilization: "30s",
 	}
 }
 
@@ -111,12 +122,14 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing ip", func(d *deployment.Descriptor) { d.IP = "" }, `ip "" is not a valid IP address`},
 		{"invalid ip", func(d *deployment.Descriptor) { d.IP = "bad-ip" }, `ip "bad-ip" is not a valid IP address`},
 		{"missing services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
-		{"missing lock when standby deployed", func(d *deployment.Descriptor) { d.Lock = nil }, "lock is required when instances.standby.disabled is false"},
-		{"missing lock windows_mutex", func(d *deployment.Descriptor) { d.Lock = &deployment.Lock{WindowsMutex: ""} }, "lock.windows_mutex is required"},
-		{"lock present when standby disabled", func(d *deployment.Descriptor) {
+		{"missing lease when standby deployed", func(d *deployment.Descriptor) { d.Lease = nil }, "lease is required when instances.standby.disabled is false"},
+		{"missing lease file", func(d *deployment.Descriptor) { d.Lease.File = "" }, "lease.file is required"},
+		{"bad lease duration", func(d *deployment.Descriptor) { d.Lease.Duration = "soon" }, "is not a valid duration"},
+		{"renewal not shorter than duration", func(d *deployment.Descriptor) { d.Lease.RenewalInterval = "15s" }, "must be shorter than lease.duration"},
+		{"lease present when standby disabled", func(d *deployment.Descriptor) {
 			d.Instances.Standby.Disabled = true
-			d.Lock = &deployment.Lock{WindowsMutex: "Global\\opdl-sensor"}
-		}, "lock is set but instances.standby.disabled is true; omit lock when no standby is deployed"},
+			d.Lease = validLease()
+		}, "lease is set but instances.standby.disabled is true; omit lease when no standby is deployed"},
 		{
 			"disabled primary",
 			func(d *deployment.Descriptor) { d.Instances.Primary.Disabled = true },
@@ -192,7 +205,7 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"standby service while disabled",
 			func(d *deployment.Descriptor) {
 				d.Instances.Standby.Disabled = true
-				d.Lock = nil
+				d.Lease = nil
 				d.Instances.Standby.APIAddress = ""
 				d.Instances.Standby.Nats = nil
 			},
@@ -202,7 +215,7 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"standby api address while disabled",
 			func(d *deployment.Descriptor) {
 				d.Instances.Standby.Disabled = true
-				d.Lock = nil
+				d.Lease = nil
 				d.Instances.Standby.Service = nil
 				d.Instances.Standby.Nats = nil
 			},
@@ -307,7 +320,7 @@ func TestDescriptorValidateFailures(t *testing.T) {
 func TestDescriptorValidateAcceptsOneInstanceMachine(t *testing.T) {
 	d := validDescriptor()
 	d.Instances.Standby = deployment.Instance{Disabled: true}
-	d.Lock = nil
+	d.Lease = nil
 	d.Peers = d.Peers[:3]
 	nats := d.Instances.Primary.Nats
 	nats.Routes = []string{gatewayCluster, historianCluster}
@@ -321,7 +334,7 @@ func TestDescriptorValidateAcceptsOneInstanceMachine(t *testing.T) {
 func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
 	d := validDescriptor()
 	d.Instances.Standby = deployment.Instance{Disabled: true}
-	d.Lock = nil
+	d.Lease = nil
 	d.Peers = []deployment.Peer{
 		peer("sensor", deployment.RolePrimary, machineIP, primaryClient, primaryCluster),
 	}
@@ -342,7 +355,7 @@ func TestDescriptorValidateAcceptsAMachineWithNoEventStorage(t *testing.T) {
 	d := validDescriptor()
 	d.Instances.Primary.Nats = nil
 	d.Instances.Standby = deployment.Instance{Disabled: true}
-	d.Lock = nil
+	d.Lease = nil
 	d.Peers = []deployment.Peer{
 		{Site: "north", Machine: "sensor", Role: deployment.RolePrimary, IP: machineIP},
 	}

@@ -59,20 +59,25 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 			Chaos: p.Features.Chaos,
 		},
 		Instances: instances(site, machine),
-		Lock:      lock(machine),
+		Lease:     lease(machine),
 		Peers:     peers(site),
 	}
 }
 
-// lock resolves a machine's local ownership lock when a Standby Instance is
-// deployed. It returns nil when the machine deploys no standby and has no lock.
-func lock(machine blueprint.Machine) *deployment.Lock {
-	authored := machine.Lock()
+// lease resolves a machine's local Primary Ownership lease when a Standby
+// Instance is deployed. It returns nil when the machine deploys no standby and
+// has no lease.
+func lease(machine blueprint.Machine) *deployment.Lease {
+	authored := machine.Lease()
 	if authored == nil {
 		return nil
 	}
-	return &deployment.Lock{
-		WindowsMutex: authored.WindowsMutex,
+	return &deployment.Lease{
+		File:                  authored.File,
+		Duration:              authored.Duration,
+		RenewalInterval:       authored.RenewalInterval,
+		HealthCheckInterval:   authored.HealthCheckInterval,
+		FailbackStabilization: authored.FailbackStabilization,
 	}
 }
 

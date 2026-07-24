@@ -28,8 +28,6 @@ namespace Opdl.Sdk.Client.Models
 #else
         public string LeaseState { get; set; }
 #endif
-        /// <summary>Ownership generation counter.</summary>
-        public long? OwnershipGeneration { get; set; }
         /// <summary>Instance role: Primary or Standby.</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -66,7 +64,6 @@ namespace Opdl.Sdk.Client.Models
             {
                 { "leaseExpirationUtc", n => { LeaseExpirationUtc = n.GetStringValue(); } },
                 { "leaseState", n => { LeaseState = n.GetStringValue(); } },
-                { "ownershipGeneration", n => { OwnershipGeneration = n.GetLongValue(); } },
                 { "role", n => { Role = n.GetStringValue(); } },
                 { "runtimeState", n => { RuntimeState = n.GetStringValue(); } },
             };
@@ -80,7 +77,6 @@ namespace Opdl.Sdk.Client.Models
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteStringValue("leaseExpirationUtc", LeaseExpirationUtc);
             writer.WriteStringValue("leaseState", LeaseState);
-            writer.WriteLongValue("ownershipGeneration", OwnershipGeneration);
             writer.WriteStringValue("role", Role);
             writer.WriteStringValue("runtimeState", RuntimeState);
         }

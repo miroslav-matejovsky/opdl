@@ -81,21 +81,25 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			json: `{"instances":{` + primaryInstanceJSON + `,"standby":{}}}`,
 			err:  "instances.standby.disabled is required",
 		},
-		"lock when standby disabled": {
-			json: `{` + instances + `,"lock":{"windows_mutex":"Global\\opdl-test"}}`,
-			err:  "lock is set but instances.standby.disabled is true",
+		"lease when standby disabled": {
+			json: `{` + instances + `,"lease":{"file":"D:/opdl/lease","duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+			err:  "lease is set but instances.standby.disabled is true",
 		},
-		"missing lock when standby enabled": {
+		"missing lease when standby enabled": {
 			json: `{` + standbyEnabledInstances + `}`,
-			err:  "lock is required",
+			err:  "lease is required",
 		},
-		"null lock when standby enabled": {
-			json: `{` + standbyEnabledInstances + `,"lock":null}`,
-			err:  "lock is required",
+		"null lease when standby enabled": {
+			json: `{` + standbyEnabledInstances + `,"lease":null}`,
+			err:  "lease is required",
 		},
-		"missing lock windows_mutex when standby enabled": {
-			json: `{` + standbyEnabledInstances + `,"lock":{}}`,
-			err:  "lock.windows_mutex is required",
+		"missing lease file when standby enabled": {
+			json: `{` + standbyEnabledInstances + `,"lease":{"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+			err:  "lease.file is required",
+		},
+		"bad lease duration when standby enabled": {
+			json: `{` + standbyEnabledInstances + `,"lease":{"file":"D:/opdl/lease","duration":"soon","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+			err:  "lease.duration",
 		},
 		"missing peers": {
 			json: `{` + instances + `}`,
@@ -169,7 +173,7 @@ func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
 	      "nats": {"jetstream_store_dir": ".data/journal/standby", "client_address": "127.0.0.1:4322", "cluster_address": "127.0.0.1:6322", "routes": ["127.0.0.1:6222"], "servers": ["127.0.0.1:4322", "127.0.0.1:4222"]}
 	    }
 	  },
-	  "lock": {"windows_mutex": "Global\\opdl-customer-a-north-sensor"},
+	  "lease": {"file": "D:/opdl/node/lease", "duration": "15s", "renewal_interval": "5s", "health_check_interval": "2s", "failback_stabilization": "30s"},
 	  "peers": [
 	    {"site":"north","machine":"node","role":"primary","ip":"127.0.0.1","api_address":"127.0.0.1:8080","nats":{"client_address":"127.0.0.1:4222","cluster_address":"127.0.0.1:6222"}},
 	    {"site":"north","machine":"node","role":"standby","ip":"127.0.0.1","api_address":"127.0.0.1:8081","nats":{"client_address":"127.0.0.1:4322","cluster_address":"127.0.0.1:6322"}}

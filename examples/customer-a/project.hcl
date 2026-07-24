@@ -39,14 +39,12 @@ project "customer-a" {
       # whoever installs the services, so the two fixed instance roles are
       # recognizable and named the same way on every machine.
       #
-      # event_storage states the event fabric topology and storage settings.
-      #
       # standby states whether a second platform instance is deployed. This sensor
       # opts out: it is a single-purpose node whose loss is already covered by the
       # site, so a second instance would add a process to operate without adding
       # site availability. Because it opts out, it states nothing further.
       platform {
-        data_dir    = "D:/opdl/customer-a/north/sensor/primary"
+        data_dir = "D:/opdl/customer-a/north/sensor/primary"
 
         api {
           local_port = 8080
@@ -56,14 +54,6 @@ project "customer-a" {
           name         = "opdl-customer-a-north-sensor-primary"
           display_name = "OPDL customer-a north sensor (Primary Instance)"
           description  = "OPDL platform Primary Instance for machine sensor."
-        }
-
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
-          }
         }
 
         standby {
@@ -79,13 +69,13 @@ project "customer-a" {
 
       # This machine deploys both instances. They are independent runtimes that
       # run together on one host, so every port below is distinct: nothing is
-      # shared between them except the ownership lock, which is not a port.
+      # shared between them except the ownership lease file, which is not a port.
       #
       # Copying the primary's blocks into standby and forgetting to change the
       # ports is the mistake this shape invites. The builder rejects it and names
       # both listeners.
       platform {
-        data_dir    = "D:/opdl/customer-a/north/local-server/primary"
+        data_dir = "D:/opdl/customer-a/north/local-server/primary"
 
         api {
           local_port = 8080
@@ -96,23 +86,23 @@ project "customer-a" {
           display_name = "OPDL customer-a north local-server (Primary Instance)"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
-          }
-        }
-
         standby {
-          disabled    = false
-          data_dir    = "D:/opdl/customer-a/north/local-server/standby"
+          disabled = false
+          data_dir = "D:/opdl/customer-a/north/local-server/standby"
 
-          # lock is mandatory when standby is enabled (disabled = false).
-          # The machine's two instances contend for this Windows named mutex
-          # in the machine-wide kernel namespace to coordinate Primary Ownership.
-          lock {
-            windows_mutex = "Global\\opdl-customer-a-north-local-server"
+          # lease is mandatory when standby is enabled (disabled = false). The
+          # machine's two instances coordinate Primary Ownership through this
+          # shared machine-wide file: the owner renews it, and the Standby takes
+          # over once it lapses and the Primary's health endpoint reports it can
+          # no longer serve. duration must be finite and renewal_interval shorter
+          # than it. failback_stabilization is how long a returning Primary must
+          # be continuously healthy before the Standby hands ownership back.
+          lease {
+            file                   = "D:/opdl/customer-a/north/local-server/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {
@@ -122,14 +112,6 @@ project "customer-a" {
           winservice {
             name         = "opdl-customer-a-north-local-server-standby"
             display_name = "OPDL customer-a north local-server (Standby Instance)"
-          }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
-            }
           }
         }
       }
@@ -142,7 +124,7 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
-        data_dir    = "D:/opdl/customer-a/control-room/master/primary"
+        data_dir = "D:/opdl/customer-a/control-room/master/primary"
 
         api {
           local_port = 8080
@@ -153,20 +135,16 @@ project "customer-a" {
           display_name = "OPDL customer-a control-room master (Primary Instance)"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/control-room/master/primary/eventfabric/nats"
-          }
-        }
-
         standby {
-          disabled    = false
-          data_dir    = "D:/opdl/customer-a/control-room/master/standby"
+          disabled = false
+          data_dir = "D:/opdl/customer-a/control-room/master/standby"
 
-          lock {
-            windows_mutex = "Global\\opdl-customer-a-control-room-master"
+          lease {
+            file                   = "D:/opdl/customer-a/control-room/master/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {
@@ -177,14 +155,6 @@ project "customer-a" {
             name         = "opdl-customer-a-control-room-master-standby"
             display_name = "OPDL customer-a control-room master (Standby Instance)"
           }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/master/standby/eventfabric/nats"
-            }
-          }
         }
       }
     }
@@ -194,7 +164,7 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
-        data_dir    = "D:/opdl/customer-a/control-room/slave/primary"
+        data_dir = "D:/opdl/customer-a/control-room/slave/primary"
 
         api {
           local_port = 8080
@@ -205,20 +175,16 @@ project "customer-a" {
           display_name = "OPDL customer-a control-room slave (Primary Instance)"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/primary/eventfabric/nats"
-          }
-        }
-
         standby {
-          disabled    = false
-          data_dir    = "D:/opdl/customer-a/control-room/slave/standby"
+          disabled = false
+          data_dir = "D:/opdl/customer-a/control-room/slave/standby"
 
-          lock {
-            windows_mutex = "Global\\opdl-customer-a-control-room-slave"
+          lease {
+            file                   = "D:/opdl/customer-a/control-room/slave/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {
@@ -229,14 +195,6 @@ project "customer-a" {
             name         = "opdl-customer-a-control-room-slave-standby"
             display_name = "OPDL customer-a control-room slave (Standby Instance)"
           }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/standby/eventfabric/nats"
-            }
-          }
         }
       }
     }
@@ -246,7 +204,7 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
-        data_dir    = "D:/opdl/customer-a/control-room/integration/primary"
+        data_dir = "D:/opdl/customer-a/control-room/integration/primary"
 
         api {
           local_port = 8080
@@ -257,20 +215,16 @@ project "customer-a" {
           display_name = "OPDL customer-a control-room integration (Primary Instance)"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/primary/eventfabric/nats"
-          }
-        }
-
         standby {
-          disabled    = false
-          data_dir    = "D:/opdl/customer-a/control-room/integration/standby"
+          disabled = false
+          data_dir = "D:/opdl/customer-a/control-room/integration/standby"
 
-          lock {
-            windows_mutex = "Global\\opdl-customer-a-control-room-integration"
+          lease {
+            file                   = "D:/opdl/customer-a/control-room/integration/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {
@@ -280,14 +234,6 @@ project "customer-a" {
           winservice {
             name         = "opdl-customer-a-control-room-integration-standby"
             display_name = "OPDL customer-a control-room integration (Standby Instance)"
-          }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/standby/eventfabric/nats"
-            }
           }
         }
       }

@@ -74,8 +74,12 @@ project "customer-a" {
           disabled    = false
           data_dir    = "D:/opdl/customer-a/north/local-server/standby"
 
-          lock {
-            windows_mutex = "Global\\opdl-customer-a-north-local-server"
+          lease {
+            file                   = "D:/opdl/customer-a/north/local-server/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {
@@ -126,8 +130,12 @@ project "customer-a" {
           disabled    = false
           data_dir    = "D:/opdl/customer-a/control-room/master/standby"
 
-          lock {
-            windows_mutex = "Global\\opdl-customer-a-control-room-master"
+          lease {
+            file                   = "D:/opdl/customer-a/control-room/master/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {
@@ -176,8 +184,12 @@ project "customer-a" {
           disabled    = false
           data_dir    = "D:/opdl/customer-a/control-room/slave/standby"
 
-          lock {
-            windows_mutex = "Global\\opdl-customer-a-control-room-slave"
+          lease {
+            file                   = "D:/opdl/customer-a/control-room/slave/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {
@@ -226,8 +238,12 @@ project "customer-a" {
           disabled    = false
           data_dir    = "D:/opdl/customer-a/control-room/integration/standby"
 
-          lock {
-            windows_mutex = "Global\\opdl-customer-a-control-room-integration"
+          lease {
+            file                   = "D:/opdl/customer-a/control-room/integration/lease"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {

@@ -9,18 +9,22 @@ Runtime identity, endpoints, storage directories, and Event Fabric topology come
 The internal packages keep the HTTP contract, registration decisions, and the event transport behind separate boundaries: the registration package is handed a publisher, a projector, and a handler, and never learns which transport carries them. For system contracts and architectural details, refer to the overview in [`docs`](../docs/README.md).
 
 Each machine runs a Primary Instance and, when its descriptor's standby instance
-is not disabled, a Standby Instance. Every process writes mandatory local JSONL
-and maintains an Event Fabric projection. An instance selected as a storage node
-also runs its own NATS server and JetStream store. Only the holder of Primary
-Ownership opens durable handlers, publishes readiness, and serves domain
-operations. The local record is what supports service-manager handover and
-diagnostics; nothing an instance writes locally grants ownership.
+is not disabled, a Standby Instance. Primary Ownership is a finite, renewable
+lease recorded in a machine-wide file the descriptor names: the owner renews it
+while Active, a Standby takes over once it lapses and the peer's health endpoint
+reports it can no longer serve, and — under the Preferred Primary policy — an
+Active Standby hands ownership back automatically once the returned Primary has
+been continuously healthy for the stabilization window. Every transition is
+automatic; there is no manual mode. Only the holder of Primary Ownership serves
+domain operations. Every process writes mandatory local JSONL, which is what
+supports diagnostics; nothing an instance writes locally grants ownership.
 
 Both instances bind their own loopback API address and hold it for their whole
-lifetime. A Passive instance answers `GET /instance` about itself and refuses
-domain operations with a `503` naming the instance that owns. Activation swaps the
-handler behind a listener that is already open, so an instance's address never
-moves and is never briefly free.
+lifetime, and both move between Active and Passive in place, without the process
+exiting. A Passive instance serves its health endpoints and `GET /instance`,
+accepts no writes, and refuses domain operations with a `503` naming the
+instance that owns. A transition swaps the handler behind a listener that is
+already open, so an instance's address never moves and is never briefly free.
 
 Each deployed instance has its own resolved Event Fabric endpoints and
 `jetstream_store_dir`. Storage selection is per instance. Selected instances

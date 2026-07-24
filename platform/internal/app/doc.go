@@ -1,6 +1,6 @@
 // Package app composes and runs the platform runtime.
 //
-// A machine's Primary and Standby Instances contend for one Primary Ownership.
+// A machine's Primary and Standby Instances share one Primary Ownership lease.
 // Both instances maintain their authored Event Fabric membership and projection.
 // Only the owner attaches durable handlers, publishes readiness, and serves
 // domain operations. The other process runs only its projector in the Passive
