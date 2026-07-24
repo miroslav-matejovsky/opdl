@@ -26,6 +26,23 @@ const (
 	// Ownership. A Passive instance answers for itself and refuses every domain
 	// operation.
 	InstanceStatePassive = "passive"
+
+	// InstanceRolePrimary identifies the primary fixed instance role.
+	InstanceRolePrimary = "Primary"
+	// InstanceRoleStandby identifies the standby fixed instance role.
+	InstanceRoleStandby = "Standby"
+
+	// HealthStatusHealthy indicates all responsibilities are performing safely.
+	HealthStatusHealthy = "Healthy"
+	// HealthStatusDegraded indicates reduced capability without requiring failover.
+	HealthStatusDegraded = "Degraded"
+	// HealthStatusUnhealthy indicates inability to reliably perform active duties.
+	HealthStatusUnhealthy = "Unhealthy"
+
+	// LeaseStateOwned indicates primary ownership lease is held.
+	LeaseStateOwned = "Owned"
+	// LeaseStateUnowned indicates primary ownership lease is not held.
+	LeaseStateUnowned = "Unowned"
 )
 
 // Instance is what one platform instance reports about itself.
@@ -142,4 +159,48 @@ type PlatformInstanceRegistrationStatus struct {
 	Status string `json:"status" doc:"Platform instance's registration status: pending, accepted, or rejected." example:"accepted"`
 	// Reason is an optional bounded machine-readable rejection code.
 	Reason *string `json:"reason,omitempty" doc:"Optional machine-readable rejection code." example:"registration_key_conflict"`
+}
+
+// HealthResponse is the primary operational health assessment.
+type HealthResponse struct {
+	// Status is Healthy, Degraded, or Unhealthy.
+	Status string `json:"status" doc:"Overall health status: Healthy, Degraded, or Unhealthy." example:"Healthy"`
+	// InstanceID is the instance identifier.
+	InstanceID string `json:"instanceId" doc:"Instance identifier." example:"Primary"`
+	// Role is the instance role: Primary or Standby.
+	Role string `json:"role" doc:"Instance role: Primary or Standby." example:"Primary"`
+	// RuntimeState is Active or Passive.
+	RuntimeState string `json:"runtimeState" doc:"Current runtime state: Active or Passive." example:"Active"`
+	// Version is the platform runtime version.
+	Version string `json:"version" doc:"Platform runtime version." example:"0.1.0"`
+	// Uptime is the human-readable process uptime.
+	Uptime string `json:"uptime" doc:"Human-readable process uptime." example:"14d 07h 23m"`
+	// Checks contains dependency health check results.
+	Checks map[string]string `json:"checks,omitempty" doc:"Dependency health check results."`
+}
+
+// HealthLiveResponse is the process liveness assessment.
+type HealthLiveResponse struct {
+	// Status is Healthy or Unhealthy.
+	Status string `json:"status" doc:"Process liveness status." example:"Healthy"`
+}
+
+// HealthReadyResponse is the operational readiness assessment.
+type HealthReadyResponse struct {
+	// Status is Healthy, Degraded, or Unhealthy.
+	Status string `json:"status" doc:"Operational readiness status." example:"Healthy"`
+}
+
+// HealthHAResponse is the high-availability and ownership diagnostics view.
+type HealthHAResponse struct {
+	// Role is Primary or Standby.
+	Role string `json:"role" doc:"Instance role: Primary or Standby." example:"Primary"`
+	// RuntimeState is Active or Passive.
+	RuntimeState string `json:"runtimeState" doc:"Current runtime state: Active or Passive." example:"Active"`
+	// LeaseState is Owned or Unowned.
+	LeaseState string `json:"leaseState" doc:"Lease ownership status: Owned or Unowned." example:"Owned"`
+	// LeaseExpirationUTC is an optional ISO-8601 timestamp for lease expiration in UTC.
+	LeaseExpirationUTC *string `json:"leaseExpirationUtc,omitempty" doc:"Lease expiration timestamp in UTC." example:"2026-07-24T10:15:00Z"`
+	// OwnershipGeneration is the ownership generation counter.
+	OwnershipGeneration int64 `json:"ownershipGeneration" doc:"Ownership generation counter." example:"42"`
 }

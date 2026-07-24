@@ -69,6 +69,35 @@ func TestHandlerRefusesRegistrationCreationWithNotImplemented(t *testing.T) {
 	require.Equal(t, http.StatusNotImplemented, response.StatusCode)
 }
 
+func TestHandlerServesHealthEndpoints(t *testing.T) {
+	site := newSite(t, "node-a")
+	nodeA := site.start("node-a")
+
+	activeSrv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, false))
+	defer activeSrv.Close()
+
+	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance))
+	defer passiveSrv.Close()
+
+	for _, srv := range []*httptest.Server{activeSrv, passiveSrv} {
+		resp := do(t, http.MethodGet, srv.URL+"/health", nil, "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.NoError(t, resp.Body.Close())
+
+		resp = do(t, http.MethodGet, srv.URL+"/health/live", nil, "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.NoError(t, resp.Body.Close())
+
+		resp = do(t, http.MethodGet, srv.URL+"/health/ready", nil, "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.NoError(t, resp.Body.Close())
+
+		resp = do(t, http.MethodGet, srv.URL+"/health/ha", nil, "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.NoError(t, resp.Body.Close())
+	}
+}
+
 func TestHandlerReturnsMethodErrors(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")

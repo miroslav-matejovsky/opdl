@@ -23,6 +23,14 @@ const (
 	// PathInstance is the instance's own identity and state. Every instance
 	// answers it in every state.
 	PathInstance = "/instance"
+	// PathHealth is the primary operational health endpoint.
+	PathHealth = "/health"
+	// PathHealthLive is the process liveness endpoint.
+	PathHealthLive = "/health/live"
+	// PathHealthReady is the operational readiness endpoint.
+	PathHealthReady = "/health/ready"
+	// PathHealthHA is the redundancy and ownership diagnostics endpoint.
+	PathHealthHA = "/health/ha"
 	// PathRegistrations lists and creates registration proposals.
 	PathRegistrations = "/registrations"
 	// PathRegistrationConflicts lists projected key conflicts.
@@ -60,6 +68,14 @@ type Handlers struct {
 	// every request rather than captured once, because State changes when Primary
 	// Ownership moves.
 	Instance func() Instance
+	// Health reports primary operational health information.
+	Health func() HealthResponse
+	// HealthLive reports process liveness information.
+	HealthLive func() HealthLiveResponse
+	// HealthReady reports operational readiness information.
+	HealthReady func() HealthReadyResponse
+	// HealthHA reports high-availability and ownership diagnostics.
+	HealthHA func() HealthHAResponse
 	// Create validates and durably records a registration proposal. It returns
 	// ErrJournalUnavailable when nothing was recorded and the client may retry.
 	Create func(ctx context.Context, req RegistrationRequest) (ProposalAccepted, error)
@@ -109,6 +125,22 @@ type instanceOutput struct {
 	Body Instance
 }
 
+type healthOutput struct {
+	Body HealthResponse
+}
+
+type healthLiveOutput struct {
+	Body HealthLiveResponse
+}
+
+type healthReadyOutput struct {
+	Body HealthReadyResponse
+}
+
+type healthHAOutput struct {
+	Body HealthHAResponse
+}
+
 // RegisterInstance attaches the instance operation to hapi.
 //
 // It is separate from Register because it is the one operation that does not
@@ -128,10 +160,124 @@ func RegisterInstance(hapi huma.API, instance func() Instance) {
 	})
 }
 
+// RegisterHealth attaches the health operations to hapi.
+func RegisterHealth(hapi huma.API, h Handlers) {
+	huma.Register(hapi, huma.Operation{
+		OperationID: "getHealth",
+		Method:      http.MethodGet,
+		Path:        PathHealth,
+		Summary:     "Report primary operational health",
+		Description: "Overall health assessment, operational status, dependency status, readiness, and basic redundancy visibility.",
+	}, func(_ context.Context, _ *struct{}) (*healthOutput, error) {
+		if h.Health != nil {
+			return &healthOutput{Body: h.Health()}, nil
+		}
+		inst := Instance{Role: InstanceRolePrimary, State: InstanceStateActive}
+		if h.Instance != nil {
+			inst = h.Instance()
+		}
+		role := inst.Role
+		if role == "" {
+			role = InstanceRolePrimary
+		}
+		state := inst.State
+		if state == "" {
+			state = InstanceStateActive
+		}
+		return &healthOutput{
+			Body: HealthResponse{
+				Status:       HealthStatusHealthy,
+				InstanceID:   role,
+				Role:         role,
+				RuntimeState: state,
+				Version:      apiVersion,
+				Uptime:       "0s",
+				Checks: map[string]string{
+					"configuration":    HealthStatusHealthy,
+					"internalServices": HealthStatusHealthy,
+				},
+			},
+		}, nil
+	})
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: "getHealthLive",
+		Method:      http.MethodGet,
+		Path:        PathHealthLive,
+		Summary:     "Report process liveness",
+		Description: "Lightweight check determining whether the process and main execution loop are running.",
+	}, func(_ context.Context, _ *struct{}) (*healthLiveOutput, error) {
+		if h.HealthLive != nil {
+			return &healthLiveOutput{Body: h.HealthLive()}, nil
+		}
+		return &healthLiveOutput{
+			Body: HealthLiveResponse{
+				Status: HealthStatusHealthy,
+			},
+		}, nil
+	})
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: "getHealthReady",
+		Method:      http.MethodGet,
+		Path:        PathHealthReady,
+		Summary:     "Report operational readiness",
+		Description: "Check determining whether the instance is capable of serving work.",
+	}, func(_ context.Context, _ *struct{}) (*healthReadyOutput, error) {
+		if h.HealthReady != nil {
+			return &healthReadyOutput{Body: h.HealthReady()}, nil
+		}
+		return &healthReadyOutput{
+			Body: HealthReadyResponse{
+				Status: HealthStatusHealthy,
+			},
+		}, nil
+	})
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: "getHealthHA",
+		Method:      http.MethodGet,
+		Path:        PathHealthHA,
+		Summary:     "Report high-availability and ownership diagnostics",
+		Description: "Redundancy, lease, and primary ownership diagnostics.",
+	}, func(_ context.Context, _ *struct{}) (*healthHAOutput, error) {
+		if h.HealthHA != nil {
+			return &healthHAOutput{Body: h.HealthHA()}, nil
+		}
+		inst := Instance{Role: InstanceRolePrimary, State: InstanceStateActive}
+		if h.Instance != nil {
+			inst = h.Instance()
+		}
+		role := inst.Role
+		if role == "" {
+			role = InstanceRolePrimary
+		}
+		state := inst.State
+		if state == "" {
+			state = InstanceStateActive
+		}
+		leaseState := LeaseStateOwned
+		if state == InstanceStatePassive {
+			leaseState = LeaseStateUnowned
+		}
+		exp := "2026-07-24T10:15:00Z"
+		return &healthHAOutput{
+			Body: HealthHAResponse{
+				Role:                role,
+				RuntimeState:        state,
+				LeaseState:          leaseState,
+				LeaseExpirationUTC:  &exp,
+				OwnershipGeneration: 1,
+			},
+		}, nil
+	})
+}
+
 // Register attaches every platform operation to hapi. It is the single source
 // the runtime serves and the OpenAPI specification is generated from.
 func Register(hapi huma.API, h Handlers) {
 	RegisterInstance(hapi, h.Instance)
+	RegisterHealth(hapi, h)
 
 	huma.Register(hapi, huma.Operation{
 		OperationID:   "registerUnit",

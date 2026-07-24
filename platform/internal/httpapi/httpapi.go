@@ -108,7 +108,9 @@ func newRefusingHandler(instance func() api.Instance, describe func(api.Instance
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	cfg.OpenAPIPath, cfg.DocsPath, cfg.SchemasPath = "", "", ""
-	api.RegisterInstance(humago.New(mux, cfg), instance)
+	hapi := humago.New(mux, cfg)
+	api.RegisterInstance(hapi, instance)
+	api.RegisterHealth(hapi, api.Handlers{Instance: instance})
 
 	for _, pattern := range api.DomainPaths {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
