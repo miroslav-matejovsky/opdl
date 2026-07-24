@@ -86,7 +86,7 @@ func peerHealthCheck(_ *config.Config, peerAddress string) func(context.Context)
 	return func(ctx context.Context) bool {
 		reqCtx, cancel := context.WithTimeout(ctx, peerHealthTimeout)
 		defer cancel()
-		request, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+		request, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, http.NoBody)
 		if err != nil {
 			return false
 		}

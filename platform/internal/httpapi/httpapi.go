@@ -12,6 +12,17 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 )
 
+// ServingMode states what surface this instance's handler serves.
+type ServingMode string
+
+const (
+	// ModeActive serves the whole API: health, identity, and domain operations.
+	ModeActive ServingMode = "active"
+	// ModePassive serves health and identity only. Every domain operation is
+	// refused with a 503 naming the instance that owns, and no write is accepted.
+	ModePassive ServingMode = "passive"
+)
+
 // NewHandler wires the registration services into the platform's huma API and
 // returns the http.Handler the runtime serves. The command service publishes
 // proposals; the query service answers from this node's projection. The caller
@@ -50,14 +61,14 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 	return mux
 }
 
-// NewPassiveHandler returns the handler a Passive instance serves.
+// NewPassiveHandler returns the handler a Passive instance serves in ModePassive.
 //
 // A Passive instance binds its own address for its whole lifetime, not only
 // while it is Active, so an operator can ask it about itself at any time. What it
-// may answer is bounded by what it actually knows: it holds no Primary Ownership
-// and its projection is not authoritative, so answering a domain query from it
-// would make the ownership rule meaningless. It answers for itself, and refuses
-// everything else.
+// may answer is bounded by ModePassive: it holds no Primary Ownership and its
+// projection is not authoritative, so answering a domain query from it would
+// make the ownership rule meaningless. It serves health and identity only, and
+// refuses everything else.
 //
 // The refusal is a 503 naming the machine's other instance, because a caller that
 // reached this instance reached the wrong one rather than a broken one. That is
@@ -69,7 +80,7 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 // instance's projection is opened for catch-up so it can take over quickly, and
 // it is never wired to a listener.
 func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView) http.Handler {
-	return newRefusingHandler(instance, started, leaseView, func(current api.Instance) string {
+	return newRefusingHandler(ModePassive, instance, started, leaseView, func(current api.Instance) string {
 		detail := "this instance is passive and does not serve domain operations"
 		if current.PeerAddress != "" {
 			detail += "; the machine's other instance holds Primary Ownership and serves at " + current.PeerAddress
@@ -81,7 +92,7 @@ func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseVie
 // NewJournallessHandler returns the handler an instance serves when its
 // deployment has no event storage.
 //
-// It is the same surface as a Passive instance's and refuses for a different
+// It is constructed in ModeActive and refuses domain operations for a different
 // reason. This instance does hold Primary Ownership: it is Active, it answers
 // for itself, and there is nothing wrong with it. It has no site journal, and
 // every domain operation is a fact that has to be journalled or a query answered
@@ -91,7 +102,7 @@ func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseVie
 // that will pass, which is why it names the deployment rather than the instance:
 // a caller that retries elsewhere, or later, gets the same answer.
 func NewJournallessHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView) http.Handler {
-	return newRefusingHandler(instance, started, leaseView, func(api.Instance) string {
+	return newRefusingHandler(ModeActive, instance, started, leaseView, func(api.Instance) string {
 		return "this deployment has no event storage, so it serves no domain operations; " +
 			"author a platform.event_storage block and rebuild to get a site journal"
 	}, "no_event_storage")
@@ -105,7 +116,10 @@ func NewJournallessHandler(instance func() api.Instance, started time.Time, leas
 // The domain paths are registered rather than left out on purpose. An
 // unregistered path answers 404, which says the operation does not exist rather
 // than that it is not served here.
-func newRefusingHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, describe func(api.Instance) string, title string) http.Handler {
+//
+// In ModePassive, a structural guard ensures that any non-GET/HEAD request is
+// refused even if an operation is omitted from DomainPaths.
+func newRefusingHandler(mode ServingMode, instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, describe func(api.Instance) string, title string) http.Handler {
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	cfg.OpenAPIPath, cfg.DocsPath, cfg.SchemasPath = "", "", ""
@@ -119,6 +133,16 @@ func newRefusingHandler(instance func() api.Instance, started time.Time, leaseVi
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
 			current := instance()
 			refuse(w, current, title, describe(current))
+		})
+	}
+	if mode == ModePassive {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				current := instance()
+				refuse(w, current, title, describe(current))
+				return
+			}
+			mux.ServeHTTP(w, r)
 		})
 	}
 	return mux

@@ -1,6 +1,12 @@
 // Package httpapi wires the platform's registration services into the public
 // HTTP API declared in platform/api.
 //
+// ServingMode (ModeActive vs ModePassive) explicitly states what surface an
+// instance serves. ModeActive serves the full API (or refuses domain operations
+// if there is no event storage). ModePassive serves health and identity endpoints
+// only, refusing all domain operations with HTTP 503 and accepting no writes
+// (non-GET/HEAD requests are refused structurally).
+//
 // NewHandler binds the platform's huma operations (platform/api.Register) to a
 // standard-library ServeMux through the humago adapter, filling the api.Handlers
 // seam with closures backed by the command and query services. Operation

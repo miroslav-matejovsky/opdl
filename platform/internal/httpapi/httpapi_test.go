@@ -389,6 +389,67 @@ func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, response.StatusCode)
 }
 
+// TestPassiveHandlerServingModeMatrix tests every method × path combination for ModePassive.
+// It proves Passive serves exactly GET/HEAD on health and instance endpoints (200),
+// reports 404 for GET/HEAD on unknown paths, and refuses all domain operations and all
+// non-GET/HEAD write requests (including unregistered future-style paths) with 503.
+func TestPassiveHandlerServingModeMatrix(t *testing.T) {
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
+	defer srv.Close()
+
+	methods := []string{
+		http.MethodGet,
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodDelete,
+		http.MethodPatch,
+	}
+
+	paths := []string{
+		"/health",
+		"/health/live",
+		"/health/ready",
+		"/health/ha",
+		"/instance",
+		"/registrations",
+		"/registrations/conflicts",
+		"/registrations/some-proposal",
+		"/no-such-operation",
+		"/registrations/v2/future-feature",
+	}
+
+	for _, method := range methods {
+		for _, path := range paths {
+			t.Run(method+" "+path, func(t *testing.T) {
+				resp := do(t, method, srv.URL+path, []byte(`{}`), "application/json")
+				defer func() { _ = resp.Body.Close() }()
+
+				isHealthOrInstance := path == "/instance" || path == "/health" ||
+					path == "/health/live" || path == "/health/ready" || path == "/health/ha"
+				isUnknownPath := path == "/no-such-operation" || path == "/registrations/v2/future-feature"
+
+				if (method == http.MethodGet || method == http.MethodHead) && isHealthOrInstance {
+					require.Equal(t, http.StatusOK, resp.StatusCode)
+					return
+				}
+
+				if (method == http.MethodGet || method == http.MethodHead) && isUnknownPath {
+					require.Equal(t, http.StatusNotFound, resp.StatusCode)
+					return
+				}
+
+				require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+				require.Equal(t, "application/problem+json", resp.Header.Get("Content-Type"))
+
+				var problem problemDetails
+				require.NoError(t, json.NewDecoder(resp.Body).Decode(&problem))
+				require.Equal(t, "instance_passive", problem.Title)
+			})
+		}
+	}
+}
+
 // testJournallessInstance is the only instance of a machine whose deployment
 // authored no event storage. It holds ownership and has no peer to point at.
 func testJournallessInstance() api.Instance {
