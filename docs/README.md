@@ -12,8 +12,10 @@ implementation stages.
 
 Additional material:
 
+- [Plans](plans/README.md) contains proposed work not yet implemented, reviewed
+  before any code is written.
+- [Drafts](drafts) contains work-in-progress models and requirements that are
+  not yet formal specifications.
 - [Backlog](backlog/README.md) contains deferred, actionable work.
 - [Bugs](bugs/README.md) contains known issues.
-- [Platform operations](operations/README.md) contains deployment,
-  monitoring, event-analysis, and troubleshooting runbooks.
 - Package-level details live next to Go code in `doc.go` files, or in `README.md` for top-level directories like `platform`.
