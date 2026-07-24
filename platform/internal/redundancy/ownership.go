@@ -271,8 +271,8 @@ func activate(ctx context.Context, publisher events.Publisher, lease *Lease, dep
 // manual mode.
 //
 // Stepping down by exiting mirrors the renewal loop's step-down. Rejoining as
-// Passive in place, without the restart, is the same refactor that item needs;
-// see docs/plans/redundancy-rest.md.
+// Passive in place, without the restart, is the same refactor both need; see
+// docs/plans/02-in-place-transitions.md.
 func startFailback(ctx context.Context, publisher events.Publisher, lease *Lease, deps Deps, stepDown func()) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -315,7 +315,7 @@ func startFailback(ctx context.Context, publisher events.Publisher, lease *Lease
 // Stepping down cancels serving through onLost. The instance then releases and
 // Contend returns; the process leaves and its service manager restarts it, which
 // is the conservative choice this pass makes over rejoining as Passive in place
-// (see docs/plans/redundancy-rest.md).
+// (see docs/plans/02-in-place-transitions.md).
 func startRenewal(ctx context.Context, publisher events.Publisher, lease *Lease, onLost func()) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {

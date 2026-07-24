@@ -51,8 +51,8 @@
 // before its lease could lapse from a promoter's view; and a promoter takes over
 // only when the peer is also unhealthy. Under the Preferred Primary policy an
 // Active Standby also hands ownership back once the Primary has been healthy for a
-// stabilization window. See docs/plans/README.md for the safety argument, and
-// docs/plans/redundancy-rest.md for what is deferred.
+// stabilization window. See docs/plans for the finalization plan and what
+// remains.
 //
 // # Per-instance endpoints and transfer ordering
 //

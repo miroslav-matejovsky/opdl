@@ -182,8 +182,7 @@ type Lease struct {
 	// polls its peer's health.
 	HealthCheckInterval string `hcl:"health_check_interval"`
 	// FailbackStabilization is how long a returning Primary must be continuously
-	// healthy before ownership is handed back to it. It is carried for the failback
-	// policy, which is not yet implemented; see docs/plans/redundancy-rest.md.
+	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `hcl:"failback_stabilization"`
 }
 

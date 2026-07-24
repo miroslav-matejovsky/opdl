@@ -25,8 +25,7 @@ import (
 // this safe is that a machine's two instances are two processes on one host: they
 // share a clock and a filesystem, so an expiry compared against the local clock
 // means the same instant to both, and there is no skew or partition to reason
-// about. See docs/plans/README.md for the safety argument in full, and
-// docs/plans/redundancy-rest.md for what this pass deliberately leaves out.
+// about. See docs/plans for the finalization plan and its accepted limitations.
 
 // LeaseConfig is the machine's resolved lease policy: where ownership is recorded
 // and the timings that govern how it is held and turned over. It is derived from
