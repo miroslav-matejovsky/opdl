@@ -27,32 +27,53 @@ func TestRedundancyEventsDeclareTheirContract(t *testing.T) {
 		wantJSON string
 	}{
 		{
-			name:     "lock opened",
-			event:    redundancy.LockOpened{Object: "Global\\opdl", Existed: true},
-			wantType: redundancy.TypeLockOpened,
+			name:     "lease opened",
+			event:    redundancy.LeaseOpened{File: "D:/opdl/lease"},
+			wantType: redundancy.TypeLeaseOpened,
 			want:     events.SeverityInfo,
-			wantJSON: `{"object":"Global\\opdl","existed":true}`,
+			wantJSON: `{"file":"D:/opdl/lease"}`,
 		},
 		{
 			name:     "ownership waiting",
-			event:    redundancy.OwnershipWaiting{Object: "Global\\opdl"},
+			event:    redundancy.OwnershipWaiting{File: "D:/opdl/lease"},
 			wantType: redundancy.TypeOwnershipWaiting,
 			want:     events.SeverityInfo,
-			wantJSON: `{"object":"Global\\opdl"}`,
+			wantJSON: `{"file":"D:/opdl/lease"}`,
 		},
 		{
 			name:     "ownership handed over",
-			event:    redundancy.OwnershipAcquired{Object: "Global\\opdl"},
+			event:    redundancy.OwnershipAcquired{File: "D:/opdl/lease", Generation: 7},
 			wantType: redundancy.TypeOwnershipAcquired,
 			want:     events.SeverityInfo,
-			wantJSON: `{"object":"Global\\opdl","abandoned":false}`,
+			wantJSON: `{"file":"D:/opdl/lease","generation":7,"abandoned":false}`,
 		},
 		{
-			name:     "ownership abandoned by a dead process",
-			event:    redundancy.OwnershipAcquired{Object: "Global\\opdl", Abandoned: true},
+			name:     "ownership taken from a lapsed lease",
+			event:    redundancy.OwnershipAcquired{File: "D:/opdl/lease", Generation: 8, Abandoned: true},
 			wantType: redundancy.TypeOwnershipAcquired,
 			want:     events.SeverityWarn,
-			wantJSON: `{"object":"Global\\opdl","abandoned":true}`,
+			wantJSON: `{"file":"D:/opdl/lease","generation":8,"abandoned":true}`,
+		},
+		{
+			name:     "promotion declined",
+			event:    redundancy.PromotionDeclined{Reason: "peer is healthy"},
+			wantType: redundancy.TypePromotionDeclined,
+			want:     events.SeverityInfo,
+			wantJSON: `{"reason":"peer is healthy"}`,
+		},
+		{
+			name:     "lease renewal failed",
+			event:    redundancy.LeaseRenewalFailed{Error: "disk stalled"},
+			wantType: redundancy.TypeLeaseRenewalFailed,
+			want:     events.SeverityWarn,
+			wantJSON: `{"error":"disk stalled"}`,
+		},
+		{
+			name:     "stepped down",
+			event:    redundancy.SteppedDown{Reason: "ownership was taken over"},
+			wantType: redundancy.TypeSteppedDown,
+			want:     events.SeverityWarn,
+			wantJSON: `{"reason":"ownership was taken over"}`,
 		},
 		{
 			name:     "activation started",
@@ -105,32 +126,33 @@ func TestRedundancyEventsDeclareTheirContract(t *testing.T) {
 func TestContendRecordsTheOwnershipLifecycle(t *testing.T) {
 	t.Parallel()
 
-	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
+	lease := openLease(t, leaseConfig(t), redundancy.RolePrimary)
 	runtime := newRecordingRuntime()
 	publisher, recorded := recording(t)
 	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, publisher, lock, runtime.runtime()) }()
+	go func() { done <- redundancy.Contend(ctx, publisher, lease, unhealthyPeer, runtime.runtime()) }()
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
 	cancel()
 	require.NoError(t, <-done)
 
 	envelopes := recorded()
 	require.Equal(t, []events.Type{
-		redundancy.TypeLockOpened,
+		redundancy.TypeLeaseOpened,
 		redundancy.TypeOwnershipAcquired,
 		redundancy.TypeActivationStarted,
 		redundancy.TypeActivationCompleted,
 	}, types(envelopes), "an uncontested start never waits, so it never says it did")
 
 	acquired := envelopes[1]
-	require.Equal(t, events.SeverityInfo, acquired.Severity, "nobody died; this was a free lock")
+	require.Equal(t, events.SeverityInfo, acquired.Severity, "nobody died; this was a free lease")
 	require.Equal(t, "primary", acquired.Origin.ProcessRole, "which process took ownership is in the origin")
 	var payload redundancy.OwnershipAcquired
 	require.NoError(t, json.Unmarshal(acquired.Data, &payload))
 	require.False(t, payload.Abandoned)
-	require.Equal(t, lock.Name(), payload.Object)
+	require.Equal(t, lease.File(), payload.File)
+	require.Equal(t, uint64(1), payload.Generation, "the first grant on a fresh lease is generation 1")
 
 	var completed redundancy.ActivationCompleted
 	require.NoError(t, json.Unmarshal(envelopes[3].Data, &completed))
@@ -144,12 +166,12 @@ func TestContendRecordsAFailedActivation(t *testing.T) {
 	t.Parallel()
 
 	notServing := errors.New("fabric would not open")
-	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
+	lease := openLease(t, leaseConfig(t), redundancy.RolePrimary)
 	runtime := newRecordingRuntime()
 	runtime.activeErr = notServing
 	publisher, recorded := recording(t)
 
-	require.ErrorIs(t, redundancy.Contend(t.Context(), publisher, lock, runtime.runtime()), notServing)
+	require.ErrorIs(t, redundancy.Contend(t.Context(), publisher, lease, unhealthyPeer, runtime.runtime()), notServing)
 
 	envelopes := recorded()
 	require.Contains(t, types(envelopes), redundancy.TypeActivationFailed)
@@ -174,11 +196,11 @@ func TestContendStopsWhenItCannotStateWhatItDid(t *testing.T) {
 	t.Parallel()
 
 	recordUnwritable := errors.New("jsonl: write events.jsonl: disk is full")
-	lock := openLock(t, ownershipObject(t), redundancy.RolePrimary)
+	lease := openLease(t, leaseConfig(t), redundancy.RolePrimary)
 	runtime := newRecordingRuntime()
 	publisher := failing(t, recordUnwritable)
 
-	err := redundancy.Contend(t.Context(), publisher, lock, runtime.runtime())
+	err := redundancy.Contend(t.Context(), publisher, lease, unhealthyPeer, runtime.runtime())
 
 	require.ErrorIs(t, err, recordUnwritable)
 	require.Empty(t, runtime.recorded(), "an instance that cannot state that it took ownership never activates")
@@ -187,7 +209,7 @@ func TestContendStopsWhenItCannotStateWhatItDid(t *testing.T) {
 func TestContendRequiresAPublisher(t *testing.T) {
 	t.Parallel()
 
-	err := redundancy.Contend(t.Context(), nil, nil, newRecordingRuntime().runtime())
+	err := redundancy.Contend(t.Context(), nil, nil, redundancy.Deps{}, newRecordingRuntime().runtime())
 
 	require.ErrorContains(t, err, "publisher is required")
 }

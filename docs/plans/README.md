@@ -1,19 +1,22 @@
 # Lease-based Primary Ownership
 
-Status: Proposed. No code has been written for this plan; it exists to be
-reviewed before any is.
+Status: implemented — the lease and health-gated promotion below are in the
+code, and the Windows named mutex is gone. What this pass deliberately left out
+(failback, fencing-token enforcement, and a few hardenings) is recorded in
+[redundancy-rest.md](redundancy-rest.md).
 
-This plan replaces the machine's non-expiring Windows named mutex with a
-lease-based Primary Ownership mechanism, and gates promotion on peer health. It
-implements the model described in [redundancy.md](../drafts/redundancy.md) and
-the operational surface in [health.md](../drafts/health.md). Health endpoints are
-already implemented (`platform/api`, `platform/internal/httpapi`); this plan
-gives them real lease data to report and adds the ownership machinery behind
-them.
+This document is the design: it replaces the machine's non-expiring Windows named
+mutex with a lease-based Primary Ownership mechanism, and gates promotion on peer
+health. It implements the model in [redundancy.md](../drafts/redundancy.md) and
+the operational surface in [health.md](../drafts/health.md), and gives the health
+endpoints real lease data to report.
 
-It is deliberately staged so that the reporting surface can land before any
-behavior changes, and the mutex is retired only in the final stage, after the
-lease has proven itself.
+One deviation from the original draft of this plan: the lease settings are
+authored in the blueprint's `platform.standby` block, not in the TOML
+configuration file — see [Configuration](#configuration). They are a machine's
+deployment policy, resolved into the descriptor alongside the rest of the standby
+instance's identity, rather than a runtime setting a site edits without a
+rebuild.
 
 ## Why change a mechanism that works
 
@@ -305,60 +308,52 @@ the current guarantee.
 
 ## Configuration
 
-A new `[redundancy]` section in the TOML file, validated in `config.go` beside
-the existing timeouts. All required, no defaults, matching the file's stated
-"no implicit defaults" policy.
+The lease is authored in the blueprint's `platform.standby.lease` block — a
+machine's deployment policy, not a runtime setting. It is required when the
+standby is deployed and rejected when it is not, exactly as the old `lock` block
+was, and it sits beside the standby instance's own `data_dir`, `api`, and
+`winservice`:
 
-```toml
-[redundancy]
-# How long a granted lease is valid without renewal.
-lease_duration = "15s"
-# How often the owner renews. Must be well below lease_duration.
-lease_renewal_interval = "5s"
-# How often a Passive instance evaluates promotion and polls peer health.
-health_check_interval = "2s"
-# Failback to a returning healthy Primary: "automatic" or "manual".
-failback_policy = "automatic"
-# How long the Primary must be continuously healthy before automatic failback.
-failback_stabilization = "30s"
+```hcl
+standby {
+  disabled = false
+  data_dir = "D:/opdl/customer-a/north/local-server/standby"
+
+  lease {
+    # The machine-wide lease file both instances read and write.
+    file                   = "D:/opdl/customer-a/north/local-server/lease"
+    # How long a granted lease is valid without renewal.
+    duration               = "15s"
+    # How often the owner renews. Must be shorter than duration.
+    renewal_interval       = "5s"
+    # How often a Passive instance evaluates promotion and polls peer health.
+    health_check_interval  = "2s"
+    # Reserved for failback (not yet implemented; see redundancy-rest.md).
+    failback_stabilization = "30s"
+  }
+
+  api { local_port = 8081 }
+  winservice { name = "opdl-customer-a-north-local-server-standby" }
+}
 ```
 
-Validation rules:
+It flows down the same path the rest of the standby policy does: the builder
+resolves it into `descriptor.Lease` (`builder/deployment`), and the platform
+mirrors that type in `config/deployment.go`. Both validate it — file present,
+every duration a positive Go duration, and `renewal_interval < duration` so at
+least two renewals fit before expiry and the step-down grace has room. The
+conformance-tests module checks the two descriptor types stay the same contract.
 
-- Every duration positive (existing `validateDuration`).
-- `lease_renewal_interval < lease_duration`, with enough headroom for the
-  step-down grace (proposed: renewal interval no more than one third of the
-  duration, so at least two renewal attempts fit before expiry).
-- `failback_policy` one of `automatic`, `manual`; `failback_stabilization`
-  required only for `automatic`.
-- The section is required whenever the machine deploys a Standby (the same
-  condition under which `lock` is required today). A standby-less machine has no
-  contender and needs none of it, mirroring how `lock` is omitted there.
+The step-down grace is derived, not configured, to keep the invariant impossible
+to misconfigure: the lease steps an owner down one `renewal_interval` before its
+grant would lapse.
 
-The step-down grace is derived, not configured, to keep the invariant
-`renewal_interval < duration - grace` impossible to misconfigure: propose
-`grace = lease_duration - lease_renewal_interval - (one renewal timeout)`, stated
-explicitly in the design of the lease type.
-
-## Descriptor and builder impact
-
-The lease needs a machine-wide file path both instances resolve to the same
-value, the way both resolve the same `windows_mutex` today. The two instances
-have separate `data_dir`s (`config.Instance.DataDir`) and the machine has no
-shared root in the descriptor, so this is a **new resolved field**:
-
-- Replace (or, during transition, sit beside) `descriptor.Lock.WindowsMutex`
-  with a `lease_file` path under a machine-wide directory the builder owns.
-- This is a **builder change** (`builder/`, a separate module) as well as a
-  platform one. The platform reads the path as identity, exactly as it reads
-  `windows_mutex` today; it never composes one itself.
-- `config/deployment.go`'s `UnmarshalJSON` gains a required-field check for the
-  new path under the same standby condition, and the conformance-tests module's
-  descriptor-compatibility check is updated.
-
-Flagging this early because it crosses the module boundary and gates Stage 1: the
-lease store cannot be opened until the descriptor tells the platform where it
-lives.
+Putting the lease in the descriptor rather than the TOML file is deliberate. A
+machine's two instances read one configuration file, so a lease path there would
+be one both instances take; the descriptor resolves it once, machine-wide, the
+way it resolved the mutex's kernel-object name. It also means the failover
+timings are compiled into the package an operator deploys rather than editable at
+a site, which suits a safety-relevant policy.
 
 ## API and health surface
 

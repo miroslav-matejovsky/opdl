@@ -106,6 +106,9 @@ type renderedMachine struct {
 	StandbyClientPort        int
 	StandbyClusterPort       int
 	StandbyDisabled          bool
+	// LeaseFile is the machine-wide Primary Ownership lease file both instances
+	// share, set only when the machine deploys a standby.
+	LeaseFile string
 	// EventStorageDisabled leaves the event_storage block out of both instances,
 	// which is what a deployment with no journal looks like in a blueprint.
 	EventStorageDisabled bool
@@ -256,6 +259,12 @@ func jetstreamStoreDirFor(workDir, machine, role string) string {
 	return filepath.ToSlash(filepath.Join(workDir, "journal-"+machine, role))
 }
 
+// leaseFileFor is a machine's Primary Ownership lease file, shared by its two
+// instances and by nothing else.
+func leaseFileFor(workDir, machine string) string {
+	return filepath.ToSlash(filepath.Join(workDir, "data-"+machine, "lease"))
+}
+
 // stageBlueprint allocates each machine's ports from the testnet pool, names each
 // instance's runtime directory, and renders the project's blueprint into a
 // temporary blueprint root.
@@ -317,6 +326,7 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
 			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, RoleStandby)
+			machine.LeaseFile = leaseFileFor(workDir, fixture.name)
 			if !fixture.eventStorageDisabled {
 				machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RoleStandby)
 				machine.StandbyClientPort = p[2]

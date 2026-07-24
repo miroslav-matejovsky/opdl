@@ -202,7 +202,7 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
 	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(inst.DataDir))
 	fmt.Fprintf(&b, "    event_storage %s\n", eventStorageSummary(inst.Nats))
-	fmt.Fprintf(&b, "    lock         %s\n", lockSummary(d.Lock))
+	fmt.Fprintf(&b, "    lease        %s\n", leaseSummary(d.Lease))
 	fmt.Fprintf(&b, "    peers        %s\n", peersSummary(d.Peers))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
@@ -243,12 +243,14 @@ func instancesSummary(instances Instances, self PlatformInstanceRole) string {
 	return strings.Join(parts, " ")
 }
 
-// lockSummary renders the Windows named mutex when a standby is deployed.
-func lockSummary(lock *Lock) string {
-	if lock == nil {
+// leaseSummary renders the Primary Ownership lease file and its timings when a
+// standby is deployed.
+func leaseSummary(lease *Lease) string {
+	if lease == nil {
 		return "(not deployed)"
 	}
-	return lock.WindowsMutex
+	return fmt.Sprintf("%s duration=%s renewal=%s health_check=%s failback=%s",
+		lease.File, lease.Duration, lease.RenewalInterval, lease.HealthCheckInterval, lease.FailbackStabilization)
 }
 
 // peersSummary renders the site's membership: the platform instances this

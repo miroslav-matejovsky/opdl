@@ -70,6 +70,14 @@ const (
 	peerClusterAddr    = "10.0.1.11:6222"
 	peerStandbyClient  = "10.0.1.11:4322"
 	peerStandbyCluster = "10.0.1.11:6322"
+
+	// The Primary Ownership lease a standby machine carries: a shared file and the
+	// failover timings, all round-tripped through the platform's type intact.
+	leaseFile                  = "D:/opdl/customer-a/north/sensor/lease"
+	leaseDuration              = "15s"
+	leaseRenewalInterval       = "5s"
+	leaseHealthCheckInterval   = "2s"
+	leaseFailbackStabilization = "30s"
 )
 
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
@@ -95,8 +103,8 @@ func checkRoundTripFor(standbyDisabled bool) error {
 
 	builtStandby := builderdeployment.Instance{Disabled: true}
 	wantStandby := platformconfig.Instance{Disabled: true}
-	var builtLock *builderdeployment.Lock
-	var wantLock *platformconfig.Lock
+	var builtLease *builderdeployment.Lease
+	var wantLease *platformconfig.Lease
 	if !standbyDisabled {
 		builtStandby = builderdeployment.Instance{
 			Disabled:   false,
@@ -122,8 +130,20 @@ func checkRoundTripFor(standbyDisabled bool) error {
 				Servers:           servers,
 			},
 		}
-		builtLock = &builderdeployment.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
-		wantLock = &platformconfig.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}
+		builtLease = &builderdeployment.Lease{
+			File:                  leaseFile,
+			Duration:              leaseDuration,
+			RenewalInterval:       leaseRenewalInterval,
+			HealthCheckInterval:   leaseHealthCheckInterval,
+			FailbackStabilization: leaseFailbackStabilization,
+		}
+		wantLease = &platformconfig.Lease{
+			File:                  leaseFile,
+			Duration:              leaseDuration,
+			RenewalInterval:       leaseRenewalInterval,
+			HealthCheckInterval:   leaseHealthCheckInterval,
+			FailbackStabilization: leaseFailbackStabilization,
+		}
 	}
 
 	// Peers are ordered by machine name, then Primary before Standby, and include
@@ -180,7 +200,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			},
 			Standby: builtStandby,
 		},
-		Lock:  builtLock,
+		Lease: builtLease,
 		Peers: builtPeers,
 	}
 
@@ -222,7 +242,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			},
 			Standby: wantStandby,
 		},
-		Lock:  wantLock,
+		Lease: wantLease,
 		Peers: wantPeers,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -284,7 +304,7 @@ func checkWireShape(data []byte, standbyDisabled bool) error {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints belong to an instance", field)
 		}
 	}
-	if err := verifyWireLock(wire, standbyDisabled); err != nil {
+	if err := verifyWireLease(wire, standbyDisabled); err != nil {
 		return err
 	}
 	peers, ok := wire["peers"]
@@ -314,23 +334,25 @@ func verifyWirePeers(peers json.RawMessage) error {
 	return nil
 }
 
-func verifyWireLock(wire map[string]json.RawMessage, standbyDisabled bool) error {
+func verifyWireLease(wire map[string]json.RawMessage, standbyDisabled bool) error {
 	if standbyDisabled {
-		if _, ok := wire["lock"]; ok {
-			return fmt.Errorf("builder descriptor carries lock when standby is disabled")
+		if _, ok := wire["lease"]; ok {
+			return fmt.Errorf("builder descriptor carries lease when standby is disabled")
 		}
 		return nil
 	}
-	lockRaw, ok := wire["lock"]
+	leaseRaw, ok := wire["lease"]
 	if !ok {
-		return fmt.Errorf("builder descriptor omitted lock when standby is deployed")
+		return fmt.Errorf("builder descriptor omitted lease when standby is deployed")
 	}
-	var lockFields map[string]json.RawMessage
-	if err := json.Unmarshal(lockRaw, &lockFields); err != nil {
+	var leaseFields map[string]json.RawMessage
+	if err := json.Unmarshal(leaseRaw, &leaseFields); err != nil {
 		return err
 	}
-	if _, ok := lockFields["windows_mutex"]; !ok {
-		return fmt.Errorf("builder descriptor omitted lock.windows_mutex")
+	for _, field := range []string{"file", "duration", "renewal_interval", "health_check_interval", "failback_stabilization"} {
+		if _, ok := leaseFields[field]; !ok {
+			return fmt.Errorf("builder descriptor omitted lease.%s", field)
+		}
 	}
 	return nil
 }

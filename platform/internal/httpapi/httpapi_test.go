@@ -60,7 +60,7 @@ func testPassiveInstance() api.Instance {
 func TestHandlerRefusesRegistrationCreationWithNotImplemented(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
 	defer srv.Close()
 
 	response := do(t, http.MethodPost, srv.URL+"/registrations",
@@ -79,10 +79,10 @@ func TestHandlerServesHealthEndpoints(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
 
-	activeSrv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
+	activeSrv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
 	defer activeSrv.Close()
 
-	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now()))
+	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
 	defer passiveSrv.Close()
 
 	cases := []struct {
@@ -133,7 +133,7 @@ func decodeGet(t *testing.T, url string, target any) {
 func TestHandlerReturnsMethodErrors(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
 	defer srv.Close()
 
 	// Routing is Go 1.22 ServeMux under huma. It answers a wrong method with 405
@@ -157,7 +157,7 @@ func TestHandlerReturnsMethodErrors(t *testing.T) {
 func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
 	defer srv.Close()
 
 	for _, path := range []string{
@@ -320,7 +320,7 @@ func do(t *testing.T, method, url string, body []byte, contentType string) *http
 // None of it comes from the journal, so it is answerable while the instance's
 // projection is still catching up and while it never will.
 func TestPassiveHandlerAnswersForItself(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now()))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
@@ -343,7 +343,7 @@ func TestPassiveHandlerAnswersForItself(t *testing.T) {
 // with a 503 that names the instance holding ownership, which is a pointer the
 // caller can follow rather than a dead end.
 func TestPassiveHandlerRefusesEveryDomainOperation(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now()))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
 	defer srv.Close()
 
 	requests := []struct {
@@ -381,7 +381,7 @@ func TestPassiveHandlerRefusesEveryDomainOperation(t *testing.T) {
 // typo that the platform is temporarily unavailable, and they would retry
 // forever. Refusing is about who serves an operation, not about whether it exists.
 func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now()))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
@@ -410,7 +410,7 @@ func testJournallessInstance() api.Instance {
 // has no journal. The refusal names the deployment rather than an instance to go
 // to instead, since there is no such instance and retrying will not help.
 func TestJournallessHandlerIsActiveAndStillRefusesDomainOperations(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now()))
+	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now(), nil))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
@@ -454,7 +454,7 @@ func TestJournallessHandlerIsActiveAndStillRefusesDomainOperations(t *testing.T)
 // TestJournallessHandlerStillReportsUnknownPathsAsNotFound checks the refusal is
 // scoped to the operations that exist, for the same reason the Passive one is.
 func TestJournallessHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now()))
+	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now(), nil))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
@@ -468,7 +468,7 @@ func TestJournallessHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 func TestActiveHandlerAnswersTheSameInstanceOperation(t *testing.T) {
 	site := newSite(t, "node-a")
 	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), false))
+	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")

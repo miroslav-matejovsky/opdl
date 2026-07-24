@@ -26,7 +26,7 @@ import (
 // endpoints are served alongside the operations; otherwise only the operations
 // are, and the authoritative specification is the checked-in
 // api-specifications/openapi.yaml.
-func NewHandler(commands *registration.CommandService, queries *registration.QueryService, instance func() api.Instance, started time.Time, exposeSpec bool) http.Handler {
+func NewHandler(commands *registration.CommandService, queries *registration.QueryService, instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, exposeSpec bool) http.Handler {
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	if !exposeSpec {
@@ -34,7 +34,7 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 		cfg.DocsPath = ""
 		cfg.SchemasPath = ""
 	}
-	handlers := api.NewHealth(instance, started)
+	handlers := api.NewHealth(instance, started, leaseView)
 	handlers.Instance = instance
 	handlers.Create = func(ctx context.Context, req api.RegistrationRequest) (api.ProposalAccepted, error) {
 		receipt, err := commands.Create(ctx, req)
@@ -68,8 +68,8 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 // It takes no registration services because there are none to take. A Passive
 // instance's projection is opened for catch-up so it can take over quickly, and
 // it is never wired to a listener.
-func NewPassiveHandler(instance func() api.Instance, started time.Time) http.Handler {
-	return newRefusingHandler(instance, started, func(current api.Instance) string {
+func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView) http.Handler {
+	return newRefusingHandler(instance, started, leaseView, func(current api.Instance) string {
 		detail := "this instance is passive and does not serve domain operations"
 		if current.PeerAddress != "" {
 			detail += "; the machine's other instance holds Primary Ownership and serves at " + current.PeerAddress
@@ -90,8 +90,8 @@ func NewPassiveHandler(instance func() api.Instance, started time.Time) http.Han
 // The refusal is permanent for the life of the deployment rather than a state
 // that will pass, which is why it names the deployment rather than the instance:
 // a caller that retries elsewhere, or later, gets the same answer.
-func NewJournallessHandler(instance func() api.Instance, started time.Time) http.Handler {
-	return newRefusingHandler(instance, started, func(api.Instance) string {
+func NewJournallessHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView) http.Handler {
+	return newRefusingHandler(instance, started, leaseView, func(api.Instance) string {
 		return "this deployment has no event storage, so it serves no domain operations; " +
 			"author a platform.event_storage block and rebuild to get a site journal"
 	}, "no_event_storage")
@@ -105,12 +105,12 @@ func NewJournallessHandler(instance func() api.Instance, started time.Time) http
 // The domain paths are registered rather than left out on purpose. An
 // unregistered path answers 404, which says the operation does not exist rather
 // than that it is not served here.
-func newRefusingHandler(instance func() api.Instance, started time.Time, describe func(api.Instance) string, title string) http.Handler {
+func newRefusingHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, describe func(api.Instance) string, title string) http.Handler {
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	cfg.OpenAPIPath, cfg.DocsPath, cfg.SchemasPath = "", "", ""
 	hapi := humago.New(mux, cfg)
-	health := api.NewHealth(instance, started)
+	health := api.NewHealth(instance, started, leaseView)
 	health.Instance = instance
 	api.RegisterInstance(hapi, instance)
 	api.RegisterHealth(hapi, health)

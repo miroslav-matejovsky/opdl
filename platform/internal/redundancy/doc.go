@@ -33,31 +33,32 @@
 //
 // # Primary Ownership
 //
-// Ownership is a non-expiring Windows named mutex in the machine-wide Global
-// namespace, under a name authored in the machine's blueprint and carried in its
-// deployment descriptor. It is released after active resources close, or abandoned
-// by the kernel when the process exits. Waiting is a kernel wait, so a waiter is
-// woken when the holder releases rather than on a polling interval.
+// Ownership is a finite, renewable lease recorded in a machine-wide file whose
+// path and timings are authored in the machine's blueprint and carried in its
+// deployment descriptor. The owner renews it periodically; a Standby takes it
+// over once it lapses and the peer's health endpoint reports the owner can no
+// longer serve. It is released cleanly after active resources close, or left to
+// lapse when the process dies. See lease.go for the record and its operations,
+// and ownership.go for the promotion machine.
 //
-// Ownership is therefore a machine fact rather than a configuration agreement.
-// The file lock this replaced was scoped by a runtime directory path, so two
-// processes excluded each other only if they had been configured with the same
-// one. Pointing them at different directories, installing the same package twice
-// under different paths, or putting the directory on a network filesystem each
-// produced two simultaneous actives, and nothing detected any of them.
-//
-// The mutex provides mutual exclusion. It is not a token that can be checked by
-// anything downstream, and two invariants are what make exclusion sufficient:
-// active resources close before ownership is released, and ownership lives on one
-// pinned OS thread for the life of the process, so it cannot be abandoned while
-// resources are still held. See utils/winmutex for why the second is a
-// correctness requirement rather than an implementation detail.
+// The lease replaced a non-expiring Windows named mutex. The mutex gave mutual
+// exclusion by construction but could never fail over from an unresponsive-but-
+// alive holder: a hung process kept its ownership until its service manager
+// killed it. The lease trades the kernel guarantee for a bounded failover — a
+// hung owner stops renewing and loses ownership on expiry — and keeps split-brain
+// out by four combined means: the two instances share one host's clock, so an
+// expiry means the same instant to both; an owner that cannot renew steps down
+// before its lease could lapse from a promoter's view; a promoter takes over only
+// when the peer is also unhealthy; and every acquisition bumps an ownership
+// generation a stale owner reads on its way back. See docs/plans/README.md for
+// the safety argument, and docs/plans/redundancy-rest.md for what is deferred
+// (failback, and fencing-token enforcement).
 //
 // # Per-instance endpoints and transfer ordering
 //
 // Each instance owns its own endpoints. Every address either of them binds is
 // resolved onto that instance's record in the deployment descriptor, and nothing
-// on a machine is shared between them except the ownership object, which is not a
+// on a machine is shared between them except the lease file, which is not a
 // port.
 //
 // An instance's API address is bound for its whole lifetime rather than only

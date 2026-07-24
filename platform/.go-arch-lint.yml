@@ -17,9 +17,7 @@ excludeFiles:
 vendors:
   toml: { in: "github.com/BurntSushi/toml**" }
   huma: { in: "github.com/danielgtaylor/huma/v2**" }
-  sys: { in: "golang.org/x/sys/**" }
   atomicfile: { in: "github.com/miroslav-matejovsky/opdl/utils/atomicfile" }
-  winmutex: { in: "github.com/miroslav-matejovsky/opdl/utils/winmutex" }
   stablehash: { in: "github.com/miroslav-matejovsky/opdl/utils/stablehash" }
 
 components:
@@ -49,7 +47,7 @@ deps:
     # states, and hands out only the publisher composed from it.
     mayDependOn: [api, config, events, events-storage, events-storage-jsonl, httpapi, redundancy, registration]
   redundancy:
-    canUse: [sys, atomicfile, winmutex]
+    canUse: [atomicfile]
     # Ownership transitions are events in their own right: which instance became
     # Active, when, and whether it took over from a process that died. The
     # package that runs the transitions is the one that can report them

@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -114,20 +112,14 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 		}
 		descriptor.Instances.Primary = instance
 	}
-	if descriptor.Lock == nil {
-		descriptor.Lock = &config.Lock{}
+	descriptor.Lease = &config.Lease{
+		File:                  filepath.Join(dataRoot, "lease"),
+		Duration:              "15s",
+		RenewalInterval:       "5s",
+		HealthCheckInterval:   "2s",
+		FailbackStabilization: "30s",
 	}
-	descriptor.Lock.WindowsMutex = uniqueLockMutex(t)
 	return descriptor
-}
-
-// uniqueLockMutex returns an ownership mutex name no other test or run shares.
-func uniqueLockMutex(t *testing.T) string {
-	t.Helper()
-	token := make([]byte, 8)
-	_, err := rand.Read(token)
-	require.NoError(t, err)
-	return `Global\opdl-app-test.` + hex.EncodeToString(token)
 }
 
 // newTestProcess composes what Run composes before it opens anything: one

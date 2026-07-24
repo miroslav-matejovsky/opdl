@@ -49,7 +49,7 @@ func validMachine() blueprint.Machine {
 			},
 			Standby: &blueprint.Standby{
 				DataDir:    "D:/opdl/sensor/standby",
-				Lock:       &blueprint.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"},
+				Lease:      validLease("D:/opdl/sensor/lease"),
 				API:        &blueprint.API{LocalPort: 8081},
 				WinService: &blueprint.WinService{Name: "standby"},
 				EventStorage: &blueprint.EventStorage{
@@ -80,8 +80,21 @@ func namedMachine(name, ip string) blueprint.Machine {
 	m.Platform.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	m.Platform.Standby.DataDir = "D:/opdl/" + name + "/standby"
 	m.Platform.Standby.EventStorage.Nats.JetStreamStoreDir = "D:/opdl/" + name + "/standby/eventfabric/nats"
-	m.Platform.Standby.Lock = &blueprint.Lock{WindowsMutex: `Global\opdl-customer-a-north-` + name}
+	m.Platform.Standby.Lease = validLease("D:/opdl/" + name + "/lease")
 	return m
+}
+
+// validLease is a usable Primary Ownership lease policy for a machine whose lease
+// file lives at file. The two instances run on one host, so nothing about it is
+// shared with another machine except that both machines derive their own file.
+func validLease(file string) *blueprint.Lease {
+	return &blueprint.Lease{
+		File:                  file,
+		Duration:              "15s",
+		RenewalInterval:       "5s",
+		HealthCheckInterval:   "2s",
+		FailbackStabilization: "30s",
+	}
 }
 
 func TestProjectValidateOK(t *testing.T) {
@@ -420,8 +433,12 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        standby {
 			          disabled = false
 			          data_dir = "D:/opdl/node-1/standby"
-			          lock {
-			            windows_mutex = "Global\\dup-north-node-1"
+			          lease {
+			            file                   = "D:/opdl/node-1/lease"
+			            duration               = "15s"
+			            renewal_interval       = "5s"
+			            health_check_interval  = "2s"
+			            failback_stabilization = "30s"
 			          }
 			          api {
 			            local_port = 8081
@@ -463,8 +480,12 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        standby {
 			          disabled = false
 			          data_dir = "D:/opdl/node-1/standby"
-			          lock {
-			            windows_mutex = "Global\\dup-south-node-1"
+			          lease {
+			            file                   = "D:/opdl/node-1/lease"
+			            duration               = "15s"
+			            renewal_interval       = "5s"
+			            health_check_interval  = "2s"
+			            failback_stabilization = "30s"
 			          }
 			          api {
 			            local_port = 8081
@@ -503,7 +524,7 @@ func disableStandby(p *blueprint.Project) {
 	standby := p.Sites[0].Machines[0].Platform.Standby
 	standby.Disabled = true
 	standby.DataDir = ""
-	standby.Lock = nil
+	standby.Lease = nil
 	standby.API = nil
 	standby.WinService = nil
 	standby.EventStorage = nil
@@ -515,7 +536,7 @@ func disableStandby(p *blueprint.Project) {
 // take effect, and a reader could not tell it from one that does.
 func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 	tests := map[string]func(*blueprint.Standby){
-		"lock":       func(s *blueprint.Standby) { s.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-standby"} },
+		"lease":      func(s *blueprint.Standby) { s.Lease = validLease("D:/opdl/sensor/lease") },
 		"api":        func(s *blueprint.Standby) { s.API = &blueprint.API{LocalPort: 8081} },
 		"winservice": func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
 		"event_storage": func(s *blueprint.Standby) {
@@ -563,7 +584,7 @@ func TestProjectValidateNatsFailures(t *testing.T) {
 	}{
 		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, `machine "sensor": platform block is required`},
 		{"missing standby block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby = nil }, `machine "sensor": platform.standby block is required`},
-		{"missing standby lock when deployed", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby.Lock = nil }, `machine "sensor": platform.standby.lock block is required when the standby is deployed`},
+		{"missing standby lease when deployed", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby.Lease = nil }, `machine "sensor": platform.standby.lease block is required when the standby is deployed`},
 		{"zero client port", func(p *blueprint.Project) {
 			p.Sites[0].Machines[0].Platform.EventStorage.Nats.ClientPort = 0
 		}, `platform.event_storage.nats.client_port must be in range 1-65535, got 0`},
@@ -629,35 +650,40 @@ func TestProjectValidateOptionalNats(t *testing.T) {
 	})
 }
 
-// TestMachineLock checks Lock returns nil when standby is disabled or omitted,
-// and returns the authored Lock when deployed.
-func TestMachineLock(t *testing.T) {
+// TestMachineLease checks Lease returns nil when standby is disabled or omitted,
+// and returns the authored Lease when deployed.
+func TestMachineLease(t *testing.T) {
 	p := validProject()
 	machine := p.Sites[0].Machines[0]
-	require.Equal(t, &blueprint.Lock{WindowsMutex: "Global\\opdl-customer-a-north-sensor"}, machine.Lock())
+	require.Equal(t, validLease("D:/opdl/sensor/lease"), machine.Lease())
 
 	disableStandby(p)
-	require.Nil(t, p.Sites[0].Machines[0].Lock())
+	require.Nil(t, p.Sites[0].Machines[0].Lease())
 }
 
-// TestProjectValidateLockFailures checks an authored lock windows_mutex that cannot be
-// used in a kernel object name is refused at build time rather than at startup.
-func TestProjectValidateLockFailures(t *testing.T) {
+// TestProjectValidateLeaseFailures checks an authored lease that cannot be used
+// is refused at build time rather than at startup.
+func TestProjectValidateLeaseFailures(t *testing.T) {
 	tests := map[string]struct {
-		windowsMutex string
-		errText      string
+		mutate  func(*blueprint.Lease)
+		errText string
 	}{
-		"blank":             {windowsMutex: "   ", errText: "windows_mutex is required"},
-		"padded":            {windowsMutex: " Global\\opdl ", errText: "leading or trailing whitespace"},
-		"no prefix":         {windowsMutex: "opdl-mutex", errText: `must start with Global\`},
-		"backslash":         {windowsMutex: `Global\opdl\b`, errText: "slashes or backslashes after Global\\"},
-		"forward slash":     {windowsMutex: "Global\\opdl/b", errText: "slashes or backslashes after Global\\"},
-		"longer than limit": {windowsMutex: "Global\\" + string(make([]byte, 261)), errText: "longer than"},
+		"blank file":            {func(l *blueprint.Lease) { l.File = "   " }, "lease.file is required"},
+		"padded file":           {func(l *blueprint.Lease) { l.File = " D:/opdl/lease " }, "leading or trailing whitespace"},
+		"blank duration":        {func(l *blueprint.Lease) { l.Duration = "" }, "lease.duration is required"},
+		"bad duration":          {func(l *blueprint.Lease) { l.Duration = "soon" }, "is not a valid duration"},
+		"non-positive duration": {func(l *blueprint.Lease) { l.Duration = "0s" }, "must be positive"},
+		"blank renewal":         {func(l *blueprint.Lease) { l.RenewalInterval = "" }, "lease.renewal_interval is required"},
+		"renewal not shorter":   {func(l *blueprint.Lease) { l.RenewalInterval = "15s" }, "must be shorter than duration"},
+		"blank health interval": {func(l *blueprint.Lease) { l.HealthCheckInterval = "" }, "lease.health_check_interval is required"},
+		"blank failback":        {func(l *blueprint.Lease) { l.FailbackStabilization = "" }, "lease.failback_stabilization is required"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			p := validProject()
-			p.Sites[0].Machines[0].Platform.Standby.Lock = &blueprint.Lock{WindowsMutex: test.windowsMutex}
+			lease := validLease("D:/opdl/sensor/lease")
+			test.mutate(lease)
+			p.Sites[0].Machines[0].Platform.Standby.Lease = lease
 			require.ErrorContains(t, p.Validate(), test.errText)
 		})
 	}

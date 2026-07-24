@@ -34,7 +34,13 @@ func jetstreamStoreDir(machine, role string) string {
 func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	standby := &blueprint.Standby{Disabled: standbyDisabled}
 	if !standbyDisabled {
-		standby.Lock = &blueprint.Lock{WindowsMutex: "Global\\opdl-" + name}
+		standby.Lease = &blueprint.Lease{
+			File:                  "D:/opdl/" + name + "/lease",
+			Duration:              "15s",
+			RenewalInterval:       "5s",
+			HealthCheckInterval:   "2s",
+			FailbackStabilization: "30s",
+		}
 		standby.DataDir = dataDir(name, "standby")
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
@@ -366,25 +372,31 @@ func TestBuildRequiresPlatformName(t *testing.T) {
 
 // TestBuildCarriesAuthoredLock checks the lock policy is carried onto the descriptor when
 // a standby is deployed, and nil when standby is disabled.
-func TestBuildCarriesAuthoredLock(t *testing.T) {
-	t.Run("standby deployed carries lock", func(t *testing.T) {
+func TestBuildCarriesAuthoredLease(t *testing.T) {
+	t.Run("standby deployed carries lease", func(t *testing.T) {
 		p := projectOf(blueprint.Site{
 			Name:     "north",
 			Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", false), companion()},
 		})
 		plan, err := resolve.Build(p, "acme-opdl")
 		require.NoError(t, err)
-		require.Equal(t, &deployment.Lock{WindowsMutex: "Global\\opdl-sensor"}, plan.Machines[0].Lock)
+		require.Equal(t, &deployment.Lease{
+			File:                  "D:/opdl/sensor/lease",
+			Duration:              "15s",
+			RenewalInterval:       "5s",
+			HealthCheckInterval:   "2s",
+			FailbackStabilization: "30s",
+		}, plan.Machines[0].Lease)
 	})
 
-	t.Run("standby disabled yields nil lock", func(t *testing.T) {
+	t.Run("standby disabled yields nil lease", func(t *testing.T) {
 		p := projectOf(blueprint.Site{
 			Name:     "north",
 			Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", true), companion()},
 		})
 		plan, err := resolve.Build(p, "acme-opdl")
 		require.NoError(t, err)
-		require.Nil(t, plan.Machines[0].Lock)
+		require.Nil(t, plan.Machines[0].Lease)
 	})
 }
 

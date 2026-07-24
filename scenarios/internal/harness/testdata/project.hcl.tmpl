@@ -72,8 +72,12 @@ project "{{ .Name }}" {
 {{- if not .StandbyDisabled }}
           data_dir    = "{{ .StandbyDataDir }}"
 
-          lock {
-            windows_mutex = "Global\\{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}"
+          lease {
+            file                   = "{{ .LeaseFile }}"
+            duration               = "15s"
+            renewal_interval       = "5s"
+            health_check_interval  = "2s"
+            failback_stabilization = "30s"
           }
 
           api {
