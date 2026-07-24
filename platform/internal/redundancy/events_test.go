@@ -126,11 +126,11 @@ func TestRedundancyEventsDeclareTheirContract(t *testing.T) {
 	}
 }
 
-// TestContendRecordsTheOwnershipLifecycle runs a real ownership lifecycle
+// TestManageOwnershipRecordsTheLifecycle runs a real ownership lifecycle
 // through a real fan-out publisher over a capturing backend, so what an operator
 // would read is what is asserted: the typed events, in order, as canonical
 // envelopes.
-func TestContendRecordsTheOwnershipLifecycle(t *testing.T) {
+func TestManageOwnershipRecordsTheLifecycle(t *testing.T) {
 	t.Parallel()
 
 	lease := openLease(t, leaseConfig(t), redundancy.RolePrimary)
@@ -139,7 +139,7 @@ func TestContendRecordsTheOwnershipLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, publisher, lease, unhealthyPeer, runtime.runtime()) }()
+	go func() { done <- redundancy.ManageOwnership(ctx, publisher, lease, unhealthyPeer, runtime.runtime()) }()
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
 	cancel()
 	require.NoError(t, <-done)
@@ -150,7 +150,7 @@ func TestContendRecordsTheOwnershipLifecycle(t *testing.T) {
 		redundancy.TypeOwnershipAcquired,
 		redundancy.TypeActivationStarted,
 		redundancy.TypeActivationCompleted,
-	}, types(envelopes), "an uncontested start never waits, so it never says it did")
+	}, types(envelopes), "a start onto a free lease never waits, so it never says it did")
 
 	acquired := envelopes[1]
 	require.Equal(t, events.SeverityInfo, acquired.Severity, "nobody died; this was a free lease")
@@ -166,9 +166,9 @@ func TestContendRecordsTheOwnershipLifecycle(t *testing.T) {
 	require.GreaterOrEqual(t, completed.DurationMS, int64(0), "an activation reports how long it held ownership")
 }
 
-// TestContendRecordsAFailedActivation checks the failure path keeps what an
+// TestManageOwnershipRecordsAFailedActivation checks the failure path keeps what an
 // operator needs: the original error and how long the instance lasted.
-func TestContendRecordsAFailedActivation(t *testing.T) {
+func TestManageOwnershipRecordsAFailedActivation(t *testing.T) {
 	t.Parallel()
 
 	notServing := errors.New("fabric would not open")
@@ -177,7 +177,7 @@ func TestContendRecordsAFailedActivation(t *testing.T) {
 	runtime.activeErr = notServing
 	publisher, recorded := recording(t)
 
-	require.ErrorIs(t, redundancy.Contend(t.Context(), publisher, lease, unhealthyPeer, runtime.runtime()), notServing)
+	require.ErrorIs(t, redundancy.ManageOwnership(t.Context(), publisher, lease, unhealthyPeer, runtime.runtime()), notServing)
 
 	envelopes := recorded()
 	require.Contains(t, types(envelopes), redundancy.TypeActivationFailed)
@@ -194,11 +194,11 @@ func TestContendRecordsAFailedActivation(t *testing.T) {
 	require.GreaterOrEqual(t, payload.DurationMS, int64(0))
 }
 
-// TestContendStopsWhenItCannotStateWhatItDid checks the error policy: ownership
+// TestManageOwnershipStopsWhenItCannotStateWhatItDid checks the error policy: ownership
 // is a startup path with an error to return, so a publication failure is
 // returned rather than swallowed. A machine whose ownership moved with no record
 // that it did is not a state an operator can be asked to reason about.
-func TestContendStopsWhenItCannotStateWhatItDid(t *testing.T) {
+func TestManageOwnershipStopsWhenItCannotStateWhatItDid(t *testing.T) {
 	t.Parallel()
 
 	recordUnwritable := errors.New("jsonl: write events.jsonl: disk is full")
@@ -206,16 +206,16 @@ func TestContendStopsWhenItCannotStateWhatItDid(t *testing.T) {
 	runtime := newRecordingRuntime()
 	publisher := failing(t, recordUnwritable)
 
-	err := redundancy.Contend(t.Context(), publisher, lease, unhealthyPeer, runtime.runtime())
+	err := redundancy.ManageOwnership(t.Context(), publisher, lease, unhealthyPeer, runtime.runtime())
 
 	require.ErrorIs(t, err, recordUnwritable)
 	require.Empty(t, runtime.recorded(), "an instance that cannot state that it took ownership never activates")
 }
 
-func TestContendRequiresAPublisher(t *testing.T) {
+func TestManageOwnershipRequiresAPublisher(t *testing.T) {
 	t.Parallel()
 
-	err := redundancy.Contend(t.Context(), nil, nil, redundancy.Deps{}, newRecordingRuntime().runtime())
+	err := redundancy.ManageOwnership(t.Context(), nil, nil, redundancy.Deps{}, newRecordingRuntime().runtime())
 
 	require.ErrorContains(t, err, "publisher is required")
 }
@@ -252,7 +252,7 @@ func (b *captureBackend) recorded() []events.Envelope {
 	return slices.Clone(b.envelopes)
 }
 
-// recording composes the process-local publisher a Contend call is given, and a
+// recording composes the process-local publisher a ManageOwnership call is given, and a
 // function that reads back the envelopes it stamped.
 func recording(t *testing.T) (local events.Publisher, recorded func() []events.Envelope) {
 	t.Helper()

@@ -96,16 +96,18 @@ func TestLeaseReleaseFreesTheGrantForThePeer(t *testing.T) {
 	_, err = holder.tryAcquire(now)
 	require.NoError(t, err)
 
-	free, err := standby.free(now)
+	avail, owner, err := standby.observe(now)
 	require.NoError(t, err)
-	require.False(t, free, "a held lease is not free")
+	require.Equal(t, leaseHeld, avail, "a valid grant is not promotable")
+	require.Equal(t, RolePrimary, owner)
 
 	require.NoError(t, holder.release())
 	require.False(t, holder.Held())
 
-	free, err = standby.free(now)
+	avail, owner, err = standby.observe(now)
 	require.NoError(t, err)
-	require.True(t, free, "a released lease is free at once, without waiting out the duration")
+	require.Equal(t, leaseReleased, avail, "a released lease is a handover at once, without waiting out the duration")
+	require.Equal(t, RolePrimary, owner, "the released grant still names who gave it up")
 
 	// A takeover of a released grant is a clean handover, not an abandonment.
 	acquired, err := standby.tryAcquire(now)

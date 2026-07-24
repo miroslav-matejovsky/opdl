@@ -13,7 +13,7 @@ import (
 )
 
 // This file is the lease: the machine-wide record a machine's two instances
-// contend for, and the operations on it. Holding an unexpired lease is what makes
+// take turns holding, and the operations on it. Holding an unexpired lease is what makes
 // an instance Active; nothing else does. What holding it means at runtime — when
 // each state is entered and left — is ownership, and that is ownership.go.
 //
@@ -52,7 +52,7 @@ type LeaseConfig struct {
 // Lease is a machine's Primary Ownership handle. It reads and writes the shared
 // lease file and tracks whether this process currently holds ownership.
 //
-// A nil Lease is the standby-less machine: there is no second instance to contend
+// A nil Lease is the standby-less machine: there is no second instance to take it
 // with, so the lone Primary Instance is Active by construction. Every method is
 // nil-safe and reports ownership held.
 //
@@ -94,14 +94,14 @@ func (r record) free(now time.Time) bool { return r.Released || r.expired(now) }
 // another instance acquired it. The owner must step down.
 var errOwnershipLost = errors.New("redundancy: lease ownership lost")
 
-// OpenLease prepares this instance to contend for the machine's ownership lease.
+// OpenLease prepares this instance to take part in the machine's ownership lease.
 //
 // When cfg.File is empty (the machine deploys no Standby Instance), it returns a
 // nil Lease, which is Active by construction and nil-safe on every method.
 //
 // A non-empty file has its parent directory created, so the first acquisition can
 // write it, and its timings validated, so a descriptor that reached here with a
-// zero duration fails at startup rather than when ownership is first contended.
+// zero duration fails at startup rather than when ownership first changes hands.
 func OpenLease(cfg LeaseConfig, role InstanceRole) (*Lease, error) {
 	if !role.Valid() {
 		return nil, fmt.Errorf("redundancy: open lease: invalid instance role %q", role)
@@ -126,7 +126,7 @@ func OpenLease(cfg LeaseConfig, role InstanceRole) (*Lease, error) {
 // It reads the current grant, and, if there is none or it is free, writes its
 // successor and confirms by re-reading that this instance is the writer that
 // landed. The confirm is what makes two instances writing a free lease at the
-// same instant resolve to one owner without a kernel lock: the two contenders
+// same instant resolve to one owner without a kernel lock: the two instances
 // have distinct roles, so each writes its own role, the file ends as one of them,
 // and the loser sees the other's role on re-read and reports it did not acquire.
 func (l *Lease) tryAcquire(now time.Time) (Acquisition, error) {
@@ -219,18 +219,44 @@ func (l *Lease) release() error {
 	return writeRecord(l.cfg.File, released)
 }
 
-// free reports whether the lease is available to a promoter: it holds no valid
-// grant right now. It is what a Passive instance reads each tick before consulting
-// its peer's health.
-func (l *Lease) free(now time.Time) (bool, error) {
-	if l == nil {
-		return false, nil
-	}
+// availability classifies what a promoter reads from the lease file. The
+// distinction between a released and a lapsed grant, and whose it was, is what
+// promotion decisions are made from: a grant the other instance released is an
+// explicit handover, a grant that lapsed is an owner that stopped renewing.
+type availability int
+
+const (
+	// leaseHeld is a valid grant; the owner is serving and nothing is promotable.
+	leaseHeld availability = iota
+	// leaseAbsent is a file nobody has written yet: the machine's first start.
+	leaseAbsent
+	// leaseReleased is a grant its owner gave up cleanly.
+	leaseReleased
+	// leaseLapsed is a grant that expired without a release: its owner stopped
+	// renewing without saying goodbye.
+	leaseLapsed
+)
+
+// observe reports the lease's current availability and which role's grant the
+// record carries. It is what a Passive instance reads each tick to evaluate
+// promotion.
+func (l *Lease) observe(now time.Time) (availability, InstanceRole, error) {
 	cur, exists, err := readRecord(l.cfg.File)
 	if err != nil {
-		return false, err
+		return leaseHeld, "", err
 	}
-	return !exists || cur.free(now), nil
+	switch {
+	case !exists:
+		return leaseAbsent, "", nil
+	// A release is the owner's explicit statement and outranks expiry: a released
+	// grant that has also expired is still a handover, not a silent death.
+	case cur.Released:
+		return leaseReleased, InstanceRole(cur.OwnerRole), nil
+	case cur.expired(now):
+		return leaseLapsed, InstanceRole(cur.OwnerRole), nil
+	default:
+		return leaseHeld, InstanceRole(cur.OwnerRole), nil
+	}
 }
 
 // ownedExpiry is the expiry of this instance's current grant, used by the renewal
@@ -265,7 +291,7 @@ func (l *Lease) Held() bool {
 	return l.held
 }
 
-// Role returns the instance role contending for ownership.
+// Role returns the instance role this lease handle acts for.
 func (l *Lease) Role() InstanceRole {
 	if l == nil {
 		return RolePrimary

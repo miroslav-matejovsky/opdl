@@ -1,5 +1,13 @@
 # Step 02 — In-place Passive↔Active transitions
 
+Status: **implemented**. The entry point is `redundancy.ManageOwnership`. One
+design refinement over the sketch below: promotion now reads *whose* grant made
+the lease free — a grant released by the other instance is an explicit handover
+and promotes at once, a grant this instance released itself needs an unhealthy
+peer, and an instance may reclaim its own lapsed grant. That is what lets a
+Standby that failed back in place (still running, still healthy) hand the lease
+to the Primary without the health gate deadlocking on two healthy instances.
+
 Complexity: **High** · Effort: **L (2–3 days)** · Depends on: nothing (01 can
 land first or after)
 
@@ -7,7 +15,7 @@ land first or after)
 
 Today both self-step-down (an owner that cannot keep its lease) and failback (an
 Active Standby handing back to a healthy Primary) end with the process
-**exiting**: `Contend` returns, and a service manager is expected to restart the
+**exiting**: `ManageOwnership` returns, and a service manager is expected to restart the
 instance Passive. That breaks the contract in two ways:
 
 - Passive must mean "still running, still answering health checks". An exited
@@ -22,9 +30,9 @@ process lifetime, exiting only on a signal or a fatal error.
 
 Two changes, one in `redundancy`, one in `app`.
 
-### `Contend` becomes a loop
+### `ManageOwnership` is a loop
 
-`redundancy.Contend` currently walks the lifecycle once. It becomes:
+The ownership entry point (now `ManageOwnership`) walks the lifecycle in a loop:
 
 ```
 for ctx alive:
@@ -80,20 +88,20 @@ the listener — correct for a process stop, wrong for a return-to-Passive.
 ### Explicit non-goals
 
 - No state machine framework, no new goroutine architecture. The loop is a `for`
-  in `Contend` plus a drain primitive on `instanceServer`.
+  in `ManageOwnership` plus a drain primitive on `instanceServer`.
 - Process exit remains the correct outcome for: signal, publisher failure,
   listener death, site open failure while Active.
 
 ## Tasks
 
-1. `redundancy`: restructure `Contend` into the loop; return-vs-continue driven
+1. `redundancy`: restructure `ManageOwnership` into the loop; return-vs-continue driven
    by `ctx.Err()` and how Active/Passive ended. Unit tests updated (several
    currently assert one-shot behavior).
 2. `app/server.go`: add drain-without-close to `instanceServer`.
 3. `app/runtime.go`: `runActive` swaps back to the Passive handler and drains
    instead of shutting down when the process is not stopping; `runProcess` keeps
    one Passive handler value to swap back to.
-4. Unit tests: an Active→Passive→Active cycle within one `Contend` call; the
+4. Unit tests: an Active→Passive→Active cycle within one `ManageOwnership` call; the
    listener answers health throughout (no connection-refused window).
 
 ## Done when

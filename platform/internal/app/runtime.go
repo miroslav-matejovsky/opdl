@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -122,12 +123,15 @@ func instanceIdentity(descriptor config.Descriptor, role redundancy.InstanceRole
 	}
 }
 
-// runProcess binds this instance's API, contends for Primary Ownership, and runs
-// the passive or active composition on the outcome.
+// runProcess binds this instance's API, opens the machine's ownership lease, and
+// runs the passive and active compositions as ownership moves.
 //
 // The order is deliberate. The listener opens first and stays open for the whole
 // process, so an instance is reachable in every state and a bind failure stops it
-// at startup rather than at a failover. Ownership decides only what it answers.
+// at startup rather than at a failover. Ownership decides only what it answers,
+// and it can decide differently many times over one process's life: a step-down
+// or an automatic failback swaps the Passive surface back in place rather than
+// stopping the process.
 func runProcess(ctx context.Context, proc process) (runErr error) {
 	descriptor, role := proc.descriptor, proc.role
 
@@ -168,12 +172,12 @@ func runProcess(ctx context.Context, proc process) (runErr error) {
 	// its health endpoint. A machine with no peer has none to check.
 	deps := redundancy.Deps{PeerHealthy: peerHealthCheck(proc.cfg, peerOf(descriptor, role).APIAddress)}
 
-	return redundancy.Contend(ctx, proc.local, lease, deps, redundancy.Runtime{
+	return redundancy.ManageOwnership(ctx, proc.local, lease, deps, redundancy.Runtime{
 		Passive: func(passiveCtx context.Context) error {
 			return runPassive(passiveCtx, proc)
 		},
 		Active: func(activeCtx context.Context, kind redundancy.ActivationKind) error {
-			return runActive(activeCtx, proc, server, lease, kind)
+			return runActive(activeCtx, proc, server, lease, passive, kind)
 		},
 	})
 }
@@ -279,7 +283,7 @@ func openPassiveSite(ctx context.Context, proc process) (*site, error) {
 // It does not open a listener. One is already bound and answering the Passive
 // surface, so activation swaps the handler rather than moving the endpoint, and
 // the address a caller uses never changes.
-func runActive(ctx context.Context, proc process, server *instanceServer, lease *redundancy.Lease, kind redundancy.ActivationKind) error {
+func runActive(ctx context.Context, proc process, server *instanceServer, lease *redundancy.Lease, passive http.Handler, kind redundancy.ActivationKind) error {
 	cfg, descriptor, role := proc.cfg, proc.descriptor, proc.role
 	// That this instance is activating was stated by the ownership machine before
 	// it called this, so there is nothing to report here that is not already in
@@ -287,7 +291,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 	fmt.Printf("platform: %s started for %s\n", kind, role)
 
 	if !hasEventStorage(descriptor, role) {
-		return runActiveWithoutJournal(ctx, proc, server, lease)
+		return runActiveWithoutJournal(ctx, proc, server, lease, passive)
 	}
 
 	site, err := open(ctx, proc, true)
@@ -345,14 +349,18 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 		serveErr = awaitStop(serveCtx, site, server)
 	}
 
-	// Reverse of startup: HTTP intake stops and in-flight requests drain before
-	// anything they could be holding is closed. Only then does the site release,
-	// which is what states that this instance has begun stopping.
+	// Reverse of startup: the Passive surface takes over the listener at once, so
+	// new requests never reach the closing site, and the requests already running
+	// against the Active handler drain before anything they could be holding is
+	// closed. Only then does the site release. The listener itself stays bound —
+	// this instance may be stepping down rather than stopping, and if the process
+	// is stopping, runProcess's deferred shutdown closes it afterwards.
+	server.serveWith(passive)
 	monitorErr := stopActiveMonitor()
-	shutdownErr := server.shutdown(cfg.ShutdownTimeout())
+	drainErr := server.drain(cfg.ShutdownTimeout())
 	closeErr := site.close(context.WithoutCancel(ctx))
 
-	err = errors.Join(serveErr, monitorErr, shutdownErr, closeErr)
+	err = errors.Join(serveErr, monitorErr, drainErr, closeErr)
 	stopped := APIStopped{}
 	if err != nil {
 		stopped.Error = err.Error()
@@ -381,7 +389,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 // a lag bound against a journal that does not exist has nothing to measure. That
 // is why this is a separate path rather than a flag threaded through the active
 // composition, which would carry a site-shaped hole from end to end.
-func runActiveWithoutJournal(ctx context.Context, proc process, server *instanceServer, lease *redundancy.Lease) error {
+func runActiveWithoutJournal(ctx context.Context, proc process, server *instanceServer, lease *redundancy.Lease, passive http.Handler) error {
 	cfg, descriptor, role := proc.cfg, proc.descriptor, proc.role
 	address := instanceOf(descriptor, role).APIAddress
 
@@ -402,8 +410,12 @@ func runActiveWithoutJournal(ctx context.Context, proc process, server *instance
 		}
 	}
 
-	shutdownErr := server.shutdown(cfg.ShutdownTimeout())
-	err := errors.Join(serveErr, shutdownErr)
+	// The Passive surface takes the listener back; the listener itself stays
+	// bound for a step-down, and runProcess's deferred shutdown closes it when
+	// the process is stopping.
+	server.serveWith(passive)
+	drainErr := server.drain(cfg.ShutdownTimeout())
+	err := errors.Join(serveErr, drainErr)
 	stopped := APIStopped{}
 	if err != nil {
 		stopped.Error = err.Error()

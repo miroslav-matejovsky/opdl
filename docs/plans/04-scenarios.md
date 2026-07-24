@@ -5,7 +5,7 @@ Complexity: **Medium** · Effort: **M (~1 day)** · Depends on: step 02
 ## Why
 
 Integration tests (step 03) prove the ownership machine in-process. Scenarios
-prove the real thing: two OS processes built from a real blueprint, contending
+prove the real thing: two OS processes built from a real blueprint, coordinating
 over a real lease file, observed only through their public surfaces (the HTTP
 API and the local JSONL event record). The failback scenario in particular is
 only possible after step 02 — without in-place transitions the Standby exits on

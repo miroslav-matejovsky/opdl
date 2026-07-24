@@ -91,12 +91,12 @@ project "customer-a" {
           data_dir = "D:/opdl/customer-a/north/local-server/standby"
 
           # lease is mandatory when standby is enabled (disabled = false). The
-          # machine's two instances contend for Primary Ownership through this
+          # machine's two instances coordinate Primary Ownership through this
           # shared machine-wide file: the owner renews it, and the Standby takes
           # over once it lapses and the Primary's health endpoint reports it can
           # no longer serve. duration must be finite and renewal_interval shorter
-          # than it. failback_stabilization is reserved for failback, which is not
-          # yet implemented.
+          # than it. failback_stabilization is how long a returning Primary must
+          # be continuously healthy before the Standby hands ownership back.
           lease {
             file                   = "D:/opdl/customer-a/north/local-server/lease"
             duration               = "15s"

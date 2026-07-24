@@ -13,12 +13,12 @@ import (
 // itself — the record and the file operations on it — is lease.go.
 //
 // The composition package supplies two functions, one to run while Passive and
-// one while Active, and Contend decides when each runs. Passive has returned
-// before Active is called, and ownership is released only after Active has
-// returned, so an instance's active resources are opened only after its passive
-// ones have closed and only while it holds the lease.
+// one while Active, and ManageOwnership decides when each runs. Passive has
+// returned before Active is called, and ownership is released only after Active
+// has returned, so an instance's active resources are opened only after its
+// passive ones have closed and only while it holds the lease.
 
-// Acquisition is the outcome of contending for Primary Ownership.
+// Acquisition is the outcome of one attempt to take Primary Ownership.
 type Acquisition struct {
 	// Held reports whether this process now holds Primary Ownership.
 	Held bool
@@ -34,7 +34,8 @@ type Acquisition struct {
 type ActivationKind string
 
 const (
-	// ActivationInitial is an instance that took ownership uncontested at startup.
+	// ActivationInitial is an instance that took a free lease at startup, with
+	// nobody to take it from.
 	ActivationInitial ActivationKind = "initial activation"
 	// ActivationFailover is a Standby Instance that took ownership from the
 	// Primary Instance.
@@ -44,21 +45,24 @@ const (
 	ActivationFailback ActivationKind = "failback"
 )
 
-// Runtime is the pair of compositions an instance moves between. Contend runs at
-// most one of them at a time, and never both.
+// Runtime is the pair of compositions an instance moves between. ManageOwnership
+// runs at most one of them at a time, and never both.
 //
 // The two are separated by ownership: Passive must have returned before Active is
 // called, so an instance's active resources are opened only after its passive
-// ones have closed and only while it holds the lease.
+// ones have closed and only while it holds the lease. Both are re-entered as
+// ownership moves over the process's lifetime, so neither may assume it runs
+// once.
 type Runtime struct {
 	// Passive runs while the machine's other instance holds ownership. Its context
 	// is canceled the moment this instance wins ownership, and it must return when
 	// that happens: Active does not start until it has.
 	Passive func(ctx context.Context) error
 	// Active runs while this instance holds ownership. Returning ends the
-	// instance's turn, and ownership is released once it has. Its context is also
-	// canceled if the renewal loop cannot keep the lease alive, which is how an
-	// instance that can no longer renew stops being Active before its lease lapses.
+	// instance's turn: the lease is released and, unless the process is stopping,
+	// the instance re-enters the Passive state in place. Its context is also
+	// canceled when the instance must stop being Active — a lease that cannot be
+	// renewed, or an automatic failback to the returning Primary.
 	Active func(ctx context.Context, kind ActivationKind) error
 }
 
@@ -67,35 +71,45 @@ type Runtime struct {
 // and reaches for no clock but time.Now.
 type Deps struct {
 	// PeerHealthy reports whether the machine's other instance answers its health
-	// endpoint as able to serve. A Passive instance promotes only when the lease
-	// has lapsed and this returns false: a lapsed lease alone is not enough, so a
-	// momentarily slow-to-renew but healthy Active is not failed over.
+	// endpoint as able to serve. A Passive instance promotes onto a lapsed lease
+	// only when this returns false, so a momentarily slow-to-renew but healthy
+	// Active is not failed over; an Active Standby fails back to the Primary once
+	// this has returned true for the whole stabilization window.
 	//
-	// It is nil on a machine with no peer to check, where it is never consulted.
+	// It is nil on a machine with no peer to check, where a lapsed lease alone
+	// permits promotion and failback never runs.
 	PeerHealthy func(ctx context.Context) bool
 }
 
-// Contend drives one instance through its whole ownership lifecycle.
+// ManageOwnership drives one instance's whole ownership lifecycle, for the life
+// of the process: Passive and Active turns alternate in place, and the function
+// returns only when ctx ends or a composition fails.
 //
 // An instance that finds the lease free at startup takes it and goes straight to
-// Active. One that finds it held runs Passive and promotes when the lease lapses
-// and its peer is unhealthy. A machine that deploys no standby has no lease, so
-// lease is nil, acquiring always succeeds, and Passive is never reached.
+// Active. One that finds it held runs Passive and promotes when the lease is
+// handed over or lapses with the peer unhealthy. An Active instance that steps
+// down — a failback to the returning Primary, or a lease it could not keep —
+// releases and re-enters Passive without the process exiting, so a Passive
+// instance keeps answering its health endpoints. A machine that deploys no
+// standby has no lease, so lease is nil and the instance is Active by
+// construction for as long as it runs.
 //
-// Ownership is released after Active returns and before Contend does, so the other
-// instance cannot start composing its active resources while this one is still
-// closing its own.
+// Ownership is released after Active returns and before the next Passive turn
+// begins, so the other instance cannot start composing its active resources
+// while this one is still closing its own.
 //
-// publisher is how this package states what it did. Every statement on the startup
-// path is returned on failure, so a failure to state one stops the instance rather
-// than leaving a machine whose ownership moved with no record that it did.
-func Contend(ctx context.Context, publisher events.Publisher, lease *Lease, deps Deps, runtime Runtime) error {
+// publisher is how this package states what it did. Every statement on the
+// turn-taking path is returned on failure, so a failure to state one stops the
+// instance rather than leaving a machine whose ownership moved with no record
+// that it did.
+func ManageOwnership(ctx context.Context, publisher events.Publisher, lease *Lease, deps Deps, runtime Runtime) error {
 	if publisher == nil {
 		return errors.New("redundancy: publisher is required")
 	}
 
-	// A machine with no standby has no lease and nothing to contend for: it is
-	// Active by construction, so there was no ownership to take from anyone.
+	// A machine with no standby has no lease and no turns to take: it is Active by
+	// construction, so there was no ownership to take from anyone and nobody to
+	// hand it to when Active returns.
 	if lease == nil {
 		return activate(ctx, publisher, nil, deps, runtime, ActivationInitial)
 	}
@@ -104,29 +118,53 @@ func Contend(ctx context.Context, publisher events.Publisher, lease *Lease, deps
 		return err
 	}
 
-	acquired, err := lease.tryAcquire(time.Now())
-	if err != nil {
-		return err
-	}
-	if acquired.Held {
+	firstTurn := true
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		kind := activationKind(lease.Role())
+		acquired := Acquisition{}
+		if firstTurn {
+			// At startup a free lease is taken at once: nothing has served yet, so
+			// there is no peer state to weigh and no reason to wait a tick.
+			var err error
+			acquired, err = lease.tryAcquire(time.Now())
+			if err != nil {
+				return err
+			}
+			if acquired.Held {
+				kind = ActivationInitial
+			}
+		}
+		firstTurn = false
+
+		if !acquired.Held {
+			if err := publisher.Publish(ctx, OwnershipWaiting{File: lease.File()}); err != nil {
+				return err
+			}
+			var err error
+			acquired, err = waitWhilePassive(ctx, publisher, lease, deps, runtime)
+			if err != nil {
+				return err
+			}
+			if !acquired.Held {
+				return nil // the process is stopping; it never won a turn
+			}
+		}
+
 		if err := publisher.Publish(ctx, OwnershipAcquired{File: lease.File(), Abandoned: acquired.Abandoned}); err != nil {
 			return err
 		}
-		return activate(ctx, publisher, lease, deps, runtime, ActivationInitial)
+		if err := activate(ctx, publisher, lease, deps, runtime, kind); err != nil {
+			return err
+		}
+		// Active ended without error: either the process is stopping, which the
+		// top of the loop answers, or this instance stepped down — a failback, a
+		// lease it could not keep, or a composition that stopped serving — and its
+		// next turn starts Passive.
 	}
-
-	if err := publisher.Publish(ctx, OwnershipWaiting{File: lease.File()}); err != nil {
-		return err
-	}
-
-	acquired, err = waitWhilePassive(ctx, publisher, lease, deps, runtime)
-	if err != nil || !acquired.Held {
-		return err
-	}
-	if err := publisher.Publish(ctx, OwnershipAcquired{File: lease.File(), Abandoned: acquired.Abandoned}); err != nil {
-		return err
-	}
-	return activate(ctx, publisher, lease, deps, runtime, activationKind(lease.Role()))
 }
 
 // activationKind names why this instance is taking over after waiting. A Standby
@@ -142,9 +180,7 @@ func activationKind(role InstanceRole) ActivationKind {
 // waitWhilePassive runs the Passive composition and evaluates promotion on a
 // timer until this instance wins ownership or ctx ends.
 //
-// Each tick it reads the lease. While the other instance's grant is valid it stays
-// Passive. Once the grant has lapsed it consults the peer's health, and promotes
-// only if the peer is unhealthy — the two conditions the draft requires. Waiting
+// Each tick it reads the lease and decides through evaluatePromotion. Waiting
 // for Passive to return before reporting the acquisition is what guarantees the
 // instance's passive resources are closed before its active ones open.
 func waitWhilePassive(ctx context.Context, publisher events.Publisher, lease *Lease, deps Deps, runtime Runtime) (Acquisition, error) {
@@ -156,6 +192,11 @@ func waitWhilePassive(ctx context.Context, publisher events.Publisher, lease *Le
 
 	ticker := time.NewTicker(lease.cfg.HealthCheckInterval)
 	defer ticker.Stop()
+
+	// A declined promotion is stated once per stretch of the same reason rather
+	// than on every tick, so a gated window does not grow the append-only record
+	// by a line per interval.
+	lastDecline := ""
 
 	for {
 		select {
@@ -170,12 +211,16 @@ func waitWhilePassive(ctx context.Context, publisher events.Publisher, lease *Le
 			// it is not ready to use.
 			return Acquisition{}, err
 		case <-ticker.C:
-			acquired, err := evaluatePromotion(ctx, publisher, lease, deps)
+			acquired, decline, err := evaluatePromotion(ctx, lease, deps)
 			if err != nil {
 				// A transient read of the shared file. Report nothing and retry;
 				// the peer's grant has not changed because we failed to read it.
 				continue
 			}
+			if decline != "" && decline != lastDecline {
+				events.BestEffort(publisher).State(ctx, PromotionDeclined{Reason: decline})
+			}
+			lastDecline = decline
 			if !acquired.Held {
 				continue
 			}
@@ -188,25 +233,58 @@ func waitWhilePassive(ctx context.Context, publisher events.Publisher, lease *Le
 	}
 }
 
-// evaluatePromotion decides whether this Passive instance may take ownership now.
-// It promotes only when the lease has lapsed and the peer is unhealthy, and
-// states a declined evaluation when the lease is free but the peer still answers,
-// which is what failover troubleshooting reads.
-func evaluatePromotion(ctx context.Context, publisher events.Publisher, lease *Lease, deps Deps) (Acquisition, error) {
-	free, err := lease.free(time.Now())
+// evaluatePromotion decides whether this Passive instance may take ownership now,
+// from what the lease record says and, when it matters, the peer's health. It
+// returns the acquisition outcome and, when promotion was possible but withheld,
+// the reason it was declined.
+//
+// The rules, per lease state:
+//
+//   - held: the owner is serving; nothing to decide.
+//   - absent: the machine's first start; take it, and let the write-then-confirm
+//     in tryAcquire resolve a simultaneous first start to one owner.
+//   - released by the other instance: an explicit handover — a graceful stop or
+//     an automatic failback — addressed to this instance. Promote at once; the
+//     peer's health is irrelevant because the owner said it was done.
+//   - released by this instance: this instance just handed ownership off and must
+//     not snatch it back; retake only if the peer cannot serve at all.
+//   - lapsed, this instance's own grant: a step-down whose release did not land.
+//     Reclaim; nobody else's claim is being overridden.
+//   - lapsed, the other instance's grant: the owner stopped renewing. Promote
+//     only if the peer is also unhealthy, so a slow-but-serving owner is not
+//     failed over; a healthy owner reclaims its own lapsed grant by this same
+//     rule from its side.
+func evaluatePromotion(ctx context.Context, lease *Lease, deps Deps) (Acquisition, string, error) {
+	avail, owner, err := lease.observe(time.Now())
 	if err != nil {
-		return Acquisition{}, err
+		return Acquisition{}, "", err
 	}
-	if !free {
-		return Acquisition{}, nil // the other instance's grant is still valid
+
+	switch avail {
+	case leaseHeld:
+		return Acquisition{}, "", nil
+	case leaseAbsent:
+		acquired, err := lease.tryAcquire(time.Now())
+		return acquired, "", err
+	case leaseReleased:
+		if owner != lease.Role() {
+			acquired, err := lease.tryAcquire(time.Now())
+			return acquired, "", err
+		}
+	case leaseLapsed:
+		if owner == lease.Role() {
+			acquired, err := lease.tryAcquire(time.Now())
+			return acquired, "", err
+		}
 	}
+
+	// A lease this instance released, or the other instance's lapsed grant: both
+	// promote only when the peer cannot serve.
 	if deps.PeerHealthy != nil && deps.PeerHealthy(ctx) {
-		// The lease lapsed but the peer still serves. Promoting now could leave two
-		// Active instances, so decline and keep watching.
-		events.BestEffort(publisher).State(ctx, PromotionDeclined{Reason: "peer is healthy"})
-		return Acquisition{}, nil
+		return Acquisition{}, "peer is healthy", nil
 	}
-	return lease.tryAcquire(time.Now())
+	acquired, err := lease.tryAcquire(time.Now())
+	return acquired, "", err
 }
 
 // activate runs the Active composition, keeps its lease renewed for as long as it
@@ -216,7 +294,9 @@ func evaluatePromotion(ctx context.Context, publisher events.Publisher, lease *L
 // Active serves, the loop extends the lease; if the loop cannot keep the lease
 // alive, it cancels serving so this instance stops being Active before a promoter
 // could see the lease lapsed. Release happens after Active has returned, which is
-// the ordering the other instance depends on.
+// the ordering the other instance depends on: the released record is what invites
+// the peer to take over, so it must not be written while this instance's active
+// resources are still open.
 //
 // An Active Standby also runs a failback watcher: once the returning Primary has
 // been healthy for the stabilization window, it stops serving and releases, so
@@ -261,18 +341,14 @@ func activate(ctx context.Context, publisher events.Publisher, lease *Lease, dep
 // It runs only on an Active Standby: an instance that took over after the Primary
 // failed. Under the Preferred Primary policy the Primary should end up Active, so
 // once its health endpoint has reported it able to serve for an uninterrupted
-// FailbackStabilization window, this Standby steps down — it stops serving, which
-// leads activate to release the lease, and the process leaves so its service
-// manager restarts it Passive while the Primary reclaims ownership.
+// FailbackStabilization window, this Standby steps down — it stops serving, its
+// turn releases the lease, and it re-enters the Passive state in place while the
+// Primary takes the released grant.
 //
 // The stabilization window resets the moment the Primary looks unhealthy again, so
 // a Primary that is only intermittently reachable does not trigger a handover that
 // would immediately fail back the other way. Failback is automatic; there is no
 // manual mode.
-//
-// Stepping down by exiting mirrors the renewal loop's step-down. Rejoining as
-// Passive in place, without the restart, is the same refactor both need; see
-// docs/plans/02-in-place-transitions.md.
 func startFailback(ctx context.Context, publisher events.Publisher, lease *Lease, deps Deps, stepDown func()) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -312,10 +388,10 @@ func startFailback(ctx context.Context, publisher events.Publisher, lease *Lease
 // interval of expiry — the step-down grace — at which point this instance stops
 // being Active so a promoter never sees the lease lapsed while it still serves.
 //
-// Stepping down cancels serving through onLost. The instance then releases and
-// Contend returns; the process leaves and its service manager restarts it, which
-// is the conservative choice this pass makes over rejoining as Passive in place
-// (see docs/plans/02-in-place-transitions.md).
+// Stepping down cancels serving through onLost. The instance's turn then ends,
+// its release is attempted, and it re-enters the Passive state in place; if the
+// release could not be written either, its own lapsed grant is what it later
+// reclaims from the Passive side once the file is writable again.
 func startRenewal(ctx context.Context, publisher events.Publisher, lease *Lease, onLost func()) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {

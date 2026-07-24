@@ -42,13 +42,13 @@ Already working (see `platform/internal/redundancy`):
 
 The gaps this plan closes, in order:
 
-| Step | What | Complexity | Effort |
-| --- | --- | --- | --- |
-| [01](01-explicit-serving-mode.md) | Explicit serving mode on the HTTP boundary | Low | S (~½ day) |
-| [02](02-in-place-transitions.md) | In-place Passive↔Active transitions — no process exit on step-down or failback | High | L (2–3 days) |
-| [03](03-integration-tests.md) | Integration tests in the redundancy package | Medium | M (~1 day) |
-| [04](04-scenarios.md) | Failover and failback scenarios in the scenarios module | Medium | M (~1 day) |
-| [05](05-cleanup.md) | Documentation and code alignment, close-out | Low | S (~½ day) |
+| Step | What | Complexity | Effort | Status |
+| --- | --- | --- | --- | --- |
+| [01](01-explicit-serving-mode.md) | Explicit serving mode on the HTTP boundary | Low | S (~½ day) | done |
+| [02](02-in-place-transitions.md) | In-place Passive↔Active transitions — no process exit on step-down or failback | High | L (2–3 days) | done |
+| [03](03-integration-tests.md) | Integration tests in the redundancy package | Medium | M (~1 day) | open |
+| [04](04-scenarios.md) | Failover and failback scenarios in the scenarios module | Medium | M (~1 day) | open |
+| [05](05-cleanup.md) | Documentation and code alignment, close-out | Low | S (~½ day) | open |
 
 Steps 01 and 02 change behavior; 03 and 04 prove it; 05 tidies. 01 can land
 independently. 03 depends on 02 (it asserts in-place cycling). 04 depends on 02

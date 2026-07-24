@@ -23,13 +23,14 @@
 // may run its active composition, when the other must have stopped, and what an
 // operator is told about the move. It does not know what a composition is. The
 // runtime supplies two functions — one to run while Passive, one to run while
-// Active — and Contend decides when each runs. See ownership.go.
+// Active — and ManageOwnership decides when each runs, alternating between them
+// in place for the life of the process. See ownership.go.
 //
 // The sequencing is the point. The Passive and Active compositions of one
 // instance use the same Event Fabric identity and storage. Nothing in the type
-// system prevents them from opening it concurrently. Contend does: Passive has
-// returned before Active is called, and ownership is released only after Active
-// has returned.
+// system prevents them from opening it concurrently. ManageOwnership does:
+// Passive has returned before Active is called, and ownership is released only
+// after Active has returned.
 //
 // # Primary Ownership
 //
@@ -109,13 +110,14 @@
 // runs the transition is the one that can report it accurately, so it states
 // them itself rather than returning them for a caller to describe.
 //
-// Contend is handed the events.Publisher it states them through, so this package
-// never reaches for one and never chooses where they are stored. Runtime
+// ManageOwnership is handed the events.Publisher it states them through, so this
+// package never reaches for one and never chooses where they are stored. Runtime
 // composition gives it the process-local publisher, whose only backend is the
-// local JSONL record: a machine contends for ownership before it has a journal to
+// local JSONL record: ownership is decided before a process has a journal to
 // write to, and an instance that never becomes active never gets one at all.
 //
-// Every statement here is on the startup path, where Contend can return an
-// error, so a failure to state one stops the instance. Ownership that moved with
-// no record that it did is not a state an operator can be asked to reason about.
+// Every statement here is on the turn-taking path, where ManageOwnership can
+// return an error, so a failure to state one stops the instance. Ownership that
+// moved with no record that it did is not a state an operator can be asked to
+// reason about.
 package redundancy

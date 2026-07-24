@@ -15,8 +15,8 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //
 // Local resources:
 //
-//   - platform.app.lock_open_failed: the Primary Ownership object could not be
-//     opened, so this instance cannot contend for ownership.
+//   - platform.app.lease_open_failed: the Primary Ownership lease could not be
+//     opened, so this instance cannot take part in ownership.
 //
 // HTTP API:
 //
@@ -168,7 +168,7 @@ type LeaseOpenFailed struct {
 // EventType returns the event's stable dotted kind.
 func (LeaseOpenFailed) EventType() events.Type { return TypeLeaseOpenFailed }
 
-// Severity reports an instance that cannot contend for ownership as an error.
+// Severity reports an instance that cannot take part in ownership as an error.
 func (LeaseOpenFailed) Severity() events.Severity { return events.SeverityError }
 
 // APIListenFailed states that the instance could not bind its API address.

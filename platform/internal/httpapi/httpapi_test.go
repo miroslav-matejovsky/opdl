@@ -442,9 +442,13 @@ func TestPassiveHandlerServingModeMatrix(t *testing.T) {
 				require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 				require.Equal(t, "application/problem+json", resp.Header.Get("Content-Type"))
 
-				var problem problemDetails
-				require.NoError(t, json.NewDecoder(resp.Body).Decode(&problem))
-				require.Equal(t, "instance_passive", problem.Title)
+				// A HEAD response carries headers only, so the problem body is
+				// checked on every other method.
+				if method != http.MethodHead {
+					var problem problemDetails
+					require.NoError(t, json.NewDecoder(resp.Body).Decode(&problem))
+					require.Equal(t, "instance_passive", problem.Title)
+				}
 			})
 		}
 	}

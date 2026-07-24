@@ -98,7 +98,7 @@ type Lease struct {
 // would decode as false and silently deploy redundancy nobody asked for; an
 // omitted peers list would decode as a site of one, so a registration would need
 // no confirmation but its own; an omitted lock.windows_mutex would decode as an empty
-// ownership mutex name, and a machine whose two instances contend for nothing
+// ownership record, and a machine whose two instances coordinate through nothing
 // has no ownership at all when standby is enabled. Failing here turns a truncated or stale descriptor
 // into a startup error instead of a running machine with the wrong topology.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
@@ -198,7 +198,7 @@ func validateInstanceNatsField(role PlatformInstanceRole, raw json.RawMessage) e
 // on a standby-less machine, and present with a file and every timing when a
 // standby is deployed. The durations are checked for validity here so a truncated
 // or hand-edited descriptor fails at load rather than when ownership is first
-// contended.
+// decided.
 func validateLeaseField(fields map[string]json.RawMessage, standbyDisabled bool) error {
 	if standbyDisabled {
 		if _, present := fields["lease"]; present {

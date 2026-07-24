@@ -159,7 +159,7 @@ type WinService struct {
 
 // Lease is a machine's local Primary Ownership lease policy.
 //
-// A machine's primary and standby processes contend for Primary Ownership through
+// A machine's primary and standby processes coordinate Primary Ownership through
 // a lease record in a shared machine-wide file rather than a kernel object. The
 // file path and the lease timings are authored here so an operator reading the
 // blueprint sees exactly where ownership is recorded and how quickly it turns

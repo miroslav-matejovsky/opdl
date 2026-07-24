@@ -33,10 +33,14 @@ type instanceServer struct {
 	address  string
 	listener net.Listener
 	srv      *http.Server
-	// handler is swapped on activation. It is read on every request, so the
-	// pointer is atomic rather than guarded: serving must not wait on a lock that
-	// a transition holds.
+	// handler is swapped on activation and back on step-down. It is read on every
+	// request, so the pointer is atomic rather than guarded: serving must not wait
+	// on a lock that a transition holds.
 	handler atomic.Pointer[http.Handler]
+	// inflight counts requests currently being served, whichever handler they
+	// started on. It is what drain waits on when an instance steps down without
+	// the process stopping.
+	inflight atomic.Int64
 	// stopped carries the serving goroutine's outcome, so a listener that dies on
 	// its own ends the instance instead of leaving it running and unreachable.
 	stopped      chan error
@@ -68,18 +72,43 @@ func openInstanceServer(ctx context.Context, address string, readHeaderTimeout t
 
 // ServeHTTP dispatches to whichever handler this instance is currently serving.
 func (s *instanceServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.inflight.Add(1)
+	defer s.inflight.Add(-1)
 	(*s.handler.Load()).ServeHTTP(w, r)
 }
 
 // serveWith replaces the handler without touching the listener, which is how an
-// instance changes what it answers without changing where it answers.
+// instance changes what it answers without changing where it answers — in both
+// directions: activation swaps the full API in, and a step-down swaps the
+// Passive surface back while the listener stays bound.
 //
-// In-flight requests finish against the handler they started on. That is safe in
-// the direction it is used: the Passive handler holds no site resources, so a
-// request still running on it cannot outlive anything the Active composition is
-// about to open.
+// In-flight requests finish against the handler they started on. Toward Active
+// that is safe because the Passive handler holds no site resources; toward
+// Passive the caller drains before closing what the Active handler could still
+// be holding. See drain.
 func (s *instanceServer) serveWith(h http.Handler) {
 	s.handler.Store(&h)
+}
+
+// drain waits until no request is in flight, or until timeout, without closing
+// the listener. It is the step-down half of what shutdown does for a process
+// stop: after the handler has been swapped back to the Passive surface, draining
+// guarantees no request started on the Active handler is still running when the
+// site behind it closes.
+//
+// The count includes requests the Passive handler is serving too. That
+// overshoots, but Passive requests are quick health reads, so waiting for a
+// moment of quiet converges fast and costs one poll interval of latency at
+// worst.
+func (s *instanceServer) drain(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for s.inflight.Load() != 0 {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("drain HTTP requests: %d still in flight after %s", s.inflight.Load(), timeout)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil
 }
 
 // shutdown stops accepting requests and waits for in-flight ones to drain, or

@@ -335,7 +335,7 @@ platform: event fabric configuration endpoint=10.0.1.10:4222 binds=true
 `endpoint` is the instance's own address from the descriptor. Primary and
 standby instances have separate endpoints and storage directories.
 
-The primary and standby contend for one non-expiring Windows named mutex in the
+The primary and standby coordinate through one machine-wide ownership lease in the
 machine-wide `Global\` namespace. Only its holder may compose active
 capabilities. It is released after active resources close, or abandoned by the
 kernel when the holding process exits. A waiting instance waits for ownership

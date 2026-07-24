@@ -128,7 +128,7 @@ type renderedProject struct {
 //
 // A machine lock and a Windows Service name are both kernel objects in a
 // machine-wide namespace. Scenarios may build the same project and machine names
-// and they run in parallel, so without this they would contend for one another's
+// and they run in parallel, so without this they would compete for one another's
 // ownership.
 //
 // The token is random rather than derived from the test name so that two
@@ -705,7 +705,7 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 // The three tolerances are deliberately looser than platform/config.toml's 30s.
 // They bound how long a machine puts up with a slow environment before giving
 // up, and a scenario suite is a slow environment on purpose: it builds the
-// platform and starts it on a contended host. No scenario asserts on these
+// platform and starts it on a busy host. No scenario asserts on these
 // values, so raising them removes a false failure without weakening anything: a
 // machine that genuinely never catches up still fails, on the assertion that was
 // actually being made.

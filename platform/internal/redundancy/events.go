@@ -22,10 +22,10 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //   - platform.redundancy.activation_started / _failed / _completed: the active
 //     composition began, did not complete, or ran and gave ownership back.
 //
-// They are stated through the events.Publisher Contend is given. Runtime
+// They are stated through the events.Publisher ManageOwnership is given. Runtime
 // composition hands it the process-local one, whose only backend is the local
-// JSONL record: a machine contends for ownership before it has a journal to
-// write to, and an instance that never becomes active never gets one at all.
+// JSONL record: ownership is decided before a process has a journal to write to,
+// and an instance that never becomes active never gets one at all.
 
 const (
 	// TypeLeaseOpened is stated when this process opens the ownership lease file.
@@ -55,7 +55,7 @@ const (
 
 // LeaseOpened states that this process opened the machine's ownership lease file.
 type LeaseOpened struct {
-	// File is the machine-wide lease file the two instances contend through.
+	// File is the machine-wide lease file ownership is recorded in.
 	File string `json:"file"`
 }
 

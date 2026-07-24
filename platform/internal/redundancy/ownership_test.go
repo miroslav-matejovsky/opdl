@@ -15,12 +15,12 @@ import (
 )
 
 // These cover the ownership lifecycle: which composition runs, in which order,
-// and what happens on each way out. They are about sequencing rather than about
-// the lease record, which lease_internal_test.go covers.
+// and how an instance moves between them in place. They are about sequencing
+// rather than about the lease record, which lease_internal_test.go covers.
 
 // leaseConfig returns a lease policy on a fresh temp file with timings short
-// enough to make a failover happen in milliseconds. Two instances that contend
-// must be opened from the same config so they share one file.
+// enough to make a failover happen in milliseconds. Two instances that share a
+// machine must be opened from the same config so they share one file.
 func leaseConfig(t *testing.T) redundancy.LeaseConfig {
 	t.Helper()
 	return redundancy.LeaseConfig{
@@ -43,12 +43,20 @@ func openLease(t *testing.T, cfg redundancy.LeaseConfig, role redundancy.Instanc
 var unhealthyPeer = redundancy.Deps{PeerHealthy: func(context.Context) bool { return false }}
 
 // healthyPeer reports the peer as always able to serve, so a Passive instance
-// never promotes however free the lease looks.
+// never promotes onto a lapsed or self-released lease.
 var healthyPeer = redundancy.Deps{PeerHealthy: func(context.Context) bool { return true }}
 
-// stating is the process-local publisher these tests hand Contend. They assert on
-// sequencing rather than on what was stated, so the envelopes go to a backend
-// nobody reads. What was stated is events_test.go's subject.
+// flippingPeer is a peer whose reported health a test changes mid-run, which is
+// how the in-place cycle is driven: healthy long enough to fail back, then gone.
+type flippingPeer struct{ healthy atomic.Bool }
+
+func (p *flippingPeer) deps() redundancy.Deps {
+	return redundancy.Deps{PeerHealthy: func(context.Context) bool { return p.healthy.Load() }}
+}
+
+// stating is the process-local publisher these tests hand ManageOwnership. They
+// assert on sequencing rather than on what was stated, so the envelopes go to a
+// backend nobody reads. What was stated is events_test.go's subject.
 func stating(t *testing.T) events.Publisher {
 	t.Helper()
 	publisher, _ := recording(t)
@@ -57,7 +65,8 @@ func stating(t *testing.T) events.Publisher {
 
 // recordingRuntime records the order the two compositions ran in, so a test can
 // assert the property the whole state machine exists for: an instance's passive
-// resources are closed before its active ones open.
+// resources are closed before its active ones open, and the instance re-enters
+// the other state in place rather than leaving.
 type recordingRuntime struct {
 	steps        atomic.Pointer[[]string]
 	passiveErr   error
@@ -67,7 +76,7 @@ type recordingRuntime struct {
 }
 
 func newRecordingRuntime() *recordingRuntime {
-	r := &recordingRuntime{activeKinds: make(chan redundancy.ActivationKind, 1), blockPassive: true}
+	r := &recordingRuntime{activeKinds: make(chan redundancy.ActivationKind, 4), blockPassive: true}
 	r.steps.Store(&[]string{})
 	return r
 }
@@ -112,9 +121,10 @@ func (r *recordingRuntime) runtime() redundancy.Runtime {
 	}
 }
 
-// TestContendActivatesImmediatelyWhenOwnershipIsFree checks the ordinary start:
-// an instance that finds the lease free never enters the passive state at all.
-func TestContendActivatesImmediatelyWhenOwnershipIsFree(t *testing.T) {
+// TestManageOwnershipActivatesImmediatelyWhenOwnershipIsFree checks the ordinary
+// start: an instance that finds the lease free never enters the passive state at
+// all.
+func TestManageOwnershipActivatesImmediatelyWhenOwnershipIsFree(t *testing.T) {
 	t.Parallel()
 
 	lease := openLease(t, leaseConfig(t), redundancy.RolePrimary)
@@ -122,10 +132,10 @@ func TestContendActivatesImmediatelyWhenOwnershipIsFree(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, stating(t), lease, unhealthyPeer, runtime.runtime()) }()
+	go func() { done <- redundancy.ManageOwnership(ctx, stating(t), lease, unhealthyPeer, runtime.runtime()) }()
 
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds,
-		"an uncontested start is an initial activation, not a failover")
+		"taking a free lease at startup is an initial activation, not a failover")
 	cancel()
 	require.NoError(t, <-done)
 
@@ -133,16 +143,16 @@ func TestContendActivatesImmediatelyWhenOwnershipIsFree(t *testing.T) {
 		"nothing passive runs when the lease was free")
 }
 
-// TestContendWithoutALeaseIsActiveByConstruction checks a machine that deploys no
-// Standby Instance. There is no lease to contend for, so the lone Primary Instance
-// is Active from the start and never waits for anything.
-func TestContendWithoutALeaseIsActiveByConstruction(t *testing.T) {
+// TestManageOwnershipWithoutALeaseIsActiveByConstruction checks a machine that
+// deploys no Standby Instance. There is no lease and no turns to take, so the
+// lone Primary Instance is Active from the start and never waits for anything.
+func TestManageOwnershipWithoutALeaseIsActiveByConstruction(t *testing.T) {
 	t.Parallel()
 
 	runtime := newRecordingRuntime()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, stating(t), nil, redundancy.Deps{}, runtime.runtime()) }()
+	go func() { done <- redundancy.ManageOwnership(ctx, stating(t), nil, redundancy.Deps{}, runtime.runtime()) }()
 
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
 	cancel()
@@ -150,11 +160,11 @@ func TestContendWithoutALeaseIsActiveByConstruction(t *testing.T) {
 	require.Equal(t, []string{"active start", "active stop"}, runtime.recorded())
 }
 
-// TestContendFailsOverWhenTheHolderReleases is the failover path, and it asserts
-// the ordering the two compositions depend on: Passive has returned before Active
-// starts. Two real Contend calls share one lease file, exactly as a machine's two
-// instances do.
-func TestContendFailsOverWhenTheHolderReleases(t *testing.T) {
+// TestManageOwnershipFailsOverWhenTheHolderReleases is the failover path, and it
+// asserts the ordering the two compositions depend on: Passive has returned
+// before Active starts. Two real ManageOwnership calls share one lease file,
+// exactly as a machine's two instances do.
+func TestManageOwnershipFailsOverWhenTheHolderReleases(t *testing.T) {
 	t.Parallel()
 
 	cfg := leaseConfig(t)
@@ -165,7 +175,7 @@ func TestContendFailsOverWhenTheHolderReleases(t *testing.T) {
 	holderCtx, stopHolder := context.WithCancel(t.Context())
 	holderDone := make(chan error, 1)
 	go func() {
-		holderDone <- redundancy.Contend(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
+		holderDone <- redundancy.ManageOwnership(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
 	}()
 	require.Equal(t, redundancy.ActivationInitial, <-holderRuntime.activeKinds, "the holder takes the free lease")
 
@@ -173,7 +183,7 @@ func TestContendFailsOverWhenTheHolderReleases(t *testing.T) {
 	standbyCtx, stopStandby := context.WithCancel(t.Context())
 	standbyDone := make(chan error, 1)
 	go func() {
-		standbyDone <- redundancy.Contend(standbyCtx, stating(t), standby, unhealthyPeer, standbyRuntime.runtime())
+		standbyDone <- redundancy.ManageOwnership(standbyCtx, stating(t), standby, unhealthyPeer, standbyRuntime.runtime())
 	}()
 
 	// The standby is passive while the holder's lease is valid.
@@ -196,11 +206,10 @@ func TestContendFailsOverWhenTheHolderReleases(t *testing.T) {
 	<-standbyDone
 }
 
-// TestContendDoesNotPromoteWhileThePeerIsHealthy checks the health gate: a free
-// lease alone does not promote a Passive instance. The holder here never releases,
-// so the standby stays passive; a healthy-peer gate would keep it passive even if
-// the lease had lapsed.
-func TestContendDoesNotPromoteWhileThePeerIsHealthy(t *testing.T) {
+// TestManageOwnershipDoesNotPromoteWhileThePeerIsHealthy checks a valid lease
+// keeps a Passive instance passive, however long it waits: the holder never
+// releases, so the standby stays where it is.
+func TestManageOwnershipDoesNotPromoteWhileThePeerIsHealthy(t *testing.T) {
 	t.Parallel()
 
 	cfg := leaseConfig(t)
@@ -211,7 +220,7 @@ func TestContendDoesNotPromoteWhileThePeerIsHealthy(t *testing.T) {
 	holderCtx, stopHolder := context.WithCancel(t.Context())
 	holderDone := make(chan error, 1)
 	go func() {
-		holderDone <- redundancy.Contend(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
+		holderDone <- redundancy.ManageOwnership(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
 	}()
 	require.Equal(t, redundancy.ActivationInitial, <-holderRuntime.activeKinds)
 
@@ -219,7 +228,7 @@ func TestContendDoesNotPromoteWhileThePeerIsHealthy(t *testing.T) {
 	standbyCtx, stopStandby := context.WithCancel(t.Context())
 	standbyDone := make(chan error, 1)
 	go func() {
-		standbyDone <- redundancy.Contend(standbyCtx, stating(t), standby, healthyPeer, standbyRuntime.runtime())
+		standbyDone <- redundancy.ManageOwnership(standbyCtx, stating(t), standby, healthyPeer, standbyRuntime.runtime())
 	}()
 
 	require.Eventually(t, func() bool { return len(standbyRuntime.recorded()) == 1 }, 5*time.Second, 10*time.Millisecond)
@@ -235,12 +244,12 @@ func TestContendDoesNotPromoteWhileThePeerIsHealthy(t *testing.T) {
 	<-holderDone
 }
 
-// TestContendStandbyFailsBackToAHealthyPrimary checks the automatic failback: an
+// TestManageOwnershipStandbyFailsBackInPlace checks the automatic failback: an
 // Active Standby whose peer (the Primary) has been healthy for the stabilization
-// window steps down on its own, so the preferred Primary can reclaim ownership.
-// Contend returns without the context being canceled, which is the step-down the
-// service manager restarts the Standby Passive after.
-func TestContendStandbyFailsBackToAHealthyPrimary(t *testing.T) {
+// window steps down on its own and re-enters the Passive state in the same call,
+// still running and still answering, so the preferred Primary can reclaim
+// ownership.
+func TestManageOwnershipStandbyFailsBackInPlace(t *testing.T) {
 	t.Parallel()
 
 	cfg := leaseConfig(t)
@@ -249,28 +258,42 @@ func TestContendStandbyFailsBackToAHealthyPrimary(t *testing.T) {
 
 	runtime := newRecordingRuntime()
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, stating(t), standby, healthyPeer, runtime.runtime()) }()
+	go func() { done <- redundancy.ManageOwnership(ctx, stating(t), standby, healthyPeer, runtime.runtime()) }()
 
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds, "the standby takes the free lease")
 
 	// The Primary is healthy, so once the stabilization window passes the standby
-	// hands ownership back by stepping down of its own accord.
+	// hands ownership back and becomes Passive without the call returning.
+	require.Eventually(t, func() bool {
+		steps := runtime.recorded()
+		return len(steps) == 3 && steps[2] == "passive start"
+	}, 5*time.Second, 10*time.Millisecond, "the standby did not step down into the passive state")
+
+	require.Equal(t, []string{"active start", "active stop", "passive start"}, runtime.recorded())
+	require.False(t, standby.Held(), "the standby released the lease on failback")
+
 	select {
 	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the standby did not fail back to the healthy primary")
+		t.Fatalf("a failback must not end the instance: %v", err)
+	default:
 	}
-	require.Equal(t, []string{"active start", "active stop"}, runtime.recorded())
-	require.False(t, standby.Held(), "the standby released the lease on failback")
+
+	// The lease it released itself is not an invitation to take it back: while the
+	// Primary stays healthy the standby remains passive.
+	time.Sleep(150 * time.Millisecond)
+	require.Equal(t, []string{"active start", "active stop", "passive start"}, runtime.recorded(),
+		"a standby must not retake the lease it just handed over")
+
+	cancel()
+	require.NoError(t, <-done)
+	require.Equal(t, []string{"active start", "active stop", "passive start", "passive stop"}, runtime.recorded())
 }
 
-// TestContendDoesNotFailBackToAnUnhealthyPeer checks the stabilization gate: an
-// Active Standby whose peer is not answering does not hand ownership back, because
-// there is no healthy Primary to hand it to.
-func TestContendDoesNotFailBackToAnUnhealthyPeer(t *testing.T) {
+// TestManageOwnershipDoesNotFailBackToAnUnhealthyPeer checks the stabilization
+// gate: an Active Standby whose peer is not answering does not hand ownership
+// back, because there is no healthy Primary to hand it to.
+func TestManageOwnershipDoesNotFailBackToAnUnhealthyPeer(t *testing.T) {
 	t.Parallel()
 
 	cfg := leaseConfig(t)
@@ -280,26 +303,62 @@ func TestContendDoesNotFailBackToAnUnhealthyPeer(t *testing.T) {
 	runtime := newRecordingRuntime()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, stating(t), standby, unhealthyPeer, runtime.runtime()) }()
+	go func() { done <- redundancy.ManageOwnership(ctx, stating(t), standby, unhealthyPeer, runtime.runtime()) }()
 
 	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
 
 	// Several stabilization windows pass with no healthy peer; the standby stays
 	// Active rather than stepping down into an empty handover.
-	select {
-	case err := <-done:
-		t.Fatalf("the standby failed back with no healthy primary to take over: %v", err)
-	case <-time.After(300 * time.Millisecond):
-	}
+	time.Sleep(300 * time.Millisecond)
+	require.Equal(t, []string{"active start"}, runtime.recorded(),
+		"the standby keeps serving while its peer is down")
 	require.True(t, standby.Held(), "the standby keeps ownership while its peer is down")
 
 	cancel()
-	<-done
+	require.NoError(t, <-done)
 }
 
-// TestContendCallsAPrimaryTakingOverAFailback checks the activation kind is
-// derived from which instance won, not from how it won.
-func TestContendCallsAPrimaryTakingOverAFailback(t *testing.T) {
+// TestManageOwnershipCyclesInPlace drives one Standby call through a whole
+// Active→Passive→Active cycle: it serves while the Primary is away, hands back
+// when the Primary is healthy for the stabilization window, and takes over again
+// when the Primary goes away — all without the call ever returning.
+func TestManageOwnershipCyclesInPlace(t *testing.T) {
+	t.Parallel()
+
+	cfg := leaseConfig(t)
+	cfg.FailbackStabilization = 60 * time.Millisecond
+	standby := openLease(t, cfg, redundancy.RoleStandby)
+
+	peer := &flippingPeer{}
+	peer.healthy.Store(true)
+
+	runtime := newRecordingRuntime()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- redundancy.ManageOwnership(ctx, stating(t), standby, peer.deps(), runtime.runtime()) }()
+
+	require.Equal(t, redundancy.ActivationInitial, <-runtime.activeKinds)
+
+	// The healthy Primary triggers a failback; the standby becomes Passive in place.
+	require.Eventually(t, func() bool {
+		steps := runtime.recorded()
+		return len(steps) == 3 && steps[2] == "passive start"
+	}, 5*time.Second, 10*time.Millisecond, "the standby did not fail back")
+
+	// The Primary dies; the standby promotes again from within the same call.
+	peer.healthy.Store(false)
+	require.Equal(t, redundancy.ActivationFailover, <-runtime.activeKinds,
+		"retaking a lease after the peer died is a failover")
+	require.Equal(t, []string{"active start", "active stop", "passive start", "passive stop", "active start"},
+		runtime.recorded(), "the whole cycle runs inside one call, in strict alternation")
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+// TestManageOwnershipCallsAPrimaryTakingOverAFailback checks the activation kind
+// is derived from which instance won, not from how it won.
+func TestManageOwnershipCallsAPrimaryTakingOverAFailback(t *testing.T) {
 	t.Parallel()
 
 	cfg := leaseConfig(t)
@@ -310,7 +369,7 @@ func TestContendCallsAPrimaryTakingOverAFailback(t *testing.T) {
 	holderCtx, stopHolder := context.WithCancel(t.Context())
 	holderDone := make(chan error, 1)
 	go func() {
-		holderDone <- redundancy.Contend(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
+		holderDone <- redundancy.ManageOwnership(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
 	}()
 	require.Equal(t, redundancy.ActivationInitial, <-holderRuntime.activeKinds)
 
@@ -318,7 +377,7 @@ func TestContendCallsAPrimaryTakingOverAFailback(t *testing.T) {
 	primaryCtx, stopPrimary := context.WithCancel(t.Context())
 	primaryDone := make(chan error, 1)
 	go func() {
-		primaryDone <- redundancy.Contend(primaryCtx, stating(t), primary, unhealthyPeer, primaryRuntime.runtime())
+		primaryDone <- redundancy.ManageOwnership(primaryCtx, stating(t), primary, unhealthyPeer, primaryRuntime.runtime())
 	}()
 	require.Eventually(t, func() bool { return len(primaryRuntime.recorded()) == 1 }, 5*time.Second, 10*time.Millisecond)
 
@@ -331,10 +390,10 @@ func TestContendCallsAPrimaryTakingOverAFailback(t *testing.T) {
 	<-primaryDone
 }
 
-// TestContendStopsWithoutActivatingWhenTheProcessIsStopped checks an instance
-// asked to stop while waiting leaves quietly. Being told to stop is not a failure,
-// and a stopping instance must not activate on its way out.
-func TestContendStopsWithoutActivatingWhenTheProcessIsStopped(t *testing.T) {
+// TestManageOwnershipStopsWithoutActivatingWhenTheProcessIsStopped checks an
+// instance asked to stop while waiting leaves quietly. Being told to stop is not
+// a failure, and a stopping instance must not activate on its way out.
+func TestManageOwnershipStopsWithoutActivatingWhenTheProcessIsStopped(t *testing.T) {
 	t.Parallel()
 
 	cfg := leaseConfig(t)
@@ -343,7 +402,7 @@ func TestContendStopsWithoutActivatingWhenTheProcessIsStopped(t *testing.T) {
 	holderDone := make(chan error, 1)
 	holderRuntime := newRecordingRuntime()
 	go func() {
-		holderDone <- redundancy.Contend(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
+		holderDone <- redundancy.ManageOwnership(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
 	}()
 	require.Equal(t, redundancy.ActivationInitial, <-holderRuntime.activeKinds)
 
@@ -352,7 +411,7 @@ func TestContendStopsWithoutActivatingWhenTheProcessIsStopped(t *testing.T) {
 	standbyCtx, stopStandby := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- redundancy.Contend(standbyCtx, stating(t), standby, unhealthyPeer, standbyRuntime.runtime())
+		done <- redundancy.ManageOwnership(standbyCtx, stating(t), standby, unhealthyPeer, standbyRuntime.runtime())
 	}()
 
 	require.Eventually(t, func() bool { return len(standbyRuntime.recorded()) == 1 }, 5*time.Second, 10*time.Millisecond)
@@ -367,10 +426,10 @@ func TestContendStopsWithoutActivatingWhenTheProcessIsStopped(t *testing.T) {
 	<-holderDone
 }
 
-// TestContendReportsAPassiveCompositionThatGivesUp checks a passive composition
-// that returns an error ends the instance rather than leaving it parked in a wait
-// it can no longer honour.
-func TestContendReportsAPassiveCompositionThatGivesUp(t *testing.T) {
+// TestManageOwnershipReportsAPassiveCompositionThatGivesUp checks a passive
+// composition that returns an error ends the instance rather than leaving it
+// parked in a wait it can no longer honour.
+func TestManageOwnershipReportsAPassiveCompositionThatGivesUp(t *testing.T) {
 	t.Parallel()
 
 	cfg := leaseConfig(t)
@@ -379,7 +438,7 @@ func TestContendReportsAPassiveCompositionThatGivesUp(t *testing.T) {
 	holderDone := make(chan error, 1)
 	holderRuntime := newRecordingRuntime()
 	go func() {
-		holderDone <- redundancy.Contend(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
+		holderDone <- redundancy.ManageOwnership(holderCtx, stating(t), holder, redundancy.Deps{}, holderRuntime.runtime())
 	}()
 	require.Equal(t, redundancy.ActivationInitial, <-holderRuntime.activeKinds)
 
@@ -387,7 +446,7 @@ func TestContendReportsAPassiveCompositionThatGivesUp(t *testing.T) {
 	standbyRuntime := newRecordingRuntime()
 	standbyRuntime.passiveErr = errors.New("projection unavailable")
 
-	err := redundancy.Contend(t.Context(), stating(t), standby, unhealthyPeer, standbyRuntime.runtime())
+	err := redundancy.ManageOwnership(t.Context(), stating(t), standby, unhealthyPeer, standbyRuntime.runtime())
 	require.ErrorContains(t, err, "projection unavailable")
 	require.Equal(t, []string{"passive start", "passive failed"}, standbyRuntime.recorded())
 	require.False(t, standby.Held(), "an instance that gave up waiting holds nothing")
@@ -396,9 +455,9 @@ func TestContendReportsAPassiveCompositionThatGivesUp(t *testing.T) {
 	<-holderDone
 }
 
-// TestContendReleasesOwnershipAfterTheActiveCompositionReturns is the ordering
-// the other instance depends on.
-func TestContendReleasesOwnershipAfterTheActiveCompositionReturns(t *testing.T) {
+// TestManageOwnershipReleasesOwnershipAfterTheActiveCompositionReturns is the
+// ordering the other instance depends on.
+func TestManageOwnershipReleasesOwnershipAfterTheActiveCompositionReturns(t *testing.T) {
 	t.Parallel()
 
 	lease := openLease(t, leaseConfig(t), redundancy.RolePrimary)
@@ -406,7 +465,7 @@ func TestContendReleasesOwnershipAfterTheActiveCompositionReturns(t *testing.T) 
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- redundancy.Contend(ctx, stating(t), lease, unhealthyPeer, runtime.runtime()) }()
+	go func() { done <- redundancy.ManageOwnership(ctx, stating(t), lease, unhealthyPeer, runtime.runtime()) }()
 
 	<-runtime.activeKinds
 	require.True(t, lease.Held(), "ownership is held for the whole active composition")
@@ -416,17 +475,17 @@ func TestContendReleasesOwnershipAfterTheActiveCompositionReturns(t *testing.T) 
 	require.False(t, lease.Held(), "ownership is released once the active composition has returned")
 }
 
-// TestContendReleasesOwnershipWhenTheActiveCompositionFails checks the failure
-// path releases too. An instance that failed to serve must not keep the other one
-// out.
-func TestContendReleasesOwnershipWhenTheActiveCompositionFails(t *testing.T) {
+// TestManageOwnershipReleasesOwnershipWhenTheActiveCompositionFails checks the
+// failure path releases too. An instance that failed to serve must not keep the
+// other one out.
+func TestManageOwnershipReleasesOwnershipWhenTheActiveCompositionFails(t *testing.T) {
 	t.Parallel()
 
 	lease := openLease(t, leaseConfig(t), redundancy.RolePrimary)
 	runtime := newRecordingRuntime()
 	runtime.activeErr = errors.New("fabric would not open")
 
-	err := redundancy.Contend(t.Context(), stating(t), lease, unhealthyPeer, runtime.runtime())
+	err := redundancy.ManageOwnership(t.Context(), stating(t), lease, unhealthyPeer, runtime.runtime())
 	require.ErrorContains(t, err, "fabric would not open")
 	require.False(t, lease.Held(), "a failed activation still releases ownership")
 }
