@@ -13,3 +13,4 @@
 - leaderless / multi-master replication with anti-entropy repair, and the safe subset is state-based CRDT replication or operation-based CRDT replication.
 - vector clocks
 - epoch-number - Every time an instance crashes, restarts, or undergoes a state change, its epoch counter increases by exactly one (e → e + 1).
+- Fencing Tokens: When an instance accesses shared resources (like a database or storage layer) after a restart, the storage node checks the epoch token. It rejects requests from any older instance epoch to prevent data corruption.
