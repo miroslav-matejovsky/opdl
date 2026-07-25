@@ -59,6 +59,7 @@
     "apispecifications",
     "atomicfile",
     "builderdeployment",
+    "CRDT",
     "cutover",
     "DACL",
     "danielgtaylor",
