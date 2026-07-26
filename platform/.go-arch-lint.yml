@@ -30,7 +30,7 @@ components:
   httpapi: { in: internal/httpapi }
   instancestate: { in: internal/instance/instancestate }
   redundancy: { in: internal/machine/redundancy }
-  registration: { in: internal/registration }
+  registration: { in: internal/site/registration }
 
 deps:
   api:

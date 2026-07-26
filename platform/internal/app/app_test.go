@@ -19,7 +19,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/instancestate"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
