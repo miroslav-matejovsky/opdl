@@ -1,6 +1,6 @@
 package app
 
-import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
+import "github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
 
 // This file is the application runtime's event catalog: every fact composition
 // itself can state. They are the process's own story — what it started, bound,

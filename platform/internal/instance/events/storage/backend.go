@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
 )
 
 // Backend receives stamped event envelopes for persistent storage.

@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
 )
 
 // testDir returns a directory under .tmp/<TestName> relative to the package

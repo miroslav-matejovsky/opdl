@@ -1,6 +1,6 @@
 package redundancy
 
-import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
+import "github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
 
 // This file is the redundancy domain's event catalog: what an operator is told
 // about which instance of a machine may run, and how it came to be that one.

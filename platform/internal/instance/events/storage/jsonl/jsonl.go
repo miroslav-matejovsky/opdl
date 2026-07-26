@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
 )
 
 var (

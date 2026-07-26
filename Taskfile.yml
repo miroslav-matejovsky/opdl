@@ -14,8 +14,9 @@ tasks:
     desc: Remove build artifacts, test results, and .exe files (retain tool caches)
     silent: true
     cmds:
+      - echo "clean starting"
       - pwsh -NoProfile -NonInteractive -File taskfile/clean.ps1{{if .QUIET}} > /dev/null 2>&1{{end}}
-      - echo clean done
+      - echo "clean done"
 
   tidy:
     desc: Run go mod tidy in every workspace module
