@@ -1,4 +1,4 @@
-package instancestate_test
+package state_test
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/instancestate"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 )
 
 // recordedState is the record in testdata: an instance that has been launched
@@ -40,8 +40,8 @@ func copyOfRecordedState(t *testing.T) string {
 func TestOpenRequiresAPath(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{"", "   "} {
-		_, err := instancestate.Open(path)
-		require.ErrorIs(t, err, instancestate.ErrInvalidPath)
+		_, err := state.Open(path)
+		require.ErrorIs(t, err, state.ErrInvalidPath)
 	}
 }
 
@@ -51,11 +51,11 @@ func TestOpenStartsAtEpochZeroWhenTheFileIsAbsent(t *testing.T) {
 	t.Parallel()
 	path := stateFile(t)
 
-	store, err := instancestate.Open(path)
+	store, err := state.Open(path)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), store.Epoch())
 	require.Equal(t, path, store.Path())
-	require.Equal(t, instancestate.State{}, store.State(),
+	require.Equal(t, state.State{}, store.State(),
 		"an instance that has never run has no counters and no times")
 	// Opening is not an incarnation, so nothing is written until Advance.
 	require.NoFileExists(t, path)
@@ -67,9 +67,9 @@ func TestOpenCreatesTheParentDirectory(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "nested", "deeper", "state.json")
 
-	store, err := instancestate.Open(path)
+	store, err := state.Open(path)
 	require.NoError(t, err)
-	_, err = store.Advance(instancestate.ReasonProcessStarted)
+	_, err = store.Advance(state.ReasonProcessStarted)
 	require.NoError(t, err)
 	require.FileExists(t, path)
 }
@@ -78,31 +78,31 @@ func TestOpenCreatesTheParentDirectory(t *testing.T) {
 // field arrives, which is what a restarting instance depends on.
 func TestOpenDecodesARecordedState(t *testing.T) {
 	t.Parallel()
-	store, err := instancestate.Open(recordedState)
+	store, err := state.Open(recordedState)
 	require.NoError(t, err)
 
-	state := store.State()
-	require.Equal(t, uint64(3), state.Epoch)
-	require.Equal(t, uint64(2), state.ProcessEpoch.Count)
-	require.Equal(t, uint64(1), state.ActivationEpoch.Count)
-	require.Equal(t, "2026-07-26T09:15:42.123456789Z", state.UpdatedAt.Format(time.RFC3339Nano))
-	require.Equal(t, state.UpdatedAt, state.ProcessEpoch.UpdatedAt,
+	st := store.State()
+	require.Equal(t, uint64(3), st.Epoch)
+	require.Equal(t, uint64(2), st.ProcessEpoch.Count)
+	require.Equal(t, uint64(1), st.ActivationEpoch.Count)
+	require.Equal(t, "2026-07-26T09:15:42.123456789Z", st.UpdatedAt.Format(time.RFC3339Nano))
+	require.Equal(t, st.UpdatedAt, st.ProcessEpoch.UpdatedAt,
 		"this record's last advance was the process start, so the two times are the same one")
-	require.Equal(t, "2026-07-26T08:04:11.5Z", state.ActivationEpoch.UpdatedAt.Format(time.RFC3339Nano))
-	require.Equal(t, time.UTC, state.UpdatedAt.Location())
+	require.Equal(t, "2026-07-26T08:04:11.5Z", st.ActivationEpoch.UpdatedAt.Format(time.RFC3339Nano))
+	require.Equal(t, time.UTC, st.UpdatedAt.Location())
 }
 
 // The epoch rises by exactly one per incarnation whichever kind it is, which is
 // the whole contract of the total.
 func TestAdvanceRaisesTheEpochByOne(t *testing.T) {
 	t.Parallel()
-	store, err := instancestate.Open(stateFile(t))
+	store, err := state.Open(stateFile(t))
 	require.NoError(t, err)
 
-	reasons := []instancestate.Reason{
-		instancestate.ReasonProcessStarted,
-		instancestate.ReasonActivated,
-		instancestate.ReasonActivated,
+	reasons := []state.Reason{
+		state.ReasonProcessStarted,
+		state.ReasonActivated,
+		state.ReasonActivated,
 	}
 	for i, reason := range reasons {
 		want := uint64(i + 1)
@@ -117,42 +117,42 @@ func TestAdvanceRaisesTheEpochByOne(t *testing.T) {
 // different one and never what made it different.
 func TestAdvanceCountsEachKindSeparately(t *testing.T) {
 	t.Parallel()
-	store, err := instancestate.Open(stateFile(t))
+	store, err := state.Open(stateFile(t))
 	require.NoError(t, err)
 
 	// One launch that then served twice: an instance whose ownership moved back
 	// and forth without the process ever dying.
-	_, err = store.Advance(instancestate.ReasonProcessStarted)
+	_, err = store.Advance(state.ReasonProcessStarted)
 	require.NoError(t, err)
 	for range 2 {
-		_, err = store.Advance(instancestate.ReasonActivated)
+		_, err = store.Advance(state.ReasonActivated)
 		require.NoError(t, err)
 	}
 
-	state := store.State()
-	require.Equal(t, uint64(3), state.Epoch)
-	require.Equal(t, uint64(1), state.ProcessEpoch.Count)
-	require.Equal(t, uint64(2), state.ActivationEpoch.Count)
+	st := store.State()
+	require.Equal(t, uint64(3), st.Epoch)
+	require.Equal(t, uint64(1), st.ProcessEpoch.Count)
+	require.Equal(t, uint64(2), st.ActivationEpoch.Count)
 }
 
 // A kind that has never advanced carries no time, which is how a reader tells a
 // Standby that has only ever followed from one that has served.
 func TestAdvanceLeavesTheOtherKindUntouched(t *testing.T) {
 	t.Parallel()
-	store, err := instancestate.Open(stateFile(t))
+	store, err := state.Open(stateFile(t))
 	require.NoError(t, err)
 
 	before := time.Now().UTC()
-	_, err = store.Advance(instancestate.ReasonProcessStarted)
+	_, err = store.Advance(state.ReasonProcessStarted)
 	require.NoError(t, err)
 
-	state := store.State()
-	require.Equal(t, uint64(1), state.ProcessEpoch.Count)
-	require.WithinDuration(t, before, state.ProcessEpoch.UpdatedAt, time.Minute)
-	require.Equal(t, state.ProcessEpoch.UpdatedAt, state.UpdatedAt,
+	st := store.State()
+	require.Equal(t, uint64(1), st.ProcessEpoch.Count)
+	require.WithinDuration(t, before, st.ProcessEpoch.UpdatedAt, time.Minute)
+	require.Equal(t, st.ProcessEpoch.UpdatedAt, st.UpdatedAt,
 		"the epoch and the kind that moved it were stamped with the same instant")
-	require.Zero(t, state.ActivationEpoch.Count)
-	require.True(t, state.ActivationEpoch.UpdatedAt.IsZero(),
+	require.Zero(t, st.ActivationEpoch.Count)
+	require.True(t, st.ActivationEpoch.UpdatedAt.IsZero(),
 		"an instance that has never activated has no activation time to report")
 }
 
@@ -161,11 +161,11 @@ func TestAdvanceLeavesTheOtherKindUntouched(t *testing.T) {
 func TestAdvanceRejectsAnUnknownReason(t *testing.T) {
 	t.Parallel()
 	path := stateFile(t)
-	store, err := instancestate.Open(path)
+	store, err := state.Open(path)
 	require.NoError(t, err)
 
-	_, err = store.Advance(instancestate.Reason("stepped_down"))
-	require.ErrorIs(t, err, instancestate.ErrUnknownReason)
+	_, err = store.Advance(state.Reason("stepped_down"))
+	require.ErrorIs(t, err, state.ErrUnknownReason)
 	require.Equal(t, uint64(0), store.Epoch())
 	require.NoFileExists(t, path)
 }
@@ -176,25 +176,25 @@ func TestAdvanceContinuesAcrossRestarts(t *testing.T) {
 	t.Parallel()
 	path := stateFile(t)
 
-	first, err := instancestate.Open(path)
+	first, err := state.Open(path)
 	require.NoError(t, err)
-	_, err = first.Advance(instancestate.ReasonProcessStarted)
+	_, err = first.Advance(state.ReasonProcessStarted)
 	require.NoError(t, err)
-	written, err := first.Advance(instancestate.ReasonActivated)
+	written, err := first.Advance(state.ReasonActivated)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), written.Epoch)
 
 	// A new process opening the same file: nothing is carried in memory.
-	second, err := instancestate.Open(path)
+	second, err := state.Open(path)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), second.Epoch())
-	written, err = second.Advance(instancestate.ReasonProcessStarted)
+	written, err = second.Advance(state.ReasonProcessStarted)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), written.Epoch)
 
-	state := second.State()
-	require.Equal(t, uint64(2), state.ProcessEpoch.Count, "both launches are counted, across the two processes")
-	require.Equal(t, uint64(1), state.ActivationEpoch.Count)
+	st := second.State()
+	require.Equal(t, uint64(2), st.ProcessEpoch.Count, "both launches are counted, across the two processes")
+	require.Equal(t, uint64(1), st.ActivationEpoch.Count)
 }
 
 // The same continuation, starting from the record checked into testdata rather
@@ -202,16 +202,16 @@ func TestAdvanceContinuesAcrossRestarts(t *testing.T) {
 // of the runtime left on disk.
 func TestAdvanceContinuesFromARecordedState(t *testing.T) {
 	t.Parallel()
-	store, err := instancestate.Open(copyOfRecordedState(t))
+	store, err := state.Open(copyOfRecordedState(t))
 	require.NoError(t, err)
 
-	state, err := store.Advance(instancestate.ReasonActivated)
+	st, err := store.Advance(state.ReasonActivated)
 	require.NoError(t, err)
-	require.Equal(t, uint64(4), state.Epoch)
-	require.Equal(t, state, store.State(), "the record returned is the one the store now holds")
+	require.Equal(t, uint64(4), st.Epoch)
+	require.Equal(t, st, store.State(), "the record returned is the one the store now holds")
 
-	require.Equal(t, uint64(2), state.ProcessEpoch.Count, "unmoved, and not recomputed from the epoch")
-	require.Equal(t, uint64(2), state.ActivationEpoch.Count)
+	require.Equal(t, uint64(2), st.ProcessEpoch.Count, "unmoved, and not recomputed from the epoch")
+	require.Equal(t, uint64(2), st.ActivationEpoch.Count)
 }
 
 // Two instances of one machine keep unrelated counters, because they are two
@@ -220,16 +220,16 @@ func TestStoresAreIndependentPerInstance(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	primary, err := instancestate.Open(filepath.Join(dir, "primary", "state.json"))
+	primary, err := state.Open(filepath.Join(dir, "primary", "state.json"))
 	require.NoError(t, err)
-	standby, err := instancestate.Open(filepath.Join(dir, "standby", "state.json"))
+	standby, err := state.Open(filepath.Join(dir, "standby", "state.json"))
 	require.NoError(t, err)
 
 	for range 3 {
-		_, err := primary.Advance(instancestate.ReasonProcessStarted)
+		_, err := primary.Advance(state.ReasonProcessStarted)
 		require.NoError(t, err)
 	}
-	written, err := standby.Advance(instancestate.ReasonProcessStarted)
+	written, err := standby.Advance(state.ReasonProcessStarted)
 	require.NoError(t, err)
 
 	require.Equal(t, uint64(3), primary.Epoch())
@@ -243,7 +243,7 @@ func TestOpenReportsAnUndecodableRecord(t *testing.T) {
 	path := stateFile(t)
 	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o644))
 
-	_, err := instancestate.Open(path)
+	_, err := state.Open(path)
 	require.ErrorContains(t, err, "decode state")
 }
 
@@ -252,9 +252,9 @@ func TestOpenReportsAnUndecodableRecord(t *testing.T) {
 func TestAdvancePersistsTheWholeRecord(t *testing.T) {
 	t.Parallel()
 	path := stateFile(t)
-	store, err := instancestate.Open(path)
+	store, err := state.Open(path)
 	require.NoError(t, err)
-	_, err = store.Advance(instancestate.ReasonActivated)
+	_, err = store.Advance(state.ReasonActivated)
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
@@ -275,15 +275,15 @@ func TestAdvanceKeepsTheEpochWhenTheWriteFails(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
-	store, err := instancestate.Open(path)
+	store, err := state.Open(path)
 	require.NoError(t, err)
 
 	// A directory where the state file should be: the atomic replace cannot
 	// overwrite it, and nothing else about the store has changed.
 	require.NoError(t, os.Mkdir(path, 0o755))
 
-	_, err = store.Advance(instancestate.ReasonProcessStarted)
+	_, err = store.Advance(state.ReasonProcessStarted)
 	require.ErrorContains(t, err, "write state")
 	require.Equal(t, uint64(0), store.Epoch())
-	require.Equal(t, instancestate.State{}, store.State())
+	require.Equal(t, state.State{}, store.State())
 }

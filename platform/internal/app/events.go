@@ -185,7 +185,7 @@ type EpochAdvanced struct {
 	StateFile string `json:"state_file"`
 	// Epoch is the new incarnation number, one higher than the previous.
 	Epoch uint64 `json:"epoch"`
-	// Reason is why a new incarnation began, one of the instancestate.Reason
+	// Reason is why a new incarnation began, one of the state.Reason
 	// values.
 	Reason string `json:"reason"`
 	// ProcessEpoch is how many times this instance has been launched, ever.
@@ -206,7 +206,7 @@ type EpochAdvanceFailed struct {
 	// StateFile is the durable record that could not be written.
 	StateFile string `json:"state_file"`
 	// Reason is which new incarnation was being recorded, one of the
-	// instancestate.Reason values.
+	// state.Reason values.
 	Reason string `json:"reason"`
 	// Error is why it could not be recorded.
 	Error string `json:"error"`

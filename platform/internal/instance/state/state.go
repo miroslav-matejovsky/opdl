@@ -1,4 +1,4 @@
-package instancestate
+package state
 
 import (
 	"encoding/json"
@@ -16,12 +16,12 @@ import (
 // ErrInvalidPath reports an empty state file path. Every deployed instance
 // authors one, so an empty path is a descriptor that never reached the runtime
 // intact rather than something to fall back from.
-var ErrInvalidPath = errors.New("instancestate: invalid state file")
+var ErrInvalidPath = errors.New("state: invalid state file")
 
 // ErrUnknownReason reports an advance that named no known reason. Every advance
 // is one of the two moments an instance becomes a new incarnation, and which one
 // it was is recorded, so there is no unattributed advance to fall back to.
-var ErrUnknownReason = errors.New("instancestate: unknown advance reason")
+var ErrUnknownReason = errors.New("state: unknown advance reason")
 
 // Reason is why an instance began a new incarnation. It selects which counter an
 // advance moves, and it is what the runtime reports the advance with, so the
@@ -112,7 +112,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("%w: state file cannot be empty", ErrInvalidPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return nil, fmt.Errorf("instancestate: create state directory %s: %w", filepath.Dir(filePath), err)
+		return nil, fmt.Errorf("state: create state directory %s: %w", filepath.Dir(filePath), err)
 	}
 
 	store := &Store{path: filePath}
@@ -121,10 +121,10 @@ func Open(path string) (*Store, error) {
 		return store, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("instancestate: read state %s: %w", filePath, err)
+		return nil, fmt.Errorf("state: read state %s: %w", filePath, err)
 	}
 	if err := json.Unmarshal(data, &store.state); err != nil {
-		return nil, fmt.Errorf("instancestate: decode state %s: %w", filePath, err)
+		return nil, fmt.Errorf("state: decode state %s: %w", filePath, err)
 	}
 	return store, nil
 }
@@ -164,10 +164,10 @@ func (s *Store) Advance(reason Reason) (State, error) {
 
 	data, err := json.Marshal(next)
 	if err != nil {
-		return State{}, fmt.Errorf("instancestate: encode state: %w", err)
+		return State{}, fmt.Errorf("state: encode state: %w", err)
 	}
 	if err := atomicfile.WriteFile(s.path, data, 0o644); err != nil {
-		return State{}, fmt.Errorf("instancestate: write state %s: %w", s.path, err)
+		return State{}, fmt.Errorf("state: write state %s: %w", s.path, err)
 	}
 	s.state = next
 	return next, nil

@@ -14,7 +14,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/instancestate"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 
@@ -51,7 +51,7 @@ type process struct {
 	// across restarts and crashes. Run advanced it once for this process; the
 	// active composition advances it again each time the instance takes ownership.
 	// There is nothing to close: every write is complete when it returns.
-	state *instancestate.Store
+	state *state.Store
 }
 
 // monitorInterval is how often a running process re-reads its projection
@@ -122,8 +122,8 @@ func hasEventStorage(descriptor config.Descriptor, role redundancy.InstanceRole)
 // later reader that used it as a fencing token would be ordering against a
 // number no restart will reproduce. Run makes the process's own first advance
 // directly, because it happens before there is a process value to pass.
-func advanceEpoch(ctx context.Context, proc process, reason instancestate.Reason) error {
-	state, err := proc.state.Advance(reason)
+func advanceEpoch(ctx context.Context, proc process, reason state.Reason) error {
+	st, err := proc.state.Advance(reason)
 	if err != nil {
 		return errors.Join(err, proc.local.Publish(ctx, EpochAdvanceFailed{
 			StateFile: proc.state.Path(),
@@ -131,19 +131,19 @@ func advanceEpoch(ctx context.Context, proc process, reason instancestate.Reason
 			Error:     err.Error(),
 		}))
 	}
-	return proc.local.Publish(ctx, epochAdvanced(proc.state.Path(), reason, state))
+	return proc.local.Publish(ctx, epochAdvanced(proc.state.Path(), reason, st))
 }
 
 // epochAdvanced describes a recorded advance. It is shared with Run, which makes
 // the process's own first advance before there is a process value to pass, so
 // both statements of the same fact carry the same fields.
-func epochAdvanced(stateFile string, reason instancestate.Reason, state instancestate.State) EpochAdvanced {
+func epochAdvanced(stateFile string, reason state.Reason, st state.State) EpochAdvanced {
 	return EpochAdvanced{
 		StateFile:       stateFile,
-		Epoch:           state.Epoch,
+		Epoch:           st.Epoch,
 		Reason:          string(reason),
-		ProcessEpoch:    state.ProcessEpoch.Count,
-		ActivationEpoch: state.ActivationEpoch.Count,
+		ProcessEpoch:    st.ProcessEpoch.Count,
+		ActivationEpoch: st.ActivationEpoch.Count,
 	}
 }
 
@@ -152,11 +152,11 @@ func epochAdvanced(stateFile string, reason instancestate.Reason, state instance
 // Nothing here comes from the journal, so it is answerable from the moment the
 // process starts: before the projection has caught up, and while it never does.
 // That is what makes a Passive instance worth asking.
-func instanceIdentity(descriptor config.Descriptor, role redundancy.InstanceRole, state string) api.Instance {
+func instanceIdentity(descriptor config.Descriptor, role redundancy.InstanceRole, stateName string) api.Instance {
 	return api.Instance{
 		Machine:     descriptor.Machine,
 		Role:        string(role),
-		State:       state,
+		State:       stateName,
 		Address:     instanceOf(descriptor, role).APIAddress,
 		PeerAddress: peerOf(descriptor, role).APIAddress,
 	}
@@ -336,7 +336,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 	// advances before the instance serves anything, and a failure to record it
 	// stops the activation rather than letting it serve under an epoch nothing
 	// persisted.
-	if err := advanceEpoch(ctx, proc, instancestate.ReasonActivated); err != nil {
+	if err := advanceEpoch(ctx, proc, state.ReasonActivated); err != nil {
 		return err
 	}
 
@@ -532,7 +532,7 @@ type progressFabric interface {
 // that. onLagExceeded is what stops serving, and it is called on every
 // observation past the bound rather than only the first, so a caller that
 // collapses them does so itself.
-func startFailoverMonitor(ctx context.Context, publisher events.Publisher, fabric progressFabric, state redundancy.State, lagBound time.Duration, onLagExceeded func()) (<-chan error, error) {
+func startFailoverMonitor(ctx context.Context, publisher events.Publisher, fabric progressFabric, redundancyState redundancy.State, lagBound time.Duration, onLagExceeded func()) (<-chan error, error) {
 	var lag redundancy.LagState
 	ready := false
 	// The first observation always counts as a change, so the record opens with
@@ -541,7 +541,7 @@ func startFailoverMonitor(ctx context.Context, publisher events.Publisher, fabri
 
 	observe := func() (FailoverReadinessChanged, bool) {
 		now := time.Now()
-		fact := FailoverReadinessChanged{Ready: true, InstanceState: state.String()}
+		fact := FailoverReadinessChanged{Ready: true, InstanceState: redundancyState.String()}
 		st, err := fabric.State(ctx)
 		behind := lag.Observe(err != nil || !st.CaughtUp, now)
 		fact.Lag = behind.String()

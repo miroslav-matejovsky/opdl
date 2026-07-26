@@ -17,7 +17,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/instancestate"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
@@ -120,7 +120,7 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 	t.Cleanup(func() { _ = record.Close(context.Background()) })
 	local, err := storage.NewPublisher(factory, record)
 	require.NoError(t, err)
-	state, err := instancestate.Open(instanceOf(descriptor, role).StateFile)
+	st, err := state.Open(instanceOf(descriptor, role).StateFile)
 	require.NoError(t, err)
 	return process{
 		descriptor: descriptor,
@@ -129,7 +129,7 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 		factory:    factory,
 		local:      local,
 		record:     record,
-		state:      state,
+		state:      st,
 	}, nil
 }
 
@@ -313,10 +313,10 @@ type togglingFabric struct {
 	state fabricState
 }
 
-func (f *togglingFabric) set(state fabricState) {
+func (f *togglingFabric) set(st fabricState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.state = state
+	f.state = st
 }
 
 func (f *togglingFabric) State(context.Context) (fabricState, error) {

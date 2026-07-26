@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/instancestate"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 )
 
 func TestApplicationEventsDeclareTheirContract(t *testing.T) {
@@ -138,7 +138,7 @@ func TestApplicationEventsAreStampedIntoValidEnvelopes(t *testing.T) {
 	advanced, err := factory.Wrap(t.Context(), EpochAdvanced{
 		StateFile:       `D:\opdl\state.json`,
 		Epoch:           4,
-		Reason:          string(instancestate.ReasonActivated),
+		Reason:          string(state.ReasonActivated),
 		ProcessEpoch:    2,
 		ActivationEpoch: 2,
 	})
@@ -150,7 +150,7 @@ func TestApplicationEventsAreStampedIntoValidEnvelopes(t *testing.T) {
 
 	failedEpoch, err := factory.Wrap(t.Context(), EpochAdvanceFailed{
 		StateFile: `D:\opdl\state.json`,
-		Reason:    string(instancestate.ReasonProcessStarted),
+		Reason:    string(state.ReasonProcessStarted),
 		Error:     "disk full",
 	})
 	require.NoError(t, err)

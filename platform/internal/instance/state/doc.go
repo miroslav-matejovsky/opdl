@@ -1,4 +1,4 @@
-// Package instancestate is one instance's durable state: the record it carries
+// Package state is one instance's durable state: the record it carries
 // across restarts and crashes, kept in the state file its blueprint authored.
 //
 // # The epoch counter
@@ -72,4 +72,4 @@
 // loses power in the same instant can lose the last advance. That is accepted
 // here for the same reason it is on the lease: both files are local to one host,
 // and a host that lost power is one whose instances are all restarting anyway.
-package instancestate
+package state
