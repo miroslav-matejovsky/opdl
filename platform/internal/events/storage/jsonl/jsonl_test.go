@@ -27,6 +27,14 @@ func testDir(t *testing.T) string {
 	return dir
 }
 
+// testFile is the events file path a test's backend is opened on. The file
+// itself is not created: opening it is the backend's job, and several tests are
+// about exactly that.
+func testFile(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(testDir(t), "events.jsonl")
+}
+
 var testDescriptor = config.Descriptor{
 	Platform:       "opdl",
 	Project:        "scenario",
@@ -59,33 +67,39 @@ func TestNewValidation(t *testing.T) {
 	require.ErrorIs(t, err, jsonl.ErrInvalidPath)
 }
 
-func TestOpeningCreatesOnlyExpectedSubdirectoryAndFile(t *testing.T) {
-	dataDir := testDir(t)
+// The backend opens the authored path and nothing else. It composes no
+// subdirectory of its own, because the blueprint already named the file.
+func TestOpeningCreatesOnlyTheAuthoredFile(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "events.jsonl")
 
-	backend, err := jsonl.New(dataDir)
+	backend, err := jsonl.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
-	eventsDir := filepath.Join(dataDir, "events")
-	eventsFile := filepath.Join(eventsDir, "events.jsonl")
+	require.FileExists(t, path)
+	require.Equal(t, path, backend.Path())
 
-	require.DirExists(t, eventsDir)
-	require.FileExists(t, eventsFile)
-
-	rootEntries, err := os.ReadDir(dataDir)
+	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
-	require.Len(t, rootEntries, 1)
-	require.Equal(t, "events", rootEntries[0].Name())
+	require.Len(t, entries, 1)
+	require.Equal(t, "events.jsonl", entries[0].Name())
+}
 
-	eventsEntries, err := os.ReadDir(eventsDir)
+// A blueprint may author the events file under a directory nothing has created
+// yet, so the backend makes the parent rather than failing on the first start.
+func TestOpeningCreatesTheParentDirectory(t *testing.T) {
+	path := filepath.Join(testDir(t), "nested", "deeper", "events.jsonl")
+
+	backend, err := jsonl.New(path)
 	require.NoError(t, err)
-	require.Len(t, eventsEntries, 1)
-	require.Equal(t, "events.jsonl", eventsEntries[0].Name())
+	require.NoError(t, backend.Close(t.Context()))
+	require.FileExists(t, path)
 }
 
 func TestOneStoredEnvelopeDecodesWithEventsDecode(t *testing.T) {
-	dataDir := testDir(t)
-	backend, err := jsonl.New(dataDir)
+	path := testFile(t)
+	backend, err := jsonl.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -93,7 +107,7 @@ func TestOneStoredEnvelopeDecodesWithEventsDecode(t *testing.T) {
 	err = backend.Store(t.Context(), env)
 	require.NoError(t, err)
 
-	filePath := filepath.Join(dataDir, "events", "events.jsonl")
+	filePath := path
 	content, err := os.ReadFile(filePath)
 	require.NoError(t, err)
 
@@ -106,8 +120,8 @@ func TestOneStoredEnvelopeDecodesWithEventsDecode(t *testing.T) {
 }
 
 func TestSeveralEventsProduceLinesInCallOrder(t *testing.T) {
-	dataDir := testDir(t)
-	backend, err := jsonl.New(dataDir)
+	path := testFile(t)
+	backend, err := jsonl.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -119,7 +133,7 @@ func TestSeveralEventsProduceLinesInCallOrder(t *testing.T) {
 	require.NoError(t, backend.Store(t.Context(), env2))
 	require.NoError(t, backend.Store(t.Context(), env3))
 
-	content, err := os.ReadFile(filepath.Join(dataDir, "events", "events.jsonl"))
+	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 
 	lines := bytes.Split(bytes.TrimSuffix(content, []byte("\n")), []byte("\n"))
@@ -138,8 +152,8 @@ func TestSeveralEventsProduceLinesInCallOrder(t *testing.T) {
 }
 
 func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
-	dataDir := testDir(t)
-	backend, err := jsonl.New(dataDir)
+	path := testFile(t)
+	backend, err := jsonl.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -158,7 +172,7 @@ func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
 
 	wg.Wait()
 
-	content, err := os.ReadFile(filepath.Join(dataDir, "events", "events.jsonl"))
+	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 
 	lines := bytes.Split(bytes.TrimSuffix(content, []byte("\n")), []byte("\n"))
@@ -175,8 +189,8 @@ func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
 }
 
 func TestInvalidEnvelopesAreRejectedBeforeLineIsWritten(t *testing.T) {
-	dataDir := testDir(t)
-	backend, err := jsonl.New(dataDir)
+	path := testFile(t)
+	backend, err := jsonl.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -185,15 +199,15 @@ func TestInvalidEnvelopesAreRejectedBeforeLineIsWritten(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, events.ErrInvalidEnvelope)
 
-	filePath := filepath.Join(dataDir, "events", "events.jsonl")
+	filePath := path
 	info, err := os.Stat(filePath)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), info.Size(), "no byte written for invalid envelope")
 }
 
 func TestCloseIsIdempotentAndStoreAfterCloseFails(t *testing.T) {
-	dataDir := testDir(t)
-	backend, err := jsonl.New(dataDir)
+	path := testFile(t)
+	backend, err := jsonl.New(path)
 	require.NoError(t, err)
 
 	err = backend.Close(t.Context())
@@ -209,23 +223,23 @@ func TestCloseIsIdempotentAndStoreAfterCloseFails(t *testing.T) {
 }
 
 func TestReopeningAppendsRatherThanTruncates(t *testing.T) {
-	dataDir := testDir(t)
+	path := testFile(t)
 
 	// First run
-	b1, err := jsonl.New(dataDir)
+	b1, err := jsonl.New(path)
 	require.NoError(t, err)
 	env1 := testEnvelope(t, "event-1")
 	require.NoError(t, b1.Store(t.Context(), env1))
 	require.NoError(t, b1.Close(t.Context()))
 
 	// Reopen
-	b2, err := jsonl.New(dataDir)
+	b2, err := jsonl.New(path)
 	require.NoError(t, err)
 	env2 := testEnvelope(t, "event-2")
 	require.NoError(t, b2.Store(t.Context(), env2))
 	require.NoError(t, b2.Close(t.Context()))
 
-	content, err := os.ReadFile(filepath.Join(dataDir, "events", "events.jsonl"))
+	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 
 	lines := bytes.Split(bytes.TrimSuffix(content, []byte("\n")), []byte("\n"))
@@ -241,19 +255,18 @@ func TestReopeningAppendsRatherThanTruncates(t *testing.T) {
 }
 
 func TestWindowsPathsWithSpacesWork(t *testing.T) {
-	dataDir := filepath.Join(testDir(t), "sub dir with spaces", "data root")
+	path := filepath.Join(testDir(t), "sub dir with spaces", "data root", "events.jsonl")
 
-	backend, err := jsonl.New(dataDir)
+	backend, err := jsonl.New(path)
 	require.NoError(t, err)
 
 	env := testEnvelope(t, "space-path")
 	require.NoError(t, backend.Store(t.Context(), env))
 	require.NoError(t, backend.Close(t.Context()))
 
-	filePath := filepath.Join(dataDir, "events", "events.jsonl")
-	require.FileExists(t, filePath)
+	require.FileExists(t, path)
 
-	content, err := os.ReadFile(filePath)
+	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 	lines := bytes.Split(bytes.TrimSuffix(content, []byte("\n")), []byte("\n"))
 	require.Len(t, lines, 1)

@@ -11,7 +11,8 @@ project "customer-a" {
       # the Primary Instance's; standby is the Standby Instance's. This machine
       # opts out of a standby, so it states that and authors nothing further.
       platform {
-        data_dir    = "D:/opdl/customer-a/north/sensor/primary"
+        events_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/north/sensor/primary/state.json"
 
         api {
           local_port = 8080
@@ -38,7 +39,8 @@ project "customer-a" {
       # every port below is distinct: nothing is shared between them except the
       # ownership object, which is not a port.
       platform {
-        data_dir    = "D:/opdl/customer-a/north/local-server/primary"
+        events_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/north/local-server/primary/state.json"
 
         api {
           local_port = 8080
@@ -52,7 +54,8 @@ project "customer-a" {
 
         standby {
           disabled    = false
-          data_dir    = "D:/opdl/customer-a/north/local-server/standby"
+          events_file = "D:/opdl/customer-a/north/local-server/standby/events.jsonl"
+          state_file  = "D:/opdl/customer-a/north/local-server/standby/state.json"
 
           lease {
             file                   = "D:/opdl/customer-a/north/local-server/lease"
@@ -83,7 +86,8 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
-        data_dir    = "D:/opdl/customer-a/control-room/master/primary"
+        events_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/control-room/master/primary/state.json"
 
         api {
           local_port = 8080
@@ -97,7 +101,8 @@ project "customer-a" {
 
         standby {
           disabled    = false
-          data_dir    = "D:/opdl/customer-a/control-room/master/standby"
+          events_file = "D:/opdl/customer-a/control-room/master/standby/events.jsonl"
+          state_file  = "D:/opdl/customer-a/control-room/master/standby/state.json"
 
           lease {
             file                   = "D:/opdl/customer-a/control-room/master/lease"
@@ -126,7 +131,8 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
-        data_dir    = "D:/opdl/customer-a/control-room/slave/primary"
+        events_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/control-room/slave/primary/state.json"
 
         api {
           local_port = 8080
@@ -140,7 +146,8 @@ project "customer-a" {
 
         standby {
           disabled    = false
-          data_dir    = "D:/opdl/customer-a/control-room/slave/standby"
+          events_file = "D:/opdl/customer-a/control-room/slave/standby/events.jsonl"
+          state_file  = "D:/opdl/customer-a/control-room/slave/standby/state.json"
 
           lease {
             file                   = "D:/opdl/customer-a/control-room/slave/lease"
@@ -169,7 +176,8 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
-        data_dir    = "D:/opdl/customer-a/control-room/integration/primary"
+        events_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/control-room/integration/primary/state.json"
 
         api {
           local_port = 8080
@@ -183,7 +191,8 @@ project "customer-a" {
 
         standby {
           disabled    = false
-          data_dir    = "D:/opdl/customer-a/control-room/integration/standby"
+          events_file = "D:/opdl/customer-a/control-room/integration/standby/events.jsonl"
+          state_file  = "D:/opdl/customer-a/control-room/integration/standby/state.json"
 
           lease {
             file                   = "D:/opdl/customer-a/control-room/integration/lease"

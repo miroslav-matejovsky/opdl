@@ -12,6 +12,8 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //   - platform.app.process_started: the process read its configuration, settled
 //     its role, and began running.
 //   - platform.app.process_stopped: the process finished, cleanly or not.
+//   - platform.app.epoch_advanced: the instance began a new incarnation.
+//   - platform.app.epoch_advance_failed: it could not record that it had.
 //
 // Local resources:
 //
@@ -66,6 +68,12 @@ const (
 	TypeProcessStarted events.Type = "platform.app.process_started"
 	// TypeProcessStopped is stated last, whatever the outcome.
 	TypeProcessStopped events.Type = "platform.app.process_stopped"
+
+	// TypeEpochAdvanced is stated when the instance begins a new incarnation.
+	TypeEpochAdvanced events.Type = "platform.app.epoch_advanced"
+	// TypeEpochAdvanceFailed is stated when a new incarnation could not be
+	// recorded in the instance's state file.
+	TypeEpochAdvanceFailed events.Type = "platform.app.epoch_advance_failed"
 
 	// TypeLeaseOpenFailed is stated when the ownership lease cannot be opened.
 	TypeLeaseOpenFailed events.Type = "platform.app.lease_open_failed"
@@ -138,6 +146,12 @@ type ProcessStarted struct {
 	// EventsFile is the mandatory local JSONL record this instance appends every
 	// event to. It is what an operator opens next.
 	EventsFile string `json:"events_file"`
+	// StateFile is the instance's durable state record, which carries the epoch
+	// below across restarts and crashes.
+	StateFile string `json:"state_file"`
+	// Epoch is this instance's incarnation number, already advanced for this
+	// process. It is what tells this run of the instance from the previous one.
+	Epoch uint64 `json:"epoch"`
 	// StandbyEnabled reports whether this machine deploys a warm standby.
 	StandbyEnabled bool `json:"standby_enabled"`
 }
@@ -156,6 +170,56 @@ func (ProcessStopped) EventType() events.Type { return TypeProcessStopped }
 
 // Severity reports a failed run as an error and a clean stop as routine.
 func (e ProcessStopped) Severity() events.Severity { return failureSeverity(e.Error) }
+
+// Why an instance began a new incarnation. The two reasons are the two moments
+// an instance becomes one: a fresh process, and taking Primary Ownership. A
+// step-down is deliberately not one of them; see package instancestate.
+const (
+	// EpochReasonProcessStarted is a new process, whether after a clean stop or a
+	// crash.
+	EpochReasonProcessStarted = "process_started"
+	// EpochReasonActivated is the instance taking Primary Ownership and beginning
+	// to serve.
+	EpochReasonActivated = "activated"
+)
+
+// EpochAdvanced states that the instance began a new incarnation.
+//
+// The epoch is monotonic for the whole life of a deployed instance, so reading
+// the last one an instance stated is reading which incarnation is current. Which
+// instance it is about is the envelope's origin.
+type EpochAdvanced struct {
+	// StateFile is the durable record the epoch was written to.
+	StateFile string `json:"state_file"`
+	// Epoch is the new incarnation number, one higher than the previous.
+	Epoch uint64 `json:"epoch"`
+	// Reason is why a new incarnation began, one of the EpochReason constants.
+	Reason string `json:"reason"`
+}
+
+// EventType returns the event's stable dotted kind.
+func (EpochAdvanced) EventType() events.Type { return TypeEpochAdvanced }
+
+// EpochAdvanceFailed states that a new incarnation could not be recorded.
+//
+// It is an error rather than a degradation. An instance whose epoch is not
+// durable cannot be ordered against its own past incarnations, so it stops
+// rather than running under a number a restart would hand out again.
+type EpochAdvanceFailed struct {
+	// StateFile is the durable record that could not be written.
+	StateFile string `json:"state_file"`
+	// Reason is which new incarnation was being recorded, one of the EpochReason
+	// constants.
+	Reason string `json:"reason"`
+	// Error is why it could not be recorded.
+	Error string `json:"error"`
+}
+
+// EventType returns the event's stable dotted kind.
+func (EpochAdvanceFailed) EventType() events.Type { return TypeEpochAdvanceFailed }
+
+// Severity reports an instance that cannot record its incarnation as an error.
+func (EpochAdvanceFailed) Severity() events.Severity { return events.SeverityError }
 
 // LeaseOpenFailed states that the Primary Ownership lease could not be opened.
 type LeaseOpenFailed struct {

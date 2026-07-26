@@ -13,10 +13,15 @@ import (
 // requires to be stated, and nothing else. Tests remove or corrupt one part at a
 // time rather than building a valid descriptor from scratch each time.
 const (
-	primaryJSON  = `"primary":{"data_dir":".data/platform/primary","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}`
-	standbyJSON  = `"standby":{"data_dir":".data/platform/standby","api_address":"127.0.0.1:8081",` + timeoutsJSON + `}`
+	primaryJSON  = `"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080",` + timeoutsJSON + `}`
+	standbyJSON  = `"standby":{` + standbyFilesJSON + `,"api_address":"127.0.0.1:8081",` + timeoutsJSON + `}`
 	timeoutsJSON = `"api_read_header_timeout":"5s","api_shutdown_timeout":"10s"`
-	leaseJSON    = `"lease":{"file":"D:/opdl/lease",` + leaseTimingsJSON + `}`
+	// The local files an instance owns. Each is stated on its own instance record,
+	// so a descriptor missing either is a startup failure rather than an instance
+	// that opens a path nothing authored.
+	primaryFilesJSON = `"events_file":".data/platform/primary/events.jsonl","state_file":".data/platform/primary/state.json"`
+	standbyFilesJSON = `"events_file":".data/platform/standby/events.jsonl","state_file":".data/platform/standby/state.json"`
+	leaseJSON        = `"lease":{"file":"D:/opdl/lease",` + leaseTimingsJSON + `}`
 	// leaseTimingsJSON are the timings a valid lease states, without the file.
 	leaseTimingsJSON = `"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s","lag_bound":"30s"`
 
@@ -37,21 +42,29 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 	}{
 		"missing primary": {json: `{` + standbyJSON + `,` + leaseJSON + `}`, err: "primary is required"},
 		"null primary":    {json: `{"primary":null}`, err: "primary is required"},
-		"missing primary data dir": {
-			json: `{"primary":{"api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
-			err:  "primary.data_dir is required",
+		"missing primary events file": {
+			json: `{"primary":{"state_file":".data/state.json","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
+			err:  "primary.events_file is required",
+		},
+		"missing primary state file": {
+			json: `{"primary":{"events_file":".data/events.jsonl","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
+			err:  "primary.state_file is required",
 		},
 		"missing primary read header timeout": {
-			json: `{"primary":{"data_dir":".data","api_shutdown_timeout":"10s"}}`,
+			json: `{"primary":{` + primaryFilesJSON + `,"api_shutdown_timeout":"10s"}}`,
 			err:  "primary.api_read_header_timeout is required",
 		},
 		"bad primary shutdown timeout": {
-			json: `{"primary":{"data_dir":".data","api_read_header_timeout":"5s","api_shutdown_timeout":"soon"}}`,
+			json: `{"primary":{` + primaryFilesJSON + `,"api_read_header_timeout":"5s","api_shutdown_timeout":"soon"}}`,
 			err:  "primary.api_shutdown_timeout",
 		},
-		"missing standby data dir": {
-			json: `{` + primaryJSON + `,"standby":{"api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
-			err:  "standby.data_dir is required",
+		"missing standby events file": {
+			json: `{` + primaryJSON + `,"standby":{"state_file":".data/standby/state.json","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			err:  "standby.events_file is required",
+		},
+		"missing standby state file": {
+			json: `{` + primaryJSON + `,"standby":{"events_file":".data/standby/events.jsonl","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			err:  "standby.state_file is required",
 		},
 		"lease without a standby": {
 			json: `{` + primaryJSON + `,` + leaseJSON + `}`,

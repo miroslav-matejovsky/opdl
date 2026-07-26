@@ -62,15 +62,48 @@ type Machine struct {
 // host, so every port either of them binds is its own. Nothing on a machine is
 // shared between them except the ownership lease, which is not a port.
 type Platform struct {
-	// DataDir is the Primary Instance's general platform data root. Required.
-	DataDir string `hcl:"data_dir,optional"`
+	// EventsFile is the Primary Instance's append-only local event record.
+	// Required. See InstanceFiles.
+	EventsFile string `hcl:"events_file,optional"`
+	// StateFile is the Primary Instance's durable state record, which carries its
+	// epoch counter. Required. See InstanceFiles.
+	StateFile string `hcl:"state_file,optional"`
 	// API is the Primary Instance's local API endpoint policy.
 	API *API `hcl:"api,block"`
 	// WinService is the Primary Instance's Windows Service identity.
 	WinService *WinService `hcl:"winservice,block"`
 	// Standby is the machine's local redundancy policy, and where a deployed
-	// Standby Instance states its own lock, data_dir, api, and winservice.
+	// Standby Instance states its own files, lease, api, and winservice.
 	Standby *Standby `hcl:"standby,block"`
+}
+
+// InstanceFiles are the files one instance owns on its machine's local disk.
+//
+// # Every file is authored, and none is derived
+//
+// These used to be one authored data_dir that the runtime composed paths under,
+// which meant a blueprint stated where an instance's data lived but not what
+// lived there. Each file is named outright instead, so an operator reading a
+// blueprint sees every path the instance will open, and adding a file to the
+// runtime is a blueprint change rather than a new convention nothing states.
+//
+// # They are an instance's, not a machine's
+//
+// A machine's two instances are independent runtimes that run at the same time
+// on one host, so each owns its own copies and no path may be shared between
+// them. The one local file the two instances do share is the ownership lease,
+// which is the machine's and is authored on the standby block; it is not one of
+// these.
+type InstanceFiles struct {
+	// EventsFile is the append-only JSON Lines record the instance appends every
+	// event it states to, including the ones about failing to start. It is the
+	// instance's whole local operational surface.
+	EventsFile string
+	// StateFile is the durable record the instance carries across restarts and
+	// crashes. It holds the instance's epoch counter, which advances by exactly
+	// one every time the process starts and every time the instance becomes
+	// Active, so a reader can tell one incarnation of an instance from the next.
+	StateFile string
 }
 
 // API is one instance's local API endpoint policy.
@@ -214,9 +247,13 @@ type Standby struct {
 	// Disabled opts the machine out of a second local process. It is required, so
 	// omitting the attribute cannot silently enable or disable redundancy.
 	Disabled bool `hcl:"disabled"`
-	// DataDir is the Standby Instance's general platform data root. It is
+	// EventsFile is the Standby Instance's append-only local event record. It is
 	// required when the Standby Instance is deployed and rejected when it is not.
-	DataDir string `hcl:"data_dir,optional"`
+	EventsFile string `hcl:"events_file,optional"`
+	// StateFile is the Standby Instance's durable state record, which carries its
+	// epoch counter. It is required when the Standby Instance is deployed and
+	// rejected when it is not.
+	StateFile string `hcl:"state_file,optional"`
 	// Lease is the machine's local Primary Ownership lease policy. It is required
 	// when the Standby Instance is deployed and rejected when it is not.
 	Lease *Lease `hcl:"lease,block"`
@@ -325,7 +362,7 @@ func validatePlatform(machine Machine) error {
 	if err := validateStandbyEndpoints(machine); err != nil {
 		return err
 	}
-	if err := validateDataDirs(machine); err != nil {
+	if err := validateInstanceFiles(machine); err != nil {
 		return err
 	}
 	if err := validateMachinePorts(machine); err != nil {
@@ -378,8 +415,11 @@ func validateStandbyEndpoints(machine Machine) error {
 	if !standby.Disabled {
 		return validateInstanceEndpoints(machine, "platform.standby", standby.API)
 	}
-	if strings.TrimSpace(standby.DataDir) != "" {
-		return fmt.Errorf("machine %q: platform.standby.data_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	if strings.TrimSpace(standby.EventsFile) != "" {
+		return fmt.Errorf("machine %q: platform.standby.events_file is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	}
+	if strings.TrimSpace(standby.StateFile) != "" {
+		return fmt.Errorf("machine %q: platform.standby.state_file is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
 	if standby.Lease != nil {
 		return fmt.Errorf("machine %q: platform.standby.lease is set but the standby is disabled; remove it or deploy the standby", machine.Name)
@@ -390,23 +430,63 @@ func validateStandbyEndpoints(machine Machine) error {
 	return nil
 }
 
-// validateDataDirs checks each deployed instance states its own platform data
-// root, and that a machine's two instances do not state the same one.
-func validateDataDirs(machine Machine) error {
-	if strings.TrimSpace(machine.Platform.DataDir) == "" {
-		return fmt.Errorf("machine %q: platform.data_dir is required", machine.Name)
+// validateInstanceFiles checks each deployed instance states every local file it
+// owns, and that a machine's two instances do not state the same path for any of
+// them.
+//
+// The paths are compared cleaned and case-insensitively because this repo is
+// Windows-only: two instances authored onto the same file under different
+// spellings would open the same file, and each would overwrite the other's
+// record with no error anywhere to say so.
+func validateInstanceFiles(machine Machine) error {
+	platform := machine.Platform
+	if strings.TrimSpace(platform.EventsFile) == "" {
+		return fmt.Errorf("machine %q: platform.events_file is required", machine.Name)
 	}
-	standby := machine.Platform.Standby
+	if strings.TrimSpace(platform.StateFile) == "" {
+		return fmt.Errorf("machine %q: platform.state_file is required", machine.Name)
+	}
+	if samePath(platform.EventsFile, platform.StateFile) {
+		return fmt.Errorf("machine %q: platform.events_file and platform.state_file are both %q; every file an instance owns needs its own path", machine.Name, platform.EventsFile)
+	}
+	standby := platform.Standby
 	if standby == nil || standby.Disabled {
 		return nil
 	}
-	if strings.TrimSpace(standby.DataDir) == "" {
-		return fmt.Errorf("machine %q: platform.standby.data_dir is required", machine.Name)
+	if strings.TrimSpace(standby.EventsFile) == "" {
+		return fmt.Errorf("machine %q: platform.standby.events_file is required", machine.Name)
 	}
-	if filepath.Clean(machine.Platform.DataDir) == filepath.Clean(standby.DataDir) {
-		return fmt.Errorf("machine %q: platform.data_dir and platform.standby.data_dir: the two instances run together and cannot share a platform data directory", machine.Name)
+	if strings.TrimSpace(standby.StateFile) == "" {
+		return fmt.Errorf("machine %q: platform.standby.state_file is required", machine.Name)
+	}
+	if samePath(standby.EventsFile, standby.StateFile) {
+		return fmt.Errorf("machine %q: platform.standby.events_file and platform.standby.state_file are both %q; every file an instance owns needs its own path", machine.Name, standby.EventsFile)
+	}
+	// Across the two instances every path must differ too: they run together on
+	// one host, so a shared path is two runtimes writing one file.
+	taken := map[string]string{}
+	for _, f := range []struct{ where, path string }{
+		{"platform.events_file", platform.EventsFile},
+		{"platform.state_file", platform.StateFile},
+		{"platform.standby.events_file", standby.EventsFile},
+		{"platform.standby.state_file", standby.StateFile},
+	} {
+		key := pathKey(f.path)
+		if owner, used := taken[key]; used {
+			return fmt.Errorf("machine %q: %s and %s are both %q; the two instances run together and cannot share a file", machine.Name, owner, f.where, f.path)
+		}
+		taken[key] = f.where
 	}
 	return nil
+}
+
+// samePath reports whether two authored paths name the same file on Windows.
+func samePath(a, b string) bool { return pathKey(a) == pathKey(b) }
+
+// pathKey normalizes an authored path for comparison: separators cleaned and
+// case folded, because Windows paths are case-insensitive.
+func pathKey(path string) string {
+	return strings.ToLower(filepath.Clean(strings.TrimSpace(path)))
 }
 
 func validateMachinePorts(machine Machine) error {
@@ -608,17 +688,23 @@ type Endpoints struct {
 	APIShutdownTimeout   string
 }
 
-// DataDir returns one instance's authored general platform data directory, or
-// an empty string when that instance is not deployed.
-func (m Machine) DataDir(standby bool) string {
+// Files returns one instance's authored local files, or the zero InstanceFiles
+// when that instance is not deployed.
+func (m Machine) Files(standby bool) InstanceFiles {
 	if m.Platform == nil {
-		return ""
+		return InstanceFiles{}
 	}
 	if !standby {
-		return strings.TrimSpace(m.Platform.DataDir)
+		return InstanceFiles{
+			EventsFile: strings.TrimSpace(m.Platform.EventsFile),
+			StateFile:  strings.TrimSpace(m.Platform.StateFile),
+		}
 	}
 	if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
-		return ""
+		return InstanceFiles{}
 	}
-	return strings.TrimSpace(m.Platform.Standby.DataDir)
+	return InstanceFiles{
+		EventsFile: strings.TrimSpace(m.Platform.Standby.EventsFile),
+		StateFile:  strings.TrimSpace(m.Platform.Standby.StateFile),
+	}
 }

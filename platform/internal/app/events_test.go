@@ -122,9 +122,35 @@ func TestApplicationEventsAreStampedIntoValidEnvelopes(t *testing.T) {
 	require.Equal(t, "node", waiting.Origin.Machine)
 	require.Equal(t, "primary", waiting.Origin.ProcessRole)
 
-	started, err := factory.Wrap(t.Context(), ProcessStarted{EventsFile: `D:\opdl\events\events.jsonl`})
+	started, err := factory.Wrap(t.Context(), ProcessStarted{
+		EventsFile: `D:\opdl\events\events.jsonl`,
+		StateFile:  `D:\opdl\state.json`,
+		Epoch:      3,
+	})
 	require.NoError(t, err)
 	require.NoError(t, started.Validate())
-	require.JSONEq(t, `{"events_file":"D:\\opdl\\events\\events.jsonl","standby_enabled":false}`, string(started.Data),
-		"a started process names the local record an operator opens next")
+	require.JSONEq(t, `{"events_file":"D:\\opdl\\events\\events.jsonl","state_file":"D:\\opdl\\state.json","epoch":3,"standby_enabled":false}`, string(started.Data),
+		"a started process names both local files and which incarnation of the instance it is")
+
+	// The epoch facts carry the counter and why it moved, so a reader of the
+	// record can order incarnations without holding the state file open.
+	advanced, err := factory.Wrap(t.Context(), EpochAdvanced{
+		StateFile: `D:\opdl\state.json`,
+		Epoch:     4,
+		Reason:    EpochReasonActivated,
+	})
+	require.NoError(t, err)
+	require.NoError(t, advanced.Validate())
+	require.Equal(t, events.SeverityInfo, advanced.Severity)
+	require.JSONEq(t, `{"state_file":"D:\\opdl\\state.json","epoch":4,"reason":"activated"}`, string(advanced.Data))
+
+	failedEpoch, err := factory.Wrap(t.Context(), EpochAdvanceFailed{
+		StateFile: `D:\opdl\state.json`,
+		Reason:    EpochReasonProcessStarted,
+		Error:     "disk full",
+	})
+	require.NoError(t, err)
+	require.NoError(t, failedEpoch.Validate())
+	require.Equal(t, events.SeverityError, failedEpoch.Severity,
+		"an instance that cannot record its incarnation stops, so this is not a degradation")
 }

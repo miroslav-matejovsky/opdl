@@ -10,16 +10,18 @@ import (
 
 // The fixture is a machine that deploys both instances, which is the shape the
 // rules are about: two independent runtimes on one host, each with its own
-// service, directory, and listener.
+// service, local files, and listener.
 const (
 	machineIP = "10.0.1.10"
 
 	// The api addresses are on loopback. The platform API is machine-local, and
 	// that is what the descriptor is checked against.
-	primaryAPI     = "127.0.0.1:8080"
-	primaryDataDir = "D:/opdl-data/sensor/primary"
-	standbyAPI     = "127.0.0.1:8081"
-	standbyDataDir = "D:/opdl-data/sensor/standby"
+	primaryAPI        = "127.0.0.1:8080"
+	primaryEventsFile = "D:/opdl-data/sensor/primary/events.jsonl"
+	primaryStateFile  = "D:/opdl-data/sensor/primary/state.json"
+	standbyAPI        = "127.0.0.1:8081"
+	standbyEventsFile = "D:/opdl-data/sensor/standby/events.jsonl"
+	standbyStateFile  = "D:/opdl-data/sensor/standby/state.json"
 )
 
 func validDescriptor() deployment.Descriptor {
@@ -34,14 +36,16 @@ func validDescriptor() deployment.Descriptor {
 		Services:       []string{"sensor-services"},
 		Primary: deployment.Instance{
 			Service:              &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
-			DataDir:              primaryDataDir,
+			EventsFile:           primaryEventsFile,
+			StateFile:            primaryStateFile,
 			APIAddress:           primaryAPI,
 			APIReadHeaderTimeout: "5s",
 			APIShutdownTimeout:   "10s",
 		},
 		Standby: &deployment.Instance{
 			Service:              &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
-			DataDir:              standbyDataDir,
+			EventsFile:           standbyEventsFile,
+			StateFile:            standbyStateFile,
 			APIAddress:           standbyAPI,
 			APIReadHeaderTimeout: "5s",
 			APIShutdownTimeout:   "10s",
@@ -85,15 +89,34 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing standby service name", func(d *deployment.Descriptor) { d.Standby.Service.Name = "" }, "standby.service.name is required"},
 		{"colliding service names", func(d *deployment.Descriptor) { d.Standby.Service.Name = d.Primary.Service.Name }, "share service name"},
 
-		// Per-instance endpoints and data directories.
+		// Per-instance endpoints and local files.
 		{"missing primary api address", func(d *deployment.Descriptor) { d.Primary.APIAddress = "" }, "primary.api_address is required"},
-		{"missing primary data dir", func(d *deployment.Descriptor) { d.Primary.DataDir = "" }, "primary.data_dir is required"},
+		{"missing primary events file", func(d *deployment.Descriptor) { d.Primary.EventsFile = "" }, "primary.events_file is required"},
+		{"missing primary state file", func(d *deployment.Descriptor) { d.Primary.StateFile = "" }, "primary.state_file is required"},
 		{"missing standby api address", func(d *deployment.Descriptor) { d.Standby.APIAddress = "" }, "standby.api_address is required"},
-		{"missing standby data dir", func(d *deployment.Descriptor) { d.Standby.DataDir = "" }, "standby.data_dir is required"},
+		{"missing standby events file", func(d *deployment.Descriptor) { d.Standby.EventsFile = "" }, "standby.events_file is required"},
+		{"missing standby state file", func(d *deployment.Descriptor) { d.Standby.StateFile = "" }, "standby.state_file is required"},
 		{
-			"instances share a platform data dir",
-			func(d *deployment.Descriptor) { d.Standby.DataDir = d.Primary.DataDir },
-			"cannot share a platform data directory",
+			"one instance points both its files at one path",
+			func(d *deployment.Descriptor) { d.Primary.StateFile = d.Primary.EventsFile },
+			"primary.events_file and primary.state_file are both",
+		},
+		{
+			"instances share an events file",
+			func(d *deployment.Descriptor) { d.Standby.EventsFile = d.Primary.EventsFile },
+			"primary.events_file and standby.events_file are both",
+		},
+		{
+			"instances share a state file",
+			func(d *deployment.Descriptor) { d.Standby.StateFile = d.Primary.StateFile },
+			"primary.state_file and standby.state_file are both",
+		},
+		{
+			// This repo is Windows-only, so two spellings of one path are one file
+			// and comparing them literally would let both instances open it.
+			"instances share a state file spelled differently",
+			func(d *deployment.Descriptor) { d.Standby.StateFile = `D:\OPDL-DATA\sensor\primary\STATE.JSON` },
+			"primary.state_file and standby.state_file are both",
 		},
 		{
 			"api address off loopback",

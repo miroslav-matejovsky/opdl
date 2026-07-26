@@ -17,7 +17,16 @@ project "customer-a" {
       # Instance, which is why its blocks need no wrapper, and the Standby
       # Instance is the optional one.
       #
-      # data_dir is the general platform data root for this instance.
+      # events_file and state_file are the local files this instance owns, named
+      # outright rather than composed under a data root, so every path the
+      # machine opens is visible here. events_file is the append-only record of
+      # everything the instance states, including failures to start. state_file
+      # is what it carries across restarts and crashes: it holds the instance's
+      # epoch, a counter that advances by one every time the process starts and
+      # every time the instance takes Primary Ownership, so one incarnation of an
+      # instance can be told from the next. No two of these paths may be the
+      # same, on either instance. The lease file is the exception and is not one
+      # of these: it is the machine's, and the two instances share it on purpose.
       #
       # api is the port this instance serves its local API on, and the timeouts
       # bounding that listener. It is called local_port because the builder joins
@@ -43,7 +52,8 @@ project "customer-a" {
       # site, so a second instance would add a process to operate without adding
       # site availability. Because it opts out, it states nothing further.
       platform {
-        data_dir = "D:/opdl/customer-a/north/sensor/primary"
+        events_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/north/sensor/primary/state.json"
 
         api {
           local_port = 8080
@@ -76,7 +86,8 @@ project "customer-a" {
       # ports is the mistake this shape invites. The builder rejects it and names
       # both listeners.
       platform {
-        data_dir = "D:/opdl/customer-a/north/local-server/primary"
+        events_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/north/local-server/primary/state.json"
 
         api {
           local_port = 8080
@@ -91,7 +102,8 @@ project "customer-a" {
 
         standby {
           disabled = false
-          data_dir = "D:/opdl/customer-a/north/local-server/standby"
+          events_file = "D:/opdl/customer-a/north/local-server/standby/events.jsonl"
+          state_file  = "D:/opdl/customer-a/north/local-server/standby/state.json"
 
           # lease is mandatory when standby is enabled (disabled = false). The
           # machine's two instances coordinate Primary Ownership through this
@@ -136,7 +148,8 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
-        data_dir = "D:/opdl/customer-a/control-room/master/primary"
+        events_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/control-room/master/primary/state.json"
 
         api {
           local_port = 8080
@@ -151,7 +164,8 @@ project "customer-a" {
 
         standby {
           disabled = false
-          data_dir = "D:/opdl/customer-a/control-room/master/standby"
+          events_file = "D:/opdl/customer-a/control-room/master/standby/events.jsonl"
+          state_file  = "D:/opdl/customer-a/control-room/master/standby/state.json"
 
           lease {
             file                   = "D:/opdl/customer-a/control-room/master/lease"
@@ -181,7 +195,8 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
-        data_dir = "D:/opdl/customer-a/control-room/slave/primary"
+        events_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/control-room/slave/primary/state.json"
 
         api {
           local_port = 8080
@@ -196,7 +211,8 @@ project "customer-a" {
 
         standby {
           disabled = false
-          data_dir = "D:/opdl/customer-a/control-room/slave/standby"
+          events_file = "D:/opdl/customer-a/control-room/slave/standby/events.jsonl"
+          state_file  = "D:/opdl/customer-a/control-room/slave/standby/state.json"
 
           lease {
             file                   = "D:/opdl/customer-a/control-room/slave/lease"
@@ -226,7 +242,8 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
-        data_dir = "D:/opdl/customer-a/control-room/integration/primary"
+        events_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
+        state_file  = "D:/opdl/customer-a/control-room/integration/primary/state.json"
 
         api {
           local_port = 8080
@@ -241,7 +258,8 @@ project "customer-a" {
 
         standby {
           disabled = false
-          data_dir = "D:/opdl/customer-a/control-room/integration/standby"
+          events_file = "D:/opdl/customer-a/control-room/integration/standby/events.jsonl"
+          state_file  = "D:/opdl/customer-a/control-room/integration/standby/state.json"
 
           lease {
             file                   = "D:/opdl/customer-a/control-room/integration/lease"

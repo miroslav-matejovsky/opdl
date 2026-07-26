@@ -15,7 +15,8 @@ project "buildtest" {
       services = ["test-services"]
 
       platform {
-        data_dir    = "D:/opdl/buildtest/solo/node-a/primary"
+        events_file = "D:/opdl/buildtest/solo/node-a/primary/events.jsonl"
+        state_file  = "D:/opdl/buildtest/solo/node-a/primary/state.json"
 
         api {
           local_port = 8080
@@ -40,7 +41,8 @@ project "buildtest" {
       services = ["test-services"]
 
       platform {
-        data_dir    = "D:/opdl/buildtest/solo/node-b/primary"
+        events_file = "D:/opdl/buildtest/solo/node-b/primary/events.jsonl"
+        state_file  = "D:/opdl/buildtest/solo/node-b/primary/state.json"
 
         api {
           local_port = 8080
@@ -55,7 +57,8 @@ project "buildtest" {
 
         standby {
           disabled    = false
-          data_dir    = "D:/opdl/buildtest/solo/node-b/standby"
+          events_file = "D:/opdl/buildtest/solo/node-b/standby/events.jsonl"
+          state_file  = "D:/opdl/buildtest/solo/node-b/standby/state.json"
 
           lease {
             file                   = "D:/opdl/buildtest/solo/node-b/lease"

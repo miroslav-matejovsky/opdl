@@ -32,14 +32,16 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 			FailbackStabilization: "30s",
 			LagBound:              "30s",
 		}
-		standby.DataDir = dataDir(name, "standby")
+		standby.EventsFile = eventsFile(name, "standby")
+		standby.StateFile = stateFile(name, "standby")
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	}
 	return blueprint.Machine{
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
 		Platform: &blueprint.Platform{
-			DataDir:    dataDir(name, "primary"),
+			EventsFile: eventsFile(name, "primary"),
+			StateFile:  stateFile(name, "primary"),
 			API:        &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 			WinService: &blueprint.WinService{Name: name + "-primary"},
 			Standby:    standby,
@@ -47,9 +49,14 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	}
 }
 
-// dataDir is one instance's general platform data root.
-func dataDir(machine, role string) string {
-	return fmt.Sprintf("D:/opdl-data/%s/%s", machine, role)
+// eventsFile is one instance's append-only event record.
+func eventsFile(machine, role string) string {
+	return fmt.Sprintf("D:/opdl-data/%s/%s/events.jsonl", machine, role)
+}
+
+// stateFile is one instance's durable state record.
+func stateFile(machine, role string) string {
+	return fmt.Sprintf("D:/opdl-data/%s/%s/state.json", machine, role)
 }
 
 // companion is a second machine carrying a Standby Instance, for fixtures whose
@@ -116,6 +123,28 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.Equal(t, "10.0.1.10", m.IP)
 	require.Equal(t, []string{"sensor-services"}, m.Services)
 	require.NotEmpty(t, m.Primary.APIAddress, "a machine always deploys a primary process")
+	// The authored paths are carried whole. Nothing here composes them, so a
+	// resolver that derived a path would show up as a mismatch rather than as a
+	// runtime that quietly wrote somewhere else.
+	require.Equal(t, eventsFile("sensor", "primary"), m.Primary.EventsFile)
+	require.Equal(t, stateFile("sensor", "primary"), m.Primary.StateFile)
+}
+
+// TestBuildCarriesInstanceFiles checks each deployed instance's own files reach
+// its own record, and that an undeployed instance carries none. Both instances
+// are checked because a resolver that read the primary's paths for both would
+// produce a descriptor that looks complete and puts two runtimes on one file.
+func TestBuildCarriesInstanceFiles(t *testing.T) {
+	p := projectOf(blueprint.Site{Name: "north", Machines: []blueprint.Machine{machine("node-a", "10.0.1.10", false), companion()}})
+	plan, err := resolve.Build(p, "acme-opdl")
+	require.NoError(t, err)
+
+	m := plan.Machines[0]
+	require.Equal(t, eventsFile("node-a", "primary"), m.Primary.EventsFile)
+	require.Equal(t, stateFile("node-a", "primary"), m.Primary.StateFile)
+	require.NotNil(t, m.Standby)
+	require.Equal(t, eventsFile("node-a", "standby"), m.Standby.EventsFile)
+	require.Equal(t, stateFile("node-a", "standby"), m.Standby.StateFile)
 }
 
 // TestBuildCopiesStandbyDecision checks the resolved descriptor carries a standby

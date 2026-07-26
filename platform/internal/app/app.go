@@ -13,6 +13,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
 
@@ -55,7 +56,7 @@ func Run(args []string) (runErr error) {
 	// does, and it is mandatory: every fact the process states has to reach it,
 	// including the ones about failing to start. It is opened here rather than
 	// with the site because it has to outlive every site the process composes.
-	record, err := jsonl.New(instanceOf(descriptor, role).DataDir)
+	record, err := jsonl.New(instanceOf(descriptor, role).EventsFile)
 	if err != nil {
 		return err
 	}
@@ -67,6 +68,24 @@ func Run(args []string) (runErr error) {
 	// every site has released and every other deferred stop has run.
 	defer func() { runErr = errors.Join(runErr, local.Close(context.Background())) }()
 
+	// This process is a new incarnation of the instance, so the epoch advances
+	// before it does anything else. It is opened after the record so that a state
+	// file that will not read is itself a fact this process can state, and
+	// advanced before the process states anything, so no fact this incarnation
+	// ever writes carries the previous incarnation's epoch.
+	state, err := instancestate.Open(instanceOf(descriptor, role).StateFile)
+	if err != nil {
+		return err
+	}
+	epoch, err := state.Advance()
+	if err != nil {
+		return errors.Join(err, local.Publish(context.Background(), EpochAdvanceFailed{
+			StateFile: state.Path(),
+			Reason:    EpochReasonProcessStarted,
+			Error:     err.Error(),
+		}))
+	}
+
 	fmt.Println(cfg.Summary(role == redundancy.RoleStandby))
 	// The service name lets an operator match this process to an entry in the
 	// services list. The platform manages no services; it only reports which one
@@ -76,6 +95,10 @@ func Run(args []string) (runErr error) {
 		serviceName = service.Name
 	}
 	fmt.Printf("    instance     role=%s standby=%t service=%s\n", role, descriptor.HasStandby(), serviceName)
+	// The epoch tells one incarnation of this instance from the previous one,
+	// which nothing else in this block can: every other value here is the same
+	// after a crash as it was before.
+	fmt.Printf("    epoch        %d (%s)\n", epoch, state.Path())
 
 	// os.Interrupt is the only signal Windows delivers: the runtime raises it for
 	// CTRL_C_EVENT and CTRL_BREAK_EVENT, which is how the service manager and the
@@ -91,10 +114,13 @@ func Run(args []string) (runErr error) {
 		factory:    factory,
 		local:      local,
 		record:     record,
+		state:      state,
 	}
 
 	if err := local.Publish(ctx, ProcessStarted{
 		EventsFile:     record.Path(),
+		StateFile:      state.Path(),
+		Epoch:          epoch,
 		StandbyEnabled: descriptor.HasStandby(),
 	}); err != nil {
 		return err

@@ -3,6 +3,7 @@ package deployment
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -157,8 +158,15 @@ type Instance struct {
 	// whoever installs the services; the runtime does not read it and the platform
 	// manages no services.
 	Service *WinService `json:"service,omitempty"`
-	// DataDir is the instance's own general platform data root.
-	DataDir string `json:"data_dir"`
+	// EventsFile is the instance's own append-only JSON Lines event record: the
+	// local file it appends every fact it states to, including the ones about
+	// failing to start.
+	EventsFile string `json:"events_file"`
+	// StateFile is the instance's own durable state record, carried across
+	// restarts and crashes. It holds the instance's epoch counter, which advances
+	// by exactly one every time the process starts and every time the instance
+	// becomes Active.
+	StateFile string `json:"state_file"`
 	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
 	// the instance's authored api local_port.
 	//
@@ -286,9 +294,20 @@ func (d Descriptor) validateEndpoints() error {
 	if err := validateInstanceEndpoints("standby", *d.Standby); err != nil {
 		return err
 	}
-	if d.Primary.DataDir == d.Standby.DataDir {
-		return fmt.Errorf("primary.data_dir and standby.data_dir are both %q; the two instances run together and cannot share a platform data directory",
-			d.Primary.DataDir)
+	// Every local file belongs to exactly one instance. The two run together on
+	// one host, so a path resolved onto both is two runtimes writing one file.
+	taken := map[string]string{}
+	for _, f := range []struct{ where, path string }{
+		{"primary.events_file", d.Primary.EventsFile},
+		{"primary.state_file", d.Primary.StateFile},
+		{"standby.events_file", d.Standby.EventsFile},
+		{"standby.state_file", d.Standby.StateFile},
+	} {
+		key := pathKey(f.path)
+		if owner, used := taken[key]; used {
+			return fmt.Errorf("%s and %s are both %q; every file an instance owns needs its own path", owner, f.where, f.path)
+		}
+		taken[key] = f.where
 	}
 	if d.Primary.APIAddress == d.Standby.APIAddress {
 		return fmt.Errorf("primary.api_address and standby.api_address are both %q; the two instances run together and cannot share a listener",
@@ -304,14 +323,27 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	if err := requireLoopback(prefix+".api_address", instance.APIAddress); err != nil {
 		return err
 	}
-	if strings.TrimSpace(instance.DataDir) == "" {
-		return fmt.Errorf("%s.data_dir is required", prefix)
+	if strings.TrimSpace(instance.EventsFile) == "" {
+		return fmt.Errorf("%s.events_file is required", prefix)
+	}
+	if strings.TrimSpace(instance.StateFile) == "" {
+		return fmt.Errorf("%s.state_file is required", prefix)
+	}
+	if pathKey(instance.EventsFile) == pathKey(instance.StateFile) {
+		return fmt.Errorf("%s.events_file and %s.state_file are both %q; every file an instance owns needs its own path", prefix, prefix, instance.EventsFile)
 	}
 	if _, err := validatePositiveDuration(prefix+".api_read_header_timeout", instance.APIReadHeaderTimeout); err != nil {
 		return err
 	}
 	_, err := validatePositiveDuration(prefix+".api_shutdown_timeout", instance.APIShutdownTimeout)
 	return err
+}
+
+// pathKey normalizes a resolved path for comparison. This repo is Windows-only,
+// so two paths that differ only in separators or case name one file, and
+// comparing them literally would let a descriptor resolve two instances onto it.
+func pathKey(path string) string {
+	return strings.ToLower(filepath.Clean(strings.TrimSpace(path)))
 }
 
 // requireAddress checks a required host:port field is present and usable.

@@ -17,6 +17,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
@@ -88,7 +89,8 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	onFreePort := func(role config.PlatformInstanceRole) config.Instance {
 		instance := descriptor.Instance(role)
 		instance.APIAddress = freeAddress(t)
-		instance.DataDir = filepath.Join(dataRoot, string(role))
+		instance.EventsFile = filepath.Join(dataRoot, string(role), "events.jsonl")
+		instance.StateFile = filepath.Join(dataRoot, string(role), "state.json")
 		return instance
 	}
 	descriptor.Primary = onFreePort(config.RolePrimary)
@@ -111,12 +113,14 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 	t.Helper()
 	factory, err := events.NewFactory(descriptor, role.String())
 	require.NoError(t, err)
-	record, err := jsonl.New(instanceOf(descriptor, role).DataDir)
+	record, err := jsonl.New(instanceOf(descriptor, role).EventsFile)
 	if err != nil {
 		return process{}, err
 	}
 	t.Cleanup(func() { _ = record.Close(context.Background()) })
 	local, err := storage.NewPublisher(factory, record)
+	require.NoError(t, err)
+	state, err := instancestate.Open(instanceOf(descriptor, role).StateFile)
 	require.NoError(t, err)
 	return process{
 		descriptor: descriptor,
@@ -125,6 +129,7 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 		factory:    factory,
 		local:      local,
 		record:     record,
+		state:      state,
 	}, nil
 }
 
@@ -330,20 +335,20 @@ func TestRunRequiresAnInstanceRole(t *testing.T) {
 	require.ErrorContains(t, Run(nil), "-instance primary|standby is required")
 }
 
-// TestOpenReportsUnusableJsonlDataDir checks a process fails at startup when the
-// local record's data directory cannot be created. The record is mandatory and
-// is opened before anything else, because every fact this process states has to
-// reach it, including the ones about failing to start.
-func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
+// TestOpenReportsUnusableEventsFile checks a process fails at startup when the
+// local record cannot be opened. The record is mandatory and is opened before
+// anything else, because every fact this process states has to reach it,
+// including the ones about failing to start.
+func TestOpenReportsUnusableEventsFile(t *testing.T) {
 	dir := t.TempDir()
 	cfg := loadConfig(t)
 
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
 	descriptor := descriptorOnFreePorts(t, cfg)
-	// Sabotage the DataDir: the JSONL backend will try to create a subdirectory
-	// under it, which will fail because blocked is a file, not a directory.
-	descriptor.Primary.DataDir = blocked
+	// Sabotage the events file: the JSONL backend will try to create its parent
+	// directory, which will fail because blocked is a file, not a directory.
+	descriptor.Primary.EventsFile = filepath.Join(blocked, "events.jsonl")
 
 	_, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "jsonl:", "the failure identifies the JSONL backend")

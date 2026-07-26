@@ -39,7 +39,7 @@ func checkContractsMatch() error {
 
 // The fixture is one machine deploying both instances. That shape exercises what
 // the contract has to carry: two independent runtimes on one machine, each with
-// its own directory, its own listener, and its own bounds on that listener.
+// its own local files, its own listener, and its own bounds on that listener.
 const (
 	site      = "north"
 	machine   = "sensor"
@@ -48,10 +48,14 @@ const (
 	// The api addresses are on loopback. That is the contract: the platform API
 	// is machine-local, so it is resolved onto 127.0.0.1 and never onto the
 	// machine ip.
-	dataDir        = "D:/opdl/customer-a/north/sensor/primary"
-	apiAddr        = "127.0.0.1:8080"
-	standbyDataDir = "D:/opdl/customer-a/north/sensor/standby"
-	standbyAPIAddr = "127.0.0.1:8081"
+	// Each instance names every local file it owns outright, so a round trip that
+	// dropped one, or resolved both instances onto the same path, would fail.
+	eventsFile        = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
+	stateFile         = "D:/opdl/customer-a/north/sensor/primary/state.json"
+	apiAddr           = "127.0.0.1:8080"
+	standbyEventsFile = "D:/opdl/customer-a/north/sensor/standby/events.jsonl"
+	standbyStateFile  = "D:/opdl/customer-a/north/sensor/standby/state.json"
+	standbyAPIAddr    = "127.0.0.1:8081"
 
 	// The listener timeouts are on the instance record for the same reason the
 	// api address is: the two instances bind their own listeners. They differ
@@ -94,13 +98,15 @@ func checkRoundTripFor(hasStandby bool) error {
 	var wantLease *platformconfig.Lease
 	if hasStandby {
 		builtStandby = &builderdeployment.Instance{
-			DataDir:              standbyDataDir,
+			EventsFile:           standbyEventsFile,
+			StateFile:            standbyStateFile,
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
 		}
 		wantStandby = &platformconfig.Instance{
-			DataDir:              standbyDataDir,
+			EventsFile:           standbyEventsFile,
+			StateFile:            standbyStateFile,
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
@@ -133,7 +139,8 @@ func checkRoundTripFor(hasStandby bool) error {
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
 		Primary: builderdeployment.Instance{
-			DataDir:              dataDir,
+			EventsFile:           eventsFile,
+			StateFile:            stateFile,
 			APIAddress:           apiAddr,
 			APIReadHeaderTimeout: readHeaderTimeout,
 			APIShutdownTimeout:   shutdownTimeout,
@@ -165,7 +172,8 @@ func checkRoundTripFor(hasStandby bool) error {
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
 		Primary: platformconfig.Instance{
-			DataDir:              dataDir,
+			EventsFile:           eventsFile,
+			StateFile:            stateFile,
 			APIAddress:           apiAddr,
 			APIReadHeaderTimeout: readHeaderTimeout,
 			APIShutdownTimeout:   shutdownTimeout,
@@ -198,10 +206,11 @@ func checkWireShape(data []byte, hasStandby bool) error {
 		return err
 	}
 
-	// The endpoints an instance binds belong to that instance.
-	for _, field := range []string{"data_dir", "api_address"} {
+	// The endpoints an instance binds and the files it owns belong to that
+	// instance.
+	for _, field := range []string{"events_file", "state_file", "api_address"} {
 		if _, ok := wire[field]; ok {
-			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints belong to an instance", field)
+			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints and local files belong to an instance", field)
 		}
 	}
 	return verifyWireLease(wire, hasStandby)
@@ -224,7 +233,7 @@ func checkWireInstance(wire map[string]json.RawMessage, role string, deployed bo
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
-	for _, field := range []string{"data_dir", "api_address", "api_read_header_timeout", "api_shutdown_timeout"} {
+	for _, field := range []string{"events_file", "state_file", "api_address", "api_read_header_timeout", "api_shutdown_timeout"} {
 		if _, ok := fields[field]; !ok {
 			return fmt.Errorf("builder descriptor omitted %s.%s", role, field)
 		}
