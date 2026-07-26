@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 
 // Run starts the platform runtime with the given command-line arguments. It
@@ -73,15 +73,15 @@ func Run(args []string) (runErr error) {
 	// file that will not read is itself a fact this process can state, and
 	// advanced before the process states anything, so no fact this incarnation
 	// ever writes carries the previous incarnation's epoch.
-	state, err := instancestate.Open(instanceOf(descriptor, role).StateFile)
+	stateStore, err := state.Open(instanceOf(descriptor, role).StateFile)
 	if err != nil {
 		return err
 	}
-	incarnation, err := state.Advance(instancestate.ReasonProcessStarted)
+	incarnation, err := stateStore.Advance(state.ReasonProcessStarted)
 	if err != nil {
 		return errors.Join(err, local.Publish(context.Background(), EpochAdvanceFailed{
-			StateFile: state.Path(),
-			Reason:    string(instancestate.ReasonProcessStarted),
+			StateFile: stateStore.Path(),
+			Reason:    string(state.ReasonProcessStarted),
 			Error:     err.Error(),
 		}))
 	}
@@ -101,7 +101,7 @@ func Run(args []string) (runErr error) {
 	// because they are what say whether this machine keeps restarting or keeps
 	// changing hands.
 	fmt.Printf("    epoch        %d (starts %d, activations %d) %s\n",
-		incarnation.Epoch, incarnation.ProcessEpoch.Count, incarnation.ActivationEpoch.Count, state.Path())
+		incarnation.Epoch, incarnation.ProcessEpoch.Count, incarnation.ActivationEpoch.Count, stateStore.Path())
 
 	// os.Interrupt is the only signal Windows delivers: the runtime raises it for
 	// CTRL_C_EVENT and CTRL_BREAK_EVENT, which is how the service manager and the
@@ -117,12 +117,12 @@ func Run(args []string) (runErr error) {
 		factory:    factory,
 		local:      local,
 		record:     record,
-		state:      state,
+		state:      stateStore,
 	}
 
 	if err := local.Publish(ctx, ProcessStarted{
 		EventsFile:     record.Path(),
-		StateFile:      state.Path(),
+		StateFile:      stateStore.Path(),
 		Epoch:          incarnation.Epoch,
 		StandbyEnabled: descriptor.HasStandby(),
 	}); err != nil {
@@ -132,7 +132,7 @@ func Run(args []string) (runErr error) {
 	// starting, and stated at all so that every advance of either kind is one
 	// platform.app.epoch_advanced: a reader following that type alone sees every
 	// incarnation this instance has had, not every one except its launches.
-	if err := local.Publish(ctx, epochAdvanced(state.Path(), instancestate.ReasonProcessStarted, incarnation)); err != nil {
+	if err := local.Publish(ctx, epochAdvanced(stateStore.Path(), state.ReasonProcessStarted, incarnation)); err != nil {
 		return err
 	}
 

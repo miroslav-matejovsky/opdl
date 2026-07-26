@@ -9,7 +9,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 )
 
 // ServingMode states what surface this instance's handler serves.

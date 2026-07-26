@@ -2,9 +2,10 @@ package app
 
 import (
 	"context"
+
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/registration"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 )
 
 type site struct {

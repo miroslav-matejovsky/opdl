@@ -1,6 +1,9 @@
 # Remove build artifacts, test results, and .exe files from repo
 . (Join-Path $PSScriptRoot "modules.ps1")
 
+# this script is called from Taskfile, so the initial message is printed by Taskfile, not here
+# Write-Host "clean starting"
+
 $foldersToRemove = @(".test-results", ".cache", ".runs", "site", "bin", "dist", ".tmp")
 
 $locations = @($RepoRoot) + ($Modules | ForEach-Object { Join-Path $RepoRoot $_ })

@@ -7,7 +7,7 @@
 > journal-less handler: health and `GET /instance` answer, and every operation
 > below is refused with a reason naming the deployment rather than the instance.
 > This page describes the target design and the contract the code in
-> `internal/registration` still implements against. Restoring it is blocked on
+> `internal/site/registration` still implements against. Restoring it is blocked on
 > the replacement distribution mechanism; see the TODO in
 > [`01-architecture.md`](01-architecture.md).
 

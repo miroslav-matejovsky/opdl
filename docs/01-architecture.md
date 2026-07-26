@@ -70,11 +70,11 @@ setting has two sources needing a precedence rule to tell them apart.
 | Boundary | Responsibility |
 | --- | --- |
 | `internal/httpapi` | Decodes and encodes the public HTTP contract. It does not decide registration state. |
-| `internal/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
-| `internal/events` | Owns the event contract, envelope, factory, and producer-facing publisher interface. |
-| `internal/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
-| `internal/events/storage/jsonl` | Writes the mandatory process-local JSONL record under the instance data root. |
-| `internal/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
+| `internal/site/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
+| `internal/instance/events` | Owns the event contract, envelope, factory, and producer-facing publisher interface. |
+| `internal/instance/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
+| `internal/instance/events/storage/jsonl` | Writes the mandatory process-local JSONL record under the instance data root. |
+| `internal/machine/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
 
 ## Event Fabric contract
 
@@ -85,7 +85,7 @@ setting has two sources needing a precedence rule to tell them apart.
 > - no deployment has event storage. `app.hasEventStorage` is hardcoded false, so
 >   every instance takes the journal-less path, opens no site, and runs no
 >   projection or readiness monitor.
-> - **registration is blocked on this.** `internal/registration` is built around
+> - **registration is blocked on this.** `internal/site/registration` is built around
 >   a publisher, a projector, and a durable handler over the site journal, so with
 >   no journal every domain operation is refused with a reason naming the
 >   deployment rather than the instance. See `docs/02-registration.md`.
@@ -267,11 +267,11 @@ hold everywhere:
 
 | Package | Events | Written to |
 | --- | --- | --- |
-| `internal/registration` | `platform.registration.proposed`, `confirmed`, `rejected`, `accepted` | JSONL and site journal |
+| `internal/site/registration` | `platform.registration.proposed`, `confirmed`, `rejected`, `accepted` | JSONL and site journal |
 | `internal/app` | `platform.app.<fact>`: process, status, API, standby, projection, and site transitions | JSONL |
-| `internal/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | JSONL |
+| `internal/machine/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | JSONL |
 
-`internal/events` owns the contract and the envelope and declares no events of
+`internal/instance/events` owns the contract and the envelope and declares no events of
 its own. An event payload implements one method, `EventType`, and implements a
 small optional interface only where it differs from a default: a schema version
 other than `1`, a severity other than `info`, tags, or a domain-stable identity.

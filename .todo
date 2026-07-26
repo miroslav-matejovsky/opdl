@@ -17,4 +17,3 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
   ownership object name, and Global\ unavailable through missing privilege.
 - failover percentiles from more than one Windows host, per docs/backlog/redundancy.md.
 - refactor app package and move lock under redundancy
-- do not log skipped tests in detail
