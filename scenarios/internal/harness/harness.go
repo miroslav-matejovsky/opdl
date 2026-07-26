@@ -88,15 +88,17 @@ var projectFixtures = map[string][]machineFixture{
 type renderedMachine struct {
 	Name string
 	IP   string
-	// The Primary Instance's ports and data directory.
-	APIPort int
-	DataDir string
+	// The Primary Instance's port and local files.
+	APIPort    int
+	EventsFile string
+	StateFile  string
 	// The Standby Instance's, empty or zero when the machine deploys none. The
 	// two instances run together on one host, so every one of these is its own
-	// listener or directory and none may repeat.
-	StandbyAPIPort  int
-	StandbyDataDir  string
-	StandbyDisabled bool
+	// listener or file and none may repeat.
+	StandbyAPIPort    int
+	StandbyEventsFile string
+	StandbyStateFile  string
+	StandbyDisabled   bool
 	// LeaseFile is the machine-wide Primary Ownership lease file both instances
 	// share, set only when the machine deploys a standby.
 	LeaseFile string
@@ -236,9 +238,22 @@ const (
 	RoleStandby = "standby"
 )
 
-// dataDirFor is one instance's own platform data root.
-func dataDirFor(workDir, machine, role string) string {
+// instanceDirFor is where one instance's own local files are rendered. It is a
+// harness convention only: the blueprint names every file outright, and this is
+// just how the harness keeps each instance of each machine apart on a host that
+// several scenarios share.
+func instanceDirFor(workDir, machine, role string) string {
 	return filepath.ToSlash(filepath.Join(workDir, "data-"+machine, role))
+}
+
+// eventsFileFor is one instance's append-only event record.
+func eventsFileFor(workDir, machine, role string) string {
+	return instanceDirFor(workDir, machine, role) + "/events.jsonl"
+}
+
+// stateFileFor is one instance's durable state record, which carries its epoch.
+func stateFileFor(workDir, machine, role string) string {
+	return instanceDirFor(workDir, machine, role) + "/state.json"
 }
 
 // leaseFileFor is a machine's Primary Ownership lease file, shared by its two
@@ -277,12 +292,14 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 			Name:            fixture.name,
 			IP:              fixture.ip,
 			APIPort:         takeAPIPort(),
-			DataDir:         dataDirFor(workDir, fixture.name, RolePrimary),
+			EventsFile:      eventsFileFor(workDir, fixture.name, RolePrimary),
+			StateFile:       stateFileFor(workDir, fixture.name, RolePrimary),
 			StandbyDisabled: fixture.standbyDisabled,
 		}
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
-			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, RoleStandby)
+			machine.StandbyEventsFile = eventsFileFor(workDir, fixture.name, RoleStandby)
+			machine.StandbyStateFile = stateFileFor(workDir, fixture.name, RoleStandby)
 			machine.LeaseFile = leaseFileFor(workDir, fixture.name)
 		}
 		data.Machines = append(data.Machines, machine)
@@ -365,24 +382,28 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 	return manifest
 }
 
-// Sockets are one machine's addresses and its local directories.
+// Sockets are one machine's addresses and its local files.
 //
 // Every value was rendered into the blueprint before the build and is carried
 // only so a scenario can reach a machine, inspect its event record, and assert
 // what the deployment derived. Nothing here is written beside the binary: the
 // blueprint is the only place these are stated, and the build compiles them in.
 //
-// The API address and each instance's data directory are an instance's rather
-// than a machine's, so the descriptor resolves them per instance.
+// The API address and each instance's local files are an instance's rather than
+// a machine's, so the descriptor resolves them per instance.
 //
-// The two data directories are how a scenario reads what an instance stated:
-// each one holds that instance's events/events.jsonl. See operationEvents.
+// The events files are how a scenario reads what an instance stated; the state
+// files are how it reads which incarnation an instance is on. See
+// operationEvents and InstanceEpoch.
 //
 // There is no monitor address. Each instance's event record is the local
 // operational surface.
 type Sockets struct {
-	DataDir        string
-	StandbyDataDir string
+	EventsFile string
+	StateFile  string
+	// The Standby Instance's own, empty on a machine that deploys no standby.
+	StandbyEventsFile string
+	StandbyStateFile  string
 
 	// API and StandbyAPI are the blueprint's, for reaching a machine and for
 	// assertions.
@@ -421,16 +442,18 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	for _, fixture := range fixtures {
 		reserved := endpoints[fixture.name]
 		sockets := Sockets{
-			// The Primary Instance's general data root, matching the path authored
+			// The Primary Instance's own local files, matching the paths authored
 			// in the blueprint.
-			DataDir: filepath.FromSlash(dataDirFor(workDir, fixture.name, RolePrimary)),
+			EventsFile: filepath.FromSlash(eventsFileFor(workDir, fixture.name, RolePrimary)),
+			StateFile:  filepath.FromSlash(stateFileFor(workDir, fixture.name, RolePrimary)),
 			// The API address the builder resolved: this machine's authored
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
 			// than at an address it chose, because it no longer chooses one.
 			API: net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
 		}
 		if !fixture.standbyDisabled {
-			sockets.StandbyDataDir = filepath.FromSlash(dataDirFor(workDir, fixture.name, RoleStandby))
+			sockets.StandbyEventsFile = filepath.FromSlash(eventsFileFor(workDir, fixture.name, RoleStandby))
+			sockets.StandbyStateFile = filepath.FromSlash(stateFileFor(workDir, fixture.name, RoleStandby))
 			sockets.StandbyAPI = net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.standbyAPIPort))
 		}
 		s.Machines = append(s.Machines, prepareMachine(t, s, fixture.name, sockets))
@@ -576,9 +599,9 @@ func WaitFor(t *testing.T, what string, timeout, interval time.Duration, cond fu
 // operationEvents reads each deployed instance's canonical JSONL event record.
 // Restarts append to the same per-instance file.
 func operationEvents(m *Machine) string {
-	paths := []string{filepath.Join(m.Sockets.DataDir, "events", "events.jsonl")}
-	if m.Sockets.StandbyDataDir != "" {
-		paths = append(paths, filepath.Join(m.Sockets.StandbyDataDir, "events", "events.jsonl"))
+	paths := []string{m.Sockets.EventsFile}
+	if m.Sockets.StandbyEventsFile != "" {
+		paths = append(paths, m.Sockets.StandbyEventsFile)
 	}
 	var b strings.Builder
 	for _, path := range paths {
@@ -596,6 +619,47 @@ func operationEvents(m *Machine) string {
 		return "(none)\n"
 	}
 	return b.String()
+}
+
+// InstanceEpochs is what an instance's state file says about its incarnations:
+// the total, and how that total was reached.
+type InstanceEpochs struct {
+	// Epoch is how many incarnations the instance has had, of both kinds.
+	Epoch uint64
+	// Process is how many times it has been launched.
+	Process uint64
+	// Activation is how many times it has taken Primary Ownership.
+	Activation uint64
+}
+
+// InstanceEpoch reads one instance's epochs out of its state file.
+//
+// The epoch is how a scenario tells one incarnation of an instance from the
+// next: it advances by exactly one when a process starts and again when the
+// instance takes Primary Ownership. The two counts are read as well as the total
+// because a scenario that killed a process and a scenario that moved ownership
+// both raise the total, and only the counts tell them apart. It is read out of
+// the file rather than off an endpoint because the file is the durable half, and
+// outliving the process is the whole point of it.
+func InstanceEpoch(t *testing.T, stateFile string) InstanceEpochs {
+	t.Helper()
+	data, err := os.ReadFile(stateFile)
+	require.NoErrorf(t, err, "reading the instance state file %s", stateFile)
+	var state struct {
+		Epoch        uint64 `json:"epoch"`
+		ProcessEpoch struct {
+			Count uint64 `json:"count"`
+		} `json:"process_epoch"`
+		ActivationEpoch struct {
+			Count uint64 `json:"count"`
+		} `json:"activation_epoch"`
+	}
+	require.NoErrorf(t, json.Unmarshal(data, &state), "decoding the instance state file %s", stateFile)
+	return InstanceEpochs{
+		Epoch:      state.Epoch,
+		Process:    state.ProcessEpoch.Count,
+		Activation: state.ActivationEpoch.Count,
+	}
 }
 
 // prepareMachine takes a handle on one built machine without starting it.

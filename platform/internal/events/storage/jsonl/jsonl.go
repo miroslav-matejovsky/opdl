@@ -17,14 +17,14 @@ var (
 	// ErrClosed indicates that operations were attempted on a closed Backend.
 	ErrClosed = errors.New("jsonl: backend is closed")
 
-	// ErrInvalidPath indicates an empty or invalid data_dir path.
-	ErrInvalidPath = errors.New("jsonl: invalid data_dir")
+	// ErrInvalidPath indicates an empty or invalid events file path.
+	ErrInvalidPath = errors.New("jsonl: invalid events file")
 )
 
 var _ storage.Backend = (*Backend)(nil)
 
 // Backend is a local file storage backend that appends stamped envelopes as JSON
-// Lines to <data_dir>/events/events.jsonl.
+// Lines to the instance's authored events file.
 type Backend struct {
 	mu     sync.Mutex
 	file   *os.File
@@ -32,21 +32,25 @@ type Backend struct {
 	path   string
 }
 
-// New creates a new JSONL storage backend for the given platform data directory.
-// It creates the <data_dir>/events subdirectory if missing and opens
-// <data_dir>/events/events.jsonl for appending.
-func New(dataDir string) (*Backend, error) {
-	dataDir = strings.TrimSpace(dataDir)
-	if dataDir == "" {
-		return nil, fmt.Errorf("%w: data_dir cannot be empty", ErrInvalidPath)
+// New creates a new JSONL storage backend at path, the events file the running
+// instance's deployment descriptor authored. It creates the file's parent
+// directory if missing and opens the file for appending, so a restart continues
+// the same record rather than starting a new one.
+//
+// The path is taken whole rather than composed under a data root: every file an
+// instance owns is named in its blueprint, so the runtime derives no path of its
+// own and an operator reading the blueprint sees exactly what will be written.
+func New(path string) (*Backend, error) {
+	filePath := strings.TrimSpace(path)
+	if filePath == "" {
+		return nil, fmt.Errorf("%w: events file cannot be empty", ErrInvalidPath)
 	}
 
-	eventsDir := filepath.Join(dataDir, "events")
-	if err := os.MkdirAll(eventsDir, 0o755); err != nil {
-		return nil, fmt.Errorf("jsonl: create events directory %s: %w", eventsDir, err)
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("jsonl: create events directory %s: %w", dir, err)
 	}
 
-	filePath := filepath.Join(eventsDir, "events.jsonl")
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("jsonl: open events file %s: %w", filePath, err)

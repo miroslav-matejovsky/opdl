@@ -37,11 +37,13 @@ func validMachine() blueprint.Machine {
 		IP:             "10.0.1.10",
 		Services:       []string{"sensor-services"},
 		Platform: &blueprint.Platform{
-			DataDir:    "D:/opdl/sensor/primary",
+			EventsFile: "D:/opdl/sensor/primary/events.jsonl",
+			StateFile:  "D:/opdl/sensor/primary/state.json",
 			API:        &blueprint.API{LocalPort: 8080, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 			WinService: &blueprint.WinService{Name: "primary"},
 			Standby: &blueprint.Standby{
-				DataDir:    "D:/opdl/sensor/standby",
+				EventsFile: "D:/opdl/sensor/standby/events.jsonl",
+				StateFile:  "D:/opdl/sensor/standby/state.json",
 				Lease:      validLease("D:/opdl/sensor/lease"),
 				API:        &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 				WinService: &blueprint.WinService{Name: "standby"},
@@ -58,12 +60,14 @@ func namedMachine(name, ip string) blueprint.Machine {
 	m.IP = ip
 	m.Platform.WinService = &blueprint.WinService{Name: name + "-primary"}
 	// Everything a machine cannot share with another machine of its site is given
-	// its own value here: the ownership object, and both per-instance directories.
-	// Sharing a lock across machines is rejected, and sharing a directory is only
-	// safe because two machines are two hosts, which a fixture on one host is not.
-	m.Platform.DataDir = "D:/opdl/" + name + "/primary"
+	// its own value here: the ownership object, and every per-instance file.
+	// Sharing a lock across machines is rejected, and sharing a file is only safe
+	// because two machines are two hosts, which a fixture on one host is not.
+	m.Platform.EventsFile = "D:/opdl/" + name + "/primary/events.jsonl"
+	m.Platform.StateFile = "D:/opdl/" + name + "/primary/state.json"
 	m.Platform.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
-	m.Platform.Standby.DataDir = "D:/opdl/" + name + "/standby"
+	m.Platform.Standby.EventsFile = "D:/opdl/" + name + "/standby/events.jsonl"
+	m.Platform.Standby.StateFile = "D:/opdl/" + name + "/standby/state.json"
 	m.Platform.Standby.Lease = validLease("D:/opdl/" + name + "/lease")
 	return m
 }
@@ -193,7 +197,8 @@ func TestMachinePlatformStandby(t *testing.T) {
 		m := machine(t, `platform {
 		  standby {
 		    disabled = false
-		    data_dir = "D:/opdl/m1/standby"
+		    events_file = "D:/opdl/m1/standby/events.jsonl"
+		    state_file  = "D:/opdl/m1/standby/state.json"
 		  }
 		}`)
 		require.NotNil(t, m.Platform)
@@ -328,7 +333,8 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			      platform {
-			        data_dir = "D:/opdl/node-1/primary"
+			        events_file = "D:/opdl/node-1/primary/events.jsonl"
+			        state_file  = "D:/opdl/node-1/primary/state.json"
 			        api {
 			          local_port = 8080
 			          read_header_timeout = "5s"
@@ -339,7 +345,8 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
-			          data_dir = "D:/opdl/node-1/standby"
+			          events_file = "D:/opdl/node-1/standby/events.jsonl"
+			          state_file  = "D:/opdl/node-1/standby/state.json"
 			          lease {
 			            file                   = "D:/opdl/node-1/lease"
 			            duration               = "15s"
@@ -366,7 +373,8 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.11"
 			      services = ["core-services"]
 			      platform {
-			        data_dir = "D:/opdl/node-1/primary"
+			        events_file = "D:/opdl/node-1/primary/events.jsonl"
+			        state_file  = "D:/opdl/node-1/primary/state.json"
 			        api {
 			          local_port = 8080
 			          read_header_timeout = "5s"
@@ -377,7 +385,8 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        }
 			        standby {
 			          disabled = false
-			          data_dir = "D:/opdl/node-1/standby"
+			          events_file = "D:/opdl/node-1/standby/events.jsonl"
+			          state_file  = "D:/opdl/node-1/standby/state.json"
 			          lease {
 			            file                   = "D:/opdl/node-1/lease"
 			            duration               = "15s"
@@ -417,7 +426,8 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 func disableStandby(p *blueprint.Project) {
 	standby := p.Sites[0].Machines[0].Platform.Standby
 	standby.Disabled = true
-	standby.DataDir = ""
+	standby.EventsFile = ""
+	standby.StateFile = ""
 	standby.Lease = nil
 	standby.API = nil
 	standby.WinService = nil

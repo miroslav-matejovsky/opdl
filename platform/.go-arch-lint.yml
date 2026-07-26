@@ -28,6 +28,7 @@ components:
   events-storage: { in: internal/events/storage }
   events-storage-jsonl: { in: internal/events/storage/jsonl }
   httpapi: { in: internal/httpapi }
+  instancestate: { in: internal/instancestate }
   redundancy: { in: internal/redundancy }
   registration: { in: internal/registration }
 
@@ -44,7 +45,15 @@ deps:
     # events is here because composition is also what knows which process this
     # is: it builds the one envelope factory that stamps every event this node
     # states, and hands out only the publisher composed from it.
-    mayDependOn: [api, config, events, events-storage, events-storage-jsonl, httpapi, redundancy, registration]
+    #
+    # instancestate is here for the same reason: composition is what knows this
+    # process is a new incarnation of the instance, so it opens the state file
+    # and advances the epoch. Nothing below app reads or writes it.
+    mayDependOn: [api, config, events, events-storage, events-storage-jsonl, httpapi, instancestate, redundancy, registration]
+  instancestate:
+    # A leaf over one local file. It states no event and reads no descriptor, so
+    # the component that advances the epoch is the one that also reports it.
+    canUse: [atomicfile]
   redundancy:
     canUse: [atomicfile]
     # Ownership transitions are events in their own right: which instance became

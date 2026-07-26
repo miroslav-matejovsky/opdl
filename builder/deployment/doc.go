@@ -8,8 +8,8 @@
 // # Two instances, one mandatory
 //
 //	{
-//	  "primary": {"data_dir": "...", "api_address": "127.0.0.1:8080", ...},
-//	  "standby": {"data_dir": "...", "api_address": "127.0.0.1:8081", ...},
+//	  "primary": {"events_file": "...", "state_file": "...", "api_address": "127.0.0.1:8080", ...},
+//	  "standby": {"events_file": "...", "state_file": "...", "api_address": "127.0.0.1:8081", ...},
 //	  "lease":   {"file": "...", "duration": "15s", ...}
 //	}
 //
@@ -29,7 +29,12 @@
 // resolve stage calls it before compiling, so a machine that would not boot is
 // rejected before any binary is produced. Beyond field presence it checks what
 // only the whole machine can answer: that the two instances do not share a
-// service name, a data directory, or a listener, that every API address is on
+// service name, a local file, or a listener, that every API address is on
 // loopback, and that the lease and the standby agree about whether redundancy is
 // deployed.
+//
+// The file paths are compared cleaned and case-folded, because this repo is
+// Windows-only and two spellings of one path are one file. The lease file is
+// deliberately not in that comparison: it is the machine's, and the two
+// instances sharing it is the point.
 package deployment

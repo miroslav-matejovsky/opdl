@@ -57,9 +57,11 @@ so an instance's address never moves and is never briefly free.
 > and is the only event surface that currently works.
 
 Each instance's own JSONL event record is the supported local monitoring
-surface. Every process appends canonical envelopes to
-`<data_dir>/events/events.jsonl`, and every operational question a status file
-used to answer is a fact in it: which instance and PID stated it, what it did
+surface. Every process appends canonical envelopes to the `events_file` its
+blueprint authored, and every operational question a status file used to answer
+is a fact in it: which instance and PID stated it, which incarnation of that
+instance it was and whether that incarnation began with a launch or with a
+takeover (`platform.app.epoch_advanced`), what it did
 (`platform.app.api_active`, `platform.redundancy.ownership_acquired`,
 `platform.app.site_stopping`), and whether it is currently promotable
 (`platform.app.failover_readiness_changed`, carrying projection progress against

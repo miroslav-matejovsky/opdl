@@ -62,10 +62,21 @@ func BuildAndRunSingleMachine(t *testing.T) {
 	require.Equal(t, harness.InstanceStateActive, refusal.Instance.State,
 		"the instance refusing is the one that owns the machine, and it is healthy")
 
-	// The machine reported the configuration it booted with.
+	// The machine reported the configuration it booted with, naming every local
+	// file it was authored with rather than a root it composes paths under.
 	logs := node.Output()
 	require.Contains(t, logs, "platform configuration")
-	require.Contains(t, logs, "data_dir     "+filepath.ToSlash(node.Sockets.DataDir))
+	require.Contains(t, logs, "events_file  "+filepath.ToSlash(node.Sockets.EventsFile))
+	require.Contains(t, logs, "state_file   "+filepath.ToSlash(node.Sockets.StateFile))
 	require.NotContains(t, logs, "event fabric configuration",
 		"a deployment with no event storage starts no Event Fabric to report one")
+
+	// The instance recorded its incarnation durably. This one has had two: the
+	// process started, and then it took Primary Ownership. A machine with no
+	// standby takes ownership at once, so both happened before it served.
+	require.Equal(t, harness.InstanceEpochs{Epoch: 2, Process: 1, Activation: 1},
+		harness.InstanceEpoch(t, node.Sockets.StateFile),
+		"the epoch advances once for the process and once for the activation, and each kind is counted on its own")
+	require.Contains(t, logs, "epoch        1 (starts 1, activations 0)",
+		"the startup block reports the epoch the process itself claimed, before it took ownership")
 }

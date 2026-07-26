@@ -164,8 +164,13 @@ func validateInstanceFields(role PlatformInstanceRole, raw json.RawMessage) erro
 	if err := json.Unmarshal(raw, &instance); err != nil {
 		return fmt.Errorf("deployment descriptor: invalid %s: %w", role, err)
 	}
-	if _, err := requiredField(instance, string(role)+".data_dir"); err != nil {
-		return err
+	// The local files are required because the instance opens both at startup and
+	// neither has a usable default: an omitted path would decode as the empty
+	// string, which is not a file the runtime could fall back to.
+	for _, field := range []string{"events_file", "state_file"} {
+		if _, err := requiredField(instance, string(role)+"."+field); err != nil {
+			return err
+		}
 	}
 	// The listener timeouts are required for the same reason the address is: the
 	// instance binds a listener for its whole lifetime, and a missing timeout
@@ -282,8 +287,15 @@ type WinService struct {
 type Instance struct {
 	// Service is the instance's Windows Service identity.
 	Service *WinService `json:"service,omitempty"`
-	// DataDir is the instance's own general platform data root.
-	DataDir string `json:"data_dir"`
+	// EventsFile is the instance's own append-only JSON Lines event record. It is
+	// opened before anything else the process does and every fact the process
+	// states reaches it, including the ones about failing to start.
+	EventsFile string `json:"events_file"`
+	// StateFile is the instance's own durable state record, carried across
+	// restarts and crashes. It holds the instance's epoch counter, which advances
+	// by exactly one every time the process starts and every time the instance
+	// becomes Active.
+	StateFile string `json:"state_file"`
 	// APIAddress is where this instance serves its local API. Each instance has
 	// its own and binds it for its whole lifetime, not only while Active.
 	//

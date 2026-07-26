@@ -135,13 +135,14 @@ view with a hole in it.
 
 ### Site topology
 
-Topology is derived, not discovered. Each deployed instance authors its platform
-data root, its API port, and the timeouts bounding that listener. Everything else
-is a consequence of the site:
+Topology is derived, not discovered. Each deployed instance authors every local
+file it owns, its API port, and the timeouts bounding that listener. Everything
+else is a consequence of the site:
 
 ```hcl
 platform {
-  data_dir = "D:/opdl/customer-a/north/local-server/primary"
+  events_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
+  state_file  = "D:/opdl/customer-a/north/local-server/primary/state.json"
 
   api {
     local_port          = 8080
@@ -155,8 +156,9 @@ platform {
   }
 
   standby {
-    disabled = false
-    data_dir = "D:/opdl/customer-a/north/local-server/standby"
+    disabled    = false
+    events_file = "D:/opdl/customer-a/north/local-server/standby/events.jsonl"
+    state_file  = "D:/opdl/customer-a/north/local-server/standby/state.json"
 
     lease {
       file                   = "D:/opdl/customer-a/north/local-server/lease"
@@ -189,10 +191,36 @@ could state them directly could split a site, omit a storage node, or point a
 machine at another site's journal, and the resulting descriptor would look like a
 working one.
 
-Primary and Standby Instances have distinct data roots and ports because they are
-separate processes on one host. The JSONL backend derives
-`<data_dir>/events/events.jsonl` under each instance's own root. Primary
-Ownership controls domain handlers and serving, not journal membership.
+Primary and Standby Instances have distinct files and ports because they are
+separate processes on one host. Every path is authored outright rather than
+composed under a shared root, and the builder rejects a machine that resolves two
+of them onto one file. Primary Ownership controls domain handlers and serving,
+not journal membership.
+
+### Instance epoch
+
+Each instance carries a `state_file` across restarts and crashes. It holds an
+epoch: a counter that advances by exactly one when the process starts and again
+when the instance takes Primary Ownership. Stepping down does not advance it.
+
+The epoch is the only thing about an instance that distinguishes one incarnation
+from the next; its machine, role, and address are identical after a crash. It is
+durable so the sequence is monotonic for the whole life of a deployed instance,
+which is what a fencing token needs: a reader holding an instance's epoch can
+reject anything stamped with an older one. An instance that cannot record a new
+epoch stops rather than running under a number a restart would hand out again.
+See `docs/drafts/data-priority.md` for where this is going.
+
+The record keeps the two kinds apart as well as their total: how many times the
+instance has been launched, how many times it has activated, and when each of
+those last happened, in UTC. Only the total fences writes, because neither count
+alone is monotonic in the order the two kinds interleaved. The counts are what
+say _why_ the total moved: an instance on epoch six that started once and
+activated five times is a machine whose ownership keeps moving, and one that
+started five times and activated once is a machine whose process keeps dying.
+Both facts reach the local event record too, as
+`platform.app.epoch_advanced`, so reading them does not mean holding the state
+file open.
 
 The platform API is machine-local: every API address is resolved onto `127.0.0.1`
 and none is reachable from the network. Any remote operational API would be a

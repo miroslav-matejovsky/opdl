@@ -91,9 +91,11 @@ func instance(machine blueprint.Machine, role deployment.PlatformInstanceRole) *
 	if endpoints == nil {
 		return nil
 	}
+	files := machine.Files(standby)
 	return &deployment.Instance{
 		Service:              winService(machine, standby),
-		DataDir:              machine.DataDir(standby),
+		EventsFile:           files.EventsFile,
+		StateFile:            files.StateFile,
 		APIAddress:           loopbackAddress(endpoints.APILocalPort),
 		APIReadHeaderTimeout: endpoints.APIReadHeaderTimeout,
 		APIShutdownTimeout:   endpoints.APIShutdownTimeout,

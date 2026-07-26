@@ -138,7 +138,7 @@ func FailoverAndFailback(t *testing.T) {
 
 	// The standby's own event record tells the same story: it took over a lease
 	// the dead primary never released, and it initiated the failback itself.
-	record, err := os.ReadFile(filepath.Join(node.Sockets.StandbyDataDir, "events", "events.jsonl"))
+	record, err := os.ReadFile(node.Sockets.StandbyEventsFile)
 	require.NoError(t, err)
 	require.Contains(t, string(record), `"platform.redundancy.ownership_acquired"`,
 		"the takeover is stated in the standby's local record")
@@ -146,4 +146,16 @@ func FailoverAndFailback(t *testing.T) {
 		"a hard-killed primary abandoned its lease, and the record says so")
 	require.Contains(t, string(record), `"platform.redundancy.failback_initiated"`,
 		"the handover back to the primary was the standby's own decision")
+
+	// The epochs tell the same story as a pair of counters that outlive the
+	// processes. The standby never restarted, so its two incarnations are its
+	// process and the failover it served through. The primary was killed and came
+	// back, so its second process is a third incarnation on top of the two its
+	// first process had, and reclaiming ownership makes a fourth.
+	require.Equal(t, harness.InstanceEpochs{Epoch: 2, Process: 1, Activation: 1},
+		harness.InstanceEpoch(t, node.Sockets.StandbyStateFile),
+		"the standby started once and became Active once; stepping back down does not advance it")
+	require.Equal(t, harness.InstanceEpochs{Epoch: 4, Process: 2, Activation: 2},
+		harness.InstanceEpoch(t, node.Sockets.StateFile),
+		"the primary started, activated, was killed, started again, and reclaimed ownership")
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
 )
 
@@ -46,6 +47,11 @@ type process struct {
 	// the same local file in the same order as a local one. The process owns it
 	// and closes it; see storage.Borrowed.
 	record *jsonl.Backend
+	// state is this instance's durable state file, carrying the epoch counter
+	// across restarts and crashes. Run advanced it once for this process; the
+	// active composition advances it again each time the instance takes ownership.
+	// There is nothing to close: every write is complete when it returns.
+	state *instancestate.Store
 }
 
 // monitorInterval is how often a running process re-reads its projection
@@ -107,6 +113,38 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 // until then the runtime always takes the journal-less path.
 func hasEventStorage(descriptor config.Descriptor, role redundancy.InstanceRole) bool {
 	return false
+}
+
+// advanceEpoch begins a new incarnation of this instance and states it.
+//
+// Both the advance and the statement of it are returned on failure. An instance
+// whose epoch could not be recorded must not carry on as though it had one: a
+// later reader that used it as a fencing token would be ordering against a
+// number no restart will reproduce. Run makes the process's own first advance
+// directly, because it happens before there is a process value to pass.
+func advanceEpoch(ctx context.Context, proc process, reason instancestate.Reason) error {
+	state, err := proc.state.Advance(reason)
+	if err != nil {
+		return errors.Join(err, proc.local.Publish(ctx, EpochAdvanceFailed{
+			StateFile: proc.state.Path(),
+			Reason:    string(reason),
+			Error:     err.Error(),
+		}))
+	}
+	return proc.local.Publish(ctx, epochAdvanced(proc.state.Path(), reason, state))
+}
+
+// epochAdvanced describes a recorded advance. It is shared with Run, which makes
+// the process's own first advance before there is a process value to pass, so
+// both statements of the same fact carry the same fields.
+func epochAdvanced(stateFile string, reason instancestate.Reason, state instancestate.State) EpochAdvanced {
+	return EpochAdvanced{
+		StateFile:       stateFile,
+		Epoch:           state.Epoch,
+		Reason:          string(reason),
+		ProcessEpoch:    state.ProcessEpoch.Count,
+		ActivationEpoch: state.ActivationEpoch.Count,
+	}
 }
 
 // instanceIdentity describes this instance to its own API in the given state.
@@ -291,6 +329,16 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 	// it called this, so there is nothing to report here that is not already in
 	// the record.
 	fmt.Printf("platform: %s started for %s\n", kind, role)
+
+	// Becoming Active is a new incarnation: from here this instance produces
+	// decisions and writes on the machine's behalf, and anything it writes must be
+	// distinguishable from what the previous holder of ownership wrote. The epoch
+	// advances before the instance serves anything, and a failure to record it
+	// stops the activation rather than letting it serve under an epoch nothing
+	// persisted.
+	if err := advanceEpoch(ctx, proc, instancestate.ReasonActivated); err != nil {
+		return err
+	}
 
 	if !hasEventStorage(descriptor, role) {
 		return runActiveWithoutJournal(ctx, proc, server, lease, passive)

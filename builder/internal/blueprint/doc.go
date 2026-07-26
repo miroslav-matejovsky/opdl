@@ -18,7 +18,8 @@
 //	      services = ["sensor-services"]
 //
 //	      platform {
-//	        data_dir    = "D:/opdl/customer-a/north/sensor/primary"
+//	        events_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
+//	        state_file  = "D:/opdl/customer-a/north/sensor/primary/state.json"
 //
 //	        api {
 //	          local_port          = 8080
@@ -51,8 +52,18 @@
 //
 // The attribute is required, so omitting it cannot silently enable or disable
 // redundancy. A false value deploys a second local process that waits on the
-// Primary Ownership, and it must then author its own data_dir, api, winservice,
-// and the machine's lease block.
+// Primary Ownership, and it must then author its own events_file, state_file,
+// api, winservice, and the machine's lease block.
+//
+// # An instance's files are named outright
+//
+// events_file and state_file are the local files an instance owns: the
+// append-only record of everything it states, and the durable record it carries
+// across restarts and crashes, which holds its epoch counter. Both are authored
+// per instance rather than composed under a shared root, so every path a machine
+// opens is visible in the blueprint. No two of them may be the same path, on
+// either instance: the two instances run together on one host. See
+// InstanceFiles.
 //
 // # The blueprint is the only place a machine is configured
 //
