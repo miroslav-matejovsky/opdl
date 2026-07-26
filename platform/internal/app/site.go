@@ -25,13 +25,5 @@ func (s *site) close(ctx context.Context) error {
 func topology(descriptor config.Descriptor) (self registration.Location, expected []registration.Location) {
 	self = registration.Location{Machine: descriptor.Machine, IP: descriptor.IP}
 	expected = append(expected, self)
-	seen := map[string]bool{descriptor.Machine: true}
-	for _, peer := range descriptor.Peers {
-		if seen[peer.Machine] {
-			continue
-		}
-		seen[peer.Machine] = true
-		expected = append(expected, registration.Location{Machine: peer.Machine, IP: peer.IP})
-	}
 	return self, expected
 }

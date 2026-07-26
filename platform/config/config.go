@@ -134,7 +134,6 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
 	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(inst.DataDir))
 	fmt.Fprintf(&b, "    lease        %s\n", leaseSummary(d.Lease))
-	fmt.Fprintf(&b, "    peers        %s\n", peersSummary(d.Peers))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
@@ -173,19 +172,6 @@ func leaseSummary(lease *Lease) string {
 	}
 	return fmt.Sprintf("%s duration=%s renewal=%s health_check=%s failback=%s",
 		lease.File, lease.Duration, lease.RenewalInterval, lease.HealthCheckInterval, lease.FailbackStabilization)
-}
-
-// peersSummary renders the site's membership: the platform instances this
-// machine expects to meet on the site's journal, its own included.
-func peersSummary(peers []Peer) string {
-	if len(peers) == 0 {
-		return "(none resolved)"
-	}
-	names := make([]string, 0, len(peers))
-	for _, peer := range peers {
-		names = append(names, fmt.Sprintf("%s/%s (%s)", peer.Machine, peer.Role, peer.IP))
-	}
-	return strings.Join(names, ", ")
 }
 
 // lagBoundSummary renders the required projection lag bound.

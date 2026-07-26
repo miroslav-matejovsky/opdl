@@ -37,9 +37,6 @@ type Descriptor struct {
 	// Lease is the machine's resolved local Primary Ownership lease. Present only
 	// when the Standby Instance is deployed; omitted on a standby-less machine.
 	Lease *Lease `json:"lease,omitempty"`
-	// Peers are the platform instances that make up this machine's site,
-	// including this machine's own.
-	Peers []Peer `json:"peers"`
 }
 
 // PlatformInstanceRole is one of the two fixed platform instance roles. The roles are
@@ -129,10 +126,6 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("deployment descriptor: invalid instances.standby: %w", err)
 	}
 	if err := validateLeaseField(fields, standbyPolicy.Disabled); err != nil {
-		return err
-	}
-
-	if _, err := requiredField(fields, "peers"); err != nil {
 		return err
 	}
 
@@ -309,29 +302,4 @@ type Instance struct {
 	// api.local_port and resolved onto 127.0.0.1, and no instance's API is
 	// reachable from the network.
 	APIAddress string `json:"api_address,omitempty"`
-}
-
-// Peer is one platform instance of this machine's site.
-//
-// The site's members are instances, not machines: each is an independent runtime
-// with its own endpoints, and a machine contributes one peer when it deploys only
-// a Primary Instance and two when it deploys a Standby Instance as well.
-//
-// The list includes this machine's own instances. One descriptor is read by both
-// instances of a machine, so it carries the site's whole membership and each
-// running instance recognises itself by Machine and Role.
-//
-// Peers are ordered by machine name, then Primary before Standby, so every
-// machine of a site sees the same list. The site is the boundary: instances of
-// another site, environment, or project are not peers.
-type Peer struct {
-	// Site is the peer's site, always equal to this machine's site.
-	Site string `json:"site"`
-	// Machine is the machine the peer instance runs on.
-	Machine string `json:"machine"`
-	// Role is which of the machine's two instances this peer is.
-	Role PlatformInstanceRole `json:"role"`
-	// IP is the address the peer's machine is reached on. Two peers on one machine
-	// share it and differ by port.
-	IP string `json:"ip"`
 }

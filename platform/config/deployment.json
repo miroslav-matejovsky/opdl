@@ -22,13 +22,5 @@
     "standby": {
       "disabled": true
     }
-  },
-  "peers": [
-    {
-      "site": "local",
-      "machine": "mock",
-      "role": "primary",
-      "ip": "127.0.0.1"
-    }
-  ]
+  }
 }

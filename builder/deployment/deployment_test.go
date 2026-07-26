@@ -24,12 +24,6 @@ const (
 	standbyDataDir = "D:/opdl-data/sensor/standby"
 )
 
-func peer(machine string, role deployment.PlatformInstanceRole, ip string) deployment.Peer {
-	return deployment.Peer{
-		Site: "north", Machine: machine, Role: role, IP: ip,
-	}
-}
-
 func validDescriptor() deployment.Descriptor {
 	return deployment.Descriptor{
 		Platform:       "opdl",
@@ -60,12 +54,6 @@ func validDescriptor() deployment.Descriptor {
 			RenewalInterval:       "5s",
 			HealthCheckInterval:   "2s",
 			FailbackStabilization: "30s",
-		},
-		Peers: []deployment.Peer{
-			peer("gateway", deployment.RolePrimary, gatewayIP),
-			peer("historian", deployment.RolePrimary, historianIP),
-			peer("sensor", deployment.RolePrimary, machineIP),
-			peer("sensor", deployment.RoleStandby, machineIP),
 		},
 	}
 }
@@ -142,24 +130,6 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			},
 			"instances.standby.api_address is set but the standby is disabled",
 		},
-
-		// Peers are instances.
-		{
-			"duplicate peer",
-			func(d *deployment.Descriptor) { d.Peers = append(d.Peers, d.Peers[0]) },
-			`peer gateway/primary is listed twice`,
-		},
-		{
-			"peers out of order",
-			func(d *deployment.Descriptor) { d.Peers[0], d.Peers[1] = d.Peers[1], d.Peers[0] },
-			"peers are not ordered by machine then role",
-		},
-		{
-			"machine is missing from its own site membership",
-			// Drops the last peer, which is this machine's own Standby Instance.
-			func(d *deployment.Descriptor) { d.Peers = d.Peers[:len(d.Peers)-1] },
-			"peers do not include this machine's own standby instance",
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -176,7 +146,6 @@ func TestDescriptorValidateAcceptsOneInstanceMachine(t *testing.T) {
 	d := validDescriptor()
 	d.Instances.Standby = deployment.Instance{Disabled: true}
 	d.Lease = nil
-	d.Peers = d.Peers[:3]
 	require.NoError(t, d.Validate())
 }
 
@@ -186,9 +155,6 @@ func TestDescriptorValidateAcceptsOneMemberSite(t *testing.T) {
 	d := validDescriptor()
 	d.Instances.Standby = deployment.Instance{Disabled: true}
 	d.Lease = nil
-	d.Peers = []deployment.Peer{
-		peer("sensor", deployment.RolePrimary, machineIP),
-	}
 	require.NoError(t, d.Validate())
 }
 
@@ -199,8 +165,5 @@ func TestDescriptorValidateAcceptsAMachineWithNoEventStorage(t *testing.T) {
 	d := validDescriptor()
 	d.Instances.Standby = deployment.Instance{Disabled: true}
 	d.Lease = nil
-	d.Peers = []deployment.Peer{
-		{Site: "north", Machine: "sensor", Role: deployment.RolePrimary, IP: machineIP},
-	}
 	require.NoError(t, d.Validate())
 }

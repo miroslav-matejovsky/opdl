@@ -64,13 +64,6 @@ const (
 	standbyClient            = "10.0.1.10:4322"
 	standbyCluster           = "10.0.1.10:6322"
 
-	peerMachine        = "gateway"
-	peerIP             = "10.0.1.11"
-	peerClientAddr     = "10.0.1.11:4222"
-	peerClusterAddr    = "10.0.1.11:6222"
-	peerStandbyClient  = "10.0.1.11:4322"
-	peerStandbyCluster = "10.0.1.11:6322"
-
 	// The Primary Ownership lease a standby machine carries: a shared file and the
 	// failover timings, all round-tripped through the platform's type intact.
 	leaseFile                  = "D:/opdl/customer-a/north/sensor/lease"
@@ -128,27 +121,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		}
 	}
 
-	// Peers are ordered by machine name, then Primary before Standby, and include
-	// this machine's own instances.
-	builtPeers := []builderdeployment.Peer{
-		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP},
-		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP},
-		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP},
-	}
-	wantPeers := []platformconfig.Peer{
-		{Site: site, Machine: peerMachine, Role: platformconfig.RolePrimary, IP: peerIP},
-		{Site: site, Machine: peerMachine, Role: platformconfig.RoleStandby, IP: peerIP},
-		{Site: site, Machine: machine, Role: platformconfig.RolePrimary, IP: machineIP},
-	}
-	if !standbyDisabled {
-		builtPeers = append(builtPeers, builderdeployment.Peer{
-			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP,
-		})
-		wantPeers = append(wantPeers, platformconfig.Peer{
-			Site: site, Machine: machine, Role: platformconfig.RoleStandby, IP: machineIP,
-		})
-	}
-
 	built := builderdeployment.Descriptor{
 		Platform:       "opdl",
 		Project:        "customer-a",
@@ -167,7 +139,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			Standby: builtStandby,
 		},
 		Lease: builtLease,
-		Peers: builtPeers,
 	}
 
 	data, err := json.Marshal(built)
@@ -201,7 +172,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			Standby: wantStandby,
 		},
 		Lease: wantLease,
-		Peers: wantPeers,
 	}
 	if !reflect.DeepEqual(got, want) {
 		return fmt.Errorf("builder descriptor did not round-trip into the platform descriptor:\n  got:  %+v\n  want: %+v", got, want)
@@ -249,34 +219,7 @@ func checkWireShape(data []byte, standbyDisabled bool) error {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints belong to an instance", field)
 		}
 	}
-	if err := verifyWireLease(wire, standbyDisabled); err != nil {
-		return err
-	}
-	peers, ok := wire["peers"]
-	if !ok {
-		return fmt.Errorf("builder descriptor omitted peers")
-	}
-	return verifyWirePeers(peers)
-}
-
-// verifyWirePeers checks a peer carries no api address.
-//
-// The platform API is bound on loopback, so every peer's api address would be
-// 127.0.0.1 and would point a reader at itself rather than at the peer. Carrying
-// the machine ip instead would be worse: an address no process listens on, stated
-// in the descriptor as though one did. Either way the field cannot be right, so
-// the contract is that it does not exist.
-func verifyWirePeers(peers json.RawMessage) error {
-	var list []map[string]json.RawMessage
-	if err := json.Unmarshal(peers, &list); err != nil {
-		return err
-	}
-	for _, peer := range list {
-		if _, ok := peer["api_address"]; ok {
-			return fmt.Errorf("builder descriptor carries peers[].api_address: the platform API is machine-local and a peer's is not reachable")
-		}
-	}
-	return nil
+	return verifyWireLease(wire, standbyDisabled)
 }
 
 func verifyWireLease(wire map[string]json.RawMessage, standbyDisabled bool) error {

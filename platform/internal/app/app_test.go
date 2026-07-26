@@ -158,20 +158,11 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
 	self, expected := topology(config.Descriptor{
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
-		Peers: []config.Peer{
-			{Site: "north", Machine: "node-a", Role: config.RolePrimary, IP: "10.0.1.10"},
-			{Site: "north", Machine: "node-b", Role: config.RolePrimary, IP: "10.0.1.11"},
-			// node-b deploys a standby as well. It is a second member of the
-			// fabric but not a second confirmation: exactly one of a machine's
-			// instances is Active, and it answers for the machine.
-			{Site: "north", Machine: "node-b", Role: config.RoleStandby, IP: "10.0.1.11"},
-		},
 	})
 	require.Equal(t, registration.Location{Machine: "node-a", IP: "10.0.1.10"}, self)
 	require.Equal(t, []registration.Location{
 		{Machine: "node-a", IP: "10.0.1.10"},
-		{Machine: "node-b", IP: "10.0.1.11"},
-	}, expected, "a machine confirms its own registrations too, and once per machine")
+	}, expected)
 
 	self, expected = topology(testDescriptor)
 	require.Equal(t, []registration.Location{self}, expected,

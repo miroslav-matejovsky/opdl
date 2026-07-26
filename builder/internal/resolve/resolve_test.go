@@ -158,9 +158,6 @@ func TestBuildStandbyIsPerMachine(t *testing.T) {
 	require.True(t, machineByName(t, reversed, "gateway").Instances.Standby.Disabled)
 }
 
-// TestBuildDerivesEventFabricPeersFromTheSiteOnly checks the fabric spans exactly one
-// site: a machine's peers are its site's other machines, never another site's,
-// and every machine of a site sees the same membership.
 func TestBuildValidatesBlueprint(t *testing.T) {
 	p := project()
 	p.Sites[0].Machines[0].Platform.Standby = nil

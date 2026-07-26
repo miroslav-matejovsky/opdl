@@ -3,7 +3,6 @@ package deployment
 import (
 	"fmt"
 	"net"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,8 +38,6 @@ type Descriptor struct {
 	// Lease is the machine's resolved local Primary Ownership lease. Present only
 	// when the Standby Instance is deployed; omitted on a standby-less machine.
 	Lease *Lease `json:"lease,omitempty"`
-	// Peers are the platform instances that make up this machine's site.
-	Peers []Peer `json:"peers"`
 }
 
 // PlatformInstanceRole is one of the two fixed platform instance roles.
@@ -199,35 +196,6 @@ type WinService struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Peer is one platform instance of a site.
-//
-// The site's members are instances, not machines: each instance is an independent
-// runtime with its own endpoints, and a machine contributes one peer when it
-// deploys only a Primary Instance and two when it deploys a Standby Instance as
-// well.
-//
-// The list includes this machine's own instances. The descriptor is per machine
-// and both instances read the same copy, so it states the site's whole membership
-// once and each running instance recognises itself by Machine and Role. A list
-// that excluded the reader could not be written once for two readers.
-//
-// Peers are ordered by machine name, then Primary before Standby, so every
-// machine of a site derives the same list however the blueprint was authored. The
-// site is the boundary: instances of another site, environment, or project are
-// not peers and form their own fabric.
-type Peer struct {
-	// Site is the peer's site. It always equals this machine's site; it is
-	// carried so a reader can check that without the rest of the topology.
-	Site string `json:"site"`
-	// Machine is the machine the peer instance runs on.
-	Machine string `json:"machine"`
-	// Role is which of the machine's two instances this peer is.
-	Role PlatformInstanceRole `json:"role"`
-	// IP is the address the peer's machine is reached on. Two peers on one machine
-	// share it and differ by port.
-	IP string `json:"ip"`
-}
-
 // Validate checks a descriptor is complete enough to deploy. resolve calls it
 // before compiling, so the builder fails before producing a machine that would
 // not boot. It fails fast on the first violation.
@@ -271,10 +239,7 @@ func (d Descriptor) Validate() error {
 	if err := d.validateServices(); err != nil {
 		return err
 	}
-	if err := d.validateEndpoints(); err != nil {
-		return err
-	}
-	return d.validatePeers()
+	return d.validateEndpoints()
 }
 
 // validateServices checks each instance's Windows Service identity is present
@@ -355,63 +320,6 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	}
 	return nil
 }
-
-func (d Descriptor) validatePeers() error {
-	seen := make(map[string]bool, len(d.Peers))
-	previous := ""
-	for _, peer := range d.Peers {
-		if peer.Site != d.Site {
-			return fmt.Errorf("peer %s is in site %q, not this machine's site %q", peer, peer.Site, d.Site)
-		}
-		if strings.TrimSpace(peer.Machine) == "" {
-			return fmt.Errorf("peer with empty machine")
-		}
-		if peer.Role != RolePrimary && peer.Role != RoleStandby {
-			return fmt.Errorf("peer on machine %q has role %q, want %q or %q", peer.Machine, peer.Role, RolePrimary, RoleStandby)
-		}
-		key := peer.key()
-		if seen[key] {
-			return fmt.Errorf("peer %s is listed twice", peer)
-		}
-		seen[key] = true
-		if net.ParseIP(peer.IP) == nil {
-			return fmt.Errorf("peer %s: ip %q is not a valid IP address", peer, peer.IP)
-		}
-		if key < previous {
-			return fmt.Errorf("peers are not ordered by machine then role: %s after %s", key, previous)
-		}
-		previous = key
-	}
-	return d.validateSelfIsPeer()
-}
-
-// validateSelfIsPeer checks this machine's own deployed instances appear in the
-// membership.
-//
-// The list is the site's whole membership rather than the reader's counterparts,
-// because one descriptor is read by both of a machine's instances. An instance
-// missing itself would be a member no peer expects to hear from, which is a
-// registration that can never be confirmed.
-func (d Descriptor) validateSelfIsPeer() error {
-	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
-		if d.Instances.Get(role).Disabled {
-			continue
-		}
-		if !slices.ContainsFunc(d.Peers, func(p Peer) bool {
-			return p.Machine == d.Machine && p.Role == role
-		}) {
-			return fmt.Errorf("peers do not include this machine's own %s instance", role)
-		}
-	}
-	return nil
-}
-
-// key orders and identifies a peer: machine first, then Primary before Standby.
-func (p Peer) key() string { return p.Machine + "\x00" + string(p.Role) }
-
-// String names a peer the way an operator would: the machine and which of its
-// instances.
-func (p Peer) String() string { return fmt.Sprintf("%s/%s", p.Machine, p.Role) }
 
 // requireAddress checks a required host:port field is present and usable.
 func requireAddress(where, addr string) error {

@@ -3,9 +3,7 @@ package resolve
 import (
 	"fmt"
 	"net"
-	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/builder/deployment"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
@@ -57,7 +55,6 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		Services:       append([]string(nil), machine.Services...),
 		Instances:      instances(machine),
 		Lease:          lease(machine),
-		Peers:          peers(site),
 	}
 }
 
@@ -120,45 +117,6 @@ func winService(machine blueprint.Machine, standby bool) *deployment.WinService 
 		DisplayName: authored.DisplayName,
 		Description: authored.Description,
 	}
-}
-
-// peers derives a site's membership: every platform instance every machine of the
-// site deploys.
-//
-// The members are instances, not machines. A machine that deploys only a Primary
-// Instance contributes one peer; a machine that deploys a Standby Instance as
-// well contributes two, and those two are separate members with separate
-// endpoints rather than one member with a spare.
-//
-// The list is the same for every machine of the site, including this machine's
-// own instances. One descriptor is read by both instances of a machine, so a list
-// that left out its reader could not be written once for two readers; each
-// running instance recognises itself by machine and role.
-//
-// Ordering is by machine name, then Primary before Standby, so every machine of a
-// site derives the same list however the blueprint was authored.
-func peers(site blueprint.Site) []deployment.Peer {
-	machines := slices.Clone(site.Machines)
-	slices.SortFunc(machines, func(a, b blueprint.Machine) int {
-		return strings.Compare(a.Name, b.Name)
-	})
-	peers := make([]deployment.Peer, 0, len(machines)*2)
-	for _, machine := range machines {
-		for _, role := range []deployment.PlatformInstanceRole{deployment.RolePrimary, deployment.RoleStandby} {
-			endpoints := machine.Endpoints(role == deployment.RoleStandby)
-			if endpoints == nil {
-				continue
-			}
-			peer := deployment.Peer{
-				Site:    site.Name,
-				Machine: machine.Name,
-				Role:    role,
-				IP:      machine.IP,
-			}
-			peers = append(peers, peer)
-		}
-	}
-	return peers
 }
 
 // loopbackAddress joins an instance's authored api local_port with 127.0.0.1.
