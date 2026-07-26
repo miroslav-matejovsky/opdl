@@ -36,7 +36,7 @@ artifacts and then regenerate `sdk-dotnet` from that contract.
 ## Deployment descriptor
 
 Every built platform binary embeds one `deployment.Descriptor`. It contains the
-project, environment, site, machine, role, IP, services, features, resolved
+project, environment, site, machine, role, IP, services, resolved
 warm-standby policy, and Event Fabric peers.
 
 The runtime trusts the descriptor as its identity. Registration origins, event

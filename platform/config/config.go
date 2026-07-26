@@ -198,7 +198,6 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    profile      %s\n", d.MachineProfile)
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
-	fmt.Fprintf(&b, "    features     chaos=%t\n", d.Features.Chaos)
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
 	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(inst.DataDir))
 	fmt.Fprintf(&b, "    event_storage %s\n", eventStorageSummary(inst.Nats))

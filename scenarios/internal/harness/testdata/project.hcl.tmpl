@@ -19,10 +19,6 @@
 project "{{ .Name }}" {
   environment = "development"
 
-  features {
-    chaos = false
-  }
-
   site "{{ .Site }}" {
 {{- range .Machines }}
     machine "{{ .Name }}" {

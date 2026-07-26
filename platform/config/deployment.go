@@ -10,7 +10,7 @@ import (
 
 // Descriptor is one machine's deployment definition as the platform consumes it:
 // its identity (platform, project, environment, site, machine, machine role, ip),
-// the services it hosts, and the project features enabled on it.
+// and the services it hosts.
 //
 // It mirrors the builder's deployment descriptor field for field. The platform
 // keeps its own copy so the runtime does not depend on the build tool; the
@@ -31,8 +31,6 @@ type Descriptor struct {
 	IP string `json:"ip"`
 	// Services are the service groups this machine hosts.
 	Services []string `json:"services"`
-	// Features are the project capability switches enabled on the machine.
-	Features Features `json:"features"`
 	// Instances is this machine's Primary and Standby Instances. Both records are
 	// always present.
 	Instances Instances `json:"instances"`
@@ -246,11 +244,6 @@ func requiredField(fields map[string]json.RawMessage, name string) (json.RawMess
 		return nil, fmt.Errorf("deployment descriptor: %s is required", name)
 	}
 	return raw, nil
-}
-
-// Features are the capability switches carried from the project onto a machine.
-type Features struct {
-	Chaos bool `json:"chaos"`
 }
 
 // Instances is a machine's two platform instances. Both records are always

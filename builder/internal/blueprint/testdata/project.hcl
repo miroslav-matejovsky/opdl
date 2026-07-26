@@ -1,14 +1,6 @@
 project "customer-a" {
   environment = "production"
 
-  # global features that apply to all sites and machines in this project
-  # mappable to the actual contracts with the customer and what they are paying for
-  # or with chaos feature, something we can enable to test the resilience of the system on our test environments,
-  # or to test the resilience of the system in production in a controlled way, with the customer aware of the test and its potential impact on their operations
-  features {
-    chaos = true
-  }
-
   site "north" {
     machine "sensor" {
       profile  = "sensor-node"

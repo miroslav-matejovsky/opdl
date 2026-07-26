@@ -184,7 +184,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		MachineProfile: "sensor-node",
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
-		Features:       builderdeployment.Features{Chaos: true},
 		Instances: builderdeployment.Instances{
 			Primary: builderdeployment.Instance{
 				Disabled:   false,
@@ -226,7 +225,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		MachineProfile: "sensor-node",
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
-		Features:       platformconfig.Features{Chaos: true},
 		Instances: platformconfig.Instances{
 			Primary: platformconfig.Instance{
 				Disabled:   false,

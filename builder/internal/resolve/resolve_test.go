@@ -110,7 +110,6 @@ func projectOf(sites ...blueprint.Site) *blueprint.Project {
 	return &blueprint.Project{
 		Name:        "customer-a",
 		Environment: "production",
-		Features:    blueprint.Features{Chaos: true},
 		Sites:       sites,
 	}
 }
@@ -174,7 +173,6 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.Equal(t, "sensor-node", m.MachineProfile)
 	require.Equal(t, "10.0.1.10", m.IP)
 	require.Equal(t, []string{"sensor-services"}, m.Services)
-	require.True(t, m.Features.Chaos)
 	require.False(t, m.Instances.Primary.Disabled, "a machine always deploys a primary process")
 }
 

@@ -8,10 +8,6 @@
 project "buildtest" {
   environment = "test"
 
-  features {
-    chaos = false
-  }
-
   site "solo" {
     machine "node-a" {
       profile  = "test-node"

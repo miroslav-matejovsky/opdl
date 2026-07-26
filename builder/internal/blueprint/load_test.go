@@ -14,7 +14,6 @@ func TestLoad(t *testing.T) {
 
 	require.Equal(t, "customer-a", p.Name)
 	require.Equal(t, "production", p.Environment)
-	require.True(t, p.Features.Chaos)
 
 	require.Len(t, p.Sites, 2)
 	require.Equal(t, "north", p.Sites[0].Name)

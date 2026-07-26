@@ -50,7 +50,6 @@ func validDescriptor() deployment.Descriptor {
 		MachineProfile: "sensor-node",
 		IP:             machineIP,
 		Services:       []string{"sensor-services"},
-		Features:       deployment.Features{Chaos: true},
 		Instances: deployment.Instances{
 			Primary: deployment.Instance{
 				Disabled:   false,

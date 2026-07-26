@@ -1,13 +1,6 @@
 project "customer-a" {
   environment = "production"
 
-  # Project-wide capability switches. Chaos deliberately injects failures to
-  # test resilience (freely in test, or in production in a controlled way with
-  # the customer aware).
-  features {
-    chaos = true
-  }
-
   site "north" {
     machine "sensor" {
       # profile is the machine's purpose. It is not called role: a machine's two

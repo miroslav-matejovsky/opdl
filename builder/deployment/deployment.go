@@ -33,8 +33,6 @@ type Descriptor struct {
 	IP string `json:"ip"`
 	// Services are the service groups this machine hosts.
 	Services []string `json:"services"`
-	// Features are the project capability switches carried onto the machine.
-	Features Features `json:"features"`
 	// Instances is this machine's Primary and Standby Instances. Both records are
 	// always present.
 	Instances Instances `json:"instances"`
@@ -132,11 +130,6 @@ func validateLeaseDuration(field, value string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s %s must be positive", field, d)
 	}
 	return d, nil
-}
-
-// Features are the capability switches carried from the project onto a machine.
-type Features struct {
-	Chaos bool `json:"chaos"`
 }
 
 // Instances is a machine's two platform instances. Both records are always

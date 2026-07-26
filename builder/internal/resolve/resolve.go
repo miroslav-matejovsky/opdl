@@ -55,12 +55,9 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		MachineProfile: machine.MachineProfile,
 		IP:             machine.IP,
 		Services:       append([]string(nil), machine.Services...),
-		Features: deployment.Features{
-			Chaos: p.Features.Chaos,
-		},
-		Instances: instances(site, machine),
-		Lease:     lease(machine),
-		Peers:     peers(site),
+		Instances:      instances(site, machine),
+		Lease:          lease(machine),
+		Peers:          peers(site),
 	}
 }
 

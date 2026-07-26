@@ -3,7 +3,7 @@
 //
 // The Descriptor is the builder's output contract. It carries a machine's place
 // in the topology (project, environment, site, machine, role, ip), the services
-// it hosts, the project features enabled on it, its resolved slot decisions, its
+// it hosts, its resolved slot decisions, its
 // resolved Event Fabric topology, and the product-line Platform identity the
 // builder stamps on. The platform runtime is what conforms to this contract at
 // deploy time.

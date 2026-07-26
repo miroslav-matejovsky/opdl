@@ -11,26 +11,14 @@ import (
 // tag captures a block's name label (the "customer-a" in project "customer-a").
 
 // Project is the top of a topology: one project (customer), the environment
-// and feature switches common to it, and the sites and machines nested
-// inside.
+// common to it, and the sites and machines nested inside.
 type Project struct {
 	// Name is the project (customer) identifier.
 	Name string `hcl:"name,label"`
 	// Environment is the target environment, e.g. "production".
 	Environment string `hcl:"environment"`
-	// Features are the capability switches available to the project.
-	Features Features `hcl:"features,block"`
 	// Sites are the locations the project is deployed to.
 	Sites []Site `hcl:"site,block"`
-}
-
-// Features are the project-level capability switches.
-type Features struct {
-	// Chaos enables deliberately injecting failures to test the system's
-	// resilience: in test environments freely, or in production in a
-	// controlled way with the customer aware of the test and its potential
-	// impact on their operations.
-	Chaos bool `hcl:"chaos,optional"`
 }
 
 // Site is one location within a project holding a set of machines.

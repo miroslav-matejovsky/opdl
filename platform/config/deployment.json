@@ -9,9 +9,6 @@
   "services": [
     "core-services"
   ],
-  "features": {
-    "chaos": false
-  },
   "instances": {
     "primary": {
       "disabled": false,

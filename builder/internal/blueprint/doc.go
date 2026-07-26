@@ -11,10 +11,6 @@
 //	project "customer-a" {
 //	  environment = "production"
 //
-//	  features {
-//	    chaos = true
-//	  }
-//
 //	  site "north" {
 //	    machine "sensor" {
 //	      profile  = "sensor-node"
@@ -44,10 +40,9 @@
 //	  }
 //	}
 //
-// A Project names an environment and holds Features and Sites; a Site holds
+// A Project names an environment and holds Sites; a Site holds
 // Machines; a Machine names a role, an IP address, the services assigned to it,
-// and its platform subsection. Chaos is an implemented project-level capability
-// switch.
+// and its platform subsection.
 //
 // # The platform subsection
 //

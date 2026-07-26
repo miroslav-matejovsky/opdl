@@ -2,7 +2,7 @@
 // deployment descriptor per machine.
 //
 // This is where the layered topology collapses. Project-wide values (identity,
-// environment, features) and each machine's own role, address, services, NATS
+// environment) and each machine's own role, address, services, NATS
 // ports, and standby policy are folded into a single, concrete deployment
 // descriptor, with the product-line identity stamped on by the builder. The
 // blueprint is validated first and each descriptor after, so the builder fails

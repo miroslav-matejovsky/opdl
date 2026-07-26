@@ -14,7 +14,6 @@ func validProject() *blueprint.Project {
 	return &blueprint.Project{
 		Name:        "customer-a",
 		Environment: "production",
-		Features:    blueprint.Features{Chaos: true},
 		// Two machines with a standby on one of them is the smallest site the
 		// platform supports, so it is what an otherwise-valid fixture has to be.
 		// A one-machine site is now rejected before any rule these tests are
@@ -181,11 +180,6 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 	})
 }
 
-func TestFeatures(t *testing.T) {
-	f := blueprint.Features{Chaos: true}
-	require.True(t, f.Chaos)
-}
-
 // TestMachinePlatformStandby checks the platform subsection decodes as a
 // presence-aware value: absent block, absent standby block, and explicit standby
 // subsections are all distinguishable.
@@ -194,7 +188,6 @@ func TestMachinePlatformStandby(t *testing.T) {
 		t.Helper()
 		p := decodeHCL(t, `project "p" {
 		  environment = "production"
-		  features {}
 		  site "north" {
 		    machine "m1" {
 		      profile  = "node"
@@ -315,7 +308,6 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			src := `project "p" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "m1" {
 			      profile  = "node"
@@ -364,7 +356,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			name: "missing profile",
 			hcl: `project "bad-profile" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "m1" {
 			      profile  = ""
@@ -379,7 +370,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			name: "missing ip",
 			hcl: `project "bad-ip" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "m1" {
 			      profile  = "node"
@@ -394,7 +384,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			name: "invalid ip",
 			hcl: `project "bad-ip" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "m1" {
 			      profile  = "node"
@@ -409,7 +398,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			name: "duplicate machine name across sites",
 			hcl: `project "dup-machine" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "node-1" {
 			      profile  = "node"
