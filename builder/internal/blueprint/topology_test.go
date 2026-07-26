@@ -1,6 +1,7 @@
 package blueprint_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2/gohcl"
@@ -37,12 +38,12 @@ func validMachine() blueprint.Machine {
 		Services:       []string{"sensor-services"},
 		Platform: &blueprint.Platform{
 			DataDir:    "D:/opdl/sensor/primary",
-			API:        &blueprint.API{LocalPort: 8080},
+			API:        &blueprint.API{LocalPort: 8080, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 			WinService: &blueprint.WinService{Name: "primary"},
 			Standby: &blueprint.Standby{
 				DataDir:    "D:/opdl/sensor/standby",
 				Lease:      validLease("D:/opdl/sensor/lease"),
-				API:        &blueprint.API{LocalPort: 8081},
+				API:        &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 				WinService: &blueprint.WinService{Name: "standby"},
 			},
 		},
@@ -77,6 +78,7 @@ func validLease(file string) *blueprint.Lease {
 		RenewalInterval:       "5s",
 		HealthCheckInterval:   "2s",
 		FailbackStabilization: "30s",
+		LagBound:              "30s",
 	}
 }
 
@@ -329,6 +331,8 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        data_dir = "D:/opdl/node-1/primary"
 			        api {
 			          local_port = 8080
+			          read_header_timeout = "5s"
+			          shutdown_timeout = "10s"
 			        }
 			        winservice {
 			          name = "primary"
@@ -342,9 +346,12 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			            renewal_interval       = "5s"
 			            health_check_interval  = "2s"
 			            failback_stabilization = "30s"
+			            lag_bound              = "30s"
 			          }
 			          api {
 			            local_port = 8081
+			            read_header_timeout = "5s"
+			            shutdown_timeout = "10s"
 			          }
 			          winservice {
 			            name = "standby"
@@ -362,6 +369,8 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        data_dir = "D:/opdl/node-1/primary"
 			        api {
 			          local_port = 8080
+			          read_header_timeout = "5s"
+			          shutdown_timeout = "10s"
 			        }
 			        winservice {
 			          name = "primary"
@@ -375,9 +384,12 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			            renewal_interval       = "5s"
 			            health_check_interval  = "2s"
 			            failback_stabilization = "30s"
+			            lag_bound              = "30s"
 			          }
 			          api {
 			            local_port = 8081
+			            read_header_timeout = "5s"
+			            shutdown_timeout = "10s"
 			          }
 			          winservice {
 			            name = "standby"
@@ -417,8 +429,10 @@ func disableStandby(p *blueprint.Project) {
 // take effect, and a reader could not tell it from one that does.
 func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 	tests := map[string]func(*blueprint.Standby){
-		"lease":      func(s *blueprint.Standby) { s.Lease = validLease("D:/opdl/sensor/lease") },
-		"api":        func(s *blueprint.Standby) { s.API = &blueprint.API{LocalPort: 8081} },
+		"lease": func(s *blueprint.Standby) { s.Lease = validLease("D:/opdl/sensor/lease") },
+		"api": func(s *blueprint.Standby) {
+			s.API = &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"}
+		},
 		"winservice": func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
 	}
 	for label, author := range tests {
@@ -445,6 +459,49 @@ func TestMachineListenersMustNotSharePort(t *testing.T) {
 			require.ErrorContains(t, p.Validate(), "needs its own port")
 		})
 	}
+}
+
+// TestProjectValidateAPITimeoutFailures checks an authored listener timeout that
+// cannot be used is refused at build time rather than at startup. A zero timeout
+// is refused rather than read as "no limit": the two look identical in a
+// blueprint and only one of them is ever meant.
+func TestProjectValidateAPITimeoutFailures(t *testing.T) {
+	tests := map[string]struct {
+		mutate  func(*blueprint.API)
+		errText string
+	}{
+		"blank read header timeout":        {func(a *blueprint.API) { a.ReadHeaderTimeout = "" }, "api.read_header_timeout is required"},
+		"bad read header timeout":          {func(a *blueprint.API) { a.ReadHeaderTimeout = "soon" }, "is not a valid duration"},
+		"non-positive read header timeout": {func(a *blueprint.API) { a.ReadHeaderTimeout = "0s" }, "must be positive"},
+		"blank shutdown timeout":           {func(a *blueprint.API) { a.ShutdownTimeout = "" }, "api.shutdown_timeout is required"},
+		"non-positive shutdown timeout":    {func(a *blueprint.API) { a.ShutdownTimeout = "-1s" }, "must be positive"},
+	}
+	// Both instances are checked: they author their own listeners, so a rule
+	// applied to only one of them would let the other ship an unusable timeout.
+	for name, test := range tests {
+		for _, standby := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/standby=%t", name, standby), func(t *testing.T) {
+				p := validProject()
+				platform := p.Sites[0].Machines[0].Platform
+				api := platform.API
+				if standby {
+					api = platform.Standby.API
+				}
+				test.mutate(api)
+				require.ErrorContains(t, p.Validate(), test.errText)
+			})
+		}
+	}
+}
+
+// TestMachineEndpointsCarryTheAPITimeouts checks the timeouts reach resolution
+// alongside the port, so an instance's listener and its bounds come from one
+// place.
+func TestMachineEndpointsCarryTheAPITimeouts(t *testing.T) {
+	p := validProject()
+	endpoints := p.Sites[0].Machines[0].Endpoints(false)
+	require.Equal(t, "5s", endpoints.APIReadHeaderTimeout)
+	require.Equal(t, "10s", endpoints.APIShutdownTimeout)
 }
 
 // TestMachineLease checks Lease returns nil when standby is disabled or omitted,
@@ -474,6 +531,11 @@ func TestProjectValidateLeaseFailures(t *testing.T) {
 		"renewal not shorter":   {func(l *blueprint.Lease) { l.RenewalInterval = "15s" }, "must be shorter than duration"},
 		"blank health interval": {func(l *blueprint.Lease) { l.HealthCheckInterval = "" }, "lease.health_check_interval is required"},
 		"blank failback":        {func(l *blueprint.Lease) { l.FailbackStabilization = "" }, "lease.failback_stabilization is required"},
+		"blank lag bound":       {func(l *blueprint.Lease) { l.LagBound = "" }, "lease.lag_bound is required"},
+		"bad lag bound":         {func(l *blueprint.Lease) { l.LagBound = "soon" }, "is not a valid duration"},
+		"non-positive lag bound": {
+			func(l *blueprint.Lease) { l.LagBound = "0s" }, "must be positive",
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

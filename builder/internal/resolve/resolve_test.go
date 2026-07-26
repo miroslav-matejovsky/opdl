@@ -30,16 +30,17 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 			RenewalInterval:       "5s",
 			HealthCheckInterval:   "2s",
 			FailbackStabilization: "30s",
+			LagBound:              "30s",
 		}
 		standby.DataDir = dataDir(name, "standby")
-		standby.API = &blueprint.API{LocalPort: standbyAPIPort}
+		standby.API = &blueprint.API{LocalPort: standbyAPIPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	}
 	return blueprint.Machine{
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
 		Platform: &blueprint.Platform{
 			DataDir:    dataDir(name, "primary"),
-			API:        &blueprint.API{LocalPort: apiPort},
+			API:        &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 			WinService: &blueprint.WinService{Name: name + "-primary"},
 			Standby:    standby,
 		},
@@ -193,6 +194,7 @@ func TestBuildCarriesAuthoredLease(t *testing.T) {
 			RenewalInterval:       "5s",
 			HealthCheckInterval:   "2s",
 			FailbackStabilization: "30s",
+			LagBound:              "30s",
 		}, plan.Machines[0].Lease)
 	})
 

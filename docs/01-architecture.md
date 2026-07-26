@@ -41,10 +41,22 @@ warm-standby policy, and Event Fabric peers.
 
 The runtime trusts the descriptor as its identity. Registration origins, event
 nodes, and Event Fabric members come from it. A client cannot claim a different
-machine or site. Runtime TOML configuration contains only runtime-adjustable
-timeouts, the required projection lag bound, and a NATS credentials file.
-Endpoints, backend selection, the platform data root, and the JetStream store
-come from the embedded descriptor.
+machine or site.
+
+The descriptor is the only configuration a binary has. There is no runtime
+configuration file; the platform reads no TOML and none is shipped. Endpoints,
+the platform data root, each instance's API listener timeouts
+(`api_read_header_timeout`, `api_shutdown_timeout`), and the Primary Ownership
+lease with its projection lag bound are all resolved into it from the blueprint.
+The listener timeouts are per instance, authored in each `api` block, because the
+two instances bind their own listeners. The lag bound is on `standby.lease`,
+because it bounds a failover: a machine that deploys no standby has no lease and
+no lag bound. A launch decides one thing, `-instance primary|standby`.
+
+A site changes any of these by rebuilding the machine's package, which is what it
+already did for every endpoint and every path. What it gains is that a binary
+states its own configuration: nothing can be turned beside the executable, and no
+setting has two sources needing a precedence rule to tell them apart.
 
 ## Runtime boundaries
 
@@ -64,6 +76,28 @@ The platform is composed around these boundaries:
 NATS libraries are imported only by `internal/events/storage/nats`.
 
 ## Event Fabric contract
+
+> **TODO — this section describes a design, not the current tree.** The NATS
+> implementation of event storage and the Event Fabric was removed during the
+> ongoing refactor, and the replacement distribution mechanism has not landed.
+> `internal/events/storage/eventfabric` and `internal/events/storage/nats` do not
+> exist; the table of runtime boundaries above still lists them. Until a
+> replacement lands:
+>
+> - no deployment has event storage. `app.hasEventStorage` is hardcoded false, so
+>   every instance takes the journal-less path, opens no site, and runs no
+>   projection or readiness monitor.
+> - **registration is blocked on this.** `internal/registration` is built around
+>   a publisher, a projector, and a durable handler over the site journal, so
+>   with no journal every domain operation is refused with a reason naming the
+>   deployment rather than the instance. See `docs/02-registration.md`.
+> - the projection lag bound authored on `standby.lease` is carried and validated
+>   but never consulted, because there is no journal to lag behind.
+> - the mandatory local JSONL record is unaffected. It is the only event surface
+>   that currently works, and process and ownership events still reach it.
+>
+> Everything from here to the end of this section, and the site topology, storage
+> node selection, and bootstrap ordering described below, is the target design.
 
 The Event Fabric is the only coordination mechanism between OPDL services. It
 exposes publish, replay, live delivery, durable handling, health, and shutdown,
@@ -115,6 +149,12 @@ consequence of the site:
 platform {
   data_dir = "D:/opdl/customer-a/north/local-server/primary"
 
+  api {
+    local_port          = 8080
+    read_header_timeout = "5s"
+    shutdown_timeout    = "10s"
+  }
+
   winservice {
     name         = "opdl-customer-a-north-local-server-primary"
     display_name = "OPDL customer-a north local-server (Primary Instance)"
@@ -123,6 +163,21 @@ platform {
   standby {
     disabled = false
     data_dir = "D:/opdl/customer-a/north/local-server/standby"
+
+    lease {
+      file                   = "D:/opdl/customer-a/north/local-server/lease"
+      duration               = "15s"
+      renewal_interval       = "5s"
+      health_check_interval  = "2s"
+      failback_stabilization = "30s"
+      lag_bound              = "30s"
+    }
+
+    api {
+      local_port          = 8081
+      read_header_timeout = "5s"
+      shutdown_timeout    = "10s"
+    }
 
     winservice {
       name         = "opdl-customer-a-north-local-server-standby"
@@ -143,8 +198,9 @@ look like a working one. The JSONL backend derives
 `<data_dir>/events/events.jsonl`; JetStream uses the explicit
 `jetstream_store_dir`, which may be on another volume.
 
-Runtime configuration carries no socket or storage topology. A configuration
-file that sets one is rejected at load time rather than ignored.
+There is no runtime configuration file at all, so no socket or storage topology
+can be stated outside the blueprint. Everything an instance binds or writes is
+resolved onto its own record in the descriptor and compiled in.
 
 #### One endpoint and storage set per instance
 

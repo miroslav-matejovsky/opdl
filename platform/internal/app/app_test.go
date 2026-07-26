@@ -52,25 +52,19 @@ func freeAddress(t *testing.T) string {
 	return res.Addresses()[0]
 }
 
-// writeConfig writes a loopback platform configuration that stores its journal
-// and coordination state under the test's own directory, so several tests can
-// run at once without colliding.
+// loadConfig loads the configuration compiled into the test binary: the neutral
+// mock descriptor, which is the only configuration a process has.
 //
-// It sets no socket topology, no API address, no runtime directory, and no data
-// directory. Every one of those is the deployment's rather than the site's, and
-// this file cannot move them: a runtime that could would be able to point a
-// machine at a journal that is not its own, or give a machine's two instances one
-// endpoint or one store. Tests that need free ports and private directories move
-// the descriptor instead, through descriptorOnFreePorts.
-func writeConfig(t *testing.T, dir string) string {
+// It names the deployment's real ports and paths, which several tests running at
+// once cannot all take, so a test that needs its own moves the descriptor
+// through descriptorOnFreePorts. That keeps the contract intact: the descriptor
+// is still the single source of the machine's topology, and each instance still
+// reads only its own record.
+func loadConfig(t *testing.T) *config.Config {
 	t.Helper()
-	path := filepath.Join(dir, "config.toml")
-	contents := `read_header_timeout = "5s"
-shutdown_timeout = "10s"
-lag_bound = "30s"
-`
-	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
-	return path
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	return cfg
 }
 
 // descriptorOnFreePorts returns the embedded descriptor with every endpoint moved
@@ -344,14 +338,14 @@ func (f *togglingFabric) State(context.Context) (fabricState, error) {
 	return f.state, nil
 }
 
-func TestRunReportsMissingConfigFlag(t *testing.T) {
+func TestRunRejectsAnUnknownFlag(t *testing.T) {
 	require.Error(t, Run([]string{"-unknown"}))
 }
 
-func TestRunReportsUnusableConfigFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(path, []byte("[invalid"), 0o644))
-	require.ErrorContains(t, Run([]string{"-config", path}), "invalid configuration file")
+// TestRunRequiresAnInstanceRole checks the one thing a launch still decides is
+// required. Everything else a process runs with is compiled into it.
+func TestRunRequiresAnInstanceRole(t *testing.T) {
+	require.ErrorContains(t, Run(nil), "-instance primary|standby is required")
 }
 
 // TestOpenReportsUnusableJsonlDataDir checks a process fails at startup when the
@@ -360,8 +354,7 @@ func TestRunReportsUnusableConfigFile(t *testing.T) {
 // reach it, including the ones about failing to start.
 func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
 	dir := t.TempDir()
-	cfg, err := config.Load(writeConfig(t, dir))
-	require.NoError(t, err)
+	cfg := loadConfig(t)
 
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
@@ -370,7 +363,7 @@ func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
 	// under it, which will fail because blocked is a file, not a directory.
 	descriptor.Instances.Primary.DataDir = blocked
 
-	_, err = newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
+	_, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "jsonl:", "the failure identifies the JSONL backend")
 }
 
@@ -378,8 +371,7 @@ func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
 // startup path: a composition that cannot write its local record does not
 // quietly carry on composing.
 func TestSiteOpenReturnsAFailureToStateThatItIsOpening(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, t.TempDir()))
-	require.NoError(t, err)
+	cfg := loadConfig(t)
 	descriptor := descriptorOnFreePorts(t, cfg)
 
 	proc, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)

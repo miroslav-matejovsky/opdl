@@ -20,16 +20,26 @@ const completeDescriptor = `{
     "primary": {
       "disabled": false,
       "data_dir": ".data/platform/primary",
-      "api_address": "127.0.0.1:8080"
+      "api_address": "127.0.0.1:8080",
+      "api_read_header_timeout": "5s",
+      "api_shutdown_timeout": "10s"
     },
     "standby": {"disabled": true}
   }
 }`
 
-const primaryInstanceJSON = `"primary":{"disabled":false,"data_dir":".data/platform/primary"}`
-const standbyInstanceJSON = `"standby":{"disabled":false,"data_dir":".data/platform/standby"}`
+// The listener timeouts are part of every deployed instance record here, so a
+// test that removes some other required field fails on that field rather than on
+// a timeout it never meant to drop.
+const instanceTimeoutsJSON = `"api_read_header_timeout":"5s","api_shutdown_timeout":"10s"`
+const primaryInstanceJSON = `"primary":{"disabled":false,"data_dir":".data/platform/primary",` + instanceTimeoutsJSON + `}`
+const standbyInstanceJSON = `"standby":{"disabled":false,"data_dir":".data/platform/standby",` + instanceTimeoutsJSON + `}`
 const instances = `"instances":{` + primaryInstanceJSON + `,"standby":{"disabled":true}}`
 const standbyEnabledInstances = `"instances":{` + primaryInstanceJSON + `,` + standbyInstanceJSON + `}`
+
+// leaseTimingsJSON are the lease timings a valid lease states, without the file.
+// Cases below drop or corrupt one part at a time rather than restating all five.
+const leaseTimingsJSON = `"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s","lag_bound":"30s"`
 
 // TestDescriptorRequiresExplicitDecisions checks the descriptor decoder rejects
 // JSON that leaves a decision to a zero value.
@@ -65,7 +75,7 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			err:  "instances.standby.disabled is required",
 		},
 		"lease when standby disabled": {
-			json: `{` + instances + `,"lease":{"file":"D:/opdl/lease","duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+			json: `{` + instances + `,"lease":{"file":"D:/opdl/lease",` + leaseTimingsJSON + `}}`,
 			err:  "lease is set but instances.standby.disabled is true",
 		},
 		"missing lease when standby enabled": {
@@ -77,12 +87,24 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			err:  "lease is required",
 		},
 		"missing lease file when standby enabled": {
-			json: `{` + standbyEnabledInstances + `,"lease":{"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+			json: `{` + standbyEnabledInstances + `,"lease":{` + leaseTimingsJSON + `}}`,
 			err:  "lease.file is required",
 		},
 		"bad lease duration when standby enabled": {
-			json: `{` + standbyEnabledInstances + `,"lease":{"file":"D:/opdl/lease","duration":"soon","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+			json: `{` + standbyEnabledInstances + `,"lease":{"file":"D:/opdl/lease","duration":"soon","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s","lag_bound":"30s"}}`,
 			err:  "lease.duration",
+		},
+		"missing lease lag bound when standby enabled": {
+			json: `{` + standbyEnabledInstances + `,"lease":{"file":"D:/opdl/lease","duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+			err:  "lease.lag_bound is required",
+		},
+		"missing instance read header timeout": {
+			json: `{"instances":{"primary":{"disabled":false,"data_dir":".data/platform/primary","api_shutdown_timeout":"10s"},"standby":{"disabled":true}}}`,
+			err:  "instances.primary.api_read_header_timeout is required",
+		},
+		"bad instance shutdown timeout": {
+			json: `{"instances":{"primary":{"disabled":false,"data_dir":".data/platform/primary","api_read_header_timeout":"5s","api_shutdown_timeout":"soon"},"standby":{"disabled":true}}}`,
+			err:  "instances.primary.api_shutdown_timeout",
 		},
 		"complete": {json: completeDescriptor},
 	}
@@ -128,15 +150,19 @@ func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
 	    "primary": {
 	      "disabled": false,
 	      "data_dir": ".data/platform/primary",
-	      "api_address": "127.0.0.1:8080"
+	      "api_address": "127.0.0.1:8080",
+	      "api_read_header_timeout": "5s",
+	      "api_shutdown_timeout": "10s"
 	    },
 	    "standby": {
 	      "disabled": false,
 	      "data_dir": ".data/platform/standby",
-	      "api_address": "127.0.0.1:8081"
+	      "api_address": "127.0.0.1:8081",
+	      "api_read_header_timeout": "5s",
+	      "api_shutdown_timeout": "10s"
 	    }
 	  },
-	  "lease": {"file": "D:/opdl/node/lease", "duration": "15s", "renewal_interval": "5s", "health_check_interval": "2s", "failback_stabilization": "30s"}
+	  "lease": {"file": "D:/opdl/node/lease", "duration": "15s", "renewal_interval": "5s", "health_check_interval": "2s", "failback_stabilization": "30s", "lag_bound": "30s"}
 	}`
 	require.NoError(t, json.Unmarshal([]byte(enabled), &descriptor))
 	require.False(t, descriptor.Instances.Standby.Disabled)

@@ -82,6 +82,12 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `json:"failback_stabilization"`
+	// LagBound is how far a process's projection may fall behind the journal
+	// before it stops being promotable, and before an Active process stops
+	// serving rather than answering from a stale view. It is carried on the lease
+	// because it bounds a failover, which is a question only a machine that
+	// deploys a standby asks.
+	LagBound string `json:"lag_bound"`
 }
 
 // validate checks a resolved lease is complete and its timings are usable. It is
@@ -94,18 +100,21 @@ func (l *Lease) validate() error {
 	if strings.TrimSpace(l.File) == "" {
 		return fmt.Errorf("lease.file is required")
 	}
-	duration, err := validateLeaseDuration("lease.duration", l.Duration)
+	duration, err := validatePositiveDuration("lease.duration", l.Duration)
 	if err != nil {
 		return err
 	}
-	renewal, err := validateLeaseDuration("lease.renewal_interval", l.RenewalInterval)
+	renewal, err := validatePositiveDuration("lease.renewal_interval", l.RenewalInterval)
 	if err != nil {
 		return err
 	}
-	if _, err := validateLeaseDuration("lease.health_check_interval", l.HealthCheckInterval); err != nil {
+	if _, err := validatePositiveDuration("lease.health_check_interval", l.HealthCheckInterval); err != nil {
 		return err
 	}
-	if _, err := validateLeaseDuration("lease.failback_stabilization", l.FailbackStabilization); err != nil {
+	if _, err := validatePositiveDuration("lease.failback_stabilization", l.FailbackStabilization); err != nil {
+		return err
+	}
+	if _, err := validatePositiveDuration("lease.lag_bound", l.LagBound); err != nil {
 		return err
 	}
 	if renewal >= duration {
@@ -114,8 +123,10 @@ func (l *Lease) validate() error {
 	return nil
 }
 
-// validateLeaseDuration parses one lease duration and requires it to be positive.
-func validateLeaseDuration(field, value string) (time.Duration, error) {
+// validatePositiveDuration parses one resolved duration string and requires it
+// to be positive. Every duration in a descriptor is one: a lease timing, a lag
+// bound, or an instance's listener timeout.
+func validatePositiveDuration(field, value string) (time.Duration, error) {
 	if strings.TrimSpace(value) == "" {
 		return 0, fmt.Errorf("%s is required", field)
 	}
@@ -177,6 +188,16 @@ type Instance struct {
 	// only while Active. A caller that needs the Active instance resolves which
 	// one that is; it does not get there by an address that changes owner.
 	APIAddress string `json:"api_address,omitempty"`
+	// APIReadHeaderTimeout bounds how long this instance's listener spends
+	// reading an HTTP request's headers before closing the connection.
+	//
+	// It is on the instance record rather than the machine because the listener
+	// it governs is, and it is a Go duration string ("5s") the platform parses at
+	// startup, exactly like the lease timings.
+	APIReadHeaderTimeout string `json:"api_read_header_timeout,omitempty"`
+	// APIShutdownTimeout bounds the graceful drain of this instance's listener
+	// when it stops serving.
+	APIShutdownTimeout string `json:"api_shutdown_timeout,omitempty"`
 }
 
 // WinService is one instance's resolved Windows Service identity.
@@ -292,6 +313,9 @@ func (d Descriptor) validateEndpoints() error {
 		if d.Instances.Standby.DataDir != "" {
 			return fmt.Errorf("instances.standby.data_dir is set but the standby is disabled")
 		}
+		if d.Instances.Standby.APIReadHeaderTimeout != "" || d.Instances.Standby.APIShutdownTimeout != "" {
+			return fmt.Errorf("instances.standby api timeouts are set but the standby is disabled")
+		}
 		return nil
 	}
 	if err := validateInstanceEndpoints("instances.standby", d.Instances.Standby); err != nil {
@@ -318,7 +342,11 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	if strings.TrimSpace(instance.DataDir) == "" {
 		return fmt.Errorf("%s.data_dir is required", prefix)
 	}
-	return nil
+	if _, err := validatePositiveDuration(prefix+".api_read_header_timeout", instance.APIReadHeaderTimeout); err != nil {
+		return err
+	}
+	_, err := validatePositiveDuration(prefix+".api_shutdown_timeout", instance.APIShutdownTimeout)
+	return err
 }
 
 // requireAddress checks a required host:port field is present and usable.

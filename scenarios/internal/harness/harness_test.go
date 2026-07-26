@@ -8,15 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPlatformConfigContainsOnlyRuntimeSettings(t *testing.T) {
-	config := string(platformConfig())
-
-	require.Contains(t, config, "lag_bound")
-	require.NotContains(t, config, "[operations]")
-	require.NotContains(t, config, "event_dir")
-	require.NotContains(t, config, "data_dir")
-}
-
 func TestOperationEventsReadsPrimaryAndStandbyRecords(t *testing.T) {
 	primary := filepath.Join(t.TempDir(), "primary")
 	standby := filepath.Join(t.TempDir(), "standby")

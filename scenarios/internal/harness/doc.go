@@ -83,8 +83,7 @@
 // two scenarios of one category do not share anything. The subdirectories are:
 //   - blueprints/: the temporary project.hcl rendered for the build
 //   - out/: the compiled packages and manifests produced by the builder
-//   - work/: runtime configuration files, site journals, and each instance's
-//     operational JSONL event record
+//   - work/: site journals and each instance's operational JSONL event record
 //   - control/: marker files, for a scenario that has to wait for something
 //     inside another process to reach a point
 //

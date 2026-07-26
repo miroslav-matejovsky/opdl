@@ -63,11 +63,10 @@ const standbyRetryInterval = 200 * time.Millisecond
 // instanceOf returns the running instance's own record: the endpoint it binds and
 // the directory it writes.
 //
-// It reads the descriptor the process was given rather than asking the
-// configuration file, because everything a single instance binds or writes is
-// resolved onto that instance's record at build time. A machine's two instances
-// share one descriptor and one configuration file, so anything read from either
-// without a role is a value they would both take.
+// Everything a single instance binds or writes is resolved onto that instance's
+// record at build time, so this is where it is read from. A machine's two
+// instances share one descriptor, so anything read from it without a role is a
+// value they would both take.
 func instanceOf(descriptor config.Descriptor, role redundancy.InstanceRole) config.Instance {
 	return descriptor.Instances.Get(config.Role(role == redundancy.RoleStandby))
 }
@@ -96,14 +95,16 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 	return role, nil
 }
 
-// hasEventStorage reports whether this instance was deployed with a site
-// journal to reach.
-//
-// A machine that authored no platform.event_storage block resolves to a
-// descriptor with no nats record, and an instance with no nats record runs no
-// Event Fabric. That is a whole-deployment property rather than a runtime state:
-// it does not change while the process runs, and both of a machine's instances
+// hasEventStorage reports whether this instance was deployed with a site journal
+// to reach. It is a whole-deployment property rather than a runtime state: it
+// does not change while the process runs, and both of a machine's instances
 // share it.
+//
+// TODO: it is hardcoded false. The answer used to come from the instance's nats
+// record in the descriptor, and the NATS Event Fabric has been removed, so no
+// deployment currently has event storage and every journal-dependent path below
+// is unreachable. Restore this when the replacement distribution mechanism lands;
+// until then the runtime always takes the journal-less path.
 func hasEventStorage(descriptor config.Descriptor, role redundancy.InstanceRole) bool {
 	return false
 }
@@ -153,12 +154,13 @@ func runProcess(ctx context.Context, proc process) (runErr error) {
 	passive := httpapi.NewPassiveHandler(func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStatePassive)
 	}, proc.started, leaseView)
-	server, err := openInstanceServer(ctx, address, proc.cfg.ReadHeaderTimeout(), passive)
+	standby := role == redundancy.RoleStandby
+	server, err := openInstanceServer(ctx, address, proc.cfg.ReadHeaderTimeout(standby), passive)
 	if err != nil {
 		return errors.Join(err, proc.local.Publish(ctx, APIListenFailed{Address: address, Error: err.Error()}))
 	}
 	// Whatever else happens, the listener drains before the process leaves.
-	defer func() { runErr = errors.Join(runErr, server.shutdown(proc.cfg.ShutdownTimeout())) }()
+	defer func() { runErr = errors.Join(runErr, server.shutdown(proc.cfg.ShutdownTimeout(standby))) }()
 
 	fmt.Printf("platform: %s listening on %s\n", role, address)
 	// A Passive instance is reachable too, and answers a different surface. Which
@@ -357,7 +359,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 	// is stopping, runProcess's deferred shutdown closes it afterwards.
 	server.serveWith(passive)
 	monitorErr := stopActiveMonitor()
-	drainErr := server.drain(cfg.ShutdownTimeout())
+	drainErr := server.drain(cfg.ShutdownTimeout(role == redundancy.RoleStandby))
 	closeErr := site.close(context.WithoutCancel(ctx))
 
 	err = errors.Join(serveErr, monitorErr, drainErr, closeErr)
@@ -414,7 +416,7 @@ func runActiveWithoutJournal(ctx context.Context, proc process, server *instance
 	// bound for a step-down, and runProcess's deferred shutdown closes it when
 	// the process is stopping.
 	server.serveWith(passive)
-	drainErr := server.drain(cfg.ShutdownTimeout())
+	drainErr := server.drain(cfg.ShutdownTimeout(role == redundancy.RoleStandby))
 	err := errors.Join(serveErr, drainErr)
 	stopped := APIStopped{}
 	if err != nil {

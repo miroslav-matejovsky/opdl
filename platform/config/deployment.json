@@ -17,7 +17,9 @@
         "display_name": "OPDL mock local mock (Primary Instance)"
       },
       "data_dir": ".data/platform/primary",
-      "api_address": "127.0.0.1:8080"
+      "api_address": "127.0.0.1:8080",
+      "api_read_header_timeout": "5s",
+      "api_shutdown_timeout": "10s"
     },
     "standby": {
       "disabled": true

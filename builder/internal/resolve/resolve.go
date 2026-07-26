@@ -72,6 +72,7 @@ func lease(machine blueprint.Machine) *deployment.Lease {
 		RenewalInterval:       authored.RenewalInterval,
 		HealthCheckInterval:   authored.HealthCheckInterval,
 		FailbackStabilization: authored.FailbackStabilization,
+		LagBound:              authored.LagBound,
 	}
 }
 
@@ -96,10 +97,12 @@ func instance(machine blueprint.Machine, role deployment.PlatformInstanceRole) d
 		return deployment.Instance{Disabled: true}
 	}
 	return deployment.Instance{
-		Disabled:   false,
-		Service:    winService(machine, role == deployment.RoleStandby),
-		DataDir:    machine.DataDir(role == deployment.RoleStandby),
-		APIAddress: loopbackAddress(endpoints.APILocalPort),
+		Disabled:             false,
+		Service:              winService(machine, role == deployment.RoleStandby),
+		DataDir:              machine.DataDir(role == deployment.RoleStandby),
+		APIAddress:           loopbackAddress(endpoints.APILocalPort),
+		APIReadHeaderTimeout: endpoints.APIReadHeaderTimeout,
+		APIShutdownTimeout:   endpoints.APIShutdownTimeout,
 	}
 }
 

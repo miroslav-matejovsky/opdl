@@ -36,16 +36,20 @@ func validDescriptor() deployment.Descriptor {
 		Services:       []string{"sensor-services"},
 		Instances: deployment.Instances{
 			Primary: deployment.Instance{
-				Disabled:   false,
-				Service:    &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
-				DataDir:    primaryDataDir,
-				APIAddress: primaryAPI,
+				Disabled:             false,
+				Service:              &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
+				DataDir:              primaryDataDir,
+				APIAddress:           primaryAPI,
+				APIReadHeaderTimeout: "5s",
+				APIShutdownTimeout:   "10s",
 			},
 			Standby: deployment.Instance{
-				Disabled:   false,
-				Service:    &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
-				DataDir:    standbyDataDir,
-				APIAddress: standbyAPI,
+				Disabled:             false,
+				Service:              &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
+				DataDir:              standbyDataDir,
+				APIAddress:           standbyAPI,
+				APIReadHeaderTimeout: "5s",
+				APIShutdownTimeout:   "10s",
 			},
 		},
 		Lease: &deployment.Lease{
@@ -54,6 +58,7 @@ func validDescriptor() deployment.Descriptor {
 			RenewalInterval:       "5s",
 			HealthCheckInterval:   "2s",
 			FailbackStabilization: "30s",
+			LagBound:              "30s",
 		},
 	}
 }
@@ -104,6 +109,26 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"is not on the loopback interface",
 		},
 		{
+			"missing primary read header timeout",
+			func(d *deployment.Descriptor) { d.Instances.Primary.APIReadHeaderTimeout = "" },
+			"instances.primary.api_read_header_timeout is required",
+		},
+		{
+			"non-positive primary read header timeout",
+			func(d *deployment.Descriptor) { d.Instances.Primary.APIReadHeaderTimeout = "0s" },
+			"must be positive",
+		},
+		{
+			"missing standby shutdown timeout",
+			func(d *deployment.Descriptor) { d.Instances.Standby.APIShutdownTimeout = "" },
+			"instances.standby.api_shutdown_timeout is required",
+		},
+		{
+			"missing lease lag bound",
+			func(d *deployment.Descriptor) { d.Lease.LagBound = "" },
+			"lease.lag_bound is required",
+		},
+		{
 			"instances share an api address",
 			func(d *deployment.Descriptor) {
 				d.Instances.Standby.APIAddress = d.Instances.Primary.APIAddress
@@ -129,6 +154,17 @@ func TestDescriptorValidateFailures(t *testing.T) {
 				d.Instances.Standby.Service = nil
 			},
 			"instances.standby.api_address is set but the standby is disabled",
+		},
+		{
+			"standby api timeouts while disabled",
+			func(d *deployment.Descriptor) {
+				d.Instances.Standby.Disabled = true
+				d.Lease = nil
+				d.Instances.Standby.Service = nil
+				d.Instances.Standby.APIAddress = ""
+				d.Instances.Standby.DataDir = ""
+			},
+			"instances.standby api timeouts are set but the standby is disabled",
 		},
 	}
 	for _, tc := range tests {

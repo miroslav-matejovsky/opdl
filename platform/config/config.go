@@ -6,65 +6,84 @@ import (
 	"time"
 )
 
-// Config is the platform's effective runtime configuration: a composition of the
-// deployment descriptor the builder stages before compiling (see Deployment) and
-// the platform's TOML configuration file, which supplies the settings a site may
-// specify without rebuilding the binary.
-// Everything an instance binds or writes on its own is read from the descriptor
-// by role, not held here: the configuration file is what a site decides for the
-// machine, and a machine's two instances read the same copy of it.
+// Config is the platform's effective runtime configuration: the deployment
+// descriptor the builder stages before compiling (see Deployment), with every
+// duration it carries parsed once at startup.
+//
+// There is one source. Everything an instance binds, writes, or is bounded by is
+// authored in the project blueprint and resolved onto that instance's record in
+// the descriptor, so a binary states its own configuration and a site changes it
+// by rebuilding rather than by editing a file next to the executable.
 type Config struct {
-	descriptor        Descriptor
-	readHeaderTimeout time.Duration
-	shutdownTimeout   time.Duration
-	lagBound          time.Duration
+	descriptor Descriptor
+	primary    instanceTimeouts
+	standby    instanceTimeouts
+	lagBound   time.Duration
 }
 
-// Load composes a Config from the platform's embedded deployment descriptor and
-// the TOML configuration file at configPath. No defaults are allowed: the
-// configuration file must exist and carry valid settings for all required options.
-func Load(configPath string) (*Config, error) {
+// instanceTimeouts are one instance's parsed listener timeouts. They are per
+// instance because the listener they govern is: a machine's two instances are
+// independent runtimes that bind their own addresses.
+type instanceTimeouts struct {
+	readHeader time.Duration
+	shutdown   time.Duration
+}
+
+// Load composes a Config from the platform's embedded deployment descriptor. No
+// defaults are applied: a descriptor missing a duration, or carrying one that is
+// not positive, is a startup failure rather than a value someone has to guess at
+// later.
+func Load() (*Config, error) {
 	d, err := Deployment()
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	f, err := loadFile(configPath)
+	cfg := &Config{descriptor: d}
+	cfg.primary, err = timeoutsOf(RolePrimary, d.Instances.Primary)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	readHeaderTimeout, err := validateDuration("read_header_timeout", f.ReadHeaderTimeout)
+	cfg.standby, err = timeoutsOf(RoleStandby, d.Instances.Standby)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	shutdownTimeout, err := validateDuration("shutdown_timeout", f.ShutdownTimeout)
+	cfg.lagBound, err = lagBoundOf(d.Lease)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
-	}
-	lagBound, err := eventStorageSettings(configPath, f)
-	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-
-	cfg := &Config{
-		descriptor:        d,
-		readHeaderTimeout: readHeaderTimeout,
-		shutdownTimeout:   shutdownTimeout,
-		lagBound:          lagBound,
 	}
 	return cfg, nil
 }
 
-// eventStorageSettings validates the settings that only mean something to a
-// deployment with a site journal, and returns the projection lag bound.
-func eventStorageSettings(path string, f file) (lagBound time.Duration, err error) {
-	if f.LagBound == "" {
-		return 0, fmt.Errorf("configuration file %s: lag_bound is required", path)
+// timeoutsOf parses one instance's listener timeouts. An instance that is not
+// deployed carries none and binds nothing, so its timeouts stay zero and are
+// never read.
+func timeoutsOf(role PlatformInstanceRole, instance Instance) (instanceTimeouts, error) {
+	if instance.Disabled {
+		return instanceTimeouts{}, nil
 	}
-	return validateLagBound(f.LagBound)
+	readHeader, err := validateDuration(fmt.Sprintf("instances.%s.api_read_header_timeout", role), instance.APIReadHeaderTimeout)
+	if err != nil {
+		return instanceTimeouts{}, err
+	}
+	shutdown, err := validateDuration(fmt.Sprintf("instances.%s.api_shutdown_timeout", role), instance.APIShutdownTimeout)
+	if err != nil {
+		return instanceTimeouts{}, err
+	}
+	return instanceTimeouts{readHeader: readHeader, shutdown: shutdown}, nil
+}
+
+// lagBoundOf parses the lease's projection lag bound. A machine that deploys no
+// Standby Instance carries no lease: it trades ownership with nobody, so there
+// is no failover for a lag bound to gate and the bound is zero.
+func lagBoundOf(lease *Lease) (time.Duration, error) {
+	if lease == nil {
+		return 0, nil
+	}
+	return validateDuration("lease.lag_bound", lease.LagBound)
 }
 
 func validateDuration(name, s string) (time.Duration, error) {
-	d, err := time.ParseDuration(s)
+	d, err := time.ParseDuration(strings.TrimSpace(s))
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s %q: %w", name, s, err)
 	}
@@ -74,52 +93,47 @@ func validateDuration(name, s string) (time.Duration, error) {
 	return d, nil
 }
 
-// validateLagBound parses the required positive projection lag bound.
-func validateLagBound(s string) (time.Duration, error) {
-	if s == "" {
-		return 0, fmt.Errorf("lag_bound is required")
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid lag_bound %q: %w", s, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("invalid lag_bound %s: duration must be positive", d)
-	}
-	return d, nil
-}
-
 // Descriptor returns the deployment descriptor the platform booted with.
 func (c *Config) Descriptor() Descriptor { return c.descriptor }
 
-// Nothing here answers for a single instance. The API address and the runtime
-// directory are resolved onto each instance's record in the descriptor, and the
-// runtime reads its own from there; see app.instanceOf. A Config accessor taking
-// a role would be a second way to reach the same field, and the one the caller
-// picked would be the one that could be wrong.
+// timeouts returns one instance's parsed listener timeouts.
+func (c *Config) timeouts(standby bool) instanceTimeouts {
+	if standby {
+		return c.standby
+	}
+	return c.primary
+}
 
-// ReadHeaderTimeout returns the maximum duration allowed for reading HTTP request headers.
-func (c *Config) ReadHeaderTimeout() time.Duration { return c.readHeaderTimeout }
+// ReadHeaderTimeout returns the running instance's maximum duration for reading
+// HTTP request headers. It takes the instance role because the two instances of
+// a machine bind their own listeners and each is bounded by its own authored
+// value.
+func (c *Config) ReadHeaderTimeout(standby bool) time.Duration {
+	return c.timeouts(standby).readHeader
+}
 
-// ShutdownTimeout returns the maximum duration allowed for graceful server and
-// Event Fabric shutdown.
-func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
+// ShutdownTimeout returns the running instance's maximum duration for the
+// graceful drain of its listener.
+func (c *Config) ShutdownTimeout(standby bool) time.Duration {
+	return c.timeouts(standby).shutdown
+}
 
-// LagBound returns the configured projection lag bound. A process lagging beyond
-// it is not ready to take over, and an active process beyond it stops serving.
+// LagBound returns the lease's projection lag bound. A process lagging beyond it
+// is not ready to take over, and an active process beyond it stops serving. It
+// is zero on a machine that deploys no Standby Instance and therefore no lease.
 func (c *Config) LagBound() time.Duration { return c.lagBound }
 
 // Summary renders the effective configuration as a human-readable block for
-// logging at startup. It names the credentials file but never reads a secret
-// into the log.
+// logging at startup.
 //
 // It takes the running instance's role so a two-instance machine's two startup
-// blocks are told apart: both list the same descriptor and the same
-// configuration file, and the only thing that differs is which instance printed
-// it.
+// blocks are told apart: both list the same descriptor, and what differs is
+// which instance printed it and which listener timeouts that instance is bound
+// by.
 func (c *Config) Summary(standby bool) string {
 	d := c.descriptor
 	inst := d.Instances.Get(Role(standby))
+	timeouts := c.timeouts(standby)
 	var b strings.Builder
 	fmt.Fprintf(&b, "platform configuration (machine=%s):\n", d.Machine)
 	fmt.Fprintf(&b, "  deployment descriptor (embedded, staged by builder):\n")
@@ -134,10 +148,9 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
 	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(inst.DataDir))
 	fmt.Fprintf(&b, "    lease        %s\n", leaseSummary(d.Lease))
-	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
-	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
-	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
-	fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
+	fmt.Fprintf(&b, "  this instance's api:\n")
+	fmt.Fprintf(&b, "    read_header_timeout %s\n", timeouts.readHeader)
+	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", timeouts.shutdown)
 	return b.String()
 }
 
@@ -165,17 +178,15 @@ func instancesSummary(instances Instances, self PlatformInstanceRole) string {
 }
 
 // leaseSummary renders the Primary Ownership lease file and its timings when a
-// standby is deployed.
+// standby is deployed. The lag bound is here because it is a lease timing: it
+// bounds whether ownership may move at all.
 func leaseSummary(lease *Lease) string {
 	if lease == nil {
 		return "(not deployed)"
 	}
-	return fmt.Sprintf("%s duration=%s renewal=%s health_check=%s failback=%s",
-		lease.File, lease.Duration, lease.RenewalInterval, lease.HealthCheckInterval, lease.FailbackStabilization)
+	return fmt.Sprintf("%s duration=%s renewal=%s health_check=%s failback=%s lag_bound=%s",
+		lease.File, lease.Duration, lease.RenewalInterval, lease.HealthCheckInterval, lease.FailbackStabilization, lease.LagBound)
 }
-
-// lagBoundSummary renders the required projection lag bound.
-func lagBoundSummary(bound time.Duration) string { return bound.String() }
 
 func optionalPathSummary(path string) string {
 	if path == "" {

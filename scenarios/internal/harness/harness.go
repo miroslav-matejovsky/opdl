@@ -155,7 +155,7 @@ var (
 //	    BuildAndRunSingleMachine/
 //	      blueprints/    rendered project.hcl
 //	      out/           built machine packages and manifests
-//	      work/          config-*.toml, journal-*, data-*
+//	      work/          journal-*, data-*
 //	      control/       marker files
 func scenarioDir(t *testing.T) string {
 	t.Helper()
@@ -369,12 +369,11 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 //
 // Every value was rendered into the blueprint before the build and is carried
 // only so a scenario can reach a machine, inspect its event record, and assert
-// what the deployment derived. The runtime configuration contains none of
-// these values.
+// what the deployment derived. Nothing here is written beside the binary: the
+// blueprint is the only place these are stated, and the build compiles them in.
 //
-// The API address and each instance's runtime directory are an instance's rather
-// than a machine's, so the descriptor resolves them per instance and the
-// configuration file cannot state either.
+// The API address and each instance's data directory are an instance's rather
+// than a machine's, so the descriptor resolves them per instance.
 //
 // The two data directories are how a scenario reads what an instance stated:
 // each one holds that instance's events/events.jsonl. See operationEvents.
@@ -385,8 +384,8 @@ type Sockets struct {
 	DataDir        string
 	StandbyDataDir string
 
-	// API and StandbyAPI are the blueprint's, for reaching a
-	// machine and for assertions. Nothing writes them to a config file.
+	// API and StandbyAPI are the blueprint's, for reaching a machine and for
+	// assertions.
 	// StandbyAPI is the Standby Instance's own address, empty on a machine that
 	// deploys no standby; each instance binds its own for its whole lifetime.
 	API        string
@@ -503,7 +502,6 @@ type Machine struct {
 	Sockets Sockets
 
 	BinaryPath string
-	configPath string
 	LaunchArgs []string
 	// Standby is this machine's Standby Instance once StartSite has started one.
 	Standby *ManagedProcess
@@ -543,8 +541,7 @@ func (m *Machine) Exited() bool {
 // handle a scenario can stop on its own.
 func (m *Machine) StartManaged(ctx context.Context, t *testing.T, role string, args []string) *ManagedProcess {
 	t.Helper()
-	commandArgs := append([]string{"-config", m.configPath}, args...)
-	cmd := exec.CommandContext(ctx, m.BinaryPath, commandArgs...)
+	cmd := exec.CommandContext(ctx, m.BinaryPath, args...)
 	proc, err := procrun.Start(cmd)
 	require.NoError(t, err)
 	p := &ManagedProcess{
@@ -602,28 +599,28 @@ func operationEvents(m *Machine) string {
 	return b.String()
 }
 
-// prepareMachine writes a configuration file for one built machine without
-// starting it.
+// prepareMachine takes a handle on one built machine without starting it.
 //
 // Preparing and starting are separate so a scenario can know where a machine
 // will answer before it is running. That is what lets a machine be deliberately
 // offline for part of a scenario while something else is already configured to
 // call it, which is the only way to observe what the platform does about an
 // expected machine that is not there.
+//
+// There is nothing to write. Every setting a machine runs with is authored in
+// the rendered blueprint and compiled into its binary, so preparing a machine is
+// finding the binary the build produced and reading the launch arguments out of
+// its manifest.
 func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machine {
 	t.Helper()
 	binaryPath := machineBinary(s.outDir, s.project, name)
 	require.FileExists(t, binaryPath)
-
-	configPath := filepath.Join(s.workDir, "config-"+name+".toml")
-	require.NoError(t, os.WriteFile(configPath, platformConfig(), 0o644))
 
 	m := &Machine{
 		Name:       name,
 		URL:        "http://" + reserved.API,
 		Sockets:    reserved,
 		BinaryPath: binaryPath,
-		configPath: configPath,
 		LaunchArgs: ReadManifest(t, binaryPath).Primary.Args,
 	}
 	if reserved.StandbyAPI != "" {
@@ -633,31 +630,11 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 	return m
 }
 
-// platformConfig renders runtime-only platform settings. Storage paths,
-// addresses, and backend selection are compiled from the blueprint into the
-// descriptor. A machine's two instances read this one file, so it cannot hold
-// per-instance values.
-//
-// The three tolerances are deliberately looser than platform/config.toml's 30s.
-// They bound how long a machine puts up with a slow environment before giving
-// up, and a scenario suite is a slow environment on purpose: it builds the
-// platform and starts it on a busy host. No scenario asserts on these
-// values, so raising them removes a false failure without weakening anything: a
-// machine that genuinely never catches up still fails, on the assertion that was
-// actually being made.
-func platformConfig() []byte {
-	return []byte(`read_header_timeout = "5s"
-shutdown_timeout = "10s"
-lag_bound = "2m"
-`)
-}
-
 // Start runs a prepared machine.
 func (m *Machine) Start(ctx context.Context, t *testing.T) {
 	t.Helper()
 	require.Nil(t, m.Process, "%s is already started", m.Name)
-	args := append([]string{"-config", m.configPath}, m.LaunchArgs...)
-	cmd := exec.CommandContext(ctx, m.BinaryPath, args...)
+	cmd := exec.CommandContext(ctx, m.BinaryPath, m.LaunchArgs...)
 	proc, err := procrun.Start(cmd)
 	require.NoError(t, err)
 	m.Process = proc

@@ -19,12 +19,18 @@ project "customer-a" {
       #
       # data_dir is the general platform data root for this instance.
       #
-      # api is the port this instance serves its local API on. It is called
-      # local_port because the builder joins it with 127.0.0.1 and never with the
-      # machine's ip: the platform API is machine-local and is not exposed to the
-      # network. Each instance has its own and binds it for its whole lifetime,
-      # not only while Active, so an operator can query a Standby Instance about
-      # itself.
+      # api is the port this instance serves its local API on, and the timeouts
+      # bounding that listener. It is called local_port because the builder joins
+      # it with 127.0.0.1 and never with the machine's ip: the platform API is
+      # machine-local and is not exposed to the network. Each instance has its
+      # own and binds it for its whole lifetime, not only while Active, so an
+      # operator can query a Standby Instance about itself.
+      #
+      # read_header_timeout bounds reading a request's headers before the
+      # connection is closed; shutdown_timeout bounds the graceful drain when the
+      # instance stops serving. Both are per instance because the listener they
+      # govern is. There is no runtime configuration file: everything the
+      # platform runs with is authored here and compiled into the binary.
       #
       # winservice names the Windows Service that runs the instance. The platform
       # installs and manages no services and has no Service Control Manager
@@ -41,6 +47,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -72,6 +80,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -90,16 +100,25 @@ project "customer-a" {
           # no longer serve. duration must be finite and renewal_interval shorter
           # than it. failback_stabilization is how long a returning Primary must
           # be continuously healthy before the Standby hands ownership back.
+          #
+          # lag_bound is here because it is a failover bound: it is how far a
+          # projection may fall behind the journal before the instance stops
+          # being promotable, and before an Active instance stops serving rather
+          # than answering from a stale view. A machine that deploys no standby
+          # trades ownership with nobody and states no lag bound.
           lease {
             file                   = "D:/opdl/customer-a/north/local-server/lease"
             duration               = "15s"
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {
@@ -121,6 +140,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -138,10 +159,13 @@ project "customer-a" {
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {
@@ -161,6 +185,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -178,10 +204,13 @@ project "customer-a" {
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {
@@ -201,6 +230,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -218,10 +249,13 @@ project "customer-a" {
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {

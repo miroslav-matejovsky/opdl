@@ -15,6 +15,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -40,6 +42,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -56,10 +60,13 @@ project "customer-a" {
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {
@@ -80,6 +87,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -96,10 +105,13 @@ project "customer-a" {
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {
@@ -118,6 +130,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -134,10 +148,13 @@ project "customer-a" {
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {
@@ -156,6 +173,8 @@ project "customer-a" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
@@ -172,10 +191,13 @@ project "customer-a" {
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {

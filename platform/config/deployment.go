@@ -83,6 +83,15 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `json:"failback_stabilization"`
+	// LagBound is how far a process's projection may fall behind the journal
+	// before it stops being promotable, and before an Active process stops
+	// serving rather than answering from a stale view.
+	//
+	// It is on the lease because it bounds a failover: a machine that deploys no
+	// standby has no lease, trades ownership with nobody, and therefore has no
+	// lag bound either. It is an operational safety bound, not a failover-time
+	// SLO.
+	LagBound string `json:"lag_bound"`
 }
 
 // UnmarshalJSON decodes a descriptor and requires every resolved decision it
@@ -91,11 +100,12 @@ type Lease struct {
 // The checks exist because the fields they guard are a bool, a string, and a
 // struct, and all have a usable zero value. An omitted instances.standby.disabled
 // would decode as false and silently deploy redundancy nobody asked for; an
-// omitted peers list would decode as a site of one, so a registration would need
-// no confirmation but its own; an omitted lock.windows_mutex would decode as an empty
-// ownership record, and a machine whose two instances coordinate through nothing
-// has no ownership at all when standby is enabled. Failing here turns a truncated or stale descriptor
-// into a startup error instead of a running machine with the wrong topology.
+// omitted api_read_header_timeout would decode as zero, which http.Server reads
+// as no limit at all; an omitted lease would decode as an empty ownership
+// record, and a machine whose two instances coordinate through nothing has no
+// ownership at all when standby is enabled. Failing here turns a truncated or
+// stale descriptor into a startup error instead of a running machine with the
+// wrong topology.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
@@ -163,26 +173,34 @@ func validateInstanceFields(role PlatformInstanceRole, raw json.RawMessage) erro
 	if _, err := requiredField(instance, "instances."+string(role)+".data_dir"); err != nil {
 		return err
 	}
-	return validateInstanceNatsField(role, instance["nats"])
+	// The listener timeouts are required of a deployed instance for the same
+	// reason its address is: it binds a listener for its whole lifetime, and a
+	// missing timeout would decode as zero, which Go's http.Server reads as "no
+	// limit" rather than as an omission.
+	for _, field := range []string{"api_read_header_timeout", "api_shutdown_timeout"} {
+		raw, err := requiredField(instance, "instances."+string(role)+"."+field)
+		if err != nil {
+			return err
+		}
+		if err := checkDurationField("instances."+string(role)+"."+field, raw); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// validateInstanceNatsField checks a deployed instance's event storage record.
-//
-// The record is optional: a machine that authored no event storage deploys an
-// instance with no Event Fabric, which binds its API and serves no domain
-// operation. When it is present it must be usable, because an instance that
-// thinks it has a journal and cannot open one is worse than one that knows it
-// has none.
-func validateInstanceNatsField(role PlatformInstanceRole, raw json.RawMessage) error {
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil
+// checkDurationField verifies a descriptor field holds a valid Go duration
+// string, so a truncated or hand-edited descriptor fails at load rather than
+// when the value is first needed.
+func checkDurationField(name string, raw json.RawMessage) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid %s: %w", name, err)
 	}
-	var nats map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &nats); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid instances.%s.nats: %w", role, err)
+	if _, err := time.ParseDuration(value); err != nil {
+		return fmt.Errorf("deployment descriptor: %s %q is not a valid duration: %w", name, value, err)
 	}
-	_, err := requiredField(nats, "instances."+string(role)+".nats.jetstream_store_dir")
-	return err
+	return nil
 }
 
 // validateLeaseField verifies the lease block matches the standby status: absent
@@ -208,17 +226,13 @@ func validateLeaseField(fields map[string]json.RawMessage, standbyDisabled bool)
 	if _, err := requiredField(leaseFields, "lease.file"); err != nil {
 		return err
 	}
-	for _, field := range []string{"duration", "renewal_interval", "health_check_interval", "failback_stabilization"} {
+	for _, field := range []string{"duration", "renewal_interval", "health_check_interval", "failback_stabilization", "lag_bound"} {
 		raw, err := requiredField(leaseFields, "lease."+field)
 		if err != nil {
 			return err
 		}
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return fmt.Errorf("deployment descriptor: invalid lease.%s: %w", field, err)
-		}
-		if _, err := time.ParseDuration(value); err != nil {
-			return fmt.Errorf("deployment descriptor: lease.%s %q is not a valid duration: %w", field, value, err)
+		if err := checkDurationField("lease."+field, raw); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -302,4 +316,15 @@ type Instance struct {
 	// api.local_port and resolved onto 127.0.0.1, and no instance's API is
 	// reachable from the network.
 	APIAddress string `json:"api_address,omitempty"`
+	// APIReadHeaderTimeout bounds how long this instance's listener spends
+	// reading an HTTP request's headers before closing the connection.
+	//
+	// It is on the instance record rather than the machine because the listener
+	// it governs is: the two instances are independent runtimes with independent
+	// listeners. It is a Go duration string ("5s"), parsed at startup.
+	APIReadHeaderTimeout string `json:"api_read_header_timeout,omitempty"`
+	// APIShutdownTimeout bounds the graceful drain of this instance's listener
+	// when it stops serving, whether it is stepping down or the process is
+	// leaving.
+	APIShutdownTimeout string `json:"api_shutdown_timeout,omitempty"`
 }

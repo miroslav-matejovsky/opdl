@@ -2,9 +2,9 @@
 
 The `platform` directory contains the runtime assembled into every machine-specific OPDL binary. The command composes the embedded deployment descriptor, the Event Fabric and its site journal, the registration projection, services, and durable handler, and the public HTTP API.
 
-Both tiers of configuration live in [`config`](config): the deployment descriptor compiled in at build time, and the TOML file read at startup. The effective configuration is their combination, which is why they are one package.
+Configuration lives in [`config`](config), and there is one source of it: the deployment descriptor compiled in at build time. Identity, endpoints, storage directories, the listener timeouts bounding each instance's API, and the Primary Ownership lease with its projection lag bound all come from it. There is no runtime configuration file: a launch decides only which of the machine's two instances the process is, through `-instance primary|standby`.
 
-Runtime identity, endpoints, storage directories, and Event Fabric topology come only from the descriptor. The configuration file supplies runtime-only timeouts and NATS credentials. It cannot move a socket, select a backend, change a storage path, or change which project, site, or machine the binary represents. Unknown settings are rejected rather than ignored.
+A site changes a setting by rebuilding from the blueprint, which is what it already did for every endpoint and every path. The listener timeouts are authored per instance in the blueprint's `api` blocks; the lag bound is authored on the machine's `standby.lease`, because it bounds a failover and a machine that deploys no standby trades ownership with nobody. A descriptor missing a required decision, or carrying a duration that is not positive, fails at startup rather than defaulting.
 
 The internal packages keep the HTTP contract, registration decisions, and the event transport behind separate boundaries: the registration package is handed a publisher, a projector, and a handler, and never learns which transport carries them. For system contracts and architectural details, refer to the overview in [`docs`](../docs/README.md).
 
@@ -25,6 +25,17 @@ exiting. A Passive instance serves its health endpoints and `GET /instance`,
 accepts no writes, and refuses domain operations with a `503` naming the
 instance that owns. A transition swaps the handler behind a listener that is
 already open, so an instance's address never moves and is never briefly free.
+
+> **TODO — the Event Fabric is currently absent.** The NATS implementation of
+> event storage and the Event Fabric was removed during the ongoing refactor, and
+> a replacement distribution mechanism has not landed. Everything below about
+> Event Fabric endpoints, `jetstream_store_dir`, storage selection, the site
+> journal, and cross-machine coordination describes the design, not the code that
+> is in the tree. Until the replacement lands, no deployment has event storage:
+> `app.hasEventStorage` is hardcoded false, every instance takes the
+> journal-less path, and registration and other domain operations are refused
+> with a reason naming the deployment. The mandatory local JSONL record is
+> unaffected and is the only event surface that currently works.
 
 Each deployed instance has its own resolved Event Fabric endpoints and
 `jetstream_store_dir`. Storage selection is per instance. Selected instances

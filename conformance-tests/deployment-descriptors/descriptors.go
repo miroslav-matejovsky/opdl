@@ -40,37 +40,39 @@ func checkContractsMatch() error {
 // These values are named so the descriptor and its peer topology stay easy to
 // compare without scattering literals through the fixture.
 //
-// The fixture is a two-machine site where the peer stores the journal and this
-// machine does not, and where both machines deploy both instances. That shape
-// exercises what the contract now has to carry: two peers on one machine sharing
-// an ip and differing by port, and a per-instance NATS topology rather than a
-// machine-level one.
+// The fixture is one machine deploying both instances. That shape exercises what
+// the contract has to carry: two independent runtimes on one machine, each with
+// its own directory, its own listener, and its own bounds on that listener.
 const (
 	site      = "north"
 	machine   = "sensor"
 	machineIP = "10.0.1.10"
 
-	// The api addresses are on loopback and the Event Fabric's are on the machine
-	// ip. That split is the contract: the platform API is machine-local, so it is
-	// resolved onto 127.0.0.1 and a peer carries no api address at all.
-	dataDir                  = "D:/opdl/customer-a/north/sensor/primary"
-	jetstreamStoreDir        = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
-	apiAddr                  = "127.0.0.1:8080"
-	clientAddr               = "10.0.1.10:4222"
-	clusterAddr              = "10.0.1.10:6222"
-	standbyDataDir           = "D:/opdl/customer-a/north/sensor/standby"
-	standbyJetStreamStoreDir = "D:/opdl/customer-a/north/sensor/standby/eventfabric/nats"
-	standbyAPIAddr           = "127.0.0.1:8081"
-	standbyClient            = "10.0.1.10:4322"
-	standbyCluster           = "10.0.1.10:6322"
+	// The api addresses are on loopback. That is the contract: the platform API
+	// is machine-local, so it is resolved onto 127.0.0.1 and never onto the
+	// machine ip.
+	dataDir        = "D:/opdl/customer-a/north/sensor/primary"
+	apiAddr        = "127.0.0.1:8080"
+	standbyDataDir = "D:/opdl/customer-a/north/sensor/standby"
+	standbyAPIAddr = "127.0.0.1:8081"
 
-	// The Primary Ownership lease a standby machine carries: a shared file and the
-	// failover timings, all round-tripped through the platform's type intact.
+	// The listener timeouts are on the instance record for the same reason the
+	// api address is: the two instances bind their own listeners. They differ
+	// between the roles here so a round trip that swapped them would fail.
+	readHeaderTimeout        = "5s"
+	shutdownTimeout          = "10s"
+	standbyReadHeaderTimeout = "6s"
+	standbyShutdownTimeout   = "11s"
+
+	// The Primary Ownership lease a standby machine carries: a shared file, the
+	// failover timings, and the projection lag bound that gates a failover, all
+	// round-tripped through the platform's type intact.
 	leaseFile                  = "D:/opdl/customer-a/north/sensor/lease"
 	leaseDuration              = "15s"
 	leaseRenewalInterval       = "5s"
 	leaseHealthCheckInterval   = "2s"
 	leaseFailbackStabilization = "30s"
+	leaseLagBound              = "30s"
 )
 
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
@@ -96,14 +98,18 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	var wantLease *platformconfig.Lease
 	if !standbyDisabled {
 		builtStandby = builderdeployment.Instance{
-			Disabled:   false,
-			DataDir:    standbyDataDir,
-			APIAddress: standbyAPIAddr,
+			Disabled:             false,
+			DataDir:              standbyDataDir,
+			APIAddress:           standbyAPIAddr,
+			APIReadHeaderTimeout: standbyReadHeaderTimeout,
+			APIShutdownTimeout:   standbyShutdownTimeout,
 		}
 		wantStandby = platformconfig.Instance{
-			Disabled:   false,
-			DataDir:    standbyDataDir,
-			APIAddress: standbyAPIAddr,
+			Disabled:             false,
+			DataDir:              standbyDataDir,
+			APIAddress:           standbyAPIAddr,
+			APIReadHeaderTimeout: standbyReadHeaderTimeout,
+			APIShutdownTimeout:   standbyShutdownTimeout,
 		}
 		builtLease = &builderdeployment.Lease{
 			File:                  leaseFile,
@@ -111,6 +117,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			RenewalInterval:       leaseRenewalInterval,
 			HealthCheckInterval:   leaseHealthCheckInterval,
 			FailbackStabilization: leaseFailbackStabilization,
+			LagBound:              leaseLagBound,
 		}
 		wantLease = &platformconfig.Lease{
 			File:                  leaseFile,
@@ -118,6 +125,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			RenewalInterval:       leaseRenewalInterval,
 			HealthCheckInterval:   leaseHealthCheckInterval,
 			FailbackStabilization: leaseFailbackStabilization,
+			LagBound:              leaseLagBound,
 		}
 	}
 
@@ -132,9 +140,11 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		Services:       []string{"sensor-services", "core-services"},
 		Instances: builderdeployment.Instances{
 			Primary: builderdeployment.Instance{
-				Disabled:   false,
-				DataDir:    dataDir,
-				APIAddress: apiAddr,
+				Disabled:             false,
+				DataDir:              dataDir,
+				APIAddress:           apiAddr,
+				APIReadHeaderTimeout: readHeaderTimeout,
+				APIShutdownTimeout:   shutdownTimeout,
 			},
 			Standby: builtStandby,
 		},
@@ -165,9 +175,11 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		Services:       []string{"sensor-services", "core-services"},
 		Instances: platformconfig.Instances{
 			Primary: platformconfig.Instance{
-				Disabled:   false,
-				DataDir:    dataDir,
-				APIAddress: apiAddr,
+				Disabled:             false,
+				DataDir:              dataDir,
+				APIAddress:           apiAddr,
+				APIReadHeaderTimeout: readHeaderTimeout,
+				APIShutdownTimeout:   shutdownTimeout,
 			},
 			Standby: wantStandby,
 		},

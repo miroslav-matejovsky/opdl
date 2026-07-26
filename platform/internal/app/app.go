@@ -25,13 +25,14 @@ func Run(args []string) (runErr error) {
 	started := time.Now()
 
 	fs := flag.NewFlagSet("platform", flag.ContinueOnError)
-	configPath := fs.String("config", "config.toml", "path to the platform TOML configuration file")
 	instance := fs.String("instance", "", "process role: primary or standby")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	// Everything this process is configured with is compiled into it, so the only
+	// thing a launch decides is which of the machine's two instances this is.
+	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}

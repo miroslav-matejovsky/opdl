@@ -94,9 +94,27 @@ type Platform struct {
 // lifetime, not only while Active. That is what lets an operator ask a Standby
 // Instance about itself, which a single endpoint owned by whoever is Active
 // cannot answer.
+//
+// # The server timeouts are the instance's too
+//
+// read_header_timeout and shutdown_timeout govern the listener authored here, so
+// they are authored here. They are per instance for the same reason the port is:
+// the two instances are independent runtimes with independent listeners, and a
+// machine-level value would be one both of them took whether or not it suited
+// either.
+//
+// The durations are HCL strings in Go's duration syntax ("5s", "10s"). They are
+// carried through the descriptor unparsed and validated by the builder; the
+// platform parses them at startup.
 type API struct {
 	// LocalPort is the loopback port this instance serves its local API on.
 	LocalPort int `hcl:"local_port"`
+	// ReadHeaderTimeout bounds how long this instance's listener spends reading
+	// an HTTP request's headers before it closes the connection.
+	ReadHeaderTimeout string `hcl:"read_header_timeout"`
+	// ShutdownTimeout bounds the graceful drain of this instance's listener when
+	// it stops serving, whether it is stepping down or the process is leaving.
+	ShutdownTimeout string `hcl:"shutdown_timeout"`
 }
 
 // maxWinServiceName bounds a Windows Service name. The Service Control Manager
@@ -166,6 +184,15 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `hcl:"failback_stabilization"`
+	// LagBound is how far a process's projection may fall behind the journal
+	// before it stops being promotable, and before an Active process stops
+	// serving rather than answering from a stale view.
+	//
+	// It is authored on the lease because it is a failover bound: it decides
+	// whether the machine's two instances may trade ownership, which is a
+	// question only a machine that deploys a standby asks. It is an operational
+	// safety bound, not a failover-time SLO.
+	LagBound string `hcl:"lag_bound"`
 }
 
 // Lease returns the machine's authored ownership lease policy, or nil when the
@@ -313,13 +340,37 @@ func validatePlatform(machine Machine) error {
 	return validateLease(machine)
 }
 
-// validateInstanceEndpoints checks one instance states its endpoint
-// policies with usable ports.
+// validateInstanceEndpoints checks one instance states its endpoint policy with
+// a usable port and usable listener timeouts.
 func validateInstanceEndpoints(machine Machine, block string, api *API) error {
 	if api == nil {
 		return fmt.Errorf("machine %q: %s.api block is required", machine.Name, block)
 	}
-	return validatePort(machine.Name, block+".api.local_port", api.LocalPort)
+	if err := validatePort(machine.Name, block+".api.local_port", api.LocalPort); err != nil {
+		return err
+	}
+	if err := validateAPIDuration(machine.Name, block+".api.read_header_timeout", api.ReadHeaderTimeout); err != nil {
+		return err
+	}
+	return validateAPIDuration(machine.Name, block+".api.shutdown_timeout", api.ShutdownTimeout)
+}
+
+// validateAPIDuration parses one authored listener timeout and requires it to be
+// a positive Go duration. A zero or negative timeout is rejected rather than
+// treated as "no limit": the two read the same in a blueprint and only one of
+// them is ever meant.
+func validateAPIDuration(machineName, where, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("machine %q: %s is required", machineName, where)
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("machine %q: %s %q is not a valid duration: %w", machineName, where, value, err)
+	}
+	if d <= 0 {
+		return fmt.Errorf("machine %q: %s %s must be positive", machineName, where, d)
+	}
+	return nil
 }
 
 // validateStandbyEndpoints checks a deployed Standby Instance states its own
@@ -495,6 +546,9 @@ func validateLease(machine Machine) error {
 	if _, err := validateLeaseDuration(machine.Name, "failback_stabilization", lease.FailbackStabilization); err != nil {
 		return err
 	}
+	if _, err := validateLeaseDuration(machine.Name, "lag_bound", lease.LagBound); err != nil {
+		return err
+	}
 	// Renewal must fit comfortably inside the lease so at least two attempts land
 	// before expiry; the platform derives its step-down grace from the difference.
 	if renewal >= duration {
@@ -542,12 +596,19 @@ func (m Machine) Endpoints(standby bool) *Endpoints {
 	if api == nil {
 		return nil
 	}
-	return &Endpoints{APILocalPort: api.LocalPort}
+	return &Endpoints{
+		APILocalPort:         api.LocalPort,
+		APIReadHeaderTimeout: strings.TrimSpace(api.ReadHeaderTimeout),
+		APIShutdownTimeout:   strings.TrimSpace(api.ShutdownTimeout),
+	}
 }
 
-// Endpoints are one instance's authored listener ports.
+// Endpoints are one instance's authored listener port and the timeouts that
+// govern it.
 type Endpoints struct {
-	APILocalPort int
+	APILocalPort         int
+	APIReadHeaderTimeout string
+	APIShutdownTimeout   string
 }
 
 // DataDir returns one instance's authored general platform data directory, or

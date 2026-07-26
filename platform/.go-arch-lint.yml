@@ -15,7 +15,6 @@ excludeFiles:
   - "^.*_test\\.go$"
 
 vendors:
-  toml: { in: "github.com/BurntSushi/toml**" }
   huma: { in: "github.com/danielgtaylor/huma/v2**" }
   atomicfile: { in: "github.com/miroslav-matejovsky/opdl/utils/atomicfile" }
   stablehash: { in: "github.com/miroslav-matejovsky/opdl/utils/stablehash" }
@@ -54,12 +53,12 @@ deps:
     # accurately, so it declares and states them itself rather than returning
     # them for a caller to describe.
     mayDependOn: [events]
-  # config is a leaf. It carries both tiers of configuration — the deployment
-  # descriptor compiled in at build time and the TOML file read at startup — so
-  # the packages below depend on it for the machine's identity and topology, and
-  # it depends on none of them.
-  config:
-    canUse: [toml]
+  # config has no entry here on purpose. It is a leaf: it carries the deployment
+  # descriptor compiled in at build time, which is the whole of a binary's
+  # configuration, so the components below depend on it for the machine's
+  # identity and topology while it depends on nothing, not even a vendor. It used
+  # to declare canUse: [toml] for the runtime configuration file, which no longer
+  # exists.
   events:
     mayDependOn: [config]
   events-storage:
