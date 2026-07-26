@@ -28,7 +28,7 @@ components:
   events-storage: { in: internal/instance/events/storage }
   events-storage-jsonl: { in: internal/instance/events/storage/jsonl }
   httpapi: { in: internal/httpapi }
-  instancestate: { in: internal/instancestate }
+  instancestate: { in: internal/instance/instancestate }
   redundancy: { in: internal/machine/redundancy }
   registration: { in: internal/registration }
 

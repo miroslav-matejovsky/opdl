@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/instancestate"
 )
 
 // recordedState is the record in testdata: an instance that has been launched

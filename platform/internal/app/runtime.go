@@ -14,7 +14,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/instancestate"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 

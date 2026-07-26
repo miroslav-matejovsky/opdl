@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/instancestate"
 )
 
 func TestApplicationEventsDeclareTheirContract(t *testing.T) {
