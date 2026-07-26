@@ -47,8 +47,8 @@
 //
 // Every producer is given one of them explicitly and none of them reaches for
 // one. Which publisher a component receives decides who hears it, and that
-// decision is made here and nowhere else. No producer knows that JSONL, the
-// Event Fabric, or NATS exist.
+// decision is made here and nowhere else. No producer knows that JSONL or the
+// Event Fabric exist.
 //
 // One factory stamps both, so a local record and a journalled event carry the
 // same origin, and a journalled event is in the local file too, in the order the

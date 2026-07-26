@@ -11,10 +11,6 @@
 //	project "customer-a" {
 //	  environment = "production"
 //
-//	  features {
-//	    chaos = true
-//	  }
-//
 //	  site "north" {
 //	    machine "sensor" {
 //	      profile  = "sensor-node"
@@ -25,15 +21,9 @@
 //	        data_dir    = "D:/opdl/customer-a/north/sensor/primary"
 //
 //	        api {
-//	          local_port = 8080
-//	        }
-//
-//	        event_storage {
-//	          nats {
-//	            client_port         = 4222
-//	            cluster_port        = 6222
-//	            jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
-//	          }
+//	          local_port          = 8080
+//	          read_header_timeout = "5s"
+//	          shutdown_timeout    = "10s"
 //	        }
 //
 //	        standby {
@@ -44,25 +34,14 @@
 //	  }
 //	}
 //
-// A Project names an environment and holds Features and Sites; a Site holds
+// A Project names an environment and holds Sites; a Site holds
 // Machines; a Machine names a role, an IP address, the services assigned to it,
-// and its platform subsection. Chaos is an implemented project-level capability
-// switch.
+// and its platform subsection.
 //
 // # The platform subsection
 //
 // The machine platform subsection carries platform-runtime policy, as opposed to
 // what the machine deploys.
-//
-// nats states the ports this machine's Event Fabric server needs. It is
-// optional, and leaving it out is a deployment decision rather than an omission:
-// a machine with no event storage runs no Event Fabric and has no site journal,
-// so its instance binds its API, reports itself active, and refuses every domain
-// operation. Only ports are
-// authored: the builder joins each with the machine's ip, and derives the site's
-// route and server lists from the site's topology. A blueprint that could state
-// those lists directly could split a site or point a machine at another site's
-// journal, and the resulting descriptor would look like a working one.
 //
 // standby states whether a second local process is deployed on the machine:
 //
@@ -72,10 +51,18 @@
 //
 // The attribute is required, so omitting it cannot silently enable or disable
 // redundancy. A false value deploys a second local process that waits on the
-// Primary Ownership. It does not add a second NATS endpoint: the two instances are
-// mutually exclusive owners of the machine's one client port and one cluster
-// port, so a transfer rebinds the same addresses rather than moving the site onto
-// new ones.
+// Primary Ownership, and it must then author its own data_dir, api, winservice,
+// and the machine's lease block.
+//
+// # The blueprint is the only place a machine is configured
+//
+// The platform reads no runtime configuration file. Everything a machine runs
+// with is authored here and compiled into its binary, so this package's schema
+// is the whole of it: each instance's api block carries read_header_timeout and
+// shutdown_timeout alongside its port, because the listener they govern is that
+// instance's; the machine's standby lease carries lag_bound alongside the
+// failover timings, because a projection lag bound decides whether ownership may
+// move at all and a machine that deploys no standby has neither.
 //
 // The hcl struct tags on these types are the authoring wire format and the
 // only contract this package exposes; there is no separate model to keep in
@@ -89,7 +76,8 @@
 // site and machine names are unique within the project, every machine has a role
 // and a valid IP address, every machine lists at least one service with no
 // duplicates, and every machine states platform blocks with ports in range
-// 1-65535 that differ from each other. Validation fails fast on the first
+// 1-65535 that differ from each other and with every duration a positive Go
+// duration string. Validation fails fast on the first
 // violation, so every downstream consumer can assume a well-formed Project.
 // Translating a Project into deployment descriptors is the builder's job,
 // not this package's.

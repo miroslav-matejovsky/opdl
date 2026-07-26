@@ -37,98 +37,73 @@ func checkContractsMatch() error {
 	return nil
 }
 
-// These values are named so the descriptor and its peer topology stay easy to
-// compare without scattering literals through the fixture.
-//
-// The fixture is a two-machine site where the peer stores the journal and this
-// machine does not, and where both machines deploy both instances. That shape
-// exercises what the contract now has to carry: two peers on one machine sharing
-// an ip and differing by port, and a per-instance NATS topology rather than a
-// machine-level one.
+// The fixture is one machine deploying both instances. That shape exercises what
+// the contract has to carry: two independent runtimes on one machine, each with
+// its own directory, its own listener, and its own bounds on that listener.
 const (
 	site      = "north"
 	machine   = "sensor"
 	machineIP = "10.0.1.10"
 
-	// The api addresses are on loopback and the Event Fabric's are on the machine
-	// ip. That split is the contract: the platform API is machine-local, so it is
-	// resolved onto 127.0.0.1 and a peer carries no api address at all.
-	dataDir                  = "D:/opdl/customer-a/north/sensor/primary"
-	jetstreamStoreDir        = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
-	apiAddr                  = "127.0.0.1:8080"
-	clientAddr               = "10.0.1.10:4222"
-	clusterAddr              = "10.0.1.10:6222"
-	standbyDataDir           = "D:/opdl/customer-a/north/sensor/standby"
-	standbyJetStreamStoreDir = "D:/opdl/customer-a/north/sensor/standby/eventfabric/nats"
-	standbyAPIAddr           = "127.0.0.1:8081"
-	standbyClient            = "10.0.1.10:4322"
-	standbyCluster           = "10.0.1.10:6322"
+	// The api addresses are on loopback. That is the contract: the platform API
+	// is machine-local, so it is resolved onto 127.0.0.1 and never onto the
+	// machine ip.
+	dataDir        = "D:/opdl/customer-a/north/sensor/primary"
+	apiAddr        = "127.0.0.1:8080"
+	standbyDataDir = "D:/opdl/customer-a/north/sensor/standby"
+	standbyAPIAddr = "127.0.0.1:8081"
 
-	peerMachine        = "gateway"
-	peerIP             = "10.0.1.11"
-	peerClientAddr     = "10.0.1.11:4222"
-	peerClusterAddr    = "10.0.1.11:6222"
-	peerStandbyClient  = "10.0.1.11:4322"
-	peerStandbyCluster = "10.0.1.11:6322"
+	// The listener timeouts are on the instance record for the same reason the
+	// api address is: the two instances bind their own listeners. They differ
+	// between the roles here so a round trip that swapped them would fail.
+	readHeaderTimeout        = "5s"
+	shutdownTimeout          = "10s"
+	standbyReadHeaderTimeout = "6s"
+	standbyShutdownTimeout   = "11s"
 
-	// The Primary Ownership lease a standby machine carries: a shared file and the
-	// failover timings, all round-tripped through the platform's type intact.
+	// The Primary Ownership lease a standby machine carries: a shared file, the
+	// failover timings, and the projection lag bound that gates a failover, all
+	// round-tripped through the platform's type intact.
 	leaseFile                  = "D:/opdl/customer-a/north/sensor/lease"
 	leaseDuration              = "15s"
 	leaseRenewalInterval       = "5s"
 	leaseHealthCheckInterval   = "2s"
 	leaseFailbackStabilization = "30s"
+	leaseLagBound              = "30s"
 )
 
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
 // produces marshals to JSON the platform reads back with every field intact.
 //
-// Both standby policies are checked. The standby decision is a bool, so an
-// enabled and a disabled machine differ by one JSON value that has a usable
-// zero: a round trip that only ever carried one of them would pass while the
-// other silently decoded to the default.
+// Both standby policies are checked. A machine with a standby and one without
+// differ by whether two optional records are on the wire at all, so a round trip
+// that only ever carried one of them would leave the other's encoding unproven.
 func checkRoundTrip() error {
-	for _, standbyDisabled := range []bool{false, true} {
-		if err := checkRoundTripFor(standbyDisabled); err != nil {
-			return fmt.Errorf("standby disabled=%t: %w", standbyDisabled, err)
+	for _, hasStandby := range []bool{true, false} {
+		if err := checkRoundTripFor(hasStandby); err != nil {
+			return fmt.Errorf("has standby=%t: %w", hasStandby, err)
 		}
 	}
 	return nil
 }
 
-func checkRoundTripFor(standbyDisabled bool) error {
-	// This machine does not store the journal, so neither of its instances routes
-	// and both reach the journal through the peer machine's two servers.
-	servers := []string{peerClientAddr, peerStandbyClient}
-
-	builtStandby := builderdeployment.Instance{Disabled: true}
-	wantStandby := platformconfig.Instance{Disabled: true}
+func checkRoundTripFor(hasStandby bool) error {
+	var builtStandby *builderdeployment.Instance
+	var wantStandby *platformconfig.Instance
 	var builtLease *builderdeployment.Lease
 	var wantLease *platformconfig.Lease
-	if !standbyDisabled {
-		builtStandby = builderdeployment.Instance{
-			Disabled:   false,
-			DataDir:    standbyDataDir,
-			APIAddress: standbyAPIAddr,
-			Nats: &builderdeployment.Nats{
-				JetStreamStoreDir: standbyJetStreamStoreDir,
-				ClientAddress:     standbyClient,
-				ClusterAddress:    standbyCluster,
-				Routes:            []string{},
-				Servers:           servers,
-			},
+	if hasStandby {
+		builtStandby = &builderdeployment.Instance{
+			DataDir:              standbyDataDir,
+			APIAddress:           standbyAPIAddr,
+			APIReadHeaderTimeout: standbyReadHeaderTimeout,
+			APIShutdownTimeout:   standbyShutdownTimeout,
 		}
-		wantStandby = platformconfig.Instance{
-			Disabled:   false,
-			DataDir:    standbyDataDir,
-			APIAddress: standbyAPIAddr,
-			Nats: &platformconfig.Nats{
-				JetStreamStoreDir: standbyJetStreamStoreDir,
-				ClientAddress:     standbyClient,
-				ClusterAddress:    standbyCluster,
-				Routes:            []string{},
-				Servers:           servers,
-			},
+		wantStandby = &platformconfig.Instance{
+			DataDir:              standbyDataDir,
+			APIAddress:           standbyAPIAddr,
+			APIReadHeaderTimeout: standbyReadHeaderTimeout,
+			APIShutdownTimeout:   standbyShutdownTimeout,
 		}
 		builtLease = &builderdeployment.Lease{
 			File:                  leaseFile,
@@ -136,6 +111,7 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			RenewalInterval:       leaseRenewalInterval,
 			HealthCheckInterval:   leaseHealthCheckInterval,
 			FailbackStabilization: leaseFailbackStabilization,
+			LagBound:              leaseLagBound,
 		}
 		wantLease = &platformconfig.Lease{
 			File:                  leaseFile,
@@ -143,36 +119,8 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			RenewalInterval:       leaseRenewalInterval,
 			HealthCheckInterval:   leaseHealthCheckInterval,
 			FailbackStabilization: leaseFailbackStabilization,
+			LagBound:              leaseLagBound,
 		}
-	}
-
-	// Peers are ordered by machine name, then Primary before Standby, and include
-	// this machine's own instances.
-	builtPeers := []builderdeployment.Peer{
-		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP,
-			Nats: &builderdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
-		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP,
-			Nats: &builderdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
-		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP,
-			Nats: &builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
-	}
-	wantPeers := []platformconfig.Peer{
-		{Site: site, Machine: peerMachine, Role: platformconfig.RolePrimary, IP: peerIP,
-			Nats: &platformconfig.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
-		{Site: site, Machine: peerMachine, Role: platformconfig.RoleStandby, IP: peerIP,
-			Nats: &platformconfig.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
-		{Site: site, Machine: machine, Role: platformconfig.RolePrimary, IP: machineIP,
-			Nats: &platformconfig.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
-	}
-	if !standbyDisabled {
-		builtPeers = append(builtPeers, builderdeployment.Peer{
-			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP,
-			Nats: &builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
-		})
-		wantPeers = append(wantPeers, platformconfig.Peer{
-			Site: site, Machine: machine, Role: platformconfig.RoleStandby, IP: machineIP,
-			Nats: &platformconfig.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
-		})
 	}
 
 	built := builderdeployment.Descriptor{
@@ -184,31 +132,21 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		MachineProfile: "sensor-node",
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
-		Features:       builderdeployment.Features{Chaos: true},
-		Instances: builderdeployment.Instances{
-			Primary: builderdeployment.Instance{
-				Disabled:   false,
-				DataDir:    dataDir,
-				APIAddress: apiAddr,
-				Nats: &builderdeployment.Nats{
-					JetStreamStoreDir: jetstreamStoreDir,
-					ClientAddress:     clientAddr,
-					ClusterAddress:    clusterAddr,
-					Routes:            []string{},
-					Servers:           servers,
-				},
-			},
-			Standby: builtStandby,
+		Primary: builderdeployment.Instance{
+			DataDir:              dataDir,
+			APIAddress:           apiAddr,
+			APIReadHeaderTimeout: readHeaderTimeout,
+			APIShutdownTimeout:   shutdownTimeout,
 		},
-		Lease: builtLease,
-		Peers: builtPeers,
+		Standby: builtStandby,
+		Lease:   builtLease,
 	}
 
 	data, err := json.Marshal(built)
 	if err != nil {
 		return err
 	}
-	if err := checkWireShape(data, standbyDisabled); err != nil {
+	if err := checkWireShape(data, hasStandby); err != nil {
 		return err
 	}
 
@@ -226,24 +164,14 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		MachineProfile: "sensor-node",
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
-		Features:       platformconfig.Features{Chaos: true},
-		Instances: platformconfig.Instances{
-			Primary: platformconfig.Instance{
-				Disabled:   false,
-				DataDir:    dataDir,
-				APIAddress: apiAddr,
-				Nats: &platformconfig.Nats{
-					JetStreamStoreDir: jetstreamStoreDir,
-					ClientAddress:     clientAddr,
-					ClusterAddress:    clusterAddr,
-					Routes:            []string{},
-					Servers:           servers,
-				},
-			},
-			Standby: wantStandby,
+		Primary: platformconfig.Instance{
+			DataDir:              dataDir,
+			APIAddress:           apiAddr,
+			APIReadHeaderTimeout: readHeaderTimeout,
+			APIShutdownTimeout:   shutdownTimeout,
 		},
-		Lease: wantLease,
-		Peers: wantPeers,
+		Standby: wantStandby,
+		Lease:   wantLease,
 	}
 	if !reflect.DeepEqual(got, want) {
 		return fmt.Errorf("builder descriptor did not round-trip into the platform descriptor:\n  got:  %+v\n  want: %+v", got, want)
@@ -251,93 +179,63 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	return nil
 }
 
-// checkWireShape checks the JSON the builder emits carries every decision the
-// platform is required to read explicitly, and carries no monitor endpoint.
+// checkWireShape checks the JSON the builder emits carries each instance record
+// where the platform looks for it, complete, and carries no endpoint of its own.
 //
-// The presence checks are on the wire rather than on the decoded value because
-// that is where the distinction exists: once decoded, an omitted "disabled" and
-// an explicit false are the same Go value, and the platform's requirement that
-// the field be stated can only be proven against the bytes.
-func checkWireShape(data []byte, standbyDisabled bool) error {
+// The checks are on the wire rather than on the decoded value because that is
+// where the distinction exists: a standby the builder omitted and one it wrote as
+// an empty object decode to different things, and only the bytes say which was
+// produced.
+func checkWireShape(data []byte, hasStandby bool) error {
 	var wire map[string]json.RawMessage
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	instances, ok := wire["instances"]
-	if !ok {
-		return fmt.Errorf("builder descriptor omitted instances")
-	}
-	var byRole map[string]json.RawMessage
-	if err := json.Unmarshal(instances, &byRole); err != nil {
+	if err := checkWireInstance(wire, "primary", true); err != nil {
 		return err
 	}
-	for _, role := range []string{"primary", "standby"} {
-		raw, ok := byRole[role]
-		if !ok {
-			return fmt.Errorf("builder descriptor omitted instances.%s", role)
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			return err
-		}
-		if _, ok := fields["disabled"]; !ok {
-			return fmt.Errorf("builder descriptor omitted instances.%s.disabled", role)
-		}
-		nats, ok := fields["nats"]
-		if !ok {
-			continue
-		}
-		var natsFields map[string]json.RawMessage
-		if err := json.Unmarshal(nats, &natsFields); err != nil {
-			return err
-		}
-		if _, ok := natsFields["monitor_address"]; ok {
-			return fmt.Errorf("builder descriptor carries instances.%s.nats.monitor_address: the platform runs no NATS monitoring listener", role)
-		}
+	if err := checkWireInstance(wire, "standby", hasStandby); err != nil {
+		return err
 	}
 
-	// The endpoints an instance binds belong to that instance. A machine-level
-	// NATS or API block would be an endpoint with two owners, which is what the
-	// per-instance shape exists to make impossible.
-	for _, field := range []string{"event_fabric", "nats", "api_address"} {
+	// The endpoints an instance binds belong to that instance.
+	for _, field := range []string{"data_dir", "api_address"} {
 		if _, ok := wire[field]; ok {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints belong to an instance", field)
 		}
 	}
-	if err := verifyWireLease(wire, standbyDisabled); err != nil {
-		return err
-	}
-	peers, ok := wire["peers"]
-	if !ok {
-		return fmt.Errorf("builder descriptor omitted peers")
-	}
-	return verifyWirePeers(peers)
+	return verifyWireLease(wire, hasStandby)
 }
 
-// verifyWirePeers checks a peer carries no api address.
-//
-// The platform API is bound on loopback, so every peer's api address would be
-// 127.0.0.1 and would point a reader at itself rather than at the peer. Carrying
-// the machine ip instead would be worse: an address no process listens on, stated
-// in the descriptor as though one did. Either way the field cannot be right, so
-// the contract is that it does not exist.
-func verifyWirePeers(peers json.RawMessage) error {
-	var list []map[string]json.RawMessage
-	if err := json.Unmarshal(peers, &list); err != nil {
+// checkWireInstance verifies one instance record is present exactly when the
+// instance is deployed, and states everything that instance binds when it is.
+func checkWireInstance(wire map[string]json.RawMessage, role string, deployed bool) error {
+	raw, ok := wire[role]
+	if !deployed {
+		if ok {
+			return fmt.Errorf("builder descriptor carries %s when that instance is not deployed", role)
+		}
+		return nil
+	}
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted %s", role)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
-	for _, peer := range list {
-		if _, ok := peer["api_address"]; ok {
-			return fmt.Errorf("builder descriptor carries peers[].api_address: the platform API is machine-local and a peer's is not reachable")
+	for _, field := range []string{"data_dir", "api_address", "api_read_header_timeout", "api_shutdown_timeout"} {
+		if _, ok := fields[field]; !ok {
+			return fmt.Errorf("builder descriptor omitted %s.%s", role, field)
 		}
 	}
 	return nil
 }
 
-func verifyWireLease(wire map[string]json.RawMessage, standbyDisabled bool) error {
-	if standbyDisabled {
+func verifyWireLease(wire map[string]json.RawMessage, hasStandby bool) error {
+	if !hasStandby {
 		if _, ok := wire["lease"]; ok {
-			return fmt.Errorf("builder descriptor carries lease when standby is disabled")
+			return fmt.Errorf("builder descriptor carries lease when no standby is deployed")
 		}
 		return nil
 	}
@@ -349,7 +247,7 @@ func verifyWireLease(wire map[string]json.RawMessage, standbyDisabled bool) erro
 	if err := json.Unmarshal(leaseRaw, &leaseFields); err != nil {
 		return err
 	}
-	for _, field := range []string{"file", "duration", "renewal_interval", "health_check_interval", "failback_stabilization"} {
+	for _, field := range []string{"file", "duration", "renewal_interval", "health_check_interval", "failback_stabilization", "lag_bound"} {
 		if _, ok := leaseFields[field]; !ok {
 			return fmt.Errorf("builder descriptor omitted lease.%s", field)
 		}

@@ -29,7 +29,7 @@ bin/
 .lintcache/
 .tmp/
 
-# Event Fabric journal storage written by `task run` (see platform/config.toml)
+# Instance data root written by `task run` (see platform/config/deployment.json)
 .data/
 
 # Rust

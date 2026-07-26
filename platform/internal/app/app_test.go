@@ -26,9 +26,9 @@ import (
 // configuration from the deployment, placing a node's storage, reading the
 // trusted topology, and the startup and shutdown ordering.
 //
-// The composition tests run a real embedded NATS server, so they are integration
-// tests and stay out of the fast gate. Everything derivable without a socket is
-// tested without one.
+// The composition tests open real sockets, so they are integration tests and stay
+// out of the fast gate. Everything derivable without a socket is tested without
+// one.
 
 var testDescriptor = config.Descriptor{
 	Platform:    "opdl",
@@ -52,28 +52,19 @@ func freeAddress(t *testing.T) string {
 	return res.Addresses()[0]
 }
 
-// writeConfig writes a loopback platform configuration that stores its journal
-// and coordination state under the test's own directory, so several tests can
-// run at once without colliding.
+// loadConfig loads the configuration compiled into the test binary: the neutral
+// mock descriptor, which is the only configuration a process has.
 //
-// It sets no socket topology, no API address, no runtime directory, and no data
-// directory. Every one of those is the deployment's rather than the site's, and
-// this file cannot move them: a runtime that could would be able to point a
-// machine at a journal that is not its own, or give a machine's two instances one
-// endpoint or one store. Tests that need free ports and private directories move
-// the descriptor instead, through descriptorOnFreePorts.
-func writeConfig(t *testing.T, dir string) string {
+// It names the deployment's real ports and paths, which several tests running at
+// once cannot all take, so a test that needs its own moves the descriptor
+// through descriptorOnFreePorts. That keeps the contract intact: the descriptor
+// is still the single source of the machine's topology, and each instance still
+// reads only its own record.
+func loadConfig(t *testing.T) *config.Config {
 	t.Helper()
-	path := filepath.Join(dir, "config.toml")
-	contents := `read_header_timeout = "5s"
-shutdown_timeout = "10s"
-lag_bound = "30s"
-[event_fabric.nats]
-startup_timeout = "30s"
-catch_up_timeout = "30s"
-`
-	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
-	return path
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	return cfg
 }
 
 // descriptorOnFreePorts returns the embedded descriptor with every endpoint moved
@@ -86,32 +77,23 @@ catch_up_timeout = "30s"
 // single source of the machine's topology, and each instance still reads only its
 // own record.
 //
-// Both instances are filled in, whether or not a test deploys the standby. A test
-// that enables it then flips one bool rather than composing a second endpoint set
-// by hand, which is how a standby ends up on the primary's address.
+// Both instance records are filled in, whether or not a test exercises the
+// standby. A test that needs one then has it already, rather than composing a
+// second endpoint set by hand, which is how a standby ends up on the primary's
+// address.
 func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
 	dataRoot := t.TempDir()
-	for _, standby := range []bool{false, true} {
-		instance := descriptor.Instances.Get(config.Role(standby))
-		client, cluster := freeAddress(t), freeAddress(t)
-		instanceDataDir := filepath.Join(dataRoot, string(config.Role(standby)))
-		instance.Nats = &config.Nats{
-			JetStreamStoreDir: filepath.Join(instanceDataDir, "eventfabric", "nats"),
-			ClientAddress:     client,
-			ClusterAddress:    cluster,
-			Servers:           []string{client},
-			Routes:            []string{},
-		}
+	onFreePort := func(role config.PlatformInstanceRole) config.Instance {
+		instance := descriptor.Instance(role)
 		instance.APIAddress = freeAddress(t)
-		instance.DataDir = instanceDataDir
-		if standby {
-			descriptor.Instances.Standby = instance
-			continue
-		}
-		descriptor.Instances.Primary = instance
+		instance.DataDir = filepath.Join(dataRoot, string(role))
+		return instance
 	}
+	descriptor.Primary = onFreePort(config.RolePrimary)
+	standby := onFreePort(config.RoleStandby)
+	descriptor.Standby = &standby
 	descriptor.Lease = &config.Lease{
 		File:                  filepath.Join(dataRoot, "lease"),
 		Duration:              "15s",
@@ -146,43 +128,17 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 	}, nil
 }
 
-// deployStandby turns a descriptor whose instances are already on free ports into
-// the shape the resolver produces for a single machine that deploys both.
-//
-// That shape is not two clustered servers, and the difference matters. Storage is
-// selected per instance, and a lone machine deploying both is a site of two
-// instances, which is below the three a replicated journal needs. So the resolver
-// selects one storage instance, the primary, and the standby is a client of it
-// with no server, no store, and no routes.
-//
-// Redundancy that survives losing a storage instance needs four instances: two
-// machines that each deploy a standby. That is the minimum redundant site, and it
-// is a scenario rather than a composition test, because it needs four processes.
-//
-// Getting this wrong is silent in a specific way worth naming: routing the two
-// instances to each other here, as if they were both storage, gives the primary a
-// route to an address nothing binds and its JetStream never reaches quorum.
-
 // TestTopologyExpectsEverySiteMachineIncludingItself checks the trusted
 // registration topology is the descriptor's static membership. Acceptance needs
 // every expected machine, so the set must never be "who is reachable".
 func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
 	self, expected := topology(config.Descriptor{
 		Site: "north", Machine: "node-a", IP: "10.0.1.10",
-		Peers: []config.Peer{
-			{Site: "north", Machine: "node-a", Role: config.RolePrimary, IP: "10.0.1.10"},
-			{Site: "north", Machine: "node-b", Role: config.RolePrimary, IP: "10.0.1.11"},
-			// node-b deploys a standby as well. It is a second member of the
-			// fabric but not a second confirmation: exactly one of a machine's
-			// instances is Active, and it answers for the machine.
-			{Site: "north", Machine: "node-b", Role: config.RoleStandby, IP: "10.0.1.11"},
-		},
 	})
 	require.Equal(t, registration.Location{Machine: "node-a", IP: "10.0.1.10"}, self)
 	require.Equal(t, []registration.Location{
 		{Machine: "node-a", IP: "10.0.1.10"},
-		{Machine: "node-b", IP: "10.0.1.11"},
-	}, expected, "a machine confirms its own registrations too, and once per machine")
+	}, expected)
 
 	self, expected = topology(testDescriptor)
 	require.Equal(t, []registration.Location{self}, expected,
@@ -364,14 +320,14 @@ func (f *togglingFabric) State(context.Context) (fabricState, error) {
 	return f.state, nil
 }
 
-func TestRunReportsMissingConfigFlag(t *testing.T) {
+func TestRunRejectsAnUnknownFlag(t *testing.T) {
 	require.Error(t, Run([]string{"-unknown"}))
 }
 
-func TestRunReportsUnusableConfigFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(path, []byte("[invalid"), 0o644))
-	require.ErrorContains(t, Run([]string{"-config", path}), "invalid configuration file")
+// TestRunRequiresAnInstanceRole checks the one thing a launch still decides is
+// required. Everything else a process runs with is compiled into it.
+func TestRunRequiresAnInstanceRole(t *testing.T) {
+	require.ErrorContains(t, Run(nil), "-instance primary|standby is required")
 }
 
 // TestOpenReportsUnusableJsonlDataDir checks a process fails at startup when the
@@ -380,17 +336,16 @@ func TestRunReportsUnusableConfigFile(t *testing.T) {
 // reach it, including the ones about failing to start.
 func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
 	dir := t.TempDir()
-	cfg, err := config.Load(writeConfig(t, dir))
-	require.NoError(t, err)
+	cfg := loadConfig(t)
 
 	blocked := filepath.Join(dir, "not-a-dir")
 	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o644))
 	descriptor := descriptorOnFreePorts(t, cfg)
 	// Sabotage the DataDir: the JSONL backend will try to create a subdirectory
 	// under it, which will fail because blocked is a file, not a directory.
-	descriptor.Instances.Primary.DataDir = blocked
+	descriptor.Primary.DataDir = blocked
 
-	_, err = newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
+	_, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "jsonl:", "the failure identifies the JSONL backend")
 }
 
@@ -398,8 +353,7 @@ func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
 // startup path: a composition that cannot write its local record does not
 // quietly carry on composing.
 func TestSiteOpenReturnsAFailureToStateThatItIsOpening(t *testing.T) {
-	cfg, err := config.Load(writeConfig(t, t.TempDir()))
-	require.NoError(t, err)
+	cfg := loadConfig(t)
 	descriptor := descriptorOnFreePorts(t, cfg)
 
 	proc, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)

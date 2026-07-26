@@ -10,7 +10,7 @@ import (
 
 // Descriptor is one machine's deployment definition as the platform consumes it:
 // its identity (platform, project, environment, site, machine, machine role, ip),
-// the services it hosts, and the project features enabled on it.
+// and the services it hosts.
 //
 // It mirrors the builder's deployment descriptor field for field. The platform
 // keeps its own copy so the runtime does not depend on the build tool; the
@@ -31,17 +31,30 @@ type Descriptor struct {
 	IP string `json:"ip"`
 	// Services are the service groups this machine hosts.
 	Services []string `json:"services"`
-	// Features are the project capability switches enabled on the machine.
-	Features Features `json:"features"`
-	// Instances is this machine's Primary and Standby Instances. Both records are
-	// always present.
-	Instances Instances `json:"instances"`
-	// Lease is the machine's resolved local Primary Ownership lease. Present only
-	// when the Standby Instance is deployed; omitted on a standby-less machine.
+	// Primary is the machine's Primary Instance, always deployed.
+	Primary Instance `json:"primary"`
+	// Standby is the machine's Standby Instance, present only when the machine
+	// deploys one. A runtime that finds it absent has no peer and no failover.
+	Standby *Instance `json:"standby,omitempty"`
+	// Lease is the machine's resolved local Primary Ownership lease. Present
+	// exactly when Standby is.
 	Lease *Lease `json:"lease,omitempty"`
-	// Peers are the platform instances that make up this machine's site,
-	// including this machine's own.
-	Peers []Peer `json:"peers"`
+}
+
+// HasStandby reports whether this machine deploys a Standby Instance.
+func (d Descriptor) HasStandby() bool { return d.Standby != nil }
+
+// Instance returns one role's record. The standby's is the zero record on a
+// machine that deploys none, so a caller asking for a peer that does not exist
+// reads blank endpoints rather than dereferencing nothing.
+func (d Descriptor) Instance(role PlatformInstanceRole) Instance {
+	if role == RoleStandby {
+		if d.Standby == nil {
+			return Instance{}
+		}
+		return *d.Standby
+	}
+	return d.Primary
 }
 
 // PlatformInstanceRole is one of the two fixed platform instance roles. The roles are
@@ -88,53 +101,50 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `json:"failback_stabilization"`
+	// LagBound is how far a process's projection may fall behind the journal
+	// before it stops being promotable, and before an Active process stops
+	// serving rather than answering from a stale view.
+	//
+	// It is on the lease because it bounds a failover: a machine that deploys no
+	// standby has no lease, trades ownership with nobody, and therefore has no
+	// lag bound either. It is an operational safety bound, not a failover-time
+	// SLO.
+	LagBound string `json:"lag_bound"`
 }
 
-// UnmarshalJSON decodes a descriptor and requires every resolved decision it
-// depends on to be present in the JSON.
+// UnmarshalJSON decodes a descriptor and requires every instance record it
+// carries to be complete.
 //
-// The checks exist because the fields they guard are a bool, a string, and a
-// struct, and all have a usable zero value. An omitted instances.standby.disabled
-// would decode as false and silently deploy redundancy nobody asked for; an
-// omitted peers list would decode as a site of one, so a registration would need
-// no confirmation but its own; an omitted lock.windows_mutex would decode as an empty
-// ownership record, and a machine whose two instances coordinate through nothing
-// has no ownership at all when standby is enabled. Failing here turns a truncated or stale descriptor
-// into a startup error instead of a running machine with the wrong topology.
+// The checks exist because the guarded fields are strings with a usable zero
+// value: an omitted api_read_header_timeout would decode as zero, which
+// http.Server reads as no limit at all, and an omitted lease timing would decode
+// as an ownership record whose grant never expires. Failing here turns a
+// truncated or stale descriptor into a startup error instead of a running machine
+// with the wrong topology.
+//
+// The standby is not guarded the same way, because it no longer needs to be. Its
+// deployment is stated by the presence of the record rather than by a bool
+// inside one, so there is no zero value to mistake for a decision: an absent
+// standby carries no endpoints to read and no lease to contend for.
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	instances, err := requiredField(fields, "instances")
+	primary, err := requiredField(fields, "primary")
 	if err != nil {
 		return err
 	}
-	var instanceFields map[string]json.RawMessage
-	if err := json.Unmarshal(instances, &instanceFields); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid instances: %w", err)
-	}
-	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
-		raw, err := requiredField(instanceFields, "instances."+string(role))
-		if err != nil {
-			return err
-		}
-		if err := validateInstanceFields(role, raw); err != nil {
-			return err
-		}
-	}
-
-	var standbyPolicy struct {
-		Disabled bool `json:"disabled"`
-	}
-	if err := json.Unmarshal(instanceFields[string(RoleStandby)], &standbyPolicy); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid instances.standby: %w", err)
-	}
-	if err := validateLeaseField(fields, standbyPolicy.Disabled); err != nil {
+	if err := validateInstanceFields(RolePrimary, primary); err != nil {
 		return err
 	}
-
-	if _, err := requiredField(fields, "peers"); err != nil {
+	standby, hasStandby := presentField(fields, "standby")
+	if hasStandby {
+		if err := validateInstanceFields(RoleStandby, standby); err != nil {
+			return err
+		}
+	}
+	if err := validateLeaseField(fields, hasStandby); err != nil {
 		return err
 	}
 
@@ -147,62 +157,56 @@ func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// validateInstanceFields checks one instance record states the policy a reader
-// must not infer: whether it is deployed at all, and, when it is, where it
-// writes and what it coordinates through.
+// validateInstanceFields checks one instance record carries everything the
+// instance it describes will bind and write.
 func validateInstanceFields(role PlatformInstanceRole, raw json.RawMessage) error {
 	var instance map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &instance); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid instances.%s: %w", role, err)
+		return fmt.Errorf("deployment descriptor: invalid %s: %w", role, err)
 	}
-	if _, err := requiredField(instance, "instances."+string(role)+".disabled"); err != nil {
+	if _, err := requiredField(instance, string(role)+".data_dir"); err != nil {
 		return err
 	}
-	var policy struct {
-		Disabled bool `json:"disabled"`
+	// The listener timeouts are required for the same reason the address is: the
+	// instance binds a listener for its whole lifetime, and a missing timeout
+	// would decode as zero, which Go's http.Server reads as "no limit" rather
+	// than as an omission.
+	for _, field := range []string{"api_read_header_timeout", "api_shutdown_timeout"} {
+		name := string(role) + "." + field
+		raw, err := requiredField(instance, name)
+		if err != nil {
+			return err
+		}
+		if err := checkDurationField(name, raw); err != nil {
+			return err
+		}
 	}
-	if err := json.Unmarshal(raw, &policy); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid instances.%s: %w", role, err)
-	}
-	// An instance that is not deployed carries nothing else, and nothing else is
-	// required of it.
-	if policy.Disabled {
-		return nil
-	}
-	if _, err := requiredField(instance, "instances."+string(role)+".data_dir"); err != nil {
-		return err
-	}
-	return validateInstanceNatsField(role, instance["nats"])
+	return nil
 }
 
-// validateInstanceNatsField checks a deployed instance's event storage record.
-//
-// The record is optional: a machine that authored no event storage deploys an
-// instance with no Event Fabric, which binds its API and serves no domain
-// operation. When it is present it must be usable, because an instance that
-// thinks it has a journal and cannot open one is worse than one that knows it
-// has none.
-func validateInstanceNatsField(role PlatformInstanceRole, raw json.RawMessage) error {
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil
+// checkDurationField verifies a descriptor field holds a valid Go duration
+// string, so a truncated or hand-edited descriptor fails at load rather than
+// when the value is first needed.
+func checkDurationField(name string, raw json.RawMessage) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid %s: %w", name, err)
 	}
-	var nats map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &nats); err != nil {
-		return fmt.Errorf("deployment descriptor: invalid instances.%s.nats: %w", role, err)
+	if _, err := time.ParseDuration(value); err != nil {
+		return fmt.Errorf("deployment descriptor: %s %q is not a valid duration: %w", name, value, err)
 	}
-	_, err := requiredField(nats, "instances."+string(role)+".nats.jetstream_store_dir")
-	return err
+	return nil
 }
 
-// validateLeaseField verifies the lease block matches the standby status: absent
+// validateLeaseField verifies the lease block matches the standby record: absent
 // on a standby-less machine, and present with a file and every timing when a
 // standby is deployed. The durations are checked for validity here so a truncated
 // or hand-edited descriptor fails at load rather than when ownership is first
 // decided.
-func validateLeaseField(fields map[string]json.RawMessage, standbyDisabled bool) error {
-	if standbyDisabled {
-		if _, present := fields["lease"]; present {
-			return fmt.Errorf("deployment descriptor: lease is set but instances.standby.disabled is true; omit lease when no standby is deployed")
+func validateLeaseField(fields map[string]json.RawMessage, hasStandby bool) error {
+	if !hasStandby {
+		if _, present := presentField(fields, "lease"); present {
+			return fmt.Errorf("deployment descriptor: lease is set but no standby is deployed; omit lease when standby is absent")
 		}
 		return nil
 	}
@@ -217,83 +221,42 @@ func validateLeaseField(fields map[string]json.RawMessage, standbyDisabled bool)
 	if _, err := requiredField(leaseFields, "lease.file"); err != nil {
 		return err
 	}
-	for _, field := range []string{"duration", "renewal_interval", "health_check_interval", "failback_stabilization"} {
+	for _, field := range []string{"duration", "renewal_interval", "health_check_interval", "failback_stabilization", "lag_bound"} {
 		raw, err := requiredField(leaseFields, "lease."+field)
 		if err != nil {
 			return err
 		}
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return fmt.Errorf("deployment descriptor: invalid lease.%s: %w", field, err)
-		}
-		if _, err := time.ParseDuration(value); err != nil {
-			return fmt.Errorf("deployment descriptor: lease.%s %q is not a valid duration: %w", field, value, err)
+		if err := checkDurationField("lease."+field, raw); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// requiredField returns fields[name]'s value, treating both an absent key and an
-// explicit null as missing. The qualified name is used in the error so a reader
-// of a failed startup knows which part of the descriptor to look at.
+// requiredField returns fields[name]'s value, or an error naming it. The
+// qualified name is used in the error so a reader of a failed startup knows which
+// part of the descriptor to look at.
 func requiredField(fields map[string]json.RawMessage, name string) (json.RawMessage, error) {
+	raw, ok := presentField(fields, name)
+	if !ok {
+		return nil, fmt.Errorf("deployment descriptor: %s is required", name)
+	}
+	return raw, nil
+}
+
+// presentField looks up a qualified field name, treating both an absent key and
+// an explicit null as absent. A field written as null says nothing a missing one
+// does not, so the two are one case rather than two the reader has to handle.
+func presentField(fields map[string]json.RawMessage, name string) (json.RawMessage, bool) {
 	key := name
 	if index := strings.LastIndex(name, "."); index >= 0 {
 		key = name[index+1:]
 	}
 	raw, ok := fields[key]
 	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil, fmt.Errorf("deployment descriptor: %s is required", name)
+		return nil, false
 	}
-	return raw, nil
-}
-
-// Features are the capability switches carried from the project onto a machine.
-type Features struct {
-	Chaos bool `json:"chaos"`
-}
-
-// Instances is a machine's two platform instances. Both records are always
-// present and non-null, so the runtime never infers an instance's deployment from
-// an omitted field.
-//
-// Each instance is an independent runtime and owns its own endpoints, so
-// everything an instance binds is carried on its own record. The machine holds no
-// endpoint of its own.
-type Instances struct {
-	Primary Instance `json:"primary"`
-	Standby Instance `json:"standby"`
-}
-
-// Get returns one instance by role.
-func (i Instances) Get(role PlatformInstanceRole) Instance {
-	if role == RoleStandby {
-		return i.Standby
-	}
-	return i.Primary
-}
-
-// Service returns one instance's Windows Service identity, or nil when that
-// instance is not deployed.
-func (i Instances) Service(standby bool) *WinService {
-	return i.Get(Role(standby)).Service
-}
-
-// HasEventStorage reports whether this deployment has a site journal at all:
-// whether any instance the machine deploys runs an Event Fabric.
-//
-// It is asked of the whole descriptor rather than of one instance because a
-// machine's two instances read one configuration file, so a setting the file
-// must carry is one either of them could need. Whether the running instance
-// itself has a journal is a different question, asked per instance.
-func (d Descriptor) HasEventStorage() bool {
-	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
-		instance := d.Instances.Get(role)
-		if !instance.Disabled && instance.Nats != nil {
-			return true
-		}
-	}
-	return false
+	return raw, true
 }
 
 // WinService is one instance's resolved Windows Service identity.
@@ -312,96 +275,28 @@ type WinService struct {
 	Description string `json:"description,omitempty"`
 }
 
-// Instance is one platform instance: whether it is deployed, what the service
-// running it is called, and every endpoint it binds.
-//
-// The endpoint fields are present exactly when the instance is deployed, so the
-// runtime cannot mistake a resolved endpoint for one that will ever be bound.
+// Instance is one platform instance: what the service running it is called, and
+// every endpoint it binds. A record exists only for an instance that is deployed,
+// so the runtime cannot mistake a resolved endpoint for one that will never be
+// bound.
 type Instance struct {
-	// Disabled reports that this instance is not deployed. It is always false for
-	// the primary.
-	Disabled bool `json:"disabled"`
-	// Service is the instance's Windows Service identity, present exactly when the
-	// instance is deployed.
+	// Service is the instance's Windows Service identity.
 	Service *WinService `json:"service,omitempty"`
 	// DataDir is the instance's own general platform data root.
-	DataDir string `json:"data_dir,omitempty"`
+	DataDir string `json:"data_dir"`
 	// APIAddress is where this instance serves its local API. Each instance has
 	// its own and binds it for its whole lifetime, not only while Active.
 	//
 	// It is always on loopback: the platform API is machine-local, authored as
 	// api.local_port and resolved onto 127.0.0.1, and no instance's API is
 	// reachable from the network.
-	APIAddress string `json:"api_address,omitempty"`
-	// Nats is this instance's own Event Fabric NATS topology.
-	Nats *Nats `json:"nats,omitempty"`
-}
-
-// Peer is one platform instance of this machine's site.
-//
-// The site's members are instances, not machines: each is an independent runtime
-// with its own endpoints, and a machine contributes one peer when it deploys only
-// a Primary Instance and two when it deploys a Standby Instance as well.
-//
-// The list includes this machine's own instances. One descriptor is read by both
-// instances of a machine, so it carries the site's whole membership and each
-// running instance recognises itself by Machine and Role.
-//
-// A peer carries the Event Fabric addresses only. It has no api_address: the
-// platform API is bound on loopback, so another machine's API is not reachable
-// and an address stating otherwise would be one no process listens on.
-//
-// Peers are ordered by machine name, then Primary before Standby, so every
-// machine of a site sees the same list. The site is the boundary: instances of
-// another site, environment, or project are not peers.
-type Peer struct {
-	// Site is the peer's site, always equal to this machine's site.
-	Site string `json:"site"`
-	// Machine is the machine the peer instance runs on.
-	Machine string `json:"machine"`
-	// Role is which of the machine's two instances this peer is.
-	Role PlatformInstanceRole `json:"role"`
-	// IP is the address the peer's machine is reached on. Two peers on one machine
-	// share it and differ by port.
-	IP string `json:"ip"`
-	// Nats are the peer instance's Event Fabric addresses, absent on a peer whose
-	// machine authored no event storage and so runs no server.
-	Nats *PeerNats `json:"nats,omitempty"`
-}
-
-// PeerNats are one peer instance's Event Fabric addresses.
-type PeerNats struct {
-	// ClientAddress is where the peer's server serves the NATS client protocol.
-	ClientAddress string `json:"client_address"`
-	// ClusterAddress is where the peer's server accepts routes from the site's
-	// other storage servers.
-	ClusterAddress string `json:"cluster_address"`
-}
-
-// Nats is one instance's resolved NATS topology: the addresses its own server
-// binds, and the addresses it reaches the site's journal through.
-//
-// There is one per deployed instance, not one per machine. Each instance runs its
-// own server, so on a storage machine that deploys a standby there are two
-// cluster members on one host and each routes to the other.
-type Nats struct {
-	// JetStreamStoreDir is the directory where this instance's NATS JetStream server
-	// stores its files.
-	JetStreamStoreDir string `json:"jetstream_store_dir,omitempty"`
-	// ClientAddress is where this instance's server serves the NATS client
-	// protocol. It is present on every instance; only an instance on a storage
-	// machine binds it.
-	ClientAddress string `json:"client_address"`
-	// ClusterAddress is where this instance's server accepts routes from the
-	// site's other storage servers. It is present on every instance; it is bound
-	// only when Routes is non-empty.
-	ClusterAddress string `json:"cluster_address"`
-	// Routes are the cluster addresses of the site's other storage servers,
-	// including this machine's other instance when the machine stores the journal.
-	// It is empty for an instance on a non-storage machine, and for a site with
-	// one storage server.
-	Routes []string `json:"routes"`
-	// Servers are the client addresses this instance reaches the journal through,
-	// ordered so an instance on a storage machine lists its own address first.
-	Servers []string `json:"servers"`
+	APIAddress string `json:"api_address"`
+	// APIReadHeaderTimeout bounds how long this instance's listener spends
+	// reading an HTTP request's headers before closing the connection. It is a Go
+	// duration string ("5s"), parsed at startup.
+	APIReadHeaderTimeout string `json:"api_read_header_timeout"`
+	// APIShutdownTimeout bounds the graceful drain of this instance's listener
+	// when it stops serving, whether it is stepping down or the process is
+	// leaving.
+	APIShutdownTimeout string `json:"api_shutdown_timeout"`
 }

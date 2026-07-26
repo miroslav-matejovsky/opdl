@@ -1,7 +1,7 @@
 # Validate project blueprints in examples/. Validates all examples if no argument is provided.
 . (Join-Path $PSScriptRoot "modules.ps1")
 
-Write-Host "Validating project blueprints..."
+Write-Host "--- Validating project blueprints... ---"
 
 $projects = @($args | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 if ($projects.Count -eq 0) {

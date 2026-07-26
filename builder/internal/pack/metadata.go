@@ -66,16 +66,16 @@ const instanceFlag = "-instance"
 // states which instances are deployed and what their services are called, so the
 // manifest restates that in the form an installer needs rather than deciding
 // anything.
-func launches(instances deployment.Instances) (primary Launch, standby *Launch) {
+func launches(d deployment.Descriptor) (primary Launch, standby *Launch) {
 	primary = Launch{
-		Service: winService(instances.Primary.Service),
+		Service: winService(d.Primary.Service),
 		Args:    []string{instanceFlag, string(deployment.RolePrimary)},
 	}
-	if instances.Standby.Disabled {
+	if !d.HasStandby() {
 		return primary, nil
 	}
 	standby = &Launch{
-		Service: winService(instances.Standby.Service),
+		Service: winService(d.Standby.Service),
 		Args:    []string{instanceFlag, string(deployment.RoleStandby)},
 	}
 	return primary, standby

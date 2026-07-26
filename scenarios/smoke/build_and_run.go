@@ -62,22 +62,10 @@ func BuildAndRunSingleMachine(t *testing.T) {
 	require.Equal(t, harness.InstanceStateActive, refusal.Instance.State,
 		"the instance refusing is the one that owns the machine, and it is healthy")
 
-	// The machine reported the configuration it booted with. The peers line is
-	// the site's membership, and this site's membership is one instance.
+	// The machine reported the configuration it booted with.
 	logs := node.Output()
 	require.Contains(t, logs, "platform configuration")
-	require.Contains(t, logs, "peers        node-a/primary (127.0.0.1)",
-		"a single-machine site's membership is its one Primary Instance")
 	require.Contains(t, logs, "data_dir     "+filepath.ToSlash(node.Sockets.DataDir))
-	require.Contains(t, logs, "event_storage (none:",
-		"the startup block says plainly that this deployment has no journal")
 	require.NotContains(t, logs, "event fabric configuration",
 		"a deployment with no event storage starts no Event Fabric to report one")
-
-	// The configuration file the harness wrote carries neither the journal's lag
-	// bound nor the Event Fabric's timeouts, and the machine started anyway. That
-	// is the evidence the runtime requires them only of a deployment that has a
-	// journal to bound, rather than of every deployment.
-	require.Contains(t, logs, "(not applicable: no event storage)",
-		"settings that bound a journal are reported as not applying, not as empty values")
 }

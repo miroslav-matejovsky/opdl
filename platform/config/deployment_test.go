@@ -9,44 +9,24 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 )
 
-// completeDescriptor is the minimal JSON that decodes: every field the platform
-// requires to be stated, and nothing else. Tests remove one part of it at a time
-// rather than building a valid descriptor from scratch each time.
-//
-// It is a one-machine site whose machine deploys only a Primary Instance, so the
-// membership is the single peer that machine contributes.
-const completeDescriptor = `{
-  "instances": {
-    "primary": {
-      "disabled": false,
-      "data_dir": ".data/platform/primary",
-      "api_address": "127.0.0.1:8080",
-      "nats": {
-        "jetstream_store_dir": ".data/journal/primary",
-        "client_address": "127.0.0.1:4222",
-        "cluster_address": "127.0.0.1:6222",
-        "routes": [],
-        "servers": ["127.0.0.1:4222"]
-      }
-    },
-    "standby": {"disabled": true}
-  },
-  "peers": [
-    {
-      "site": "north",
-      "machine": "node",
-      "role": "primary",
-      "ip": "127.0.0.1",
-      "api_address": "127.0.0.1:8080",
-      "nats": {"client_address": "127.0.0.1:4222", "cluster_address": "127.0.0.1:6222"}
-    }
-  ]
-}`
+// The fixtures below are the minimal JSON that decodes: every field the platform
+// requires to be stated, and nothing else. Tests remove or corrupt one part at a
+// time rather than building a valid descriptor from scratch each time.
+const (
+	primaryJSON  = `"primary":{"data_dir":".data/platform/primary","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}`
+	standbyJSON  = `"standby":{"data_dir":".data/platform/standby","api_address":"127.0.0.1:8081",` + timeoutsJSON + `}`
+	timeoutsJSON = `"api_read_header_timeout":"5s","api_shutdown_timeout":"10s"`
+	leaseJSON    = `"lease":{"file":"D:/opdl/lease",` + leaseTimingsJSON + `}`
+	// leaseTimingsJSON are the timings a valid lease states, without the file.
+	leaseTimingsJSON = `"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s","lag_bound":"30s"`
 
-const primaryInstanceJSON = `"primary":{"disabled":false,"data_dir":".data/platform/primary","nats":{"jetstream_store_dir":".data/journal/primary"}}`
-const standbyInstanceJSON = `"standby":{"disabled":false,"data_dir":".data/platform/standby","nats":{"jetstream_store_dir":".data/journal/standby"}}`
-const instances = `"instances":{` + primaryInstanceJSON + `,"standby":{"disabled":true}}`
-const standbyEnabledInstances = `"instances":{` + primaryInstanceJSON + `,` + standbyInstanceJSON + `}`
+	// standbyless is a machine that deploys only a Primary Instance: no standby
+	// record, and therefore no lease.
+	standbyless = `{` + primaryJSON + `}`
+	// redundant is a machine that deploys both instances and the lease they
+	// contend for.
+	redundant = `{` + primaryJSON + `,` + standbyJSON + `,` + leaseJSON + `}`
+)
 
 // TestDescriptorRequiresExplicitDecisions checks the descriptor decoder rejects
 // JSON that leaves a decision to a zero value.
@@ -55,61 +35,50 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 		json string
 		err  string
 	}{
-		"missing instances": {json: `{}`, err: "instances is required"},
-		"null instances":    {json: `{"instances":null}`, err: "instances is required"},
-		"missing primary instance": {
-			json: `{"instances":{"standby":{"disabled":true}}}`,
-			err:  "instances.primary is required",
+		"missing primary": {json: `{` + standbyJSON + `,` + leaseJSON + `}`, err: "primary is required"},
+		"null primary":    {json: `{"primary":null}`, err: "primary is required"},
+		"missing primary data dir": {
+			json: `{"primary":{"api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
+			err:  "primary.data_dir is required",
 		},
-		"null primary instance": {
-			json: `{"instances":{"primary":null,"standby":{"disabled":true}}}`,
-			err:  "instances.primary is required",
+		"missing primary read header timeout": {
+			json: `{"primary":{"data_dir":".data","api_shutdown_timeout":"10s"}}`,
+			err:  "primary.api_read_header_timeout is required",
 		},
-		"missing standby instance": {
-			json: `{"instances":{` + primaryInstanceJSON + `}}`,
-			err:  "instances.standby is required",
+		"bad primary shutdown timeout": {
+			json: `{"primary":{"data_dir":".data","api_read_header_timeout":"5s","api_shutdown_timeout":"soon"}}`,
+			err:  "primary.api_shutdown_timeout",
 		},
-		"null standby instance": {
-			json: `{"instances":{` + primaryInstanceJSON + `,"standby":null}}`,
-			err:  "instances.standby is required",
+		"missing standby data dir": {
+			json: `{` + primaryJSON + `,"standby":{"api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			err:  "standby.data_dir is required",
 		},
-		"missing primary disabled": {
-			json: `{"instances":{"primary":{},"standby":{"disabled":true}}}`,
-			err:  "instances.primary.disabled is required",
+		"lease without a standby": {
+			json: `{` + primaryJSON + `,` + leaseJSON + `}`,
+			err:  "lease is set but no standby is deployed",
 		},
-		"missing standby disabled": {
-			json: `{"instances":{` + primaryInstanceJSON + `,"standby":{}}}`,
-			err:  "instances.standby.disabled is required",
-		},
-		"lease when standby disabled": {
-			json: `{` + instances + `,"lease":{"file":"D:/opdl/lease","duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
-			err:  "lease is set but instances.standby.disabled is true",
-		},
-		"missing lease when standby enabled": {
-			json: `{` + standbyEnabledInstances + `}`,
+		"missing lease with a standby": {
+			json: `{` + primaryJSON + `,` + standbyJSON + `}`,
 			err:  "lease is required",
 		},
-		"null lease when standby enabled": {
-			json: `{` + standbyEnabledInstances + `,"lease":null}`,
+		"null lease with a standby": {
+			json: `{` + primaryJSON + `,` + standbyJSON + `,"lease":null}`,
 			err:  "lease is required",
 		},
-		"missing lease file when standby enabled": {
-			json: `{` + standbyEnabledInstances + `,"lease":{"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+		"missing lease file": {
+			json: `{` + primaryJSON + `,` + standbyJSON + `,"lease":{` + leaseTimingsJSON + `}}`,
 			err:  "lease.file is required",
 		},
-		"bad lease duration when standby enabled": {
-			json: `{` + standbyEnabledInstances + `,"lease":{"file":"D:/opdl/lease","duration":"soon","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+		"bad lease duration": {
+			json: `{` + primaryJSON + `,` + standbyJSON + `,"lease":{"file":"D:/opdl/lease","duration":"soon","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s","lag_bound":"30s"}}`,
 			err:  "lease.duration",
 		},
-		"missing peers": {
-			json: `{` + instances + `}`,
-			err:  "peers is required",
+		"missing lease lag bound": {
+			json: `{` + primaryJSON + `,` + standbyJSON + `,"lease":{"file":"D:/opdl/lease","duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
+			err:  "lease.lag_bound is required",
 		},
-		"null peers": {
-			json: `{` + instances + `,"peers":null}`,
-			err:  "peers is required",
-		},
-		"complete": {json: completeDescriptor},
+		"standby-less machine": {json: standbyless},
+		"redundant machine":    {json: redundant},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -124,80 +93,45 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 	}
 }
 
-// TestDescriptorDecodesTopology checks a complete descriptor decodes into the
-// values the runtime composes from: both instance decisions, the endpoints the
-// deployed instance binds, and the site's membership.
-func TestDescriptorDecodesTopology(t *testing.T) {
+// TestDescriptorDecodesAStandbylessMachine checks the shape a machine with no
+// redundancy decodes into: a primary record, and nothing where the peer and the
+// lease would be.
+func TestDescriptorDecodesAStandbylessMachine(t *testing.T) {
 	var descriptor config.Descriptor
-	require.NoError(t, json.Unmarshal([]byte(completeDescriptor), &descriptor))
+	require.NoError(t, json.Unmarshal([]byte(standbyless), &descriptor))
 
-	require.False(t, descriptor.Instances.Primary.Disabled)
-	require.True(t, descriptor.Instances.Standby.Disabled)
-
-	primary := descriptor.Instances.Primary
-	require.Equal(t, "127.0.0.1:8080", primary.APIAddress)
-	require.NotNil(t, primary.Nats)
-	require.Equal(t, "127.0.0.1:4222", primary.Nats.ClientAddress)
-	require.Equal(t, "127.0.0.1:6222", primary.Nats.ClusterAddress)
-	require.Empty(t, primary.Nats.Routes)
-	require.Equal(t, []string{"127.0.0.1:4222"}, primary.Nats.Servers)
-
-	// An instance that is not deployed carries no endpoint, so the runtime cannot
-	// mistake a resolved address for one that will ever be bound.
-	require.Empty(t, descriptor.Instances.Standby.APIAddress)
-	require.Nil(t, descriptor.Instances.Standby.Nats)
-
-	require.Len(t, descriptor.Peers, 1)
-	require.Equal(t, config.RolePrimary, descriptor.Peers[0].Role)
-	require.Equal(t, "node", descriptor.Peers[0].Machine)
+	require.Equal(t, "127.0.0.1:8080", descriptor.Primary.APIAddress)
+	require.False(t, descriptor.HasStandby())
+	require.Nil(t, descriptor.Standby)
+	require.Nil(t, descriptor.Lease)
 }
 
-// TestDescriptorStandbyEnabledDecodes checks an enabled standby decodes as
-// enabled, with its own endpoints. It is the counterpart of the disabled fixture:
-// the field is a bool, so a decoder that dropped it would still satisfy one of
-// the two cases.
-func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
+// TestDescriptorDecodesARedundantMachine is the counterpart: a standby that is
+// deployed decodes with its own endpoints and the lease the two instances
+// contend for.
+func TestDescriptorDecodesARedundantMachine(t *testing.T) {
 	var descriptor config.Descriptor
-	enabled := `{
-	  "instances": {
-	    "primary": {
-	      "disabled": false,
-	      "data_dir": ".data/platform/primary",
-	      "api_address": "127.0.0.1:8080",
-	      "nats": {"jetstream_store_dir": ".data/journal/primary", "client_address": "127.0.0.1:4222", "cluster_address": "127.0.0.1:6222", "routes": ["127.0.0.1:6322"], "servers": ["127.0.0.1:4222", "127.0.0.1:4322"]}
-	    },
-	    "standby": {
-	      "disabled": false,
-	      "data_dir": ".data/platform/standby",
-	      "api_address": "127.0.0.1:8081",
-	      "nats": {"jetstream_store_dir": ".data/journal/standby", "client_address": "127.0.0.1:4322", "cluster_address": "127.0.0.1:6322", "routes": ["127.0.0.1:6222"], "servers": ["127.0.0.1:4322", "127.0.0.1:4222"]}
-	    }
-	  },
-	  "lease": {"file": "D:/opdl/node/lease", "duration": "15s", "renewal_interval": "5s", "health_check_interval": "2s", "failback_stabilization": "30s"},
-	  "peers": [
-	    {"site":"north","machine":"node","role":"primary","ip":"127.0.0.1","api_address":"127.0.0.1:8080","nats":{"client_address":"127.0.0.1:4222","cluster_address":"127.0.0.1:6222"}},
-	    {"site":"north","machine":"node","role":"standby","ip":"127.0.0.1","api_address":"127.0.0.1:8081","nats":{"client_address":"127.0.0.1:4322","cluster_address":"127.0.0.1:6322"}}
-	  ]
-	}`
-	require.NoError(t, json.Unmarshal([]byte(enabled), &descriptor))
-	require.False(t, descriptor.Instances.Standby.Disabled)
+	require.NoError(t, json.Unmarshal([]byte(redundant), &descriptor))
 
-	// The two instances of one machine are two members of the site, each with its
-	// own endpoints, and each routes to the other.
-	require.Len(t, descriptor.Peers, 2)
-	require.Equal(t, "127.0.0.1:8081", descriptor.Instances.Standby.APIAddress)
-	require.Equal(t, []string{"127.0.0.1:6322"}, descriptor.Instances.Primary.Nats.Routes)
-	require.Equal(t, []string{"127.0.0.1:6222"}, descriptor.Instances.Standby.Nats.Routes)
+	require.True(t, descriptor.HasStandby())
+	require.Equal(t, "127.0.0.1:8081", descriptor.Standby.APIAddress)
+	require.NotNil(t, descriptor.Lease)
+	require.Equal(t, "30s", descriptor.Lease.LagBound)
 }
 
-// TestInstancesGetSelectsByRole checks the accessor the runtime uses to find its
-// own record.
-func TestInstancesGetSelectsByRole(t *testing.T) {
-	var descriptor config.Descriptor
-	require.NoError(t, json.Unmarshal([]byte(completeDescriptor), &descriptor))
+// TestDescriptorInstanceSelectsByRole checks the accessor the runtime uses to
+// find its own record and its peer's, including the peer that does not exist.
+func TestDescriptorInstanceSelectsByRole(t *testing.T) {
+	var redundantMachine config.Descriptor
+	require.NoError(t, json.Unmarshal([]byte(redundant), &redundantMachine))
+	require.Equal(t, "127.0.0.1:8080", redundantMachine.Instance(config.RolePrimary).APIAddress)
+	require.Equal(t, "127.0.0.1:8081", redundantMachine.Instance(config.RoleStandby).APIAddress)
 
-	require.False(t, descriptor.Instances.Get(config.RolePrimary).Disabled)
-	require.True(t, descriptor.Instances.Get(config.RoleStandby).Disabled)
+	var alone config.Descriptor
+	require.NoError(t, json.Unmarshal([]byte(standbyless), &alone))
+	require.Empty(t, alone.Instance(config.RoleStandby).APIAddress,
+		"an instance the machine does not deploy has no address to read")
+
 	require.Equal(t, config.RolePrimary, config.Role(false))
 	require.Equal(t, config.RoleStandby, config.Role(true))
 }

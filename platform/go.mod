@@ -3,7 +3,6 @@ module github.com/miroslav-matejovsky/opdl/platform
 go 1.26.5
 
 require (
-	github.com/BurntSushi/toml v1.6.0
 	github.com/danielgtaylor/huma/v2 v2.39.0
 	github.com/miroslav-matejovsky/opdl/utils v0.0.0
 	github.com/stretchr/testify v1.11.1

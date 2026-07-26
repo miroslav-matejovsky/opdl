@@ -8,10 +8,6 @@
 project "buildtest" {
   environment = "test"
 
-  features {
-    chaos = false
-  }
-
   site "solo" {
     machine "node-a" {
       profile  = "test-node"
@@ -23,19 +19,13 @@ project "buildtest" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
           name         = "opdl-buildtest-solo-node-a-primary"
           display_name = "OPDL buildtest solo node-a (Primary Instance)"
-        }
-
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/buildtest/solo/node-a/primary/eventfabric/nats"
-          }
         }
 
         standby {
@@ -54,19 +44,13 @@ project "buildtest" {
 
         api {
           local_port = 8080
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
           name         = "opdl-buildtest-solo-node-b-primary"
           display_name = "OPDL buildtest solo node-b (Primary Instance)"
-        }
-
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/buildtest/solo/node-b/primary/eventfabric/nats"
-          }
         }
 
         standby {
@@ -79,23 +63,18 @@ project "buildtest" {
             renewal_interval       = "5s"
             health_check_interval  = "2s"
             failback_stabilization = "30s"
+            lag_bound              = "30s"
           }
 
           api {
             local_port = 8081
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {
             name         = "opdl-buildtest-solo-node-b-standby"
             display_name = "OPDL buildtest solo node-b (Standby Instance)"
-          }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/buildtest/solo/node-b/standby/eventfabric/nats"
-            }
           }
         }
       }

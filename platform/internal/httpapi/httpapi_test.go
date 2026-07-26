@@ -181,13 +181,13 @@ func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
 type site struct {
 	t        *testing.T
 	journal  *journal
-	machines []config.Peer
+	machines []registration.Location
 }
 
 // journal is an ordered, in-process site journal. It stamps each published event
 // with the node that stated it, gives it the next sequence, and folds it into
-// every node's projection, which is what the real fabric does once JetStream has
-// accepted a write.
+// every node's projection, which is what the real fabric does once the journal
+// has accepted a write.
 type journal struct {
 	t *testing.T
 
@@ -232,9 +232,9 @@ func newSite(t *testing.T, machines ...string) *site {
 		journal: &journal{t: t},
 	}
 	for i, machine := range machines {
-		s.machines = append(s.machines, config.Peer{
-			Site: "local", Machine: machine, Role: config.RolePrimary,
-			IP: fmt.Sprintf("127.0.0.%d", i+1),
+		s.machines = append(s.machines, registration.Location{
+			Machine: machine,
+			IP:      fmt.Sprintf("127.0.0.%d", i+1),
 		})
 	}
 	return s
@@ -247,12 +247,11 @@ func newSite(t *testing.T, machines ...string) *site {
 //nolint:unparam // machine parameter kept for clarity when identifying site node
 func (s *site) start(machine string) *node {
 	s.t.Helper()
-	expected := make([]registration.Location, 0, len(s.machines))
+	expected := s.machines
 	var self registration.Location
-	for _, peer := range s.machines {
-		expected = append(expected, registration.Location{Machine: peer.Machine, IP: peer.IP})
-		if peer.Machine == machine {
-			self = registration.Location{Machine: peer.Machine, IP: peer.IP}
+	for _, loc := range s.machines {
+		if loc.Machine == machine {
+			self = loc
 		}
 	}
 	require.NotEmpty(s.t, self.Machine, "%s is not a machine of this site", machine)

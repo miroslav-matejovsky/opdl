@@ -1,16 +1,5 @@
 # Scenario blueprint template.
 #
-# Scenarios build from the same blueprint contract a customer does, so the NATS
-# ports come from here rather than from a runtime setting. They cannot be fixed
-# numbers: several machines share one host and a developer's machine may already
-# hold 4222, so the harness reserves free ports and renders them in.
-#
-# The event_storage block is optional and is left out entirely for a fixture that
-# disables it. A machine with no event_storage runs no Event Fabric: it has no
-# site journal, so its instance binds its API, reports itself active, and refuses
-# every domain operation. That is a deployment shape rather than a degraded one,
-# which is why the block is absent rather than present and empty.
-#
 # The .tmpl extension is deliberate. The builder loads every *.hcl file in a
 # blueprint directory, so an unrendered template must not look like one.
 #
@@ -18,10 +7,6 @@
 # is the single source of each machine's name, address, and standby policy.
 project "{{ .Name }}" {
   environment = "development"
-
-  features {
-    chaos = false
-  }
 
   site "{{ .Site }}" {
 {{- range .Machines }}
@@ -35,11 +20,9 @@ project "{{ .Name }}" {
         # carries the Standby Instance's. Every port is reserved separately by the
         # harness, because the two instances run together on one host.
         #
-        # data_dir is per instance for the same reason the ports
-        # are: several machines share one host here, so the harness renders a
-        # distinct directory for every instance of every machine. data_dir needs
-        # it most, because two NATS servers cannot open one JetStream store and
-        # every deployed instance on a storage machine runs one.
+        # data_dir is per instance for the same reason the ports are: several
+        # machines share one host here, so the harness renders a distinct
+        # directory for every instance of every machine.
         #
         # The platform installs and manages no services; the winservice names are
         # carried into the manifest so the roles are named consistently. The
@@ -47,25 +30,19 @@ project "{{ .Name }}" {
         # service twice.
         data_dir    = "{{ .DataDir }}"
 
+        # The listener timeouts are per instance, and every setting a machine
+        # runs with is compiled into its binary: a scenario launches a built
+        # machine with nothing but its instance role.
         api {
-          local_port = {{ .APIPort }}
+          local_port          = {{ .APIPort }}
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
         }
 
         winservice {
           name         = "{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}-primary"
           display_name = "OPDL {{ $.Name }} {{ .Name }} (Primary Instance)"
         }
-
-{{- if not .EventStorageDisabled }}
-
-        event_storage {
-          nats {
-            client_port         = {{ .ClientPort }}
-            cluster_port        = {{ .ClusterPort }}
-            jetstream_store_dir = "{{ .JetStreamStoreDir }}"
-          }
-        }
-{{- end }}
 
         standby {
           disabled = {{ .StandbyDisabled }}
@@ -76,33 +53,34 @@ project "{{ .Name }}" {
           # blueprint's: a redundancy scenario waits out real lapses and real
           # stabilization windows, and at production pace one failover-and-back
           # would take a minute of wall clock without testing anything more.
+          #
+          # lag_bound goes the other way, and is deliberately looser than a
+          # production blueprint's 30s. It bounds how long a machine puts up with
+          # a slow environment before it stops being promotable, and a scenario
+          # suite is a slow environment on purpose: it builds the platform and
+          # starts it on a busy host. No scenario asserts on the bound, so
+          # raising it removes a false failure without weakening anything. A
+          # machine that genuinely never catches up still fails, on the assertion
+          # that was actually being made.
           lease {
             file                   = "{{ .LeaseFile }}"
             duration               = "2s"
             renewal_interval       = "500ms"
             health_check_interval  = "250ms"
             failback_stabilization = "2s"
+            lag_bound              = "2m"
           }
 
           api {
-            local_port = {{ .StandbyAPIPort }}
+            local_port          = {{ .StandbyAPIPort }}
+            read_header_timeout = "5s"
+            shutdown_timeout    = "10s"
           }
 
           winservice {
             name         = "{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}-standby"
             display_name = "OPDL {{ $.Name }} {{ .Name }} (Standby Instance)"
           }
-
-{{- if not .EventStorageDisabled }}
-
-          event_storage {
-            nats {
-              client_port         = {{ .StandbyClientPort }}
-              cluster_port        = {{ .StandbyClusterPort }}
-              jetstream_store_dir = "{{ .StandbyJetStreamStoreDir }}"
-            }
-          }
-{{- end }}
 {{- end }}
         }
       }

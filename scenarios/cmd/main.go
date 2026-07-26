@@ -105,7 +105,7 @@ func main() {
 }
 
 // names splits a comma-separated flag value into category names, tolerating
-// spaces and empty entries so -only "nats, sdk" and -only nats,, both work.
+// spaces and empty entries so -only "smoke, sdk" and -only smoke,, both work.
 func names(value string) []string {
 	var selected []string
 	for part := range strings.SplitSeq(value, ",") {

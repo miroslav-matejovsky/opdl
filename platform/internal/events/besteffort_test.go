@@ -60,7 +60,7 @@ func TestBestEffortReportsAPublicationFailureToTheErrorStream(t *testing.T) {
 // failed, so exactly one publication is attempted however badly it goes.
 func TestBestEffortDoesNotRepublishItsOwnFailure(t *testing.T) {
 	captureDiagnostics(t)
-	publisher := &stubPublisher{err: errors.New("nats: no responders")}
+	publisher := &stubPublisher{err: errors.New("journal: no responders")}
 
 	BestEffort(publisher).State(t.Context(), stubEvent{})
 

@@ -9,42 +9,14 @@
   "services": [
     "core-services"
   ],
-  "features": {
-    "chaos": false
-  },
-  "instances": {
-    "primary": {
-      "disabled": false,
-      "service": {
-        "name": "opdl-mock-local-mock-primary",
-        "display_name": "OPDL mock local mock (Primary Instance)"
-      },
-      "data_dir": ".data/platform/primary",
-      "api_address": "127.0.0.1:8080",
-      "nats": {
-        "jetstream_store_dir": ".data/journal/primary",
-        "client_address": "127.0.0.1:4222",
-        "cluster_address": "127.0.0.1:6222",
-        "routes": [],
-        "servers": [
-          "127.0.0.1:4222"
-        ]
-      }
+  "primary": {
+    "service": {
+      "name": "opdl-mock-local-mock-primary",
+      "display_name": "OPDL mock local mock (Primary Instance)"
     },
-    "standby": {
-      "disabled": true
-    }
-  },
-  "peers": [
-    {
-      "site": "local",
-      "machine": "mock",
-      "role": "primary",
-      "ip": "127.0.0.1",
-      "nats": {
-        "client_address": "127.0.0.1:4222",
-        "cluster_address": "127.0.0.1:6222"
-      }
-    }
-  ]
+    "data_dir": ".data/platform/primary",
+    "api_address": "127.0.0.1:8080",
+    "api_read_header_timeout": "5s",
+    "api_shutdown_timeout": "10s"
+  }
 }

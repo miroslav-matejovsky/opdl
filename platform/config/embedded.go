@@ -23,9 +23,9 @@ import (
 //go:embed deployment.json
 var deploymentJSON []byte
 
-// Deployment decodes the deployment descriptor baked into this binary. It is the
-// descriptor tier on its own, for callers that need the machine's identity
-// without a configuration file; Load composes it with the file.
+// Deployment decodes the deployment descriptor baked into this binary, for
+// callers that need the machine's identity without parsing anything else. Load
+// wraps it and parses every duration the descriptor carries.
 func Deployment() (Descriptor, error) {
 	return decodeDescriptor(deploymentJSON)
 }

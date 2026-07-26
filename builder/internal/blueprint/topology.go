@@ -3,6 +3,7 @@ package blueprint
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -11,26 +12,14 @@ import (
 // tag captures a block's name label (the "customer-a" in project "customer-a").
 
 // Project is the top of a topology: one project (customer), the environment
-// and feature switches common to it, and the sites and machines nested
-// inside.
+// common to it, and the sites and machines nested inside.
 type Project struct {
 	// Name is the project (customer) identifier.
 	Name string `hcl:"name,label"`
 	// Environment is the target environment, e.g. "production".
 	Environment string `hcl:"environment"`
-	// Features are the capability switches available to the project.
-	Features Features `hcl:"features,block"`
 	// Sites are the locations the project is deployed to.
 	Sites []Site `hcl:"site,block"`
-}
-
-// Features are the project-level capability switches.
-type Features struct {
-	// Chaos enables deliberately injecting failures to test the system's
-	// resilience: in test environments freely, or in production in a
-	// controlled way with the customer aware of the test and its potential
-	// impact on their operations.
-	Chaos bool `hcl:"chaos,optional"`
 }
 
 // Site is one location within a project holding a set of machines.
@@ -70,10 +59,8 @@ type Machine struct {
 // authors nothing further.
 //
 // The two instances are independent runtimes that run at the same time on one
-// host. Every port either of them binds is therefore its own: the api endpoint it
-// serves and the Event Fabric ports its own NATS server binds. Nothing on a
-// machine is shared between them except the ownership object, which is not a
-// port.
+// host, so every port either of them binds is its own. Nothing on a machine is
+// shared between them except the ownership lease, which is not a port.
 type Platform struct {
 	// DataDir is the Primary Instance's general platform data root. Required.
 	DataDir string `hcl:"data_dir,optional"`
@@ -81,16 +68,9 @@ type Platform struct {
 	API *API `hcl:"api,block"`
 	// WinService is the Primary Instance's Windows Service identity.
 	WinService *WinService `hcl:"winservice,block"`
-	// EventStorage is the Primary Instance's event storage policy.
-	EventStorage *EventStorage `hcl:"event_storage,block"`
 	// Standby is the machine's local redundancy policy, and where a deployed
-	// Standby Instance states its own lock, data_dir, api, winservice, and event_storage.
+	// Standby Instance states its own lock, data_dir, api, and winservice.
 	Standby *Standby `hcl:"standby,block"`
-}
-
-// EventStorage is an instance's event storage policy.
-type EventStorage struct {
-	Nats *Nats `hcl:"nats,block"`
 }
 
 // API is one instance's local API endpoint policy.
@@ -101,8 +81,7 @@ type EventStorage struct {
 // it with 127.0.0.1 and never with the machine's ip. The platform API is how an
 // operator, or a service co-located on that host, asks this instance about
 // itself; it is not how machines reach each other. Cross-machine traffic is the
-// Event Fabric's, and the nats block is where the ports derived from the machine
-// ip are authored.
+// Event Fabric's.
 //
 // The name carries the constraint so a blueprint cannot be authored in the belief
 // that this port will be reachable from the network. Nothing binds it off
@@ -112,9 +91,27 @@ type EventStorage struct {
 // lifetime, not only while Active. That is what lets an operator ask a Standby
 // Instance about itself, which a single endpoint owned by whoever is Active
 // cannot answer.
+//
+// # The server timeouts are the instance's too
+//
+// read_header_timeout and shutdown_timeout govern the listener authored here, so
+// they are authored here. They are per instance for the same reason the port is:
+// the two instances are independent runtimes with independent listeners, and a
+// machine-level value would be one both of them took whether or not it suited
+// either.
+//
+// The durations are HCL strings in Go's duration syntax ("5s", "10s"). They are
+// carried through the descriptor unparsed and validated by the builder; the
+// platform parses them at startup.
 type API struct {
 	// LocalPort is the loopback port this instance serves its local API on.
 	LocalPort int `hcl:"local_port"`
+	// ReadHeaderTimeout bounds how long this instance's listener spends reading
+	// an HTTP request's headers before it closes the connection.
+	ReadHeaderTimeout string `hcl:"read_header_timeout"`
+	// ShutdownTimeout bounds the graceful drain of this instance's listener when
+	// it stops serving, whether it is stepping down or the process is leaving.
+	ShutdownTimeout string `hcl:"shutdown_timeout"`
 }
 
 // maxWinServiceName bounds a Windows Service name. The Service Control Manager
@@ -184,6 +181,15 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `hcl:"failback_stabilization"`
+	// LagBound is how far a process's projection may fall behind the journal
+	// before it stops being promotable, and before an Active process stops
+	// serving rather than answering from a stale view.
+	//
+	// It is authored on the lease because it is a failover bound: it decides
+	// whether the machine's two instances may trade ownership, which is a
+	// question only a machine that deploys a standby asks. It is an operational
+	// safety bound, not a failover-time SLO.
+	LagBound string `hcl:"lag_bound"`
 }
 
 // Lease returns the machine's authored ownership lease policy, or nil when the
@@ -218,26 +224,6 @@ type Standby struct {
 	API *API `hcl:"api,block"`
 	// WinService is the Standby Instance's Windows Service identity.
 	WinService *WinService `hcl:"winservice,block"`
-	// EventStorage is the Standby Instance's event storage policy.
-	EventStorage *EventStorage `hcl:"event_storage,block"`
-}
-
-// Nats is one instance's Event Fabric NATS port policy and JetStream storage location,
-// authored so a blueprint reader sees which ports the machine needs open and where
-// JetStream files are stored.
-type Nats struct {
-	// ClientPort is the port this instance's server serves the NATS client
-	// protocol on. It is bound only on a storage machine; every other instance of
-	// the site reaches the journal through the storage machines' client ports.
-	ClientPort int `hcl:"client_port"`
-	// ClusterPort is the port this instance's server routes to the site's other
-	// storage servers on, including its own machine's other instance. It carries
-	// the server-to-server route protocol only, and is bound only when the site
-	// has a second storage server to route to.
-	ClusterPort int `hcl:"cluster_port"`
-	// JetStreamStoreDir is the directory where this instance's NATS JetStream server
-	// stores its files. Required.
-	JetStreamStoreDir string `hcl:"jetstream_store_dir,optional"`
 }
 
 // Validate checks a project against the model's structural rules. It fails
@@ -333,16 +319,13 @@ func validatePlatform(machine Machine) error {
 	if machine.Platform.Standby == nil {
 		return fmt.Errorf("machine %q: platform.standby block is required", machine.Name)
 	}
-	if err := validateInstanceEndpoints(machine, "platform", machine.Platform.API, machine.Platform.EventStorage); err != nil {
+	if err := validateInstanceEndpoints(machine, "platform", machine.Platform.API); err != nil {
 		return err
 	}
 	if err := validateStandbyEndpoints(machine); err != nil {
 		return err
 	}
 	if err := validateDataDirs(machine); err != nil {
-		return err
-	}
-	if err := validateJetStreamStoreDirs(machine); err != nil {
 		return err
 	}
 	if err := validateMachinePorts(machine); err != nil {
@@ -354,27 +337,35 @@ func validatePlatform(machine Machine) error {
 	return validateLease(machine)
 }
 
-// validateInstanceEndpoints checks one instance states its endpoint
-// policies with usable ports and a JetStream store directory when present.
-func validateInstanceEndpoints(machine Machine, block string, api *API, eventStorage *EventStorage) error {
+// validateInstanceEndpoints checks one instance states its endpoint policy with
+// a usable port and usable listener timeouts.
+func validateInstanceEndpoints(machine Machine, block string, api *API) error {
 	if api == nil {
 		return fmt.Errorf("machine %q: %s.api block is required", machine.Name, block)
 	}
 	if err := validatePort(machine.Name, block+".api.local_port", api.LocalPort); err != nil {
 		return err
 	}
-	if eventStorage == nil || eventStorage.Nats == nil {
-		return nil
-	}
-	nats := eventStorage.Nats
-	if err := validatePort(machine.Name, block+".event_storage.nats.client_port", nats.ClientPort); err != nil {
+	if err := validateAPIDuration(machine.Name, block+".api.read_header_timeout", api.ReadHeaderTimeout); err != nil {
 		return err
 	}
-	if err := validatePort(machine.Name, block+".event_storage.nats.cluster_port", nats.ClusterPort); err != nil {
-		return err
+	return validateAPIDuration(machine.Name, block+".api.shutdown_timeout", api.ShutdownTimeout)
+}
+
+// validateAPIDuration parses one authored listener timeout and requires it to be
+// a positive Go duration. A zero or negative timeout is rejected rather than
+// treated as "no limit": the two read the same in a blueprint and only one of
+// them is ever meant.
+func validateAPIDuration(machineName, where, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("machine %q: %s is required", machineName, where)
 	}
-	if strings.TrimSpace(nats.JetStreamStoreDir) == "" {
-		return fmt.Errorf("machine %q: %s.event_storage.nats.jetstream_store_dir is required", machine.Name, block)
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("machine %q: %s %q is not a valid duration: %w", machineName, where, value, err)
+	}
+	if d <= 0 {
+		return fmt.Errorf("machine %q: %s %s must be positive", machineName, where, d)
 	}
 	return nil
 }
@@ -385,7 +376,7 @@ func validateInstanceEndpoints(machine Machine, block string, api *API, eventSto
 func validateStandbyEndpoints(machine Machine) error {
 	standby := machine.Platform.Standby
 	if !standby.Disabled {
-		return validateInstanceEndpoints(machine, "platform.standby", standby.API, standby.EventStorage)
+		return validateInstanceEndpoints(machine, "platform.standby", standby.API)
 	}
 	if strings.TrimSpace(standby.DataDir) != "" {
 		return fmt.Errorf("machine %q: platform.standby.data_dir is set but the standby is disabled; remove it or deploy the standby", machine.Name)
@@ -396,56 +387,28 @@ func validateStandbyEndpoints(machine Machine) error {
 	if standby.API != nil {
 		return fmt.Errorf("machine %q: platform.standby.api is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
-	if standby.EventStorage != nil {
-		return fmt.Errorf("machine %q: platform.standby.event_storage is set but the standby is disabled; remove it or deploy the standby", machine.Name)
-	}
 	return nil
 }
 
 // validateDataDirs checks each deployed instance states its own platform data
 // root, and that a machine's two instances do not state the same one.
 func validateDataDirs(machine Machine) error {
-	return validateInstanceDirs(machine, "data_dir",
-		machine.Platform.DataDir, machine.Platform.Standby.DataDir,
-		"the two instances run together and cannot share a platform data directory")
-}
-
-// validateJetStreamStoreDirs checks each deployed instance states its own JetStream
-// file store directory, and that a machine's two instances do not state the same one.
-func validateJetStreamStoreDirs(machine Machine) error {
-	primaryDir := machine.JetStreamStoreDir(false)
-	standbyDir := machine.JetStreamStoreDir(true)
-	if primaryDir == "" || standbyDir == "" || machine.Platform.Standby.Disabled {
+	if strings.TrimSpace(machine.Platform.DataDir) == "" {
+		return fmt.Errorf("machine %q: platform.data_dir is required", machine.Name)
+	}
+	standby := machine.Platform.Standby
+	if standby == nil || standby.Disabled {
 		return nil
 	}
-	if primaryDir == standbyDir {
-		return fmt.Errorf("machine %q: platform.event_storage.nats.jetstream_store_dir and platform.standby.event_storage.nats.jetstream_store_dir are both %q; each instance runs its own Event Fabric server and two servers cannot open the same JetStream store", machine.Name, primaryDir)
+	if strings.TrimSpace(standby.DataDir) == "" {
+		return fmt.Errorf("machine %q: platform.standby.data_dir is required", machine.Name)
+	}
+	if filepath.Clean(machine.Platform.DataDir) == filepath.Clean(standby.DataDir) {
+		return fmt.Errorf("machine %q: platform.data_dir and platform.standby.data_dir: the two instances run together and cannot share a platform data directory", machine.Name)
 	}
 	return nil
 }
 
-// validateInstanceDirs checks one per-instance directory attribute: required on
-// the primary, required on a deployed standby, and never the same on both.
-func validateInstanceDirs(machine Machine, attribute, primaryDir, standbyDir, collision string) error {
-	primary := strings.TrimSpace(primaryDir)
-	if primary == "" {
-		return fmt.Errorf("machine %q: platform.%s is required; every machine deploys a Primary Instance", machine.Name, attribute)
-	}
-	if machine.Platform.Standby.Disabled {
-		return nil
-	}
-	standby := strings.TrimSpace(standbyDir)
-	if standby == "" {
-		return fmt.Errorf("machine %q: platform.standby.%s is required when the standby is deployed", machine.Name, attribute)
-	}
-	if primary == standby {
-		return fmt.Errorf("machine %q: platform.%s and platform.standby.%s are both %q; %s", machine.Name, attribute, attribute, primary, collision)
-	}
-	return nil
-}
-
-// validateMachinePorts checks no two listeners on the machine are given the same
-// port.
 func validateMachinePorts(machine Machine) error {
 	type listener struct {
 		where string
@@ -455,24 +418,10 @@ func validateMachinePorts(machine Machine) error {
 	listeners := []listener{
 		{"platform.api.local_port", platform.API.LocalPort},
 	}
-	primaryNats := machine.Nats(false)
-	if primaryNats != nil {
-		listeners = append(listeners,
-			listener{"platform.event_storage.nats.client_port", primaryNats.ClientPort},
-			listener{"platform.event_storage.nats.cluster_port", primaryNats.ClusterPort},
-		)
-	}
 	if !platform.Standby.Disabled {
 		listeners = append(listeners,
 			listener{"platform.standby.api.local_port", platform.Standby.API.LocalPort},
 		)
-		standbyNats := machine.Nats(true)
-		if standbyNats != nil {
-			listeners = append(listeners,
-				listener{"platform.standby.event_storage.nats.client_port", standbyNats.ClientPort},
-				listener{"platform.standby.event_storage.nats.cluster_port", standbyNats.ClusterPort},
-			)
-		}
 	}
 	taken := make(map[int]string, len(listeners))
 	for _, l := range listeners {
@@ -594,6 +543,9 @@ func validateLease(machine Machine) error {
 	if _, err := validateLeaseDuration(machine.Name, "failback_stabilization", lease.FailbackStabilization); err != nil {
 		return err
 	}
+	if _, err := validateLeaseDuration(machine.Name, "lag_bound", lease.LagBound); err != nil {
+		return err
+	}
 	// Renewal must fit comfortably inside the lease so at least two attempts land
 	// before expiry; the platform derives its step-down grace from the difference.
 	if renewal >= duration {
@@ -625,43 +577,13 @@ func validatePort(machineName, where string, port int) error {
 	return nil
 }
 
-// Nats returns one instance's authored Nats configuration, or nil when that
-// instance is not deployed or omits it.
-func (m Machine) Nats(standby bool) *Nats {
-	if m.Platform == nil {
-		return nil
-	}
-	if !standby {
-		if m.Platform.EventStorage == nil {
-			return nil
-		}
-		return m.Platform.EventStorage.Nats
-	}
-	if m.Platform.Standby == nil || m.Platform.Standby.Disabled || m.Platform.Standby.EventStorage == nil {
-		return nil
-	}
-	return m.Platform.Standby.EventStorage.Nats
-}
-
-// JetStreamStoreDir returns one instance's authored JetStream store directory.
-func (m Machine) JetStreamStoreDir(standby bool) string {
-	nats := m.Nats(standby)
-	if nats == nil {
-		return ""
-	}
-	return strings.TrimSpace(nats.JetStreamStoreDir)
-}
-
 // Endpoints resolves one instance's authored endpoint ports, or nil when that
-// instance is not deployed. It is the one place resolution asks a machine which
-// ports an instance owns, so the primary-under-platform and standby-under-standby
-// asymmetry is read in a single place rather than repeated per endpoint.
+// instance is not deployed.
 func (m Machine) Endpoints(standby bool) *Endpoints {
 	if m.Platform == nil {
 		return nil
 	}
 	api := m.Platform.API
-	nats := m.Nats(standby)
 	if standby {
 		if m.Platform.Standby == nil || m.Platform.Standby.Disabled {
 			return nil
@@ -671,22 +593,19 @@ func (m Machine) Endpoints(standby bool) *Endpoints {
 	if api == nil {
 		return nil
 	}
-	clientPort := 0
-	clusterPort := 0
-	if nats != nil {
-		clientPort = nats.ClientPort
-		clusterPort = nats.ClusterPort
+	return &Endpoints{
+		APILocalPort:         api.LocalPort,
+		APIReadHeaderTimeout: strings.TrimSpace(api.ReadHeaderTimeout),
+		APIShutdownTimeout:   strings.TrimSpace(api.ShutdownTimeout),
 	}
-	return &Endpoints{APILocalPort: api.LocalPort, ClientPort: clientPort, ClusterPort: clusterPort}
 }
 
-// Endpoints are one instance's authored listener ports.
+// Endpoints are one instance's authored listener port and the timeouts that
+// govern it.
 type Endpoints struct {
-	// APILocalPort is bound on loopback; the two nats ports are bound on the
-	// machine's ip.
-	APILocalPort int
-	ClientPort   int
-	ClusterPort  int
+	APILocalPort         int
+	APIReadHeaderTimeout string
+	APIShutdownTimeout   string
 }
 
 // DataDir returns one instance's authored general platform data directory, or

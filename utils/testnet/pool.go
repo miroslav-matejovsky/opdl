@@ -15,7 +15,7 @@ const (
 	//
 	// Why this band:
 	// Port 0 draws from the Windows ephemeral range, 49152 to 65535. That range is
-	// shared with outbound connections (NATS clients, HTTP clients, dotnet test).
+	// shared with outbound connections (HTTP clients, dotnet test).
 	// Between release and bind in a reserve-then-release lifecycle, an ephemeral
 	// port can be taken by an unrelated outbound socket.
 	//

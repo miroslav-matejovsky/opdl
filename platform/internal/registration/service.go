@@ -37,7 +37,7 @@ type ProposalReceipt struct {
 }
 
 // QueryService answers registration queries from one node-local projection.
-// It never calls the Event Fabric or NATS.
+// It never calls the Event Fabric.
 type QueryService struct {
 	projection *Projection
 	locations  map[string]Location

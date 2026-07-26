@@ -35,8 +35,8 @@ than once at the root.
   launches it and every knob is the command's: run `go run ./cmd -h` inside
   `scenarios/` for the list. It runs concurrently under a bounded load budget;
   when debugging, you can serialize it with `go run ./cmd -parallel 1`, see what
-  there is with `go run ./cmd -list`, and narrow it with `-only nats`, `-skip
-  sdk`, or `-run nats/FourMachine`.
+  there is with `go run ./cmd -list`, and narrow it with `-only smoke`, `-skip
+  sdk`, or `-run redundancy/FailoverAndFailback`.
 
   The two halves are separate scripts and separate tasks because they fail for
   different reasons and take very different times. A scenario failure means a

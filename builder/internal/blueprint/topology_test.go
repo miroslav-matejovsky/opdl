@@ -1,6 +1,7 @@
 package blueprint_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2/gohcl"
@@ -14,7 +15,6 @@ func validProject() *blueprint.Project {
 	return &blueprint.Project{
 		Name:        "customer-a",
 		Environment: "production",
-		Features:    blueprint.Features{Chaos: true},
 		// Two machines with a standby on one of them is the smallest site the
 		// platform supports, so it is what an otherwise-valid fixture has to be.
 		// A one-machine site is now rejected before any rule these tests are
@@ -38,27 +38,13 @@ func validMachine() blueprint.Machine {
 		Services:       []string{"sensor-services"},
 		Platform: &blueprint.Platform{
 			DataDir:    "D:/opdl/sensor/primary",
-			API:        &blueprint.API{LocalPort: 8080},
+			API:        &blueprint.API{LocalPort: 8080, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 			WinService: &blueprint.WinService{Name: "primary"},
-			EventStorage: &blueprint.EventStorage{
-				Nats: &blueprint.Nats{
-					ClientPort:        4222,
-					ClusterPort:       6222,
-					JetStreamStoreDir: "D:/opdl/sensor/primary/eventfabric/nats",
-				},
-			},
 			Standby: &blueprint.Standby{
 				DataDir:    "D:/opdl/sensor/standby",
 				Lease:      validLease("D:/opdl/sensor/lease"),
-				API:        &blueprint.API{LocalPort: 8081},
+				API:        &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 				WinService: &blueprint.WinService{Name: "standby"},
-				EventStorage: &blueprint.EventStorage{
-					Nats: &blueprint.Nats{
-						ClientPort:        4322,
-						ClusterPort:       6322,
-						JetStreamStoreDir: "D:/opdl/sensor/standby/eventfabric/nats",
-					},
-				},
 			},
 		},
 	}
@@ -76,10 +62,8 @@ func namedMachine(name, ip string) blueprint.Machine {
 	// Sharing a lock across machines is rejected, and sharing a directory is only
 	// safe because two machines are two hosts, which a fixture on one host is not.
 	m.Platform.DataDir = "D:/opdl/" + name + "/primary"
-	m.Platform.EventStorage.Nats.JetStreamStoreDir = "D:/opdl/" + name + "/primary/eventfabric/nats"
 	m.Platform.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	m.Platform.Standby.DataDir = "D:/opdl/" + name + "/standby"
-	m.Platform.Standby.EventStorage.Nats.JetStreamStoreDir = "D:/opdl/" + name + "/standby/eventfabric/nats"
 	m.Platform.Standby.Lease = validLease("D:/opdl/" + name + "/lease")
 	return m
 }
@@ -94,6 +78,7 @@ func validLease(file string) *blueprint.Lease {
 		RenewalInterval:       "5s",
 		HealthCheckInterval:   "2s",
 		FailbackStabilization: "30s",
+		LagBound:              "30s",
 	}
 }
 
@@ -181,11 +166,6 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 	})
 }
 
-func TestFeatures(t *testing.T) {
-	f := blueprint.Features{Chaos: true}
-	require.True(t, f.Chaos)
-}
-
 // TestMachinePlatformStandby checks the platform subsection decodes as a
 // presence-aware value: absent block, absent standby block, and explicit standby
 // subsections are all distinguishable.
@@ -194,7 +174,6 @@ func TestMachinePlatformStandby(t *testing.T) {
 		t.Helper()
 		p := decodeHCL(t, `project "p" {
 		  environment = "production"
-		  features {}
 		  site "north" {
 		    machine "m1" {
 		      profile  = "node"
@@ -212,42 +191,17 @@ func TestMachinePlatformStandby(t *testing.T) {
 	})
 	t.Run("standby enabled", func(t *testing.T) {
 		m := machine(t, `platform {
-		  event_storage {
-		    nats {
-		      client_port         = 4222
-		      cluster_port        = 6222
-		      jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
-		    }
-		  }
 		  standby {
 		    disabled = false
 		    data_dir = "D:/opdl/m1/standby"
-		    event_storage {
-		      nats {
-		        client_port         = 4322
-		        cluster_port        = 6322
-		        jetstream_store_dir = "D:/opdl/m1/standby/eventfabric/nats"
-		      }
-		    }
 		  }
 		}`)
 		require.NotNil(t, m.Platform)
-		nats := m.Nats(false)
-		require.NotNil(t, nats)
-		require.Equal(t, 4222, nats.ClientPort)
-		require.Equal(t, 6222, nats.ClusterPort)
 		require.NotNil(t, m.Platform.Standby)
 		require.False(t, m.Platform.Standby.Disabled)
 	})
 	t.Run("standby explicitly disabled", func(t *testing.T) {
 		m := machine(t, `platform {
-		  event_storage {
-		    nats {
-		      client_port         = 4222
-		      cluster_port        = 6222
-		      jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
-		    }
-		  }
 		  standby {
 		    disabled = true
 		  }
@@ -268,46 +222,9 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 		{
 			name: "standby block without disabled attribute",
 			body: `platform {
-			  event_storage {
-			    nats {
-			      client_port         = 4222
-			      cluster_port        = 6222
-			      jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
-			    }
-			  }
 			  standby {}
 			}`,
 			errText: `"disabled"`,
-		},
-		{
-			name: "nats block without client_port",
-			body: `platform {
-			  event_storage {
-			    nats {
-			      cluster_port        = 6222
-			      jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
-			    }
-			  }
-			  standby {
-			    disabled = true
-			  }
-			}`,
-			errText: `"client_port"`,
-		},
-		{
-			name: "nats block without cluster_port",
-			body: `platform {
-			  event_storage {
-			    nats {
-			      client_port         = 4222
-			      jetstream_store_dir = "D:/opdl/m1/primary/eventfabric/nats"
-			    }
-			  }
-			  standby {
-			    disabled = true
-			  }
-			}`,
-			errText: `"cluster_port"`,
 		},
 	}
 
@@ -315,7 +232,6 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			src := `project "p" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "m1" {
 			      profile  = "node"
@@ -364,7 +280,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			name: "missing profile",
 			hcl: `project "bad-profile" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "m1" {
 			      profile  = ""
@@ -379,7 +294,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			name: "missing ip",
 			hcl: `project "bad-ip" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "m1" {
 			      profile  = "node"
@@ -394,7 +308,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			name: "invalid ip",
 			hcl: `project "bad-ip" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "m1" {
 			      profile  = "node"
@@ -409,7 +322,6 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			name: "duplicate machine name across sites",
 			hcl: `project "dup-machine" {
 			  environment = "production"
-			  features {}
 			  site "north" {
 			    machine "node-1" {
 			      profile  = "node"
@@ -419,16 +331,11 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        data_dir = "D:/opdl/node-1/primary"
 			        api {
 			          local_port = 8080
+			          read_header_timeout = "5s"
+			          shutdown_timeout = "10s"
 			        }
 			        winservice {
 			          name = "primary"
-			        }
-			        event_storage {
-			          nats {
-			            client_port         = 4222
-			            cluster_port        = 6222
-			            jetstream_store_dir = "D:/opdl/node-1/primary/eventfabric/nats"
-			          }
 			        }
 			        standby {
 			          disabled = false
@@ -439,19 +346,15 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			            renewal_interval       = "5s"
 			            health_check_interval  = "2s"
 			            failback_stabilization = "30s"
+			            lag_bound              = "30s"
 			          }
 			          api {
 			            local_port = 8081
+			            read_header_timeout = "5s"
+			            shutdown_timeout = "10s"
 			          }
 			          winservice {
 			            name = "standby"
-			          }
-			          event_storage {
-			            nats {
-			              client_port         = 4322
-			              cluster_port        = 6322
-			              jetstream_store_dir = "D:/opdl/node-1/standby/eventfabric/nats"
-			            }
 			          }
 			        }
 			      }
@@ -466,16 +369,11 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        data_dir = "D:/opdl/node-1/primary"
 			        api {
 			          local_port = 8080
+			          read_header_timeout = "5s"
+			          shutdown_timeout = "10s"
 			        }
 			        winservice {
 			          name = "primary"
-			        }
-			        event_storage {
-			          nats {
-			            client_port         = 4222
-			            cluster_port        = 6222
-			            jetstream_store_dir = "D:/opdl/node-1/primary/eventfabric/nats"
-			          }
 			        }
 			        standby {
 			          disabled = false
@@ -486,19 +384,15 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			            renewal_interval       = "5s"
 			            health_check_interval  = "2s"
 			            failback_stabilization = "30s"
+			            lag_bound              = "30s"
 			          }
 			          api {
 			            local_port = 8081
+			            read_header_timeout = "5s"
+			            shutdown_timeout = "10s"
 			          }
 			          winservice {
 			            name = "standby"
-			          }
-			          event_storage {
-			            nats {
-			              client_port         = 4322
-			              cluster_port        = 6322
-			              jetstream_store_dir = "D:/opdl/node-1/standby/eventfabric/nats"
-			            }
 			          }
 			        }
 			      }
@@ -527,7 +421,6 @@ func disableStandby(p *blueprint.Project) {
 	standby.Lease = nil
 	standby.API = nil
 	standby.WinService = nil
-	standby.EventStorage = nil
 }
 
 // TestStandbyEndpointsAreRejectedWhenNotDeployed checks each block a Standby
@@ -536,12 +429,11 @@ func disableStandby(p *blueprint.Project) {
 // take effect, and a reader could not tell it from one that does.
 func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 	tests := map[string]func(*blueprint.Standby){
-		"lease":      func(s *blueprint.Standby) { s.Lease = validLease("D:/opdl/sensor/lease") },
-		"api":        func(s *blueprint.Standby) { s.API = &blueprint.API{LocalPort: 8081} },
-		"winservice": func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
-		"event_storage": func(s *blueprint.Standby) {
-			s.EventStorage = &blueprint.EventStorage{Nats: &blueprint.Nats{ClientPort: 4322, ClusterPort: 6322, JetStreamStoreDir: "D:/opdl/sensor/standby/eventfabric/nats"}}
+		"lease": func(s *blueprint.Standby) { s.Lease = validLease("D:/opdl/sensor/lease") },
+		"api": func(s *blueprint.Standby) {
+			s.API = &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"}
 		},
+		"winservice": func(s *blueprint.Standby) { s.WinService = &blueprint.WinService{Name: "standby"} },
 	}
 	for label, author := range tests {
 		t.Run(label, func(t *testing.T) {
@@ -559,13 +451,6 @@ func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 func TestMachineListenersMustNotSharePort(t *testing.T) {
 	tests := map[string]func(*blueprint.Platform){
 		"standby api copies primary api": func(pl *blueprint.Platform) { pl.Standby.API.LocalPort = pl.API.LocalPort },
-		"standby nats copies primary nats": func(pl *blueprint.Platform) {
-			pl.Standby.EventStorage.Nats.ClientPort = pl.EventStorage.Nats.ClientPort
-		},
-		"standby cluster copies primary": func(pl *blueprint.Platform) {
-			pl.Standby.EventStorage.Nats.ClusterPort = pl.EventStorage.Nats.ClusterPort
-		},
-		"api collides with this instance nats": func(pl *blueprint.Platform) { pl.API.LocalPort = pl.EventStorage.Nats.ClientPort },
 	}
 	for label, collide := range tests {
 		t.Run(label, func(t *testing.T) {
@@ -576,78 +461,47 @@ func TestMachineListenersMustNotSharePort(t *testing.T) {
 	}
 }
 
-func TestProjectValidateNatsFailures(t *testing.T) {
-	tests := []struct {
-		name    string
-		mutate  func(*blueprint.Project)
+// TestProjectValidateAPITimeoutFailures checks an authored listener timeout that
+// cannot be used is refused at build time rather than at startup. A zero timeout
+// is refused rather than read as "no limit": the two look identical in a
+// blueprint and only one of them is ever meant.
+func TestProjectValidateAPITimeoutFailures(t *testing.T) {
+	tests := map[string]struct {
+		mutate  func(*blueprint.API)
 		errText string
 	}{
-		{"missing platform block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform = nil }, `machine "sensor": platform block is required`},
-		{"missing standby block", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby = nil }, `machine "sensor": platform.standby block is required`},
-		{"missing standby lease when deployed", func(p *blueprint.Project) { p.Sites[0].Machines[0].Platform.Standby.Lease = nil }, `machine "sensor": platform.standby.lease block is required when the standby is deployed`},
-		{"zero client port", func(p *blueprint.Project) {
-			p.Sites[0].Machines[0].Platform.EventStorage.Nats.ClientPort = 0
-		}, `platform.event_storage.nats.client_port must be in range 1-65535, got 0`},
-		{"negative client port", func(p *blueprint.Project) {
-			p.Sites[0].Machines[0].Platform.EventStorage.Nats.ClientPort = -1
-		}, `platform.event_storage.nats.client_port must be in range 1-65535, got -1`},
-		{"client port above range", func(p *blueprint.Project) {
-			p.Sites[0].Machines[0].Platform.EventStorage.Nats.ClientPort = 65536
-		}, `platform.event_storage.nats.client_port must be in range 1-65535, got 65536`},
-		{"zero cluster port", func(p *blueprint.Project) {
-			p.Sites[0].Machines[0].Platform.EventStorage.Nats.ClusterPort = 0
-		}, `platform.event_storage.nats.cluster_port must be in range 1-65535, got 0`},
-		{"cluster port above range", func(p *blueprint.Project) {
-			p.Sites[0].Machines[0].Platform.EventStorage.Nats.ClusterPort = 70000
-		}, `platform.event_storage.nats.cluster_port must be in range 1-65535, got 70000`},
-		{"colliding ports", func(p *blueprint.Project) {
-			p.Sites[0].Machines[0].Platform.EventStorage.Nats.ClusterPort = p.Sites[0].Machines[0].Platform.EventStorage.Nats.ClientPort
-		}, `platform.event_storage.nats.client_port and platform.event_storage.nats.cluster_port are both 4222`},
+		"blank read header timeout":        {func(a *blueprint.API) { a.ReadHeaderTimeout = "" }, "api.read_header_timeout is required"},
+		"bad read header timeout":          {func(a *blueprint.API) { a.ReadHeaderTimeout = "soon" }, "is not a valid duration"},
+		"non-positive read header timeout": {func(a *blueprint.API) { a.ReadHeaderTimeout = "0s" }, "must be positive"},
+		"blank shutdown timeout":           {func(a *blueprint.API) { a.ShutdownTimeout = "" }, "api.shutdown_timeout is required"},
+		"non-positive shutdown timeout":    {func(a *blueprint.API) { a.ShutdownTimeout = "-1s" }, "must be positive"},
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			p := validProject()
-			tc.mutate(p)
-			require.ErrorContains(t, p.Validate(), tc.errText)
-		})
+	// Both instances are checked: they author their own listeners, so a rule
+	// applied to only one of them would let the other ship an unusable timeout.
+	for name, test := range tests {
+		for _, standby := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/standby=%t", name, standby), func(t *testing.T) {
+				p := validProject()
+				platform := p.Sites[0].Machines[0].Platform
+				api := platform.API
+				if standby {
+					api = platform.Standby.API
+				}
+				test.mutate(api)
+				require.ErrorContains(t, p.Validate(), test.errText)
+			})
+		}
 	}
 }
 
-func TestProjectValidateOptionalNats(t *testing.T) {
-	t.Run("missing primary event_storage block", func(t *testing.T) {
-		p := validProject()
-		p.Sites[0].Machines[0].Platform.EventStorage = nil
-		require.NoError(t, p.Validate())
-		m := p.Sites[0].Machines[0]
-		require.Nil(t, m.Nats(false))
-		ep := m.Endpoints(false)
-		require.NotNil(t, ep)
-		require.Equal(t, 8080, ep.APILocalPort)
-		require.Equal(t, 0, ep.ClientPort)
-		require.Equal(t, 0, ep.ClusterPort)
-	})
-
-	t.Run("missing nats block inside event_storage", func(t *testing.T) {
-		p := validProject()
-		p.Sites[0].Machines[0].Platform.EventStorage = &blueprint.EventStorage{Nats: nil}
-		require.NoError(t, p.Validate())
-		m := p.Sites[0].Machines[0]
-		require.Nil(t, m.Nats(false))
-	})
-
-	t.Run("missing standby event_storage block", func(t *testing.T) {
-		p := validProject()
-		p.Sites[0].Machines[0].Platform.Standby.EventStorage = nil
-		require.NoError(t, p.Validate())
-		m := p.Sites[0].Machines[0]
-		require.Nil(t, m.Nats(true))
-		ep := m.Endpoints(true)
-		require.NotNil(t, ep)
-		require.Equal(t, 8081, ep.APILocalPort)
-		require.Equal(t, 0, ep.ClientPort)
-		require.Equal(t, 0, ep.ClusterPort)
-	})
+// TestMachineEndpointsCarryTheAPITimeouts checks the timeouts reach resolution
+// alongside the port, so an instance's listener and its bounds come from one
+// place.
+func TestMachineEndpointsCarryTheAPITimeouts(t *testing.T) {
+	p := validProject()
+	endpoints := p.Sites[0].Machines[0].Endpoints(false)
+	require.Equal(t, "5s", endpoints.APIReadHeaderTimeout)
+	require.Equal(t, "10s", endpoints.APIShutdownTimeout)
 }
 
 // TestMachineLease checks Lease returns nil when standby is disabled or omitted,
@@ -677,6 +531,11 @@ func TestProjectValidateLeaseFailures(t *testing.T) {
 		"renewal not shorter":   {func(l *blueprint.Lease) { l.RenewalInterval = "15s" }, "must be shorter than duration"},
 		"blank health interval": {func(l *blueprint.Lease) { l.HealthCheckInterval = "" }, "lease.health_check_interval is required"},
 		"blank failback":        {func(l *blueprint.Lease) { l.FailbackStabilization = "" }, "lease.failback_stabilization is required"},
+		"blank lag bound":       {func(l *blueprint.Lease) { l.LagBound = "" }, "lease.lag_bound is required"},
+		"bad lag bound":         {func(l *blueprint.Lease) { l.LagBound = "soon" }, "is not a valid duration"},
+		"non-positive lag bound": {
+			func(l *blueprint.Lease) { l.LagBound = "0s" }, "must be positive",
+		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -761,7 +620,6 @@ func TestWinServiceIdentityFillsDisplayNameDefault(t *testing.T) {
 
 	machine.Platform.Standby.Disabled = true
 	machine.Platform.Standby.API = nil
-	machine.Platform.Standby.EventStorage = nil
 	machine.Platform.Standby.WinService = nil
 	require.Nil(t, machine.WinServiceIdentity(true), "an undeployed instance has no service")
 }
