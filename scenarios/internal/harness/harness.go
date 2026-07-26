@@ -745,9 +745,6 @@ shutdown_timeout = "10s"
 		return []byte(config)
 	}
 	return []byte(config + `lag_bound = "2m"
-[event_fabric.nats]
-startup_timeout = "60s"
-catch_up_timeout = "60s"
 `)
 }
 

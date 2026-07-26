@@ -68,9 +68,6 @@ func writeConfig(t *testing.T, dir string) string {
 	contents := `read_header_timeout = "5s"
 shutdown_timeout = "10s"
 lag_bound = "30s"
-[event_fabric.nats]
-startup_timeout = "30s"
-catch_up_timeout = "30s"
 `
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 	return path

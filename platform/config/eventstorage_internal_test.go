@@ -43,7 +43,7 @@ func TestHasEventStorageIgnoresAnInstanceThatIsNotDeployed(t *testing.T) {
 }
 
 // TestEventStorageSettingsAreRequiredOnlyWithAJournal is the rule the
-// configuration file follows: the three settings that bound a site journal are
+// configuration file follows: the setting that bounds a site journal is
 // required of a deployment that has one and of no other.
 func TestEventStorageSettingsAreRequiredOnlyWithAJournal(t *testing.T) {
 	empty := file{}
@@ -67,45 +67,19 @@ func TestEventStorageSettingsValidateAStatedValueThatDoesNotApply(t *testing.T) 
 	_, err := eventStorageSettings("config.toml", journalless(), stated)
 	require.ErrorContains(t, err, "invalid lag_bound")
 
-	stated = file{EventFabric: EventFabric{Nats: EventFabricNats{StartupTimeout: "-5s"}}}
+	stated = file{LagBound: "-5s"}
 	_, err = eventStorageSettings("config.toml", journalless(), stated)
 	require.ErrorContains(t, err, "duration must be positive")
 
 	// A well-formed value that does not apply is accepted and left unused.
-	stated = file{LagBound: "30s", EventFabric: EventFabric{Nats: EventFabricNats{StartupTimeout: "30s", CatchUpTimeout: "25s"}}}
+	stated = file{LagBound: "30s"}
 	lagBound, err := eventStorageSettings("config.toml", journalless(), stated)
 	require.NoError(t, err)
 	require.Zero(t, lagBound, "a bound this deployment does not read is not adopted")
 }
 
-// TestEventStorageSettingsRequireEachSettingWithAJournal checks the three are
-// required individually rather than as a block, so a partly filled file names
-// the setting that is missing.
 func TestEventStorageSettingsRequireEachSettingWithAJournal(t *testing.T) {
-	tests := []struct {
-		name    string
-		file    file
-		errText string
-	}{
-		{
-			"no startup timeout",
-			file{LagBound: "30s", EventFabric: EventFabric{Nats: EventFabricNats{CatchUpTimeout: "25s"}}},
-			"[event_fabric.nats] startup_timeout is required",
-		},
-		{
-			"no catch-up timeout",
-			file{LagBound: "30s", EventFabric: EventFabric{Nats: EventFabricNats{StartupTimeout: "30s"}}},
-			"[event_fabric.nats] catch_up_timeout is required",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := eventStorageSettings("config.toml", journalled(), tc.file)
-			require.ErrorContains(t, err, tc.errText)
-		})
-	}
-
-	complete := file{LagBound: "30s", EventFabric: EventFabric{Nats: EventFabricNats{StartupTimeout: "30s", CatchUpTimeout: "25s"}}}
+	complete := file{LagBound: "30s"}
 	lagBound, err := eventStorageSettings("config.toml", journalled(), complete)
 	require.NoError(t, err)
 	require.Equal(t, 30*time.Second, lagBound)

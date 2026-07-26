@@ -5,14 +5,10 @@
 # A user may modify runtime settings without rebuilding the binary or touching the
 # embedded deployment descriptor.
 #
-# What is required depends on the deployment this file is read by. Everything
-# below lag_bound describes a site journal: how far a projection may lag it, how
-# long its server may take to start, and how long catching up on it may take. A
-# deployment whose blueprint authors no platform.event_storage block has no
-# journal, so those three settings are not required of it and nothing reads them.
-# Stating one anyway is allowed and still validated, so a file copied from a
-# deployment that had a journal fails on a typo rather than being silently
-# ignored. Everything above them applies to every deployment.
+# What is required depends on the deployment this file is read by. lag_bound describes
+# a site journal: how far a projection may lag it. A deployment whose blueprint
+# authors no platform.event_storage block has no journal, so lag_bound is not
+# required of it and nothing reads it. Stating one anyway is allowed and still validated.
 
 # Maximum duration allowed for reading HTTP request headers before closing the connection.
 read_header_timeout = "5s"
@@ -26,26 +22,6 @@ shutdown_timeout = "10s"
 # bound, not a failover-time SLO. Required of a deployment with event storage.
 lag_bound = "30s"
 
-[event_fabric.nats]
-# The whole section is required of a deployment with event storage, and applies
-# to no other: a deployment with no journal starts no NATS server.
-#
-# Maximum duration allowed for the embedded NATS server to become ready for connections.
-startup_timeout = "30s"
-
-# Maximum duration allowed for the complete startup readiness sequence: replaying
-# the retained journal into this node's projections, draining its durable
-# handlers' retained work, and recording that the node is ready. The platform
-# does not serve its API until that finishes, and does not start if it cannot.
-catch_up_timeout = "30s"
-
-# Path to a TOML file holding the site's NATS credentials as `username` and
-# `password` keys. Required for any deployment that binds a non-loopback address;
-# a loopback-only deployment (development, scenarios) may omit it. It is a
-# separate file so a site can hold it at different permissions, and its contents
-# are never logged.
-# credentials_file = "/etc/opdl/nats-credentials.toml"
-
 # There are no socket settings here, and no API address or runtime directory
 # either. Everything a single instance binds or writes is deployment topology: it
 # is authored in the project blueprint and resolved onto that instance's record in
@@ -53,7 +29,7 @@ catch_up_timeout = "30s"
 #
 # A machine's two instances read this one file, so an address here would be an
 # address both of them bind, and a runtime directory here would be one they both
-# address both of them bind. The API address is authored as api.local_port and resolved onto
+# bind. The API address is authored as api.local_port and resolved onto
 # 127.0.0.1. Setting the Event
 # Fabric's addresses at a site could point a machine at a journal that is not its
 # own, so this file cannot do that either.
@@ -61,3 +37,4 @@ catch_up_timeout = "30s"
 # Unknown keys are rejected at load time. A setting this schema does not define
 # is an error rather than a value that is silently ignored, because a silently
 # ignored setting is indistinguishable from an applied one.
+

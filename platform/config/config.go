@@ -18,9 +18,6 @@ type Config struct {
 	readHeaderTimeout time.Duration
 	shutdownTimeout   time.Duration
 	lagBound          time.Duration
-	eventFabric       EventFabric
-	username          string
-	password          string
 }
 
 // Load composes a Config from the platform's embedded deployment descriptor and
@@ -53,17 +50,6 @@ func Load(configPath string) (*Config, error) {
 		readHeaderTimeout: readHeaderTimeout,
 		shutdownTimeout:   shutdownTimeout,
 		lagBound:          lagBound,
-		eventFabric:       f.EventFabric,
-	}
-	// Credentials are read here rather than by the adapter: composition owns
-	// files and secrets, and the adapter is handed values. A configured file that
-	// cannot be read is a startup failure, not a surprise when a listener opens.
-	if path := f.EventFabric.Nats.CredentialsFile; path != "" {
-		site, err := loadCredentials(path)
-		if err != nil {
-			return nil, fmt.Errorf("config: %w", err)
-		}
-		cfg.username, cfg.password = site.Username, site.Password
 	}
 	return cfg, nil
 }
@@ -71,30 +57,17 @@ func Load(configPath string) (*Config, error) {
 // eventStorageSettings validates the settings that only mean something to a
 // deployment with a site journal, and returns the projection lag bound.
 //
-// lag_bound bounds how far a projection may fall behind the journal, and the two
-// [event_fabric.nats] timeouts bound starting a server and catching up on it.
-// A deployment with no event storage has no journal, no projection, and no
-// server, so all three are settings with nothing to bound. Requiring them there
-// would make an operator write three durations that no code path reads, which is
-// worse than an absent value: it reads like configuration that is in effect.
-//
-// They stay strictly required wherever they do apply, and a value that is stated
-// is validated whether it applies or not. Nothing here is defaulted: a
-// deployment that has a journal must still say what its bounds are.
+// lag_bound bounds how far a projection may fall behind the journal.
+// A deployment with no event storage has no journal and no projection, so
+// lag_bound has nothing to bound. Requiring it there would make an operator write
+// a duration that no code path reads, which is worse than an absent value.
 func eventStorageSettings(path string, d Descriptor, f file) (lagBound time.Duration, err error) {
 	if !d.HasEventStorage() {
 		// A stated value is still checked, so a file carried over from a
 		// deployment that had a journal fails on a typo rather than being
 		// silently ignored.
-		for _, stated := range []struct{ name, value string }{
-			{"lag_bound", f.LagBound},
-			{"[event_fabric.nats] startup_timeout", f.EventFabric.Nats.StartupTimeout},
-			{"[event_fabric.nats] catch_up_timeout", f.EventFabric.Nats.CatchUpTimeout},
-		} {
-			if stated.value == "" {
-				continue
-			}
-			if _, err := validateDuration(stated.name, stated.value); err != nil {
+		if f.LagBound != "" {
+			if _, err := validateDuration("lag_bound", f.LagBound); err != nil {
 				return 0, err
 			}
 		}
@@ -103,18 +76,6 @@ func eventStorageSettings(path string, d Descriptor, f file) (lagBound time.Dura
 
 	if f.LagBound == "" {
 		return 0, fmt.Errorf("configuration file %s: lag_bound is required", path)
-	}
-	if f.EventFabric.Nats.StartupTimeout == "" {
-		return 0, fmt.Errorf("configuration file %s: [event_fabric.nats] startup_timeout is required", path)
-	}
-	if f.EventFabric.Nats.CatchUpTimeout == "" {
-		return 0, fmt.Errorf("configuration file %s: [event_fabric.nats] catch_up_timeout is required", path)
-	}
-	if _, err := validateDuration("[event_fabric.nats] startup_timeout", f.EventFabric.Nats.StartupTimeout); err != nil {
-		return 0, err
-	}
-	if _, err := validateDuration("[event_fabric.nats] catch_up_timeout", f.EventFabric.Nats.CatchUpTimeout); err != nil {
-		return 0, err
 	}
 	return validateLagBound(f.LagBound)
 }
@@ -165,17 +126,6 @@ func (c *Config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
 // it is not ready to take over, and an active process beyond it stops serving.
 func (c *Config) LagBound() time.Duration { return c.lagBound }
 
-// EventFabric returns the Event Fabric adapter settings from the configuration
-// file. Only runtime composition reads it: it is how a site places the journal's
-// storage and moves the transport's sockets, and no domain package has any
-// business knowing a transport is configurable.
-func (c *Config) EventFabric() EventFabric { return c.eventFabric }
-
-// Credentials returns the site's NATS username and password, empty when no
-// credentials file is configured. They are held apart from EventFabric so a
-// secret is never carried in the struct the startup summary renders.
-func (c *Config) Credentials() (username, password string) { return c.username, c.password }
-
 // Summary renders the effective configuration as a human-readable block for
 // logging at startup. It names the credentials file but never reads a secret
 // into the log.
@@ -212,9 +162,8 @@ func (c *Config) Summary(standby bool) string {
 	// do not apply.
 	if d.HasEventStorage() {
 		fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
-		fmt.Fprintf(&b, "    event_fabric.nats   %s", natsSummary(c.eventFabric.Nats))
 	} else {
-		fmt.Fprint(&b, "    lag_bound, event_fabric.nats  (not applicable: no event storage)")
+		fmt.Fprint(&b, "    lag_bound           (not applicable: no event storage)\n")
 	}
 	return b.String()
 }
@@ -265,36 +214,8 @@ func peersSummary(peers []Peer) string {
 	return strings.Join(names, ", ")
 }
 
-// natsSummary renders the Event Fabric adapter's settings a site owns: its
-// startup bounds and where its transport credentials are read from.
-//
-// Where the journal is stored is no longer among them. It is the instance's own
-// and is rendered from the descriptor above, because a machine's two instances
-// open two stores.
-//
-// It names the credentials file and never renders its content: a startup block
-// is copied into tickets and chat windows, so a secret must not be able to reach
-// it in the first place.
-func natsSummary(n EventFabricNats) string {
-	return strings.Join([]string{
-		"startup_timeout=" + n.StartupTimeout,
-		"catch_up_timeout=" + n.CatchUpTimeout,
-		"credentials_file=" + credentialsSummary(n.CredentialsFile),
-	}, " ")
-}
-
 // lagBoundSummary renders the required projection lag bound.
 func lagBoundSummary(bound time.Duration) string { return bound.String() }
-
-// credentialsSummary renders an unset credentials file as an explicit statement
-// that the deployment is running unauthenticated, so the startup block never
-// shows a blank value.
-func credentialsSummary(path string) string {
-	if path == "" {
-		return "(none: loopback only)"
-	}
-	return path
-}
 
 func optionalPathSummary(path string) string {
 	if path == "" {
