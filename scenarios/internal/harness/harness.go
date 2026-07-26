@@ -259,10 +259,10 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 	endpoints = make(map[string]reservedEndpoints, len(fixtures))
 
 	// Every instance's API port comes from one reservation on 127.0.0.1, because
-	// that is the only interface any of them is resolved onto. Reserving them per
-	// machine ip the way the NATS ports are would say nothing about whether two
-	// machines had been given the same loopback port, and the collision would only
-	// appear as the second machine failing to bind.
+	// that is the only interface any of them is resolved onto. Reserving per
+	// machine ip would say nothing about whether two machines had been given the
+	// same loopback port, and the collision would only appear as the second
+	// machine failing to bind.
 	apiPorts, err := testnet.Take("127.0.0.1", apiPortsWanted(fixtures))
 	require.NoError(t, err)
 	nextAPIPort := 0
@@ -378,8 +378,8 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 // The two data directories are how a scenario reads what an instance stated:
 // each one holds that instance's events/events.jsonl. See operationEvents.
 //
-// There is no monitor address. The platform runs no NATS monitoring listener;
-// each instance's event record is the local operational surface.
+// There is no monitor address. Each instance's event record is the local
+// operational surface.
 type Sockets struct {
 	DataDir        string
 	StandbyDataDir string
@@ -455,11 +455,10 @@ func (s *Site) Machine(t *testing.T, name string) *Machine {
 // only then waits for each machine's Primary Instance to serve.
 //
 // Every instance, not only the primaries. The journal's replica count is the
-// site's storage instance count, and JetStream cannot place three replicas until
-// three servers are up, so a site whose third storage instance is a machine's
-// Standby Instance would sit in "no suitable peers for placement" if it were
-// started primaries-only. That makes starting the standbys part of bringing a
-// site up rather than an extra a redundancy scenario opts into.
+// site's storage instance count, so a site whose third storage instance is a
+// machine's Standby Instance cannot place its replicas if it is started
+// primaries-only. That makes starting the standbys part of bringing a site up
+// rather than an extra a redundancy scenario opts into.
 //
 // except names machines to leave down, for a scenario whose subject is a machine
 // that is absent. Only a machine outside the storage selection can be held back;

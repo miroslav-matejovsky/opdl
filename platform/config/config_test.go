@@ -23,8 +23,9 @@ func TestLoadReadsTheEmbeddedDescriptor(t *testing.T) {
 	require.Equal(t, []string{"core-services"}, d.Services)
 
 	// The address is the instance's, carried on its own descriptor record.
-	require.Equal(t, "127.0.0.1:8080", d.Instances.Primary.APIAddress)
-	require.Empty(t, d.Instances.Standby.APIAddress, "the mock machine deploys no standby")
+	require.Equal(t, "127.0.0.1:8080", d.Primary.APIAddress)
+	require.Nil(t, d.Standby, "the mock machine deploys no standby")
+	require.False(t, d.HasStandby())
 }
 
 // TestLoadParsesTheInstanceTimeouts checks the listener timeouts are read from

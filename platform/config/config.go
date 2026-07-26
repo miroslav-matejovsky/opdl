@@ -39,11 +39,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	cfg := &Config{descriptor: d}
-	cfg.primary, err = timeoutsOf(RolePrimary, d.Instances.Primary)
+	cfg.primary, err = timeoutsOf(RolePrimary, &d.Primary)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	cfg.standby, err = timeoutsOf(RoleStandby, d.Instances.Standby)
+	cfg.standby, err = timeoutsOf(RoleStandby, d.Standby)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -55,10 +55,10 @@ func Load() (*Config, error) {
 }
 
 // timeoutsOf parses one instance's listener timeouts. An instance that is not
-// deployed carries none and binds nothing, so its timeouts stay zero and are
+// deployed has no record and binds nothing, so its timeouts stay zero and are
 // never read.
-func timeoutsOf(role PlatformInstanceRole, instance Instance) (instanceTimeouts, error) {
-	if instance.Disabled {
+func timeoutsOf(role PlatformInstanceRole, instance *Instance) (instanceTimeouts, error) {
+	if instance == nil {
 		return instanceTimeouts{}, nil
 	}
 	readHeader, err := validateDuration(fmt.Sprintf("instances.%s.api_read_header_timeout", role), instance.APIReadHeaderTimeout)
@@ -132,7 +132,7 @@ func (c *Config) LagBound() time.Duration { return c.lagBound }
 // by.
 func (c *Config) Summary(standby bool) string {
 	d := c.descriptor
-	inst := d.Instances.Get(Role(standby))
+	inst := d.Instance(Role(standby))
 	timeouts := c.timeouts(standby)
 	var b strings.Builder
 	fmt.Fprintf(&b, "platform configuration (machine=%s):\n", d.Machine)
@@ -145,7 +145,7 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    profile      %s\n", d.MachineProfile)
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
-	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
+	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d, Role(standby)))
 	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(inst.DataDir))
 	fmt.Fprintf(&b, "    lease        %s\n", leaseSummary(d.Lease))
 	fmt.Fprintf(&b, "  this instance's api:\n")
@@ -160,14 +160,14 @@ func (c *Config) Summary(standby bool) string {
 // Both endpoints are stated whichever instance printed it, because an operator
 // looking at one instance's log is usually trying to find the other. The marker
 // on self is what keeps the two logs of one machine from being identical.
-func instancesSummary(instances Instances, self PlatformInstanceRole) string {
+func instancesSummary(d Descriptor, self PlatformInstanceRole) string {
 	parts := make([]string, 0, 2)
 	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
-		instance := instances.Get(role)
-		if instance.Disabled {
+		if role == RoleStandby && !d.HasStandby() {
 			parts = append(parts, fmt.Sprintf("%s=(not deployed)", role))
 			continue
 		}
+		instance := d.Instance(role)
 		marker := ""
 		if role == self {
 			marker = " (this instance)"

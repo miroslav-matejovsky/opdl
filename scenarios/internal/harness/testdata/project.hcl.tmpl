@@ -20,11 +20,9 @@ project "{{ .Name }}" {
         # carries the Standby Instance's. Every port is reserved separately by the
         # harness, because the two instances run together on one host.
         #
-        # data_dir is per instance for the same reason the ports
-        # are: several machines share one host here, so the harness renders a
-        # distinct directory for every instance of every machine. data_dir needs
-        # it most, because two NATS servers cannot open one JetStream store and
-        # every deployed instance on a storage machine runs one.
+        # data_dir is per instance for the same reason the ports are: several
+        # machines share one host here, so the harness renders a distinct
+        # directory for every instance of every machine.
         #
         # The platform installs and manages no services; the winservice names are
         # carried into the manifest so the roles are named consistently. The

@@ -24,8 +24,8 @@ const (
 	// apiPollInterval is how often a wait retries a request.
 	apiPollInterval = 100 * time.Millisecond
 	// APIWaitTimeout bounds a wait for the API to answer or to reach a state.
-	// It is generous: it covers a machine starting its NATS server and replaying
-	// the site journal before it reports itself active.
+	// It is generous: it covers a machine replaying the site journal before it
+	// reports itself active.
 	APIWaitTimeout = 60 * time.Second
 )
 

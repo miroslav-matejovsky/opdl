@@ -12,10 +12,9 @@ import (
 // needs to run on that machine, projected from the project blueprint. It is the
 // builder's output contract; the platform runtime conforms to it.
 //
-// A machine deploys one or two platform instances, and each is an independent
-// runtime with its own endpoints. The descriptor is still per machine because one
-// binary is built per machine and both instances run from it, so it states the
-// machine's identity once and every instance's endpoints separately.
+// One binary is built per machine and both of its instances run from it, so the
+// descriptor states the machine's identity once and each instance's own
+// endpoints on its own record.
 type Descriptor struct {
 	// Platform identifies the product line the binary is built from. The builder
 	// supplies it; it is not part of the project blueprint.
@@ -32,13 +31,21 @@ type Descriptor struct {
 	IP string `json:"ip"`
 	// Services are the service groups this machine hosts.
 	Services []string `json:"services"`
-	// Instances is this machine's Primary and Standby Instances. Both records are
-	// always present.
-	Instances Instances `json:"instances"`
-	// Lease is the machine's resolved local Primary Ownership lease. Present only
-	// when the Standby Instance is deployed; omitted on a standby-less machine.
+	// Primary is the machine's Primary Instance. It is mandatory: a machine with
+	// no Primary Instance would deploy nothing that can serve.
+	Primary Instance `json:"primary"`
+	// Standby is the machine's Standby Instance, present only when the blueprint
+	// deploys one. Absence is the whole statement: there is no disabled record to
+	// read endpoints off, so an endpoint in a descriptor is always one a process
+	// will bind.
+	Standby *Instance `json:"standby,omitempty"`
+	// Lease is the machine's resolved local Primary Ownership lease. Present
+	// exactly when Standby is.
 	Lease *Lease `json:"lease,omitempty"`
 }
+
+// HasStandby reports whether this machine deploys a Standby Instance.
+func (d Descriptor) HasStandby() bool { return d.Standby != nil }
 
 // PlatformInstanceRole is one of the two fixed platform instance roles.
 //
@@ -62,9 +69,8 @@ const (
 // deployment.json, exactly as the lock's kernel object name was.
 //
 // It is the machine's, not an instance's: the lease file is the one thing the two
-// instances share, and it is what makes exactly one of them Active. It is present
-// only when the Standby Instance is deployed (Instances.Standby.Disabled is
-// false); on a standby-less machine, there is no lease and no contention.
+// instances share, and it is what makes exactly one of them Active. On a
+// standby-less machine there is no lease and no contention.
 //
 // The durations are Go duration strings ("15s", "5s"), validated by the builder
 // and parsed by the platform at startup.
@@ -95,7 +101,7 @@ type Lease struct {
 // lease at all.
 func (l *Lease) validate() error {
 	if l == nil {
-		return fmt.Errorf("lease is required when instances.standby.disabled is false")
+		return fmt.Errorf("lease is required when a standby is deployed")
 	}
 	if strings.TrimSpace(l.File) == "" {
 		return fmt.Errorf("lease.file is required")
@@ -140,43 +146,19 @@ func validatePositiveDuration(field, value string) (time.Duration, error) {
 	return d, nil
 }
 
-// Instances is a machine's two platform instances. Both records are always
-// present and non-null, so a reader never infers an instance's deployment from an
-// omitted field.
+// Instance is one platform instance: what the service running it is called, and
+// every endpoint it binds. Both roles use this type; which role a record is for
+// is the field it sits in, not a value inside it.
 //
-// Each instance is an independent runtime and owns its own endpoints, so
-// everything an instance binds is resolved onto its own record. The machine holds
-// no endpoint of its own.
-type Instances struct {
-	Primary Instance `json:"primary"`
-	Standby Instance `json:"standby"`
-}
-
-// Get returns one instance by role.
-func (i Instances) Get(role PlatformInstanceRole) Instance {
-	if role == RoleStandby {
-		return i.Standby
-	}
-	return i.Primary
-}
-
-// Instance is one platform instance: whether it is deployed, what the service
-// running it is called, and every endpoint it binds.
-//
-// The endpoint fields are present exactly when the instance is deployed. A
-// disabled standby carries nothing but Disabled, so a reader cannot mistake a
-// resolved endpoint for one that will ever be bound.
+// Every field is required. An instance record exists only for an instance that is
+// deployed, so nothing here is conditional.
 type Instance struct {
-	// Disabled reports that this instance is not deployed. It is always false for
-	// the primary: a machine with no Primary Instance would deploy nothing that
-	// can serve.
-	Disabled bool `json:"disabled"`
 	// Service is the instance's Windows Service identity. It is carried for
 	// whoever installs the services; the runtime does not read it and the platform
 	// manages no services.
 	Service *WinService `json:"service,omitempty"`
 	// DataDir is the instance's own general platform data root.
-	DataDir string `json:"data_dir,omitempty"`
+	DataDir string `json:"data_dir"`
 	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
 	// the instance's authored api local_port.
 	//
@@ -187,17 +169,14 @@ type Instance struct {
 	// Each instance has its own, and binds it for its whole lifetime rather than
 	// only while Active. A caller that needs the Active instance resolves which
 	// one that is; it does not get there by an address that changes owner.
-	APIAddress string `json:"api_address,omitempty"`
+	APIAddress string `json:"api_address"`
 	// APIReadHeaderTimeout bounds how long this instance's listener spends
-	// reading an HTTP request's headers before closing the connection.
-	//
-	// It is on the instance record rather than the machine because the listener
-	// it governs is, and it is a Go duration string ("5s") the platform parses at
-	// startup, exactly like the lease timings.
-	APIReadHeaderTimeout string `json:"api_read_header_timeout,omitempty"`
+	// reading an HTTP request's headers before closing the connection. It is a Go
+	// duration string ("5s"), parsed by the platform at startup.
+	APIReadHeaderTimeout string `json:"api_read_header_timeout"`
 	// APIShutdownTimeout bounds the graceful drain of this instance's listener
 	// when it stops serving.
-	APIShutdownTimeout string `json:"api_shutdown_timeout,omitempty"`
+	APIShutdownTimeout string `json:"api_shutdown_timeout"`
 }
 
 // WinService is one instance's resolved Windows Service identity.
@@ -245,17 +224,12 @@ func (d Descriptor) Validate() error {
 	if len(d.Services) == 0 {
 		return fmt.Errorf("at least one service is required")
 	}
-	if d.Instances.Standby.Disabled {
+	if !d.HasStandby() {
 		if d.Lease != nil {
-			return fmt.Errorf("lease is set but instances.standby.disabled is true; omit lease when no standby is deployed")
+			return fmt.Errorf("lease is set but no standby is deployed; omit lease when standby is absent")
 		}
-	} else {
-		if err := d.Lease.validate(); err != nil {
-			return err
-		}
-	}
-	if d.Instances.Primary.Disabled {
-		return fmt.Errorf("instances.primary.disabled: a machine must deploy a Primary Instance")
+	} else if err := d.Lease.validate(); err != nil {
+		return err
 	}
 	if err := d.validateServices(); err != nil {
 		return err
@@ -269,33 +243,33 @@ func (d Descriptor) Validate() error {
 // The two instances run on one host, so identical names are the one service
 // collision Windows cannot refuse at install time for us.
 func (d Descriptor) validateServices() error {
-	if d.Instances.Primary.Service == nil {
-		return fmt.Errorf("instances.primary.service is required")
+	if err := validateService("primary", d.Primary); err != nil {
+		return err
 	}
-	if strings.TrimSpace(d.Instances.Primary.Service.Name) == "" {
-		return fmt.Errorf("instances.primary.service.name is required")
-	}
-	if d.Instances.Standby.Disabled {
-		if d.Instances.Standby.Service != nil {
-			return fmt.Errorf("instances.standby.service is set but the standby is disabled")
-		}
+	if !d.HasStandby() {
 		return nil
 	}
-	if d.Instances.Standby.Service == nil {
-		return fmt.Errorf("instances.standby.service is required when the standby is deployed")
+	if err := validateService("standby", *d.Standby); err != nil {
+		return err
 	}
-	if strings.TrimSpace(d.Instances.Standby.Service.Name) == "" {
-		return fmt.Errorf("instances.standby.service.name is required")
+	if d.Primary.Service.Name == d.Standby.Service.Name {
+		return fmt.Errorf("the primary and standby instances share service name %q", d.Primary.Service.Name)
 	}
-	if d.Instances.Primary.Service.Name == d.Instances.Standby.Service.Name {
-		return fmt.Errorf("the primary and standby instances share service name %q", d.Instances.Primary.Service.Name)
+	return nil
+}
+
+func validateService(prefix string, instance Instance) error {
+	if instance.Service == nil {
+		return fmt.Errorf("%s.service is required", prefix)
+	}
+	if strings.TrimSpace(instance.Service.Name) == "" {
+		return fmt.Errorf("%s.service.name is required", prefix)
 	}
 	return nil
 }
 
 // validateEndpoints checks each deployed instance carries the endpoints it binds,
-// that a disabled standby carries none, and that no two listeners on the machine
-// were resolved onto the same address.
+// and that no two listeners on the machine were resolved onto the same address.
 //
 // The addresses are checked against each other rather than only for validity
 // because both instances run at once on one host. Two listeners resolved to one
@@ -303,31 +277,22 @@ func (d Descriptor) validateServices() error {
 // here derives from the same machine ip, so a repeated port is a repeated
 // address.
 func (d Descriptor) validateEndpoints() error {
-	if err := validateInstanceEndpoints("instances.primary", d.Instances.Primary); err != nil {
+	if err := validateInstanceEndpoints("primary", d.Primary); err != nil {
 		return err
 	}
-	if d.Instances.Standby.Disabled {
-		if d.Instances.Standby.APIAddress != "" {
-			return fmt.Errorf("instances.standby.api_address is set but the standby is disabled")
-		}
-		if d.Instances.Standby.DataDir != "" {
-			return fmt.Errorf("instances.standby.data_dir is set but the standby is disabled")
-		}
-		if d.Instances.Standby.APIReadHeaderTimeout != "" || d.Instances.Standby.APIShutdownTimeout != "" {
-			return fmt.Errorf("instances.standby api timeouts are set but the standby is disabled")
-		}
+	if !d.HasStandby() {
 		return nil
 	}
-	if err := validateInstanceEndpoints("instances.standby", d.Instances.Standby); err != nil {
+	if err := validateInstanceEndpoints("standby", *d.Standby); err != nil {
 		return err
 	}
-	if d.Instances.Primary.DataDir == d.Instances.Standby.DataDir {
-		return fmt.Errorf("instances.primary.data_dir and instances.standby.data_dir are both %q; the two instances run together and cannot share a platform data directory",
-			d.Instances.Primary.DataDir)
+	if d.Primary.DataDir == d.Standby.DataDir {
+		return fmt.Errorf("primary.data_dir and standby.data_dir are both %q; the two instances run together and cannot share a platform data directory",
+			d.Primary.DataDir)
 	}
-	if d.Instances.Primary.APIAddress == d.Instances.Standby.APIAddress {
-		return fmt.Errorf("instances.primary.api_address and instances.standby.api_address are both %q; the two instances run together and cannot share a listener",
-			d.Instances.Primary.APIAddress)
+	if d.Primary.APIAddress == d.Standby.APIAddress {
+		return fmt.Errorf("primary.api_address and standby.api_address are both %q; the two instances run together and cannot share a listener",
+			d.Primary.APIAddress)
 	}
 	return nil
 }

@@ -115,13 +115,13 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.Equal(t, "sensor-node", m.MachineProfile)
 	require.Equal(t, "10.0.1.10", m.IP)
 	require.Equal(t, []string{"sensor-services"}, m.Services)
-	require.False(t, m.Instances.Primary.Disabled, "a machine always deploys a primary process")
+	require.NotEmpty(t, m.Primary.APIAddress, "a machine always deploys a primary process")
 }
 
-// TestBuildCopiesStandbyDecision checks the resolved descriptor states the
-// blueprint's standby decision rather than implying it. Both values are checked
-// because the field is a bool: a resolver that dropped it would still produce a
-// descriptor that looks right for one of them.
+// TestBuildCopiesStandbyDecision checks the resolved descriptor carries a standby
+// record exactly when the blueprint deploys one. Both values are checked because
+// a resolver that ignored the decision would still produce a descriptor that
+// looks right for one of them.
 func TestBuildCopiesStandbyDecision(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
@@ -131,8 +131,8 @@ func TestBuildCopiesStandbyDecision(t *testing.T) {
 			})
 			plan, err := resolve.Build(p, "acme-opdl")
 			require.NoError(t, err)
-			require.Equal(t, disabled, plan.Machines[0].Instances.Standby.Disabled)
-			require.False(t, plan.Machines[0].Instances.Primary.Disabled)
+			require.Equal(t, !disabled, plan.Machines[0].HasStandby())
+			require.NotEmpty(t, plan.Machines[0].Primary.APIAddress)
 		})
 	}
 }
@@ -150,13 +150,13 @@ func TestBuildStandbyIsPerMachine(t *testing.T) {
 	disabled := machine("gateway", "10.0.1.11", true)
 
 	forward := build([]blueprint.Machine{enabled, disabled})
-	require.False(t, machineByName(t, forward, "sensor").Instances.Standby.Disabled)
-	require.True(t, machineByName(t, forward, "gateway").Instances.Standby.Disabled)
+	require.True(t, machineByName(t, forward, "sensor").HasStandby())
+	require.False(t, machineByName(t, forward, "gateway").HasStandby())
 
 	// Declaration order must not change the resolved policy of either machine.
 	reversed := build([]blueprint.Machine{disabled, enabled})
-	require.False(t, machineByName(t, reversed, "sensor").Instances.Standby.Disabled)
-	require.True(t, machineByName(t, reversed, "gateway").Instances.Standby.Disabled)
+	require.True(t, machineByName(t, reversed, "sensor").HasStandby())
+	require.False(t, machineByName(t, reversed, "gateway").HasStandby())
 }
 
 func TestBuildValidatesBlueprint(t *testing.T) {
@@ -218,12 +218,12 @@ func TestBuildCarriesWinServiceIdentities(t *testing.T) {
 		plan, err := resolve.Build(p, "acme-opdl")
 		require.NoError(t, err)
 
-		instances := plan.Machines[0].Instances
-		require.NotNil(t, instances.Primary.Service)
-		require.Equal(t, "node-a-primary", instances.Primary.Service.Name)
-		require.Equal(t, "node-a-primary", instances.Primary.Service.DisplayName, "display name defaults to the name")
-		require.NotNil(t, instances.Standby.Service)
-		require.Equal(t, "node-a-standby", instances.Standby.Service.Name)
+		m := plan.Machines[0]
+		require.NotNil(t, m.Primary.Service)
+		require.Equal(t, "node-a-primary", m.Primary.Service.Name)
+		require.Equal(t, "node-a-primary", m.Primary.Service.DisplayName, "display name defaults to the name")
+		require.NotNil(t, m.Standby)
+		require.Equal(t, "node-a-standby", m.Standby.Service.Name)
 	})
 
 	t.Run("standby not deployed", func(t *testing.T) {
@@ -231,8 +231,8 @@ func TestBuildCarriesWinServiceIdentities(t *testing.T) {
 		plan, err := resolve.Build(p, "acme-opdl")
 		require.NoError(t, err)
 
-		instances := plan.Machines[0].Instances
-		require.NotNil(t, instances.Primary.Service, "a machine always deploys a Primary Instance")
-		require.Nil(t, instances.Standby.Service, "an undeployed instance names no service")
+		m := plan.Machines[0]
+		require.NotNil(t, m.Primary.Service, "a machine always deploys a Primary Instance")
+		require.Nil(t, m.Standby, "an undeployed instance has no record at all")
 	})
 }

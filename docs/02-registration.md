@@ -1,12 +1,12 @@
 # Registration
 
 > **TODO — registration does not currently run.** Every mechanism on this page
-> rests on the site journal, and the NATS implementation of event storage and the
-> Event Fabric was removed during the ongoing refactor. No deployment has event
-> storage today (`app.hasEventStorage` is hardcoded false), so an instance serves
-> the journal-less handler: health and `GET /instance` answer, and every
-> operation below is refused with a reason naming the deployment rather than the
-> instance. This page describes the target design and the contract the code in
+> rests on the site journal, and event storage and the Event Fabric were removed
+> during the ongoing refactor. No deployment has event storage today
+> (`app.hasEventStorage` is hardcoded false), so an instance serves the
+> journal-less handler: health and `GET /instance` answer, and every operation
+> below is refused with a reason naming the deployment rather than the instance.
+> This page describes the target design and the contract the code in
 > `internal/registration` still implements against. Restoring it is blocked on
 > the replacement distribution mechanism; see the TODO in
 > [`01-architecture.md`](01-architecture.md).

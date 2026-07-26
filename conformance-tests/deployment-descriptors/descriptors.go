@@ -37,9 +37,6 @@ func checkContractsMatch() error {
 	return nil
 }
 
-// These values are named so the descriptor and its peer topology stay easy to
-// compare without scattering literals through the fixture.
-//
 // The fixture is one machine deploying both instances. That shape exercises what
 // the contract has to carry: two independent runtimes on one machine, each with
 // its own directory, its own listener, and its own bounds on that listener.
@@ -78,34 +75,31 @@ const (
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
 // produces marshals to JSON the platform reads back with every field intact.
 //
-// Both standby policies are checked. The standby decision is a bool, so an
-// enabled and a disabled machine differ by one JSON value that has a usable
-// zero: a round trip that only ever carried one of them would pass while the
-// other silently decoded to the default.
+// Both standby policies are checked. A machine with a standby and one without
+// differ by whether two optional records are on the wire at all, so a round trip
+// that only ever carried one of them would leave the other's encoding unproven.
 func checkRoundTrip() error {
-	for _, standbyDisabled := range []bool{false, true} {
-		if err := checkRoundTripFor(standbyDisabled); err != nil {
-			return fmt.Errorf("standby disabled=%t: %w", standbyDisabled, err)
+	for _, hasStandby := range []bool{true, false} {
+		if err := checkRoundTripFor(hasStandby); err != nil {
+			return fmt.Errorf("has standby=%t: %w", hasStandby, err)
 		}
 	}
 	return nil
 }
 
-func checkRoundTripFor(standbyDisabled bool) error {
-	builtStandby := builderdeployment.Instance{Disabled: true}
-	wantStandby := platformconfig.Instance{Disabled: true}
+func checkRoundTripFor(hasStandby bool) error {
+	var builtStandby *builderdeployment.Instance
+	var wantStandby *platformconfig.Instance
 	var builtLease *builderdeployment.Lease
 	var wantLease *platformconfig.Lease
-	if !standbyDisabled {
-		builtStandby = builderdeployment.Instance{
-			Disabled:             false,
+	if hasStandby {
+		builtStandby = &builderdeployment.Instance{
 			DataDir:              standbyDataDir,
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
 		}
-		wantStandby = platformconfig.Instance{
-			Disabled:             false,
+		wantStandby = &platformconfig.Instance{
 			DataDir:              standbyDataDir,
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
@@ -138,24 +132,21 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		MachineProfile: "sensor-node",
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
-		Instances: builderdeployment.Instances{
-			Primary: builderdeployment.Instance{
-				Disabled:             false,
-				DataDir:              dataDir,
-				APIAddress:           apiAddr,
-				APIReadHeaderTimeout: readHeaderTimeout,
-				APIShutdownTimeout:   shutdownTimeout,
-			},
-			Standby: builtStandby,
+		Primary: builderdeployment.Instance{
+			DataDir:              dataDir,
+			APIAddress:           apiAddr,
+			APIReadHeaderTimeout: readHeaderTimeout,
+			APIShutdownTimeout:   shutdownTimeout,
 		},
-		Lease: builtLease,
+		Standby: builtStandby,
+		Lease:   builtLease,
 	}
 
 	data, err := json.Marshal(built)
 	if err != nil {
 		return err
 	}
-	if err := checkWireShape(data, standbyDisabled); err != nil {
+	if err := checkWireShape(data, hasStandby); err != nil {
 		return err
 	}
 
@@ -173,17 +164,14 @@ func checkRoundTripFor(standbyDisabled bool) error {
 		MachineProfile: "sensor-node",
 		IP:             machineIP,
 		Services:       []string{"sensor-services", "core-services"},
-		Instances: platformconfig.Instances{
-			Primary: platformconfig.Instance{
-				Disabled:             false,
-				DataDir:              dataDir,
-				APIAddress:           apiAddr,
-				APIReadHeaderTimeout: readHeaderTimeout,
-				APIShutdownTimeout:   shutdownTimeout,
-			},
-			Standby: wantStandby,
+		Primary: platformconfig.Instance{
+			DataDir:              dataDir,
+			APIAddress:           apiAddr,
+			APIReadHeaderTimeout: readHeaderTimeout,
+			APIShutdownTimeout:   shutdownTimeout,
 		},
-		Lease: wantLease,
+		Standby: wantStandby,
+		Lease:   wantLease,
 	}
 	if !reflect.DeepEqual(got, want) {
 		return fmt.Errorf("builder descriptor did not round-trip into the platform descriptor:\n  got:  %+v\n  want: %+v", got, want)
@@ -191,53 +179,63 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	return nil
 }
 
-// checkWireShape checks the JSON the builder emits carries every decision the
-// platform is required to read explicitly, and carries no monitor endpoint.
+// checkWireShape checks the JSON the builder emits carries each instance record
+// where the platform looks for it, complete, and carries no endpoint of its own.
 //
-// The presence checks are on the wire rather than on the decoded value because
-// that is where the distinction exists: once decoded, an omitted "disabled" and
-// an explicit false are the same Go value, and the platform's requirement that
-// the field be stated can only be proven against the bytes.
-func checkWireShape(data []byte, standbyDisabled bool) error {
+// The checks are on the wire rather than on the decoded value because that is
+// where the distinction exists: a standby the builder omitted and one it wrote as
+// an empty object decode to different things, and only the bytes say which was
+// produced.
+func checkWireShape(data []byte, hasStandby bool) error {
 	var wire map[string]json.RawMessage
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	instances, ok := wire["instances"]
-	if !ok {
-		return fmt.Errorf("builder descriptor omitted instances")
-	}
-	var byRole map[string]json.RawMessage
-	if err := json.Unmarshal(instances, &byRole); err != nil {
+	if err := checkWireInstance(wire, "primary", true); err != nil {
 		return err
 	}
-	for _, role := range []string{"primary", "standby"} {
-		raw, ok := byRole[role]
-		if !ok {
-			return fmt.Errorf("builder descriptor omitted instances.%s", role)
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			return err
-		}
-		if _, ok := fields["disabled"]; !ok {
-			return fmt.Errorf("builder descriptor omitted instances.%s.disabled", role)
-		}
+	if err := checkWireInstance(wire, "standby", hasStandby); err != nil {
+		return err
 	}
 
 	// The endpoints an instance binds belong to that instance.
-	for _, field := range []string{"event_fabric", "nats", "api_address"} {
+	for _, field := range []string{"data_dir", "api_address"} {
 		if _, ok := wire[field]; ok {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints belong to an instance", field)
 		}
 	}
-	return verifyWireLease(wire, standbyDisabled)
+	return verifyWireLease(wire, hasStandby)
 }
 
-func verifyWireLease(wire map[string]json.RawMessage, standbyDisabled bool) error {
-	if standbyDisabled {
+// checkWireInstance verifies one instance record is present exactly when the
+// instance is deployed, and states everything that instance binds when it is.
+func checkWireInstance(wire map[string]json.RawMessage, role string, deployed bool) error {
+	raw, ok := wire[role]
+	if !deployed {
+		if ok {
+			return fmt.Errorf("builder descriptor carries %s when that instance is not deployed", role)
+		}
+		return nil
+	}
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted %s", role)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	for _, field := range []string{"data_dir", "api_address", "api_read_header_timeout", "api_shutdown_timeout"} {
+		if _, ok := fields[field]; !ok {
+			return fmt.Errorf("builder descriptor omitted %s.%s", role, field)
+		}
+	}
+	return nil
+}
+
+func verifyWireLease(wire map[string]json.RawMessage, hasStandby bool) error {
+	if !hasStandby {
 		if _, ok := wire["lease"]; ok {
-			return fmt.Errorf("builder descriptor carries lease when standby is disabled")
+			return fmt.Errorf("builder descriptor carries lease when no standby is deployed")
 		}
 		return nil
 	}
@@ -249,7 +247,7 @@ func verifyWireLease(wire map[string]json.RawMessage, standbyDisabled bool) erro
 	if err := json.Unmarshal(leaseRaw, &leaseFields); err != nil {
 		return err
 	}
-	for _, field := range []string{"file", "duration", "renewal_interval", "health_check_interval", "failback_stabilization"} {
+	for _, field := range []string{"file", "duration", "renewal_interval", "health_check_interval", "failback_stabilization", "lag_bound"} {
 		if _, ok := leaseFields[field]; !ok {
 			return fmt.Errorf("builder descriptor omitted lease.%s", field)
 		}

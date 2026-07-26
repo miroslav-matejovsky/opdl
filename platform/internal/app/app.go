@@ -40,7 +40,7 @@ func Run(args []string) (runErr error) {
 
 	// Validate the explicit role before opening sockets or storage. Primary-only
 	// machines reject standby.
-	role, err := resolveRole(*instance, !descriptor.Instances.Standby.Disabled)
+	role, err := resolveRole(*instance, descriptor.HasStandby())
 	if err != nil {
 		return err
 	}
@@ -72,10 +72,10 @@ func Run(args []string) (runErr error) {
 	// services list. The platform manages no services; it only reports which one
 	// the package says should be running this instance.
 	serviceName := "(none stated)"
-	if service := descriptor.Instances.Service(role == redundancy.RoleStandby); service != nil {
+	if service := instanceOf(descriptor, role).Service; service != nil {
 		serviceName = service.Name
 	}
-	fmt.Printf("    instance     role=%s standby=%t service=%s\n", role, !descriptor.Instances.Standby.Disabled, serviceName)
+	fmt.Printf("    instance     role=%s standby=%t service=%s\n", role, descriptor.HasStandby(), serviceName)
 
 	// os.Interrupt is the only signal Windows delivers: the runtime raises it for
 	// CTRL_C_EVENT and CTRL_BREAK_EVENT, which is how the service manager and the
@@ -95,7 +95,7 @@ func Run(args []string) (runErr error) {
 
 	if err := local.Publish(ctx, ProcessStarted{
 		EventsFile:     record.Path(),
-		StandbyEnabled: !descriptor.Instances.Standby.Disabled,
+		StandbyEnabled: descriptor.HasStandby(),
 	}); err != nil {
 		return err
 	}

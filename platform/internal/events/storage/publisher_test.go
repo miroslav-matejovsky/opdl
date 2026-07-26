@@ -99,7 +99,7 @@ func TestNewPublisherValidation(t *testing.T) {
 func TestPublishStampsOnceAndDistributesIdenticalEnvelope(t *testing.T) {
 	factory := testFactory()
 	b1 := &mockBackend{name: "jsonl"}
-	b2 := &mockBackend{name: "nats"}
+	b2 := &mockBackend{name: "journal"}
 
 	pub, err := storage.NewPublisher(factory, b1, b2)
 	require.NoError(t, err)
@@ -154,10 +154,10 @@ func TestPublishContinuesAfterBackendFailure(t *testing.T) {
 	factory := testFactory()
 
 	errJSONL := errors.New("jsonl: disk full")
-	errNATS := errors.New("nats: connection refused")
+	errJournal := errors.New("journal: connection refused")
 
 	b1 := &mockBackend{name: "jsonl", storeFn: func(context.Context, events.Envelope) error { return errJSONL }}
-	b2 := &mockBackend{name: "nats", storeFn: func(context.Context, events.Envelope) error { return errNATS }}
+	b2 := &mockBackend{name: "journal", storeFn: func(context.Context, events.Envelope) error { return errJournal }}
 	b3 := &mockBackend{name: "backup"}
 
 	pub, err := storage.NewPublisher(factory, b1, b2, b3)
@@ -167,7 +167,7 @@ func TestPublishContinuesAfterBackendFailure(t *testing.T) {
 	require.Error(t, err)
 
 	require.ErrorIs(t, err, errJSONL)
-	require.ErrorIs(t, err, errNATS)
+	require.ErrorIs(t, err, errJournal)
 
 	require.Len(t, b1.envelopes, 1)
 	require.Len(t, b2.envelopes, 1)
@@ -221,7 +221,7 @@ func TestCloseInReverseOrderAndIdempotent(t *testing.T) {
 	}
 
 	errB1 := errors.New("jsonl: close err")
-	errB3 := errors.New("nats: close err")
+	errB3 := errors.New("journal: close err")
 
 	b1 := &mockBackend{name: "b1", callLogger: logCall, closeFn: func(context.Context) error { return errB1 }}
 	b2 := &mockBackend{name: "b2", callLogger: logCall}

@@ -68,13 +68,13 @@ const standbyRetryInterval = 200 * time.Millisecond
 // instances share one descriptor, so anything read from it without a role is a
 // value they would both take.
 func instanceOf(descriptor config.Descriptor, role redundancy.InstanceRole) config.Instance {
-	return descriptor.Instances.Get(config.Role(role == redundancy.RoleStandby))
+	return descriptor.Instance(config.Role(role == redundancy.RoleStandby))
 }
 
-// peerOf returns the machine's other instance's record. It is empty on a machine
-// that deploys only a Primary Instance.
+// peerOf returns the machine's other instance's record. It is the zero record on
+// a machine that deploys only a Primary Instance.
 func peerOf(descriptor config.Descriptor, role redundancy.InstanceRole) config.Instance {
-	return descriptor.Instances.Get(config.Role(role != redundancy.RoleStandby))
+	return descriptor.Instance(config.Role(role != redundancy.RoleStandby))
 }
 
 // resolveRole validates the requested process role against the deployment policy.
@@ -100,10 +100,10 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 // does not change while the process runs, and both of a machine's instances
 // share it.
 //
-// TODO: it is hardcoded false. The answer used to come from the instance's nats
-// record in the descriptor, and the NATS Event Fabric has been removed, so no
-// deployment currently has event storage and every journal-dependent path below
-// is unreachable. Restore this when the replacement distribution mechanism lands;
+// TODO: it is hardcoded false. The answer used to come from the instance's event
+// storage record in the descriptor, and event storage has been removed, so no
+// deployment currently has any and every journal-dependent path below is
+// unreachable. Restore this when the replacement distribution mechanism lands;
 // until then the runtime always takes the journal-less path.
 func hasEventStorage(descriptor config.Descriptor, role redundancy.InstanceRole) bool {
 	return false

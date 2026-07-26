@@ -186,8 +186,8 @@ type site struct {
 
 // journal is an ordered, in-process site journal. It stamps each published event
 // with the node that stated it, gives it the next sequence, and folds it into
-// every node's projection, which is what the real fabric does once JetStream has
-// accepted a write.
+// every node's projection, which is what the real fabric does once the journal
+// has accepted a write.
 type journal struct {
 	t *testing.T
 

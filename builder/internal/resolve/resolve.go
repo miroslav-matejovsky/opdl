@@ -53,7 +53,8 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		MachineProfile: machine.MachineProfile,
 		IP:             machine.IP,
 		Services:       append([]string(nil), machine.Services...),
-		Instances:      instances(machine),
+		Primary:        primaryInstance(machine),
+		Standby:        instance(machine, deployment.RoleStandby),
 		Lease:          lease(machine),
 	}
 }
@@ -76,34 +77,36 @@ func lease(machine blueprint.Machine) *deployment.Lease {
 	}
 }
 
-// instances resolves a machine's two platform instances. The primary is never
-// disabled: a machine with no Primary Instance would deploy nothing that can
-// serve. The standby decision is the blueprint's, copied through unchanged so the
-// descriptor states it rather than implying it.
-func instances(machine blueprint.Machine) deployment.Instances {
-	return deployment.Instances{
-		Primary: instance(machine, deployment.RolePrimary),
-		Standby: instance(machine, deployment.RoleStandby),
-	}
-}
-
 // instance resolves one platform instance: what runs it and every endpoint it
-// binds. An instance that is not deployed resolves to the disabled record and
-// nothing else, because an endpoint no process will bind would read exactly like
-// one that will.
-func instance(machine blueprint.Machine, role deployment.PlatformInstanceRole) deployment.Instance {
-	endpoints := machine.Endpoints(role == deployment.RoleStandby)
+// binds. It returns nil when the machine deploys no instance in that role, which
+// is how a standby-less machine resolves: an endpoint no process will bind would
+// read exactly like one that will, so it is absent rather than blank.
+//
+// The primary is always deployed. A blueprint that somehow authored none resolves
+// to a nil record here and is rejected by Descriptor.Validate rather than
+// silently producing a machine that serves nothing.
+func instance(machine blueprint.Machine, role deployment.PlatformInstanceRole) *deployment.Instance {
+	standby := role == deployment.RoleStandby
+	endpoints := machine.Endpoints(standby)
 	if endpoints == nil {
-		return deployment.Instance{Disabled: true}
+		return nil
 	}
-	return deployment.Instance{
-		Disabled:             false,
-		Service:              winService(machine, role == deployment.RoleStandby),
-		DataDir:              machine.DataDir(role == deployment.RoleStandby),
+	return &deployment.Instance{
+		Service:              winService(machine, standby),
+		DataDir:              machine.DataDir(standby),
 		APIAddress:           loopbackAddress(endpoints.APILocalPort),
 		APIReadHeaderTimeout: endpoints.APIReadHeaderTimeout,
 		APIShutdownTimeout:   endpoints.APIShutdownTimeout,
 	}
+}
+
+// primaryInstance resolves the machine's mandatory Primary Instance record.
+func primaryInstance(machine blueprint.Machine) deployment.Instance {
+	resolved := instance(machine, deployment.RolePrimary)
+	if resolved == nil {
+		return deployment.Instance{}
+	}
+	return *resolved
 }
 
 // winService resolves one instance's Windows Service identity, or nil when that

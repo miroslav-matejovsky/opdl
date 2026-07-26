@@ -12,10 +12,9 @@
 // graceful handover, never by seizing it from a Standby Instance in the Active state.
 //
 // Only the owner may serve domain operations, run durable handlers, or publish
-// lifecycle readiness. Event Fabric membership is independent of ownership: an
-// instance selected for storage runs its authored NATS server in either state.
-// The Passive instance runs only its projector and answers for itself on its own
-// API address.
+// lifecycle readiness. Event Fabric membership is independent of ownership. The
+// Passive instance runs only its projector and answers for itself on its own API
+// address.
 //
 // # What this package decides, and what it does not
 //

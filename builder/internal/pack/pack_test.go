@@ -70,10 +70,10 @@ func TestLaunches(t *testing.T) {
 	primaryService := &deployment.WinService{Name: "node-primary", DisplayName: "node primary"}
 	standbyService := &deployment.WinService{Name: "node-standby", DisplayName: "node standby"}
 
-	t.Run("standby enabled", func(t *testing.T) {
-		primary, standby := launches(deployment.Instances{
+	t.Run("standby deployed", func(t *testing.T) {
+		primary, standby := launches(deployment.Descriptor{
 			Primary: deployment.Instance{Service: primaryService},
-			Standby: deployment.Instance{Disabled: false, Service: standbyService},
+			Standby: &deployment.Instance{Service: standbyService},
 		})
 		require.Equal(t, Launch{
 			Service: WinService{Name: "node-primary", DisplayName: "node primary"},
@@ -87,10 +87,9 @@ func TestLaunches(t *testing.T) {
 
 	// A machine that deploys no Standby Instance ships no standby launch, so
 	// nothing names a service for an instance that will never run.
-	t.Run("standby disabled", func(t *testing.T) {
-		primary, standby := launches(deployment.Instances{
+	t.Run("standby not deployed", func(t *testing.T) {
+		primary, standby := launches(deployment.Descriptor{
 			Primary: deployment.Instance{Service: primaryService},
-			Standby: deployment.Instance{Disabled: true},
 		})
 		require.Equal(t, Launch{
 			Service: WinService{Name: "node-primary", DisplayName: "node primary"},

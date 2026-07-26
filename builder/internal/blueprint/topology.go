@@ -59,10 +59,8 @@ type Machine struct {
 // authors nothing further.
 //
 // The two instances are independent runtimes that run at the same time on one
-// host. Every port either of them binds is therefore its own: the api endpoint it
-// serves and the Event Fabric ports its own NATS server binds. Nothing on a
-// machine is shared between them except the ownership object, which is not a
-// port.
+// host, so every port either of them binds is its own. Nothing on a machine is
+// shared between them except the ownership lease, which is not a port.
 type Platform struct {
 	// DataDir is the Primary Instance's general platform data root. Required.
 	DataDir string `hcl:"data_dir,optional"`
@@ -83,8 +81,7 @@ type Platform struct {
 // it with 127.0.0.1 and never with the machine's ip. The platform API is how an
 // operator, or a service co-located on that host, asks this instance about
 // itself; it is not how machines reach each other. Cross-machine traffic is the
-// Event Fabric's, and the nats block is where the ports derived from the machine
-// ip are authored.
+// Event Fabric's.
 //
 // The name carries the constraint so a blueprint cannot be authored in the belief
 // that this port will be reachable from the network. Nothing binds it off

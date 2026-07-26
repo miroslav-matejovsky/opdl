@@ -36,14 +36,14 @@ func TestTimeoutsOfRejectsUnusableDurations(t *testing.T) {
 	}
 	for name, instance := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := timeoutsOf(RolePrimary, instance)
-			require.ErrorContains(t, err, "instances.primary.api_")
+			_, err := timeoutsOf(RolePrimary, &instance)
+			require.ErrorContains(t, err, "primary.api_")
 		})
 	}
 }
 
 func TestTimeoutsOfReadsADeployedInstance(t *testing.T) {
-	timeouts, err := timeoutsOf(RoleStandby, Instance{
+	timeouts, err := timeoutsOf(RoleStandby, &Instance{
 		APIReadHeaderTimeout: "5s",
 		APIShutdownTimeout:   "10s",
 	})
@@ -53,9 +53,10 @@ func TestTimeoutsOfReadsADeployedInstance(t *testing.T) {
 }
 
 // TestTimeoutsOfSkipsAnInstanceThatIsNotDeployed checks an instance the machine
-// does not run is not required to carry timeouts for a listener it never binds.
+// does not run, and therefore has no record for, is not required to carry
+// timeouts for a listener it never binds.
 func TestTimeoutsOfSkipsAnInstanceThatIsNotDeployed(t *testing.T) {
-	timeouts, err := timeoutsOf(RoleStandby, Instance{Disabled: true})
+	timeouts, err := timeoutsOf(RoleStandby, nil)
 	require.NoError(t, err)
 	require.Zero(t, timeouts)
 }

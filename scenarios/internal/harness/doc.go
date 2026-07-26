@@ -26,21 +26,19 @@
 // measures one; both are tooling no current scenario needs. Only testnet, the
 // port allocator, still comes from utils, which platform shares.
 //
-// # Where the NATS ports come from
+// # Where the ports come from
 //
 // A scenario builds from a rendered blueprint, not from checked-in HCL. The
-// harness allocates free client and cluster ports from the fixed 20000 to 32767
-// band, below the Windows ephemeral range that starts at 49152, and never reuses
-// a port within a single run. Those ports are rendered into a temporary
-// project.hcl through the embedded testdata/project.hcl.tmpl and built into the
-// deployment packages.
+// harness allocates free ports from the fixed 20000 to 32767 band, below the
+// Windows ephemeral range that starts at 49152, and never reuses a port within a
+// single run. Those ports are rendered into a temporary project.hcl through the
+// embedded testdata/project.hcl.tmpl and built into the deployment packages.
 //
-// This matters because it is the same contract a customer build uses. NATS
-// endpoints are deployment topology: they are authored as ports in the blueprint
-// and compiled into each machine's descriptor, and the runtime configuration
-// cannot set them at all. Fixed ports in checked-in HCL would not do either:
-// several machines share one host and a developer's machine may already hold
-// 4222.
+// This matters because it is the same contract a customer build uses. Endpoints
+// are deployment topology: they are authored as ports in the blueprint and
+// compiled into each machine's descriptor, and nothing at runtime can set them.
+// Fixed ports in checked-in HCL would not do either, since several machines
+// share one host and a developer's machine may already hold the port.
 //
 // # Evidence
 //
@@ -64,9 +62,8 @@
 //
 // Scenarios run concurrently under a bounded load budget. Each scenario is not a
 // single unit of work: it compiles Go code, then runs one platform process per
-// deployed instance, each embedding NATS JetStream and writing a journal to
-// disk. The harness enforces two independent limits using the internal semaphore
-// package:
+// deployed instance, each writing its own record to disk. The harness enforces
+// two independent limits using the internal semaphore package:
 //   - Build concurrency: bounded to 2 concurrent builds.
 //   - Machine budget: bounded to max(2, GOMAXPROCS/2) concurrent platform
 //     processes. DeploySite acquires weight equal to a project's machine count

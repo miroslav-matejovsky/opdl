@@ -26,9 +26,9 @@ import (
 // configuration from the deployment, placing a node's storage, reading the
 // trusted topology, and the startup and shutdown ordering.
 //
-// The composition tests run a real embedded NATS server, so they are integration
-// tests and stay out of the fast gate. Everything derivable without a socket is
-// tested without one.
+// The composition tests open real sockets, so they are integration tests and stay
+// out of the fast gate. Everything derivable without a socket is tested without
+// one.
 
 var testDescriptor = config.Descriptor{
 	Platform:    "opdl",
@@ -77,24 +77,23 @@ func loadConfig(t *testing.T) *config.Config {
 // single source of the machine's topology, and each instance still reads only its
 // own record.
 //
-// Both instances are filled in, whether or not a test deploys the standby. A test
-// that enables it then flips one bool rather than composing a second endpoint set
-// by hand, which is how a standby ends up on the primary's address.
+// Both instance records are filled in, whether or not a test exercises the
+// standby. A test that needs one then has it already, rather than composing a
+// second endpoint set by hand, which is how a standby ends up on the primary's
+// address.
 func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	t.Helper()
 	descriptor := cfg.Descriptor()
 	dataRoot := t.TempDir()
-	for _, standby := range []bool{false, true} {
-		instance := descriptor.Instances.Get(config.Role(standby))
-		instanceDataDir := filepath.Join(dataRoot, string(config.Role(standby)))
+	onFreePort := func(role config.PlatformInstanceRole) config.Instance {
+		instance := descriptor.Instance(role)
 		instance.APIAddress = freeAddress(t)
-		instance.DataDir = instanceDataDir
-		if standby {
-			descriptor.Instances.Standby = instance
-			continue
-		}
-		descriptor.Instances.Primary = instance
+		instance.DataDir = filepath.Join(dataRoot, string(role))
+		return instance
 	}
+	descriptor.Primary = onFreePort(config.RolePrimary)
+	standby := onFreePort(config.RoleStandby)
+	descriptor.Standby = &standby
 	descriptor.Lease = &config.Lease{
 		File:                  filepath.Join(dataRoot, "lease"),
 		Duration:              "15s",
@@ -128,23 +127,6 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 		record:     record,
 	}, nil
 }
-
-// deployStandby turns a descriptor whose instances are already on free ports into
-// the shape the resolver produces for a single machine that deploys both.
-//
-// That shape is not two clustered servers, and the difference matters. Storage is
-// selected per instance, and a lone machine deploying both is a site of two
-// instances, which is below the three a replicated journal needs. So the resolver
-// selects one storage instance, the primary, and the standby is a client of it
-// with no server, no store, and no routes.
-//
-// Redundancy that survives losing a storage instance needs four instances: two
-// machines that each deploy a standby. That is the minimum redundant site, and it
-// is a scenario rather than a composition test, because it needs four processes.
-//
-// Getting this wrong is silent in a specific way worth naming: routing the two
-// instances to each other here, as if they were both storage, gives the primary a
-// route to an address nothing binds and its JetStream never reaches quorum.
 
 // TestTopologyExpectsEverySiteMachineIncludingItself checks the trusted
 // registration topology is the descriptor's static membership. Acceptance needs
@@ -361,7 +343,7 @@ func TestOpenReportsUnusableJsonlDataDir(t *testing.T) {
 	descriptor := descriptorOnFreePorts(t, cfg)
 	// Sabotage the DataDir: the JSONL backend will try to create a subdirectory
 	// under it, which will fail because blocked is a file, not a directory.
-	descriptor.Instances.Primary.DataDir = blocked
+	descriptor.Primary.DataDir = blocked
 
 	_, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "jsonl:", "the failure identifies the JSONL backend")

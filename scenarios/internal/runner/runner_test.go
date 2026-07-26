@@ -32,7 +32,7 @@ func TestPrintSummary(t *testing.T) {
 			duration: 0,
 		},
 		{
-			name:   "nats/UnranScenario",
+			name:   "resilience/UnranScenario",
 			ran:    false,
 			passed: false,
 		},
@@ -61,7 +61,7 @@ func TestPrintStartSummary(t *testing.T) {
 			},
 		},
 		{
-			Package: "nats",
+			Package: "resilience",
 			Scenarios: []Scenario{
 				{Name: "TwoMachineEventFabric"},
 			},
@@ -84,7 +84,7 @@ func TestPrintStartSummary(t *testing.T) {
 	expected := "--- scenarios to run ---\n" +
 		"RUN   registration/BuildAndRunMinimumSite\n" +
 		"RUN   registration/TwoMachineRegistration\n" +
-		"SKIP  nats/TwoMachineEventFabric\n"
+		"SKIP  resilience/TwoMachineEventFabric\n"
 
 	require.Equal(t, expected, buf.String())
 }

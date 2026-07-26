@@ -3,9 +3,9 @@
 OPDL builds one platform binary for each machine in a project blueprint. The
 builder resolves the machine's deployment descriptor, embeds it in the runtime,
 and packages the result. A package runs one process when warm standby is
-disabled, or a primary and standby when it is enabled. Identity is
-compiled into the artifact. A deployment site does not assign identity through
-runtime configuration.
+disabled, or a primary and standby when it is enabled. Identity is compiled into
+the artifact; a deployment site does not assign identity through runtime
+configuration.
 
 ## Distribution line
 
@@ -35,32 +35,37 @@ artifacts and then regenerate `sdk-dotnet` from that contract.
 
 ## Deployment descriptor
 
-Every built platform binary embeds one `deployment.Descriptor`. It contains the
-project, environment, site, machine, role, IP, services, resolved
-warm-standby policy, and Event Fabric peers.
+Every built binary embeds one `deployment.Descriptor`, and it is the only
+configuration that binary has. There is no runtime configuration file: a launch
+decides one thing, `-instance primary|standby`. The runtime trusts the descriptor
+as its identity, so a client cannot claim a different machine or site.
 
-The runtime trusts the descriptor as its identity. Registration origins, event
-nodes, and Event Fabric members come from it. A client cannot claim a different
-machine or site.
+The descriptor states the machine once and each instance separately:
 
-The descriptor is the only configuration a binary has. There is no runtime
-configuration file; the platform reads no TOML and none is shipped. Endpoints,
-the platform data root, each instance's API listener timeouts
-(`api_read_header_timeout`, `api_shutdown_timeout`), and the Primary Ownership
-lease with its projection lag bound are all resolved into it from the blueprint.
+| Part | Contents |
+| --- | --- |
+| machine | platform, project, environment, site, machine, machine profile, ip, services |
+| `primary` | mandatory: Windows Service identity, data dir, loopback API address, listener timeouts |
+| `standby` | the same fields, present only when the machine deploys a standby |
+| `lease` | the shared Primary Ownership file, its failover timings, and the projection lag bound; present exactly when `standby` is |
+
+A machine with no standby carries neither a standby record nor a lease, so an
+endpoint in a descriptor is always one a process will bind, and the two absences
+say the same thing once rather than a disabled record saying it in three places.
+See `builder/deployment` for the field-level contract and `platform/config` for
+the runtime's copy of it; the two are kept in step by `conformance-tests`.
+
 The listener timeouts are per instance, authored in each `api` block, because the
 two instances bind their own listeners. The lag bound is on `standby.lease`,
 because it bounds a failover: a machine that deploys no standby has no lease and
-no lag bound. A launch decides one thing, `-instance primary|standby`.
+no lag bound.
 
-A site changes any of these by rebuilding the machine's package, which is what it
+A site changes any of this by rebuilding the machine's package, which is what it
 already did for every endpoint and every path. What it gains is that a binary
 states its own configuration: nothing can be turned beside the executable, and no
 setting has two sources needing a precedence rule to tell them apart.
 
 ## Runtime boundaries
-
-The platform is composed around these boundaries:
 
 | Boundary | Responsibility |
 | --- | --- |
@@ -69,35 +74,25 @@ The platform is composed around these boundaries:
 | `internal/events` | Owns the event contract, envelope, factory, and producer-facing publisher interface. |
 | `internal/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
 | `internal/events/storage/jsonl` | Writes the mandatory process-local JSONL record under the instance data root. |
-| `internal/events/storage/eventfabric` | Defines ordered replay, delivery, projection, handler, and health capabilities without naming a transport. |
-| `internal/events/storage/nats` | Implements both event storage and Event Fabric with NATS JetStream. |
 | `internal/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
-
-NATS libraries are imported only by `internal/events/storage/nats`.
 
 ## Event Fabric contract
 
-> **TODO — this section describes a design, not the current tree.** The NATS
-> implementation of event storage and the Event Fabric was removed during the
-> ongoing refactor, and the replacement distribution mechanism has not landed.
-> `internal/events/storage/eventfabric` and `internal/events/storage/nats` do not
-> exist; the table of runtime boundaries above still lists them. Until a
-> replacement lands:
+> **TODO — this section is a design, not the current tree.** Event storage and
+> the Event Fabric were removed during the ongoing refactor, and the replacement
+> distribution mechanism has not landed. Until it does:
 >
 > - no deployment has event storage. `app.hasEventStorage` is hardcoded false, so
 >   every instance takes the journal-less path, opens no site, and runs no
 >   projection or readiness monitor.
 > - **registration is blocked on this.** `internal/registration` is built around
->   a publisher, a projector, and a durable handler over the site journal, so
->   with no journal every domain operation is refused with a reason naming the
+>   a publisher, a projector, and a durable handler over the site journal, so with
+>   no journal every domain operation is refused with a reason naming the
 >   deployment rather than the instance. See `docs/02-registration.md`.
 > - the projection lag bound authored on `standby.lease` is carried and validated
 >   but never consulted, because there is no journal to lag behind.
 > - the mandatory local JSONL record is unaffected. It is the only event surface
 >   that currently works, and process and ownership events still reach it.
->
-> Everything from here to the end of this section, and the site topology, storage
-> node selection, and bootstrap ordering described below, is the target design.
 
 The Event Fabric is the only coordination mechanism between OPDL services. It
 exposes publish, replay, live delivery, durable handling, health, and shutdown,
@@ -116,10 +111,9 @@ stream, or consumer, or knows one exists.
 
 A route is `opdl.<site-scope>.event.<domain>.<fact>`, where `site-scope` is a
 stable transport-safe hash of the length-prefixed project, environment, and site.
-The journal is `OPDL_<UPPER_SITE_SCOPE>_EVENTS` and binds
-`opdl.<site-scope>.event.>`. It uses file storage and rejects new events when a
-configured byte limit is reached rather than deleting history a node still needs
-to replay.
+There is one journal per site, holding `opdl.<site-scope>.event.>`. It rejects
+new events when a configured byte limit is reached rather than deleting history a
+node still needs to replay.
 
 The fabric promises:
 
@@ -142,8 +136,8 @@ view with a hole in it.
 ### Site topology
 
 Topology is derived, not discovered. Each deployed instance authors its platform
-data root and its NATS ports and JetStream store. Everything else is a
-consequence of the site:
+data root, its API port, and the timeouts bounding that listener. Everything else
+is a consequence of the site:
 
 ```hcl
 platform {
@@ -190,58 +184,19 @@ platform {
 The `winservice` blocks name the Windows Service that runs each of the machine's
 two fixed instances. See the fixed-role model below.
 
-The builder joins each port with `machine.ip` and resolves the site's server and
-route lists into the deployment descriptor. Those lists are never authored. A
-blueprint that could state them directly could split a site, omit a storage node,
-or point a machine at another site's journal, and the resulting descriptor would
-look like a working one. The JSONL backend derives
-`<data_dir>/events/events.jsonl`; JetStream uses the explicit
-`jetstream_store_dir`, which may be on another volume.
+Site-wide lists are resolved by the builder, never authored. A blueprint that
+could state them directly could split a site, omit a storage node, or point a
+machine at another site's journal, and the resulting descriptor would look like a
+working one.
 
-There is no runtime configuration file at all, so no socket or storage topology
-can be stated outside the blueprint. Everything an instance binds or writes is
-resolved onto its own record in the descriptor and compiled in.
+Primary and Standby Instances have distinct data roots and ports because they are
+separate processes on one host. The JSONL backend derives
+`<data_dir>/events/events.jsonl` under each instance's own root. Primary
+Ownership controls domain handlers and serving, not journal membership.
 
-#### One endpoint and storage set per instance
-
-Primary and Standby Instances have distinct data roots, JetStream stores, and
-ports because they are separate processes on one host. Storage selection is per
-instance. A selected instance binds its server endpoints and opens its own
-JetStream store even while it is Passive; Primary Ownership controls domain
-handlers and serving, not Event Fabric membership.
-
-#### What actually listens
-
-The cluster listener is bound only when the site's topology resolves routes.
-Authoring a cluster port is not permission to bind it: with one storage node
-there is no peer server, and binding it would open a port nothing can connect to.
-
-| Site size | Storage machines | Cluster listeners | NATS monitor listeners |
-| ---: | ---: | ---: | ---: |
-| 1 | 1 | 0 | 0 |
-| 2 | 1 | 0 | 0 |
-| 4 | 3 | 3 | 0 |
-
-There is no NATS monitoring listener. `HTTPPort` and `HTTPSPort` are left at
-zero, which is what makes the embedded server start none. The runtime reads
-connection state, journal high-water, projection progress, and lag through the
-Event Fabric client API, and states each change in whether an instance is
-promotable to its process-local record. That record is mandatory JSONL using the
-same envelope the site journal carries, so an operator decodes one shape
-wherever an event is read.
-Those events deliberately do not depend on NATS, so they remain available to
-explain a connection or journal outage. A second unauthenticated HTTP surface would add an
-open port without adding a signal. Any remote operational API is a separate
-contract that must be platform-owned, authenticated, and authorized, and must
-not proxy the NATS monitor.
-
-Port reduction is not by itself a security control. Bind only to the machine's
-exact `ip`, never a wildcard; restrict the client port to the OPDL machines that
-need Event Fabric access and the cluster port to the selected storage machines;
-keep credentials out of the blueprint and descriptor. The current
-username/password configuration does not encrypt client or route traffic, so TLS
-or mutual TLS is required before non-loopback NATS is suitable for an untrusted
-network.
+The platform API is machine-local: every API address is resolved onto `127.0.0.1`
+and none is reachable from the network. Any remote operational API would be a
+separate contract that must be platform-owned, authenticated, and authorized.
 
 Storage nodes are selected deterministically by sorted machine name: one for a
 site smaller than three machines, the first three otherwise, with one and three
@@ -254,31 +209,12 @@ tolerance. A deployment that must tolerate one journal node failure requires at
 least three machines with stable storage on the first three machines by sorted
 name. This protects event history, not service processes.
 
-There is currently no scenario evidence for the three-storage-node topology.
-`scenarios/nats.FourMachineStorageTopologyAndFailure` used to be it — it built
-four machines from one blueprint and proved that exactly the first three by
-sorted name store the journal and bind a cluster listener, that the fourth is
-client-only and binds nothing, that publication through one machine is replayed
-through another, that the site keeps accepting and projecting after one storage
-machine is stopped, and that the stopped machine rejoins its own storage and
-reconverges to the same state. It was removed with the rest of the suite; the
-scenarios now cover only the single-machine floor.
-
-A client-only machine's resolved server order is stable, and the same removed
-scenario proved it reconnects and resumes projection after the storage server it
-is connected to is killed. The remaining product decision is tracked in
-`docs/backlog/event-fabric.md`: whether the platform should absorb the brief
-window after a storage machine is lost during which the journal's replica group
-is electing a leader and rejects writes.
-
-The site's NATS cluster is exactly its storage nodes. Every other machine of the
-site runs no server and reaches the journal as a client of the storage nodes.
-This is not a simplification for its own sake: NATS sizes a journal's metadata
-group from the routes a server is configured with, not from the servers that
-actually hold storage, so a server in the cluster that stores nothing would
-enlarge the quorum deciding whether the site can write without adding anywhere to
-write to. A machine that does not store the journal therefore depends on one that
-does, and does not start until it can reach it.
+There is currently no scenario evidence for the three-storage-node topology. The
+four-machine storage scenario that proved it was removed with the rest of the
+suite; the scenarios now cover only the single-machine floor. The remaining
+product decision is tracked in `docs/backlog/event-fabric.md`: whether the
+platform should absorb the brief window after a storage machine is lost during
+which the journal's replica group is electing a leader and rejects writes.
 
 ## Events
 
@@ -296,31 +232,27 @@ hold everywhere:
 - an event type is `platform.<source>.<fact>`, and the source is derived from it
   rather than restated;
 - transport order is delivery metadata, not part of the fact;
-- process-local event output stays usable while NATS is unavailable, because it
-  uses the JSONL-only publisher;
+- process-local event output stays usable while the journal is unavailable,
+  because it uses the JSONL-only publisher;
 - storage and distribution do not define event shape; an adapter receives a
   completed envelope and decides only where it goes.
 
 | Package | Events | Written to |
 | --- | --- | --- |
 | `internal/registration` | `platform.registration.proposed`, `confirmed`, `rejected`, `accepted` | JSONL and site journal |
-| `internal/events/storage/eventfabric` | `platform.event_fabric.ready`, `stopping` | JSONL and site journal |
 | `internal/app` | `platform.app.<fact>`: process, status, API, standby, projection, and site transitions | JSONL |
 | `internal/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | JSONL |
-| `internal/events/storage/nats` | `platform.nats.<fact>`: server, client, journal, and consumer transitions | JSONL |
 
 `internal/events` owns the contract and the envelope and declares no events of
 its own. An event payload implements one method, `EventType`, and implements a
 small optional interface only where it differs from a default: a schema version
 other than `1`, a severity other than `info`, tags, or a domain-stable identity.
 
-`events.Envelope` is the only serialized wrapper. It carries the occurrence ID
-and UTC time, the event type and its derived source, the payload schema version,
-the severity, the origin that stated it, the optional causal links and stable
-identity, and the payload as JSON. Every envelope is validated before it leaves
-the process, so a stored event is always self-describing. It deliberately carries
-no transport ordering: the journal orders events when it accepts them, and that
-sequence belongs to Event Fabric delivery metadata, not to the immutable fact.
+`events.Envelope` is the only serialized wrapper, and every envelope is validated
+before it leaves the process, so a stored event is always self-describing. It
+deliberately carries no transport ordering: the journal orders events when it
+accepts them, and that sequence belongs to delivery metadata, not to the
+immutable fact.
 
 Causal links are infrastructure, not domain vocabulary. The Event Fabric attaches
 a delivery to the handler's context as the cause before invoking it, so a
@@ -345,81 +277,24 @@ Active startup order is strict, and each step exists because the next one would
 otherwise be a lie:
 
 1. Validate the configuration and probe the journal's storage.
-2. Start the embedded NATS server, on a storage node, and connect.
-3. Create or validate the site journal.
-4. Attach the node-wide ordered projector and catch up to a captured high-water
+2. Connect to the site journal, creating or validating it.
+3. Attach the node-wide ordered projector and catch up to a captured high-water
    sequence.
-5. Attach the durable handlers and let them work through what the journal
+4. Attach the durable handlers and let them work through what the journal
    retained for them.
-6. Catch up again to whatever that work published.
-7. State `platform.event_fabric.ready` and wait for the node's own projection to
+5. Catch up again to whatever that work published.
+6. State `platform.event_fabric.ready` and wait for the node's own projection to
    apply it.
-8. Serve the public HTTP API.
+7. Serve the public HTTP API.
 
-A warm standby opens its own Event Fabric connection and projector. If topology
-selected that instance for storage, it also runs its authored NATS server and
-JetStream store. It catches up and follows the journal, writes its local process
-status, and owns no durable handler, lifecycle readiness publication, or domain
-operation. Its adapter configuration comes from its own instance record in the
-descriptor.
+The whole readiness sequence is bounded. A node that cannot finish it does not
+serve, and reports how far its projector got and what each handler still owed.
+Answering registration queries from a projection that has not seen the site's
+history would be answering for a site the process has not caught up with.
 
-At startup each process prints the endpoints it actually composed. This
-distinguishes an instance selected for storage from a client-only instance and
-makes its Event Fabric membership visible independently of Primary Ownership:
-
-```text
-platform: event fabric configuration endpoint=10.0.1.10:4222 binds=true
-  cluster=none servers=10.0.1.10:4222 routes=none storage=true replicas=1
-```
-
-`endpoint` is the instance's own address from the descriptor. Primary and
-standby instances have separate endpoints and storage directories.
-
-The primary and standby coordinate through one machine-wide ownership lease in the
-machine-wide `Global\` namespace. Only its holder may compose active
-capabilities. It is released after active resources close, or abandoned by the
-kernel when the holding process exits. A waiting instance waits for ownership
-independently of its projector, in a kernel wait rather than a poll, so it is
-woken the moment the holder releases or dies. After acquisition it marks itself
-activating, closes its passive composition, opens the active composition over
-the same authored Event Fabric membership, catches up again, drains retained
-handler work, publishes readiness, switches its existing HTTP listener to the
-active handler, and marks itself active.
-
-When a machine deploys a Standby Instance (`standby.disabled = false`), its `standby`
-block must author the Windows named mutex in full under `lock.windows_mutex`, and the
-builder records it in the descriptor as `lock.windows_mutex`. Ownership is therefore a
-property of the machine's local `standby` block where the second instance is defined,
-and the descriptor omits `lock` when `standby` is disabled.
-
-This replaced an OS file lock under the local instance directory, whose scope was
-a path. Two processes excluded each other only if they had been configured with
-the same directory, so pointing them at different ones, installing the same
-package twice under different paths, or placing the directory on a network
-filesystem each produced two simultaneous actives, and nothing detected any of
-them. None of the three is expressible now, and an instance's runtime directory
-takes no part in ownership at all. That is what makes it safe for each instance
-to have its own: the directories are operational evidence, so two of them are two
-places to read an instance's own record rather than two ownership scopes.
-
-An instance that takes ownership also learns how it became free. The kernel reports
-a mutex whose owner died without releasing it as abandoned, so a failover caused
-by a crash is distinguishable from a planned handover in
-`platform.redundancy.ownership_acquired`. The file lock reported both
-identically.
-
-The mutex provides mutual exclusion, not a fencing token. What makes exclusion
-sufficient is two invariants around it: active resources close before ownership is
-released, and ownership lives on one pinned OS thread for the life of the process.
-Windows ties mutex ownership to a thread rather than a process, so without the
-second one a thread exiting would abandon ownership while the process still held
-its listener, handlers, and embedded server.
-
-The whole readiness sequence is bounded by `catch_up_timeout`. A node that cannot
-finish it does not serve, and reports how far its projector got and what each
-handler still owed. Answering registration queries from a projection that has not
-seen the site's history would be answering for a site the process has not caught
-up with.
+A warm standby opens its own journal connection and projector. It catches up and
+follows the journal, writes its local process record, and owns no durable
+handler, readiness publication, or domain operation.
 
 Shutdown reverses ownership. HTTP intake stops and in-flight requests drain;
 handlers stop and finish the delivery they hold, because they are the only role
@@ -430,12 +305,13 @@ handler that stops on its own also ends serving: the projection is what every
 query is answered from.
 
 Full-machine shutdown stops the primary service and then the standby service. A
-standby may become Active during this bounded interval and is stopped immediately.
+standby may become Active during this bounded interval and is stopped
+immediately.
 
 The site journal is the platform's durable state. A node rebuilds its projections
-by replaying it at every start, so a machine that is killed comes back to the same
-answers. Local projections are memory-only and are not snapshotted; replay cost
-has not yet justified it.
+by replaying it at every start, so a machine that is killed comes back to the
+same answers. Local projections are memory-only and are not snapshotted; replay
+cost has not yet justified it.
 
 ## Local warm standby
 
@@ -448,9 +324,9 @@ package, and named in the Windows Service that runs the process. It is not
 assigned at runtime, negotiated, or exchanged.
 
 A role is not a state. A Standby Instance that takes over does not become the
-Primary Instance: it runs active capabilities until ownership returns. The status
-file carries both axes, `role` and `state`, and the combinations that differ are
-the interesting ones, `standby`/`active` most of all.
+Primary Instance: it runs active capabilities until ownership returns. The two
+axes, `role` and `state`, are reported separately, and the combinations that
+differ are the interesting ones, `standby`/`active` most of all.
 
 Each instance's Windows Service name is authored in the blueprint's `winservice`
 blocks and carried into `manifest.json`, so the same two roles are named
@@ -462,38 +338,49 @@ startup.
 
 ### Ownership
 
-OPDL can run a preferred primary and an optional standby for one machine. The
-owner runs active capabilities; the other process maintains a warm local
-projection. Both retain the same compiled machine identity, so they remain one
-registration voter. After failover, ownership returns to the Primary Instance only through an
-operator-initiated failback from the Active Standby.
+Primary Ownership is a finite, renewable lease recorded in a machine-wide file
+the descriptor names. The owner renews it while Active; a Standby takes it over
+once it lapses and the peer's health endpoint reports the owner can no longer
+serve. It is released cleanly after active resources close, or left to lapse when
+the process dies, so a crash-caused failover is distinguishable from a planned
+handover in `platform.redundancy.ownership_acquired`.
 
-After failover, a returning primary starts projection-only and waits. Deployment
-tooling verifies that it is caught up, gracefully stops the Active Standby,
-and waits for the primary to acquire released ownership. The primary never
-steals ownership from a live standby. Journal replication remains separate from
-service redundancy: storage replicas protect site history, while the local
-ownership protects one machine's active capabilities.
+Under the Preferred Primary policy an Active Standby hands ownership back once
+the returned Primary has been continuously healthy for the stabilization window.
+The Primary never seizes ownership from a live Standby. Both instances carry the
+same compiled machine identity, so they remain one registration voter, and
+journal replication stays separate from service redundancy: replicas protect site
+history, the lease protects one machine's active capabilities.
+
+The lease replaced a non-expiring Windows named mutex, which gave mutual
+exclusion by construction but could never fail over from an unresponsive-but-
+alive holder. Split-brain is kept out instead by three combined means: the two
+instances share one host's clock, so an expiry means the same instant to both; an
+owner that cannot renew steps down before its lease could lapse from a promoter's
+view; and a promoter takes over only when the peer is also unhealthy.
+
+Both instances bind their own loopback API address for their whole lifetime, so a
+transfer swaps the handler behind an already-open listener rather than moving an
+address between processes. An instance's data directory takes no part in
+ownership at all: the directories are operational evidence, so two of them are
+two places to read an instance's own record rather than two ownership scopes.
 
 ### Package and service-manager contract
 
 Each package manifest contains one required `primary` launch and, when the
 machine's blueprint sets `standby.disabled = false`, one optional `standby`
-launch. Both name the same binary and configuration. Their direct arguments are
-`-instance primary` and `-instance standby`.
+launch. Both name the same binary. Their direct arguments are `-instance primary`
+and `-instance standby`.
 
 The standby decision is never inferred from an omitted field. Every blueprint
-machine states `platform.standby.disabled`, every descriptor carries explicit
-`slots.primary.disabled` and `slots.standby.disabled` records, and the platform
-refuses to decode a descriptor that omits either. A missing decision is a startup
-error rather than a default.
+machine states `platform.standby.disabled`, and the resolved descriptor either
+carries a complete standby record with its lease or carries neither.
 
 Deployment starts the primary and waits for it to state `platform.app.api_active`
 before starting the standby. A handover requires the standby's last
 `platform.app.failover_readiness_changed` to say `ready`, from the PID of the
-process that is running now. The service manager then gracefully stops the
-active process and waits for the other process to state `platform.app.api_active`.
-A returning Primary Instance uses this procedure to take ownership back. Full
+process that is running now. The service manager then gracefully stops the active
+process and waits for the other process to state `platform.app.api_active`. Full
 machine shutdown stops the primary service and then the standby service; the
 standby may briefly become Active between those operations.
 
@@ -502,25 +389,19 @@ identifies the process role and PID that stated it, and between them the events
 report lifecycle transitions, projection progress, lag, and failover readiness.
 Only Primary Ownership makes an instance Active.
 
-There is no status file. It reported the same facts as a snapshot rewritten once
-a second, which meant the record and the file could disagree, and a reader had to
-know that a file left behind by a dead process still looked current. Readiness is
-now stated when it changes, and liveness is asked of the instance's own API,
-which is bound in every state.
+There is no status file. Readiness is stated when it changes, and liveness is
+asked of the instance's own API, which is bound in every state, rather than read
+from a file a dead process leaves behind unchanged.
 
 ### Validation baseline
 
 The black-box warm-standby scenario builds a standby-enabled package, launches
 both processes, kills and hands ownership over repeatedly, preserves
-registrations, checks storage ownership, fails back to the Primary Instance, and
-completes full machine shutdown. It records measurements without enforcing an SLO.
+registrations, fails back to the Primary Instance, and completes full machine
+shutdown. It records measurements without enforcing an SLO.
 
-The scenario records each instance's effective endpoints, server list, and
-storage role. Those values are derived per instance and do not change when
-Primary Ownership changes.
-
-Three consecutive Windows development runs with the file lock, followed by
-one run after it was replaced with the named mutex:
+Three consecutive Windows development runs with the file lock, followed by one
+run after it was replaced with the named mutex:
 
 | Measurement | Lock 1 | Lock 2 | Lock 3 | Mutex |
 | --- | ---: | ---: | ---: | ---: |
@@ -530,20 +411,10 @@ one run after it was replaced with the named mutex:
 | Operator-initiated failback | 275.8 ms | 266.6 ms | 177.8 ms | 164.0 ms |
 
 The three ownership-transfer rows improved by roughly the amount the removed poll
-predicts. The file lock woke a waiter on its next 100 ms tick, so it added up to
-that and about 50 ms on average to every failover and failback; the mutex wakes
-the waiter in the kernel when the holder releases or dies. Catch-up is not an
-ownership measurement and its one mutex sample is within the noise of a single
-run.
-
-The earlier 2026-07-18 baseline measured a forced-kill failover of about 29.9
-seconds. That gap was a symptom rather than a performance property: the standby
-had been given its own NATS client address while the only running server was the
-active process's, so it never reached the journal and was never warm, and the
-newly Active process had to complete a cold startup bounded by the same 30 second
-Event Fabric startup timeout.
+predicts. The file lock woke a waiter on its next 100 ms tick; the mutex woke it
+in the kernel when the holder released or died. Catch-up is not an ownership
+measurement and its one mutex sample is within the noise of a single run.
 
 These remain development measurements, not production limits or percentiles. One
 sample on one host is not an SLO, and none may be quoted as one until
 `docs/backlog/redundancy.md` records percentiles from more than one host.
-

@@ -5,37 +5,24 @@
 //
 // A running instance is configured by exactly one thing: the deployment
 // descriptor, resolved by the builder from the project blueprint and compiled
-// into the binary from deployment.json (see Deployment). It is the machine's
-// identity, its instances and their endpoints, and its Primary Ownership lease.
-// A binary's descriptor cannot be reassigned at runtime.
-//
-// There is no configuration file. There used to be a TOML file read from beside
-// the executable, holding the settings a site could turn without rebuilding: the
-// listener timeouts and the projection lag bound. They are authored in the
-// blueprint now, the timeouts on each instance's api block and the lag bound on
-// the machine's standby lease, and they are resolved into the descriptor with
-// everything else. That removed the one thing two tiers cost: a reader asking
-// what an instance is configured with no longer has to know which tier answers,
-// and no setting can appear in both and need a precedence rule to tell them
-// apart. What a site gives up is turning a timeout without a rebuild, which is
-// the same thing it already gives up for every endpoint and every path.
+// into the binary from deployment.json (see Deployment). There is no
+// configuration file beside the executable and no environment override; a
+// binary's descriptor cannot be reassigned at runtime, and a site changes what a
+// machine runs with by rebuilding it.
 //
 // Load parses every duration the descriptor carries and fails fast on a bad one.
 // No implicit defaults are applied: a missing or non-positive duration is a
-// startup failure rather than a value someone has to guess at later. Deployment
-// decodes the descriptor alone, for callers that need the machine's identity
-// without parsing anything.
+// startup failure rather than a value someone has to guess at later.
 //
 // # Per-machine and per-instance
 //
-// One machine has one descriptor, and its Primary and Standby Instances both
-// read it. So nothing that answers for a single instance is held on the machine:
-// everything an instance binds or writes on its own — its API address, its data
-// directory, the timeouts bounding its listener — is carried on that instance's
-// own record inside the descriptor, and the runtime reads its own by role. The
-// accessors on Config that take a role take it for that reason, and Summary
-// takes it because the role is the only thing that differs between the two
-// startup blocks of one machine.
+// One machine has one descriptor and both of its instances read it, so nothing
+// that answers for a single instance is held on the machine. Each instance's own
+// API address, data directory, and listener timeouts are on its own record:
+// Descriptor.Primary always, Descriptor.Standby only when the machine deploys
+// one. The accessors on Config take a role for that reason, and Summary takes
+// one because the role is the only thing that differs between the two startup
+// blocks of a machine.
 //
 // # The descriptor is a contract with the builder
 //
@@ -45,11 +32,9 @@
 // imports this package alongside the builder's descriptor to verify the two stay
 // compatible. That is why this package is exported rather than internal.
 //
-// The descriptor decodes strictly. UnmarshalJSON requires every resolved
-// decision it depends on to be present, because each field it guards has a
-// usable zero value: an omitted instances.standby.disabled would decode as false
-// and deploy redundancy nobody asked for, and an omitted read header timeout
-// would decode as zero, which http.Server reads as no limit at all. The failure
-// lands at startup instead of on a machine running with a topology nobody wrote
-// down.
+// UnmarshalJSON decodes strictly: a deployed instance must state its data
+// directory and both listener timeouts, and the lease must be present exactly
+// when a standby is. Each guarded field is a string with a usable zero value, so
+// an omission would otherwise decode into a running machine with a topology
+// nobody wrote down.
 package config
