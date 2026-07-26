@@ -1,6 +1,8 @@
 # Dead-code detection, in two complementary layers.
 . (Join-Path $PSScriptRoot "modules.ps1")
 
+Write-Host "deadcode starting"
+
 $deadcodeTool = Get-Command deadcode -ErrorAction SilentlyContinue
 
 # Collect the packages reachable from the command modules. The workspace uses

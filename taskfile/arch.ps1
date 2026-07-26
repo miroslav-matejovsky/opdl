@@ -4,6 +4,8 @@
 # `go run ...@latest` for clean environments.
 . (Join-Path $PSScriptRoot "modules.ps1")
 
+Write-Host "arch starting"
+
 $archTool = Get-Command go-arch-lint -ErrorAction SilentlyContinue
 
 $ran = $false

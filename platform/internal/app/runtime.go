@@ -15,7 +15,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 
 // process is everything one running instance was composed from and everything it

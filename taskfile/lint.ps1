@@ -1,4 +1,5 @@
 . (Join-Path $PSScriptRoot "modules.ps1")
+Write-Host "lint starting"
 $LintFile = Join-Path $RepoRoot ".golangci.yml"
 # verify that the lint config file exists, otherwise golangci-lint will fail with a confusing error.
 if (-not (Test-Path $LintFile)) {

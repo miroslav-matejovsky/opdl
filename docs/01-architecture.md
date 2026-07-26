@@ -74,7 +74,7 @@ setting has two sources needing a precedence rule to tell them apart.
 | `internal/events` | Owns the event contract, envelope, factory, and producer-facing publisher interface. |
 | `internal/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
 | `internal/events/storage/jsonl` | Writes the mandatory process-local JSONL record under the instance data root. |
-| `internal/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
+| `internal/machine/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
 
 ## Event Fabric contract
 
@@ -269,7 +269,7 @@ hold everywhere:
 | --- | --- | --- |
 | `internal/registration` | `platform.registration.proposed`, `confirmed`, `rejected`, `accepted` | JSONL and site journal |
 | `internal/app` | `platform.app.<fact>`: process, status, API, standby, projection, and site transitions | JSONL |
-| `internal/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | JSONL |
+| `internal/machine/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | JSONL |
 
 `internal/events` owns the contract and the envelope and declares no events of
 its own. An event payload implements one method, `EventType`, and implements a

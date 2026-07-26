@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 
 // These cover the ownership lifecycle: which composition runs, in which order,

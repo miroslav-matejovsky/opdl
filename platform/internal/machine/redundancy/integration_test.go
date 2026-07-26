@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 
 // These are the redundancy package's integration tests: two real ManageOwnership

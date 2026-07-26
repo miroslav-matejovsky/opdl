@@ -3,7 +3,7 @@ package redundancy_test
 import (
 	"testing"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 	"github.com/stretchr/testify/require"
 )
 

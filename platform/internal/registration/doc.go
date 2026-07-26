@@ -53,7 +53,7 @@
 // The local process role is never part of these identities either.
 // Proposal IDs, decision IDs, and the durable handler's consumer name are
 // machine-scoped, so a machine running a warm standby second process (see
-// internal/redundancy) still confirms once and decides once. A role is lifecycle
+// internal/machine/redundancy) still confirms once and decides once. A role is lifecycle
 // and diagnostics, not a second voter.
 //
 // # Ordering and conflict

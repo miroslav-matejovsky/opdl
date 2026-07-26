@@ -14,7 +14,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage/jsonl"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instancestate"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/redundancy"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 
 // Run starts the platform runtime with the given command-line arguments. It
