@@ -272,23 +272,6 @@ func (i Instances) Service(standby bool) *WinService {
 	return i.Get(Role(standby)).Service
 }
 
-// HasEventStorage reports whether this deployment has a site journal at all:
-// whether any instance the machine deploys runs an Event Fabric.
-//
-// It is asked of the whole descriptor rather than of one instance because a
-// machine's two instances read one configuration file, so a setting the file
-// must carry is one either of them could need. Whether the running instance
-// itself has a journal is a different question, asked per instance.
-func (d Descriptor) HasEventStorage() bool {
-	for _, role := range []PlatformInstanceRole{RolePrimary, RoleStandby} {
-		instance := d.Instances.Get(role)
-		if !instance.Disabled && instance.Nats != nil {
-			return true
-		}
-	}
-	return false
-}
-
 // WinService is one instance's resolved Windows Service identity.
 //
 // It is a declaration carried for whoever installs the services, not a
@@ -326,8 +309,6 @@ type Instance struct {
 	// api.local_port and resolved onto 127.0.0.1, and no instance's API is
 	// reachable from the network.
 	APIAddress string `json:"api_address,omitempty"`
-	// Nats is this instance's own Event Fabric NATS topology.
-	Nats *Nats `json:"nats,omitempty"`
 }
 
 // Peer is one platform instance of this machine's site.
@@ -339,10 +320,6 @@ type Instance struct {
 // The list includes this machine's own instances. One descriptor is read by both
 // instances of a machine, so it carries the site's whole membership and each
 // running instance recognises itself by Machine and Role.
-//
-// A peer carries the Event Fabric addresses only. It has no api_address: the
-// platform API is bound on loopback, so another machine's API is not reachable
-// and an address stating otherwise would be one no process listens on.
 //
 // Peers are ordered by machine name, then Primary before Standby, so every
 // machine of a site sees the same list. The site is the boundary: instances of
@@ -357,44 +334,4 @@ type Peer struct {
 	// IP is the address the peer's machine is reached on. Two peers on one machine
 	// share it and differ by port.
 	IP string `json:"ip"`
-	// Nats are the peer instance's Event Fabric addresses, absent on a peer whose
-	// machine authored no event storage and so runs no server.
-	Nats *PeerNats `json:"nats,omitempty"`
-}
-
-// PeerNats are one peer instance's Event Fabric addresses.
-type PeerNats struct {
-	// ClientAddress is where the peer's server serves the NATS client protocol.
-	ClientAddress string `json:"client_address"`
-	// ClusterAddress is where the peer's server accepts routes from the site's
-	// other storage servers.
-	ClusterAddress string `json:"cluster_address"`
-}
-
-// Nats is one instance's resolved NATS topology: the addresses its own server
-// binds, and the addresses it reaches the site's journal through.
-//
-// There is one per deployed instance, not one per machine. Each instance runs its
-// own server, so on a storage machine that deploys a standby there are two
-// cluster members on one host and each routes to the other.
-type Nats struct {
-	// JetStreamStoreDir is the directory where this instance's NATS JetStream server
-	// stores its files.
-	JetStreamStoreDir string `json:"jetstream_store_dir,omitempty"`
-	// ClientAddress is where this instance's server serves the NATS client
-	// protocol. It is present on every instance; only an instance on a storage
-	// machine binds it.
-	ClientAddress string `json:"client_address"`
-	// ClusterAddress is where this instance's server accepts routes from the
-	// site's other storage servers. It is present on every instance; it is bound
-	// only when Routes is non-empty.
-	ClusterAddress string `json:"cluster_address"`
-	// Routes are the cluster addresses of the site's other storage servers,
-	// including this machine's other instance when the machine stores the journal.
-	// It is empty for an instance on a non-storage machine, and for a site with
-	// one storage server.
-	Routes []string `json:"routes"`
-	// Servers are the client addresses this instance reaches the journal through,
-	// ordered so an instance on a storage machine lists its own address first.
-	Servers []string `json:"servers"`
 }

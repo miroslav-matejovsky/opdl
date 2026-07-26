@@ -40,7 +40,7 @@ func Load(configPath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	lagBound, err := eventStorageSettings(configPath, d, f)
+	lagBound, err := eventStorageSettings(configPath, f)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -56,24 +56,7 @@ func Load(configPath string) (*Config, error) {
 
 // eventStorageSettings validates the settings that only mean something to a
 // deployment with a site journal, and returns the projection lag bound.
-//
-// lag_bound bounds how far a projection may fall behind the journal.
-// A deployment with no event storage has no journal and no projection, so
-// lag_bound has nothing to bound. Requiring it there would make an operator write
-// a duration that no code path reads, which is worse than an absent value.
-func eventStorageSettings(path string, d Descriptor, f file) (lagBound time.Duration, err error) {
-	if !d.HasEventStorage() {
-		// A stated value is still checked, so a file carried over from a
-		// deployment that had a journal fails on a typo rather than being
-		// silently ignored.
-		if f.LagBound != "" {
-			if _, err := validateDuration("lag_bound", f.LagBound); err != nil {
-				return 0, err
-			}
-		}
-		return 0, nil
-	}
-
+func eventStorageSettings(path string, f file) (lagBound time.Duration, err error) {
 	if f.LagBound == "" {
 		return 0, fmt.Errorf("configuration file %s: lag_bound is required", path)
 	}
@@ -150,21 +133,12 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d.Instances, Role(standby)))
 	fmt.Fprintf(&b, "    data_dir     %s\n", optionalPathSummary(inst.DataDir))
-	fmt.Fprintf(&b, "    event_storage %s\n", eventStorageSummary(inst.Nats))
 	fmt.Fprintf(&b, "    lease        %s\n", leaseSummary(d.Lease))
 	fmt.Fprintf(&b, "    peers        %s\n", peersSummary(d.Peers))
 	fmt.Fprintf(&b, "  configuration file (TOML, user-provided):\n")
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", c.readHeaderTimeout)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", c.shutdownTimeout)
-	// The journal's bounds are printed only by a deployment that has one. Showing
-	// "lag_bound 0s" and a line of empty timeouts on a deployment with no event
-	// storage would read as a misconfiguration rather than as three settings that
-	// do not apply.
-	if d.HasEventStorage() {
-		fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
-	} else {
-		fmt.Fprint(&b, "    lag_bound           (not applicable: no event storage)\n")
-	}
+	fmt.Fprintf(&b, "    lag_bound           %s\n", lagBoundSummary(c.lagBound))
 	return b.String()
 }
 
@@ -222,18 +196,4 @@ func optionalPathSummary(path string) string {
 		return "(not configured)"
 	}
 	return path
-}
-
-// eventStorageSummary renders where this instance's journal lives, and says so
-// plainly when the deployment has none.
-//
-// The distinction is worth a sentence rather than an empty value: an instance
-// with no event storage is not misconfigured, it is a deployment that serves no
-// domain operations, and an operator reading the startup block should not have
-// to infer that from a blank path.
-func eventStorageSummary(nats *Nats) string {
-	if nats == nil {
-		return "(none: this deployment has no event storage and serves no domain operations)"
-	}
-	return optionalPathSummary(nats.JetStreamStoreDir)
 }

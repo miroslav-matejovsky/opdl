@@ -92,15 +92,7 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 	dataRoot := t.TempDir()
 	for _, standby := range []bool{false, true} {
 		instance := descriptor.Instances.Get(config.Role(standby))
-		client, cluster := freeAddress(t), freeAddress(t)
 		instanceDataDir := filepath.Join(dataRoot, string(config.Role(standby)))
-		instance.Nats = &config.Nats{
-			JetStreamStoreDir: filepath.Join(instanceDataDir, "eventfabric", "nats"),
-			ClientAddress:     client,
-			ClusterAddress:    cluster,
-			Servers:           []string{client},
-			Routes:            []string{},
-		}
 		instance.APIAddress = freeAddress(t)
 		instance.DataDir = instanceDataDir
 		if standby {

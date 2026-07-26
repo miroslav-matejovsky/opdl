@@ -176,7 +176,6 @@ func TestSummaryShowsConfiguration(t *testing.T) {
 	require.Contains(t, s, "shutdown_timeout    10s")
 	require.Contains(t, s, "lag_bound           30s")
 	require.Contains(t, s, "data_dir     .data/platform/primary")
-	require.Contains(t, s, "event_storage .data/journal/primary")
 }
 
 // TestSummaryNamesBothInstancesAndMarksThisOne checks a startup block states

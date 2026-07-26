@@ -26,14 +26,6 @@ project "buildtest" {
           display_name = "OPDL buildtest solo node-a (Primary Instance)"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/buildtest/solo/node-a/primary/eventfabric/nats"
-          }
-        }
-
         standby {
           disabled = true
         }
@@ -57,14 +49,6 @@ project "buildtest" {
           display_name = "OPDL buildtest solo node-b (Primary Instance)"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/buildtest/solo/node-b/primary/eventfabric/nats"
-          }
-        }
-
         standby {
           disabled    = false
           data_dir    = "D:/opdl/buildtest/solo/node-b/standby"
@@ -84,14 +68,6 @@ project "buildtest" {
           winservice {
             name         = "opdl-buildtest-solo-node-b-standby"
             display_name = "OPDL buildtest solo node-b (Standby Instance)"
-          }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/buildtest/solo/node-b/standby/eventfabric/nats"
-            }
           }
         }
       }

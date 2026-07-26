@@ -21,14 +21,6 @@ project "customer-a" {
           name = "opdl-customer-a-north-sensor-primary"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
-          }
-        }
-
         standby {
           disabled = true
         }
@@ -54,14 +46,6 @@ project "customer-a" {
           name = "opdl-customer-a-north-local-server-primary"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
-          }
-        }
-
         standby {
           disabled    = false
           data_dir    = "D:/opdl/customer-a/north/local-server/standby"
@@ -80,14 +64,6 @@ project "customer-a" {
 
           winservice {
             name = "opdl-customer-a-north-local-server-standby"
-          }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
-            }
           }
         }
       }
@@ -110,14 +86,6 @@ project "customer-a" {
           name = "opdl-customer-a-control-room-master-primary"
         }
 
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/control-room/master/primary/eventfabric/nats"
-          }
-        }
-
         standby {
           disabled    = false
           data_dir    = "D:/opdl/customer-a/control-room/master/standby"
@@ -137,14 +105,6 @@ project "customer-a" {
           winservice {
             name = "opdl-customer-a-control-room-master-standby"
           }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/master/standby/eventfabric/nats"
-            }
-          }
         }
       }
     }
@@ -162,14 +122,6 @@ project "customer-a" {
 
         winservice {
           name = "opdl-customer-a-control-room-slave-primary"
-        }
-
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/primary/eventfabric/nats"
-          }
         }
 
         standby {
@@ -191,14 +143,6 @@ project "customer-a" {
           winservice {
             name = "opdl-customer-a-control-room-slave-standby"
           }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/slave/standby/eventfabric/nats"
-            }
-          }
         }
       }
     }
@@ -216,14 +160,6 @@ project "customer-a" {
 
         winservice {
           name = "opdl-customer-a-control-room-integration-primary"
-        }
-
-        event_storage {
-          nats {
-            client_port         = 4222
-            cluster_port        = 6222
-            jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/primary/eventfabric/nats"
-          }
         }
 
         standby {
@@ -244,14 +180,6 @@ project "customer-a" {
 
           winservice {
             name = "opdl-customer-a-control-room-integration-standby"
-          }
-
-          event_storage {
-            nats {
-              client_port         = 4322
-              cluster_port        = 6322
-              jetstream_store_dir = "D:/opdl/customer-a/control-room/integration/standby/eventfabric/nats"
-            }
           }
         }
       }

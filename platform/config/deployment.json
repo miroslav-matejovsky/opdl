@@ -17,16 +17,7 @@
         "display_name": "OPDL mock local mock (Primary Instance)"
       },
       "data_dir": ".data/platform/primary",
-      "api_address": "127.0.0.1:8080",
-      "nats": {
-        "jetstream_store_dir": ".data/journal/primary",
-        "client_address": "127.0.0.1:4222",
-        "cluster_address": "127.0.0.1:6222",
-        "routes": [],
-        "servers": [
-          "127.0.0.1:4222"
-        ]
-      }
+      "api_address": "127.0.0.1:8080"
     },
     "standby": {
       "disabled": true
@@ -37,11 +28,7 @@
       "site": "local",
       "machine": "mock",
       "role": "primary",
-      "ip": "127.0.0.1",
-      "nats": {
-        "client_address": "127.0.0.1:4222",
-        "cluster_address": "127.0.0.1:6222"
-      }
+      "ip": "127.0.0.1"
     }
   ]
 }

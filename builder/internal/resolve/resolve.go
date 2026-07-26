@@ -55,7 +55,7 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		MachineProfile: machine.MachineProfile,
 		IP:             machine.IP,
 		Services:       append([]string(nil), machine.Services...),
-		Instances:      instances(site, machine),
+		Instances:      instances(machine),
 		Lease:          lease(machine),
 		Peers:          peers(site),
 	}
@@ -82,10 +82,10 @@ func lease(machine blueprint.Machine) *deployment.Lease {
 // disabled: a machine with no Primary Instance would deploy nothing that can
 // serve. The standby decision is the blueprint's, copied through unchanged so the
 // descriptor states it rather than implying it.
-func instances(site blueprint.Site, machine blueprint.Machine) deployment.Instances {
+func instances(machine blueprint.Machine) deployment.Instances {
 	return deployment.Instances{
-		Primary: instance(site, machine, deployment.RolePrimary),
-		Standby: instance(site, machine, deployment.RoleStandby),
+		Primary: instance(machine, deployment.RolePrimary),
+		Standby: instance(machine, deployment.RoleStandby),
 	}
 }
 
@@ -93,26 +93,17 @@ func instances(site blueprint.Site, machine blueprint.Machine) deployment.Instan
 // binds. An instance that is not deployed resolves to the disabled record and
 // nothing else, because an endpoint no process will bind would read exactly like
 // one that will.
-//
-// An instance whose machine authored no event storage resolves with no nats
-// record at all, for the same reason: it runs no Event Fabric, so addresses for
-// one would describe a server nothing starts.
-func instance(site blueprint.Site, machine blueprint.Machine, role deployment.PlatformInstanceRole) deployment.Instance {
+func instance(machine blueprint.Machine, role deployment.PlatformInstanceRole) deployment.Instance {
 	endpoints := machine.Endpoints(role == deployment.RoleStandby)
 	if endpoints == nil {
 		return deployment.Instance{Disabled: true}
 	}
-	resolved := deployment.Instance{
+	return deployment.Instance{
 		Disabled:   false,
 		Service:    winService(machine, role == deployment.RoleStandby),
 		DataDir:    machine.DataDir(role == deployment.RoleStandby),
 		APIAddress: loopbackAddress(endpoints.APILocalPort),
 	}
-	if machine.Nats(role == deployment.RoleStandby) != nil {
-		nats := instanceNats(site, machine, role)
-		resolved.Nats = &nats
-	}
-	return resolved
 }
 
 // winService resolves one instance's Windows Service identity, or nil when that
@@ -164,120 +155,10 @@ func peers(site blueprint.Site) []deployment.Peer {
 				Role:    role,
 				IP:      machine.IP,
 			}
-			// A machine that authored no event storage contributes a member with
-			// no Event Fabric addresses. It is still a peer: site membership is
-			// who the site expects to hear from, not who runs a server.
-			if machine.Nats(role == deployment.RoleStandby) != nil {
-				peer.Nats = &deployment.PeerNats{
-					ClientAddress:  address(machine.IP, endpoints.ClientPort),
-					ClusterAddress: address(machine.IP, endpoints.ClusterPort),
-				}
-			}
 			peers = append(peers, peer)
 		}
 	}
 	return peers
-}
-
-// instanceNats derives one instance's NATS topology from its site.
-//
-// Nothing here is authored. The instance's own addresses are its blueprint ports
-// joined to its machine's ip, and the route and server lists are consequences of
-// which instances the site selects to store the journal. Letting a blueprint state
-// those lists directly would let it split a site, drop a storage server, or point
-// an instance at a journal that is not its own, and none of that would be visible
-// in the descriptor as anything other than a working topology.
-//
-// Storage is selected and served by instance: every selected instance runs a
-// server, and a machine's two servers route to each other like any other pair.
-// That is why a site of two machines that each deploy a standby has four servers
-// and a three-member cluster, rather than the two-member one a per-machine count
-// would give it.
-//
-// Both lists are always non-nil, so an empty list serialises as [] and a
-// descriptor reader can tell "no routes" from "not resolved".
-func instanceNats(site blueprint.Site, machine blueprint.Machine, role deployment.PlatformInstanceRole) deployment.Nats {
-	endpoints := machine.Endpoints(role == deployment.RoleStandby)
-	out := deployment.Nats{
-		JetStreamStoreDir: machine.JetStreamStoreDir(role == deployment.RoleStandby),
-		ClientAddress:     address(machine.IP, endpoints.ClientPort),
-		ClusterAddress:    address(machine.IP, endpoints.ClusterPort),
-		Routes:            []string{},
-		Servers:           []string{},
-	}
-	storage := siteStorageServers(site)
-	hostsStorage := slices.ContainsFunc(storage, func(s deployment.Peer) bool {
-		return s.Machine == machine.Name && s.Role == role
-	})
-	// A storage server answers its own clients, so it connects to itself first and
-	// falls back to the rest. That ordering is what keeps an Active instance on its
-	// own server rather than routing its traffic through a peer.
-	if hostsStorage {
-		out.Servers = append(out.Servers, out.ClientAddress)
-	}
-	for _, server := range storage {
-		if server.Machine == machine.Name && server.Role == role {
-			continue
-		}
-		out.Servers = append(out.Servers, server.Nats.ClientAddress)
-		// Only storage instances route, and only to each other. A site with one
-		// storage instance has no peer to route to and binds no cluster listener.
-		if hostsStorage {
-			out.Routes = append(out.Routes, server.Nats.ClusterAddress)
-		}
-	}
-	return out
-}
-
-// siteStorageServers returns the platform instances that serve the site journal,
-// sorted by instance name: one for a site smaller than three instances, the first
-// three otherwise. Selecting by sorted name makes every instance of the site
-// derive the same set without coordinating.
-//
-// The unit is the instance because an instance is what runs a server. A site of
-// two machines that each deploy a standby has four of them and can form a
-// three-member metadata group; counted by machine it would have two, and a
-// two-member group needs both members alive, which is no redundancy at all.
-//
-// That trades away a guarantee worth naming: three instances are not necessarily
-// three machines, so a two-machine site survives losing one instance but not
-// necessarily one machine. Machine tolerance still needs three machines.
-func siteStorageServers(site blueprint.Site) []deployment.Peer {
-	// Only an instance that runs an Event Fabric can store the journal. Selecting
-	// by sorted name over every member would otherwise hand a replica to an
-	// instance with no server to place it on.
-	sorted := make([]deployment.Peer, 0, len(site.Machines)*2)
-	for _, peer := range peers(site) {
-		if peer.HasNats() {
-			sorted = append(sorted, peer)
-		}
-	}
-	slices.SortFunc(sorted, func(a, b deployment.Peer) int {
-		return strings.Compare(instanceKey(a), instanceKey(b))
-	})
-	switch {
-	case len(sorted) == 0:
-		return nil
-	case len(sorted) <= smallSiteMax:
-		return sorted[:1]
-	default:
-		return sorted[:3]
-	}
-}
-
-// instanceKey names one platform instance within its site, for the deterministic
-// ordering storage selection depends on.
-func instanceKey(peer deployment.Peer) string {
-	return peer.Machine + "-" + string(peer.Role)
-}
-
-// smallSiteMax is the largest site that runs one storage instance. It matches the
-// platform adapter's rule; both derive the same set from the same site.
-const smallSiteMax = 2
-
-// address joins a machine's ip with one of its instances' authored ports.
-func address(ip string, port int) string {
-	return net.JoinHostPort(ip, strconv.Itoa(port))
 }
 
 // loopbackAddress joins an instance's authored api local_port with 127.0.0.1.
@@ -285,8 +166,7 @@ func address(ip string, port int) string {
 // The platform API is machine-local: it answers for the instance running on that
 // host, to an operator or a co-located service. It is never joined with the
 // machine's ip, so no deployment can reach another machine's API and none of
-// these ports is exposed to the network. Cross-machine traffic is the Event
-// Fabric's, and those addresses are the ones derived from the machine ip.
+// these ports is exposed to the network.
 func loopbackAddress(port int) string {
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 }

@@ -24,14 +24,6 @@
 //	          local_port = 8080
 //	        }
 //
-//	        event_storage {
-//	          nats {
-//	            client_port         = 4222
-//	            cluster_port        = 6222
-//	            jetstream_store_dir = "D:/opdl/customer-a/north/sensor/primary/eventfabric/nats"
-//	          }
-//	        }
-//
 //	        standby {
 //	          disabled = true
 //	        }
@@ -49,16 +41,6 @@
 // The machine platform subsection carries platform-runtime policy, as opposed to
 // what the machine deploys.
 //
-// nats states the ports this machine's Event Fabric server needs. It is
-// optional, and leaving it out is a deployment decision rather than an omission:
-// a machine with no event storage runs no Event Fabric and has no site journal,
-// so its instance binds its API, reports itself active, and refuses every domain
-// operation. Only ports are
-// authored: the builder joins each with the machine's ip, and derives the site's
-// route and server lists from the site's topology. A blueprint that could state
-// those lists directly could split a site or point a machine at another site's
-// journal, and the resulting descriptor would look like a working one.
-//
 // standby states whether a second local process is deployed on the machine:
 //
 //	standby {
@@ -67,10 +49,7 @@
 //
 // The attribute is required, so omitting it cannot silently enable or disable
 // redundancy. A false value deploys a second local process that waits on the
-// Primary Ownership. It does not add a second NATS endpoint: the two instances are
-// mutually exclusive owners of the machine's one client port and one cluster
-// port, so a transfer rebinds the same addresses rather than moving the site onto
-// new ones.
+// Primary Ownership.
 //
 // The hcl struct tags on these types are the authoring wire format and the
 // only contract this package exposes; there is no separate model to keep in

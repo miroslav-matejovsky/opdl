@@ -120,14 +120,6 @@ platform {
     display_name = "OPDL customer-a north local-server (Primary Instance)"
   }
 
-  event_storage {
-    nats {
-      client_port         = 4222
-      cluster_port        = 6222
-      jetstream_store_dir = "D:/opdl/customer-a/north/local-server/primary/eventfabric/nats"
-    }
-  }
-
   standby {
     disabled = false
     data_dir = "D:/opdl/customer-a/north/local-server/standby"
@@ -135,14 +127,6 @@ platform {
     winservice {
       name         = "opdl-customer-a-north-local-server-standby"
       display_name = "OPDL customer-a north local-server (Standby Instance)"
-    }
-
-    event_storage {
-      nats {
-        client_port         = 4223
-        cluster_port        = 6223
-        jetstream_store_dir = "D:/opdl/customer-a/north/local-server/standby/eventfabric/nats"
-      }
     }
   }
 }

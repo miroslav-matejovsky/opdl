@@ -63,11 +63,6 @@ type machineFixture struct {
 	ip   string
 	// standbyDisabled opts the machine out of a second local process.
 	standbyDisabled bool
-	// eventStorageDisabled opts the machine out of an Event Fabric entirely, by
-	// authoring no platform.event_storage block. The instance then binds its API
-	// and nothing else, and serves no domain operation because it has no journal
-	// to serve one from.
-	eventStorageDisabled bool
 }
 
 // projectFixtures are the blueprints scenarios build from, keyed by project.
@@ -78,18 +73,13 @@ type machineFixture struct {
 // right loopback address before rendering the blueprint that names them.
 var projectFixtures = map[string][]machineFixture{
 	// The smallest thing the platform runs: one machine deploying one Primary
-	// Instance, with no standby and no event storage. There is no site to
-	// coordinate with, nothing to fail over to, and no journal, so the deployment
-	// is one process that binds one listener.
+	// Instance, with no standby.
 	"simple": {
-		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true, eventStorageDisabled: true},
+		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
 	},
-	// The local redundancy pair: one machine deploying both instances, with no
-	// event storage. Two processes share one lease file and one health contract,
-	// which is the whole subject of the redundancy scenarios; a journal would add
-	// startup time without adding anything they assert.
+	// The local redundancy pair: one machine deploying both instances.
 	"redundancy": {
-		{name: "node-a", ip: "127.0.0.1", eventStorageDisabled: true},
+		{name: "node-a", ip: "127.0.0.1"},
 	},
 }
 
@@ -99,26 +89,17 @@ type renderedMachine struct {
 	Name string
 	IP   string
 	// The Primary Instance's ports and data directory.
-	APIPort           int
-	DataDir           string
-	JetStreamStoreDir string
-	ClientPort        int
-	ClusterPort       int
+	APIPort int
+	DataDir string
 	// The Standby Instance's, empty or zero when the machine deploys none. The
 	// two instances run together on one host, so every one of these is its own
 	// listener or directory and none may repeat.
-	StandbyAPIPort           int
-	StandbyDataDir           string
-	StandbyJetStreamStoreDir string
-	StandbyClientPort        int
-	StandbyClusterPort       int
-	StandbyDisabled          bool
+	StandbyAPIPort  int
+	StandbyDataDir  string
+	StandbyDisabled bool
 	// LeaseFile is the machine-wide Primary Ownership lease file both instances
 	// share, set only when the machine deploys a standby.
 	LeaseFile string
-	// EventStorageDisabled leaves the event_storage block out of both instances,
-	// which is what a deployment with no journal looks like in a blueprint.
-	EventStorageDisabled bool
 }
 
 // renderedProject is the blueprint template's data.
@@ -152,17 +133,11 @@ func runToken(t *testing.T) string {
 // scenario can assert what the deployment should have derived from the blueprint
 // it was rendered into.
 type reservedEndpoints struct {
-	// apiPort is the Primary Instance's loopback API port. The builder joins it
-	// with 127.0.0.1, never with the machine's ip, so these are reserved on
-	// 127.0.0.1 for every machine however many loopback addresses the site uses.
+	// apiPort is the Primary Instance's loopback API port.
 	apiPort int
 	// standbyAPIPort is the Standby Instance's own loopback API port, zero on a
-	// machine that deploys no standby. Each instance binds its own address for
-	// its whole lifetime, which is what lets a scenario ask a Passive instance
-	// about itself.
+	// machine that deploys no standby.
 	standbyAPIPort int
-	client         int
-	cluster        int
 }
 
 var (
@@ -266,11 +241,6 @@ func dataDirFor(workDir, machine, role string) string {
 	return filepath.ToSlash(filepath.Join(workDir, "data-"+machine, role))
 }
 
-// jetstreamStoreDirFor is one instance's own JetStream file store directory.
-func jetstreamStoreDirFor(workDir, machine, role string) string {
-	return filepath.ToSlash(filepath.Join(workDir, "journal-"+machine, role))
-}
-
 // leaseFileFor is a machine's Primary Ownership lease file, shared by its two
 // instances and by nothing else.
 func leaseFileFor(workDir, machine string) string {
@@ -303,54 +273,22 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 	}
 
 	for _, fixture := range fixtures {
-		// Take the Event Fabric's ports from this machine's own loopback address.
-		// A port is only free per interface, so taking on 127.0.0.1 would say
-		// nothing about 127.0.0.2.
-		//
-		// A machine that deploys both instances needs four: each instance runs its
-		// own Event Fabric server. Reserving them in one call is what keeps them
-		// distinct, which the builder requires. A machine with no event storage
-		// runs no server and takes none.
-		var p []int
-		if !fixture.eventStorageDisabled {
-			wanted := 2
-			if !fixture.standbyDisabled {
-				wanted = 4
-			}
-			reserved, err := testnet.Take(fixture.ip, wanted)
-			require.NoError(t, err)
-			p = reserved
-		}
-
 		machine := renderedMachine{
-			Name:                 fixture.name,
-			IP:                   fixture.ip,
-			APIPort:              takeAPIPort(),
-			DataDir:              dataDirFor(workDir, fixture.name, RolePrimary),
-			StandbyDisabled:      fixture.standbyDisabled,
-			EventStorageDisabled: fixture.eventStorageDisabled,
-		}
-		if !fixture.eventStorageDisabled {
-			machine.JetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RolePrimary)
-			machine.ClientPort = p[0]
-			machine.ClusterPort = p[1]
+			Name:            fixture.name,
+			IP:              fixture.ip,
+			APIPort:         takeAPIPort(),
+			DataDir:         dataDirFor(workDir, fixture.name, RolePrimary),
+			StandbyDisabled: fixture.standbyDisabled,
 		}
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
 			machine.StandbyDataDir = dataDirFor(workDir, fixture.name, RoleStandby)
 			machine.LeaseFile = leaseFileFor(workDir, fixture.name)
-			if !fixture.eventStorageDisabled {
-				machine.StandbyJetStreamStoreDir = jetstreamStoreDirFor(workDir, fixture.name, RoleStandby)
-				machine.StandbyClientPort = p[2]
-				machine.StandbyClusterPort = p[3]
-			}
 		}
 		data.Machines = append(data.Machines, machine)
 		endpoints[fixture.name] = reservedEndpoints{
 			apiPort:        machine.APIPort,
 			standbyAPIPort: machine.StandbyAPIPort,
-			client:         machine.ClientPort,
-			cluster:        machine.ClusterPort,
 		}
 	}
 
@@ -444,47 +382,34 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 // There is no monitor address. The platform runs no NATS monitoring listener;
 // each instance's event record is the local operational surface.
 type Sockets struct {
-	DataDir           string
-	StandbyDataDir    string
-	JetStreamStoreDir string
+	DataDir        string
+	StandbyDataDir string
 
-	// API, StandbyAPI, Client, and Cluster are the blueprint's, for reaching a
+	// API and StandbyAPI are the blueprint's, for reaching a
 	// machine and for assertions. Nothing writes them to a config file.
 	// StandbyAPI is the Standby Instance's own address, empty on a machine that
 	// deploys no standby; each instance binds its own for its whole lifetime.
 	API        string
 	StandbyAPI string
-	Client     string
-	Cluster    string
 }
 
 // Site is the machines of one built project under a scenario's control.
-//
-// Every machine is prepared before any is started, because each one's
-// configuration names the others: the site's NATS nodes route to each other's
-// cluster addresses, and on one host those addresses are not the ones the
-// deployment derived. Preparing the site as a whole is what lets a scenario
-// start the machines in any order, or leave one deliberately absent.
 type Site struct {
-	project  string
-	outDir   string
-	workDir  string
+	project string
+	outDir  string
+	workDir string
+
 	Machines []*Machine
 }
 
-// DeploySite renders the project's blueprint with allocated ports, builds every
-// machine from it, and prepares each one to run.
-//
-// Building and preparing are one call because the two are not independent: the
-// NATS ports are blueprint values, so they must be chosen before the build rather
-// than handed to the runtime after it. That is the point. A scenario exercises
-// the same contract a customer build does, instead of a runtime override path
-// that no deployment uses.
+// DeploySite builds a project and returns its site ready to run.
 func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project string) *Site {
 	t.Helper()
 
-	fixtures := projectFixtures[project]
+	fixtures, ok := projectFixtures[project]
+	require.Truef(t, ok, "no blueprint fixture for project %q", project)
 	nMachines := len(fixtures)
+
 	require.NoError(t, budget.Acquire(ctx, nMachines))
 	t.Cleanup(func() {
 		budget.Release(nMachines)
@@ -504,14 +429,6 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
 			// than at an address it chose, because it no longer chooses one.
 			API: net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
-		}
-		// A machine with no event storage has no journal and binds no Event Fabric
-		// listener, so it has no address or store directory to carry. Composing
-		// one from the zero port would name a listener nothing opens.
-		if !fixture.eventStorageDisabled {
-			sockets.JetStreamStoreDir = filepath.FromSlash(jetstreamStoreDirFor(workDir, fixture.name, RolePrimary))
-			sockets.Client = net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.client))
-			sockets.Cluster = net.JoinHostPort(fixture.ip, strconv.Itoa(reserved.cluster))
 		}
 		if !fixture.standbyDisabled {
 			sockets.StandbyDataDir = filepath.FromSlash(dataDirFor(workDir, fixture.name, RoleStandby))
@@ -698,12 +615,8 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 	binaryPath := machineBinary(s.outDir, s.project, name)
 	require.FileExists(t, binaryPath)
 
-	// The file carries the journal's bounds only when there is a journal to
-	// bound. A machine with no event storage has no Event Fabric server to start
-	// and no projection to lag, so writing them would be writing settings nothing
-	// reads. The store directory is the harness's own record of that decision.
 	configPath := filepath.Join(s.workDir, "config-"+name+".toml")
-	require.NoError(t, os.WriteFile(configPath, platformConfig(reserved.JetStreamStoreDir != ""), 0o644))
+	require.NoError(t, os.WriteFile(configPath, platformConfig(), 0o644))
 
 	m := &Machine{
 		Name:       name,
@@ -732,19 +645,10 @@ func prepareMachine(t *testing.T, s *Site, name string, reserved Sockets) *Machi
 // values, so raising them removes a false failure without weakening anything: a
 // machine that genuinely never catches up still fails, on the assertion that was
 // actually being made.
-//
-// A machine with no event storage gets none of the three. They all bound a site
-// journal, which that deployment does not have, and leaving them out is what
-// proves the runtime does not require them: the scenario's platform binary reads
-// this exact file.
-func platformConfig(eventStorage bool) []byte {
-	config := `read_header_timeout = "5s"
+func platformConfig() []byte {
+	return []byte(`read_header_timeout = "5s"
 shutdown_timeout = "10s"
-`
-	if !eventStorage {
-		return []byte(config)
-	}
-	return []byte(config + `lag_bound = "2m"
+lag_bound = "2m"
 `)
 }
 
@@ -797,8 +701,8 @@ func Diagnose(machines []*Machine) string {
 		if m.IsRunning() {
 			state = "running"
 		}
-		fmt.Fprintf(&b, "\n--- machine %s (%s, api %s, journal %s) ---\n%s",
-			m.Name, state, m.URL, m.Sockets.JetStreamStoreDir, m.Output())
+		fmt.Fprintf(&b, "\n--- machine %s (%s, api %s) ---\n%s",
+			m.Name, state, m.URL, m.Output())
 		fmt.Fprintf(&b, "\n--- machine %s operational events ---\n%s", m.Name, operationEvents(m))
 	}
 	return b.String()

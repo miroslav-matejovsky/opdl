@@ -105,7 +105,7 @@ func resolveRole(instance string, hasStandby bool) (redundancy.InstanceRole, err
 // it does not change while the process runs, and both of a machine's instances
 // share it.
 func hasEventStorage(descriptor config.Descriptor, role redundancy.InstanceRole) bool {
-	return instanceOf(descriptor, role).Nats != nil
+	return false
 }
 
 // instanceIdentity describes this instance to its own API in the given state.

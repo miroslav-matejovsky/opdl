@@ -20,14 +20,7 @@ const completeDescriptor = `{
     "primary": {
       "disabled": false,
       "data_dir": ".data/platform/primary",
-      "api_address": "127.0.0.1:8080",
-      "nats": {
-        "jetstream_store_dir": ".data/journal/primary",
-        "client_address": "127.0.0.1:4222",
-        "cluster_address": "127.0.0.1:6222",
-        "routes": [],
-        "servers": ["127.0.0.1:4222"]
-      }
+      "api_address": "127.0.0.1:8080"
     },
     "standby": {"disabled": true}
   },
@@ -36,15 +29,13 @@ const completeDescriptor = `{
       "site": "north",
       "machine": "node",
       "role": "primary",
-      "ip": "127.0.0.1",
-      "api_address": "127.0.0.1:8080",
-      "nats": {"client_address": "127.0.0.1:4222", "cluster_address": "127.0.0.1:6222"}
+      "ip": "127.0.0.1"
     }
   ]
 }`
 
-const primaryInstanceJSON = `"primary":{"disabled":false,"data_dir":".data/platform/primary","nats":{"jetstream_store_dir":".data/journal/primary"}}`
-const standbyInstanceJSON = `"standby":{"disabled":false,"data_dir":".data/platform/standby","nats":{"jetstream_store_dir":".data/journal/standby"}}`
+const primaryInstanceJSON = `"primary":{"disabled":false,"data_dir":".data/platform/primary"}`
+const standbyInstanceJSON = `"standby":{"disabled":false,"data_dir":".data/platform/standby"}`
 const instances = `"instances":{` + primaryInstanceJSON + `,"standby":{"disabled":true}}`
 const standbyEnabledInstances = `"instances":{` + primaryInstanceJSON + `,` + standbyInstanceJSON + `}`
 
@@ -136,16 +127,10 @@ func TestDescriptorDecodesTopology(t *testing.T) {
 
 	primary := descriptor.Instances.Primary
 	require.Equal(t, "127.0.0.1:8080", primary.APIAddress)
-	require.NotNil(t, primary.Nats)
-	require.Equal(t, "127.0.0.1:4222", primary.Nats.ClientAddress)
-	require.Equal(t, "127.0.0.1:6222", primary.Nats.ClusterAddress)
-	require.Empty(t, primary.Nats.Routes)
-	require.Equal(t, []string{"127.0.0.1:4222"}, primary.Nats.Servers)
 
 	// An instance that is not deployed carries no endpoint, so the runtime cannot
 	// mistake a resolved address for one that will ever be bound.
 	require.Empty(t, descriptor.Instances.Standby.APIAddress)
-	require.Nil(t, descriptor.Instances.Standby.Nats)
 
 	require.Len(t, descriptor.Peers, 1)
 	require.Equal(t, config.RolePrimary, descriptor.Peers[0].Role)
@@ -163,31 +148,27 @@ func TestDescriptorStandbyEnabledDecodes(t *testing.T) {
 	    "primary": {
 	      "disabled": false,
 	      "data_dir": ".data/platform/primary",
-	      "api_address": "127.0.0.1:8080",
-	      "nats": {"jetstream_store_dir": ".data/journal/primary", "client_address": "127.0.0.1:4222", "cluster_address": "127.0.0.1:6222", "routes": ["127.0.0.1:6322"], "servers": ["127.0.0.1:4222", "127.0.0.1:4322"]}
+	      "api_address": "127.0.0.1:8080"
 	    },
 	    "standby": {
 	      "disabled": false,
 	      "data_dir": ".data/platform/standby",
-	      "api_address": "127.0.0.1:8081",
-	      "nats": {"jetstream_store_dir": ".data/journal/standby", "client_address": "127.0.0.1:4322", "cluster_address": "127.0.0.1:6322", "routes": ["127.0.0.1:6222"], "servers": ["127.0.0.1:4322", "127.0.0.1:4222"]}
+	      "api_address": "127.0.0.1:8081"
 	    }
 	  },
 	  "lease": {"file": "D:/opdl/node/lease", "duration": "15s", "renewal_interval": "5s", "health_check_interval": "2s", "failback_stabilization": "30s"},
 	  "peers": [
-	    {"site":"north","machine":"node","role":"primary","ip":"127.0.0.1","api_address":"127.0.0.1:8080","nats":{"client_address":"127.0.0.1:4222","cluster_address":"127.0.0.1:6222"}},
-	    {"site":"north","machine":"node","role":"standby","ip":"127.0.0.1","api_address":"127.0.0.1:8081","nats":{"client_address":"127.0.0.1:4322","cluster_address":"127.0.0.1:6322"}}
+	    {"site":"north","machine":"node","role":"primary","ip":"127.0.0.1"},
+	    {"site":"north","machine":"node","role":"standby","ip":"127.0.0.1"}
 	  ]
 	}`
 	require.NoError(t, json.Unmarshal([]byte(enabled), &descriptor))
 	require.False(t, descriptor.Instances.Standby.Disabled)
 
 	// The two instances of one machine are two members of the site, each with its
-	// own endpoints, and each routes to the other.
+	// own endpoints.
 	require.Len(t, descriptor.Peers, 2)
 	require.Equal(t, "127.0.0.1:8081", descriptor.Instances.Standby.APIAddress)
-	require.Equal(t, []string{"127.0.0.1:6322"}, descriptor.Instances.Primary.Nats.Routes)
-	require.Equal(t, []string{"127.0.0.1:6222"}, descriptor.Instances.Standby.Nats.Routes)
 }
 
 // TestInstancesGetSelectsByRole checks the accessor the runtime uses to find its

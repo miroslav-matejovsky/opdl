@@ -25,10 +25,6 @@ func TestLoad(t *testing.T) {
 	require.Equal(t, "10.0.1.10", m1.IP)
 	require.Equal(t, []string{"sensor-services"}, m1.Services)
 	require.NotNil(t, m1.Platform)
-	nats1 := m1.Nats(false)
-	require.NotNil(t, nats1)
-	require.Equal(t, 4222, nats1.ClientPort)
-	require.Equal(t, 6222, nats1.ClusterPort)
 	// The sensor opts out of a local standby process; local-server opts in. Both
 	// state the decision, so the fixture proves each value survives loading rather
 	// than only the one that matches the zero value.
@@ -37,9 +33,6 @@ func TestLoad(t *testing.T) {
 
 	m2 := p.Sites[0].Machines[1]
 	require.NotNil(t, m2.Platform)
-	nats2 := m2.Nats(false)
-	require.NotNil(t, nats2)
-	require.Equal(t, 4222, nats2.ClientPort)
 	require.NotNil(t, m2.Platform.Standby)
 	require.False(t, m2.Platform.Standby.Disabled)
 

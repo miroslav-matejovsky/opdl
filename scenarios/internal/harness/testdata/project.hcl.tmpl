@@ -1,16 +1,5 @@
 # Scenario blueprint template.
 #
-# Scenarios build from the same blueprint contract a customer does, so the NATS
-# ports come from here rather than from a runtime setting. They cannot be fixed
-# numbers: several machines share one host and a developer's machine may already
-# hold 4222, so the harness reserves free ports and renders them in.
-#
-# The event_storage block is optional and is left out entirely for a fixture that
-# disables it. A machine with no event_storage runs no Event Fabric: it has no
-# site journal, so its instance binds its API, reports itself active, and refuses
-# every domain operation. That is a deployment shape rather than a degraded one,
-# which is why the block is absent rather than present and empty.
-#
 # The .tmpl extension is deliberate. The builder loads every *.hcl file in a
 # blueprint directory, so an unrendered template must not look like one.
 #
@@ -52,17 +41,6 @@ project "{{ .Name }}" {
           display_name = "OPDL {{ $.Name }} {{ .Name }} (Primary Instance)"
         }
 
-{{- if not .EventStorageDisabled }}
-
-        event_storage {
-          nats {
-            client_port         = {{ .ClientPort }}
-            cluster_port        = {{ .ClusterPort }}
-            jetstream_store_dir = "{{ .JetStreamStoreDir }}"
-          }
-        }
-{{- end }}
-
         standby {
           disabled = {{ .StandbyDisabled }}
 {{- if not .StandbyDisabled }}
@@ -88,17 +66,6 @@ project "{{ .Name }}" {
             name         = "{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}-standby"
             display_name = "OPDL {{ $.Name }} {{ .Name }} (Standby Instance)"
           }
-
-{{- if not .EventStorageDisabled }}
-
-          event_storage {
-            nats {
-              client_port         = {{ .StandbyClientPort }}
-              cluster_port        = {{ .StandbyClusterPort }}
-              jetstream_store_dir = "{{ .StandbyJetStreamStoreDir }}"
-            }
-          }
-{{- end }}
 {{- end }}
         }
       }

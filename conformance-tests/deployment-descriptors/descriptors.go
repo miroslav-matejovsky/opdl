@@ -97,10 +97,6 @@ func checkRoundTrip() error {
 }
 
 func checkRoundTripFor(standbyDisabled bool) error {
-	// This machine does not store the journal, so neither of its instances routes
-	// and both reach the journal through the peer machine's two servers.
-	servers := []string{peerClientAddr, peerStandbyClient}
-
 	builtStandby := builderdeployment.Instance{Disabled: true}
 	wantStandby := platformconfig.Instance{Disabled: true}
 	var builtLease *builderdeployment.Lease
@@ -110,25 +106,11 @@ func checkRoundTripFor(standbyDisabled bool) error {
 			Disabled:   false,
 			DataDir:    standbyDataDir,
 			APIAddress: standbyAPIAddr,
-			Nats: &builderdeployment.Nats{
-				JetStreamStoreDir: standbyJetStreamStoreDir,
-				ClientAddress:     standbyClient,
-				ClusterAddress:    standbyCluster,
-				Routes:            []string{},
-				Servers:           servers,
-			},
 		}
 		wantStandby = platformconfig.Instance{
 			Disabled:   false,
 			DataDir:    standbyDataDir,
 			APIAddress: standbyAPIAddr,
-			Nats: &platformconfig.Nats{
-				JetStreamStoreDir: standbyJetStreamStoreDir,
-				ClientAddress:     standbyClient,
-				ClusterAddress:    standbyCluster,
-				Routes:            []string{},
-				Servers:           servers,
-			},
 		}
 		builtLease = &builderdeployment.Lease{
 			File:                  leaseFile,
@@ -149,29 +131,21 @@ func checkRoundTripFor(standbyDisabled bool) error {
 	// Peers are ordered by machine name, then Primary before Standby, and include
 	// this machine's own instances.
 	builtPeers := []builderdeployment.Peer{
-		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP,
-			Nats: &builderdeployment.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
-		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP,
-			Nats: &builderdeployment.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
-		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP,
-			Nats: &builderdeployment.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+		{Site: site, Machine: peerMachine, Role: builderdeployment.RolePrimary, IP: peerIP},
+		{Site: site, Machine: peerMachine, Role: builderdeployment.RoleStandby, IP: peerIP},
+		{Site: site, Machine: machine, Role: builderdeployment.RolePrimary, IP: machineIP},
 	}
 	wantPeers := []platformconfig.Peer{
-		{Site: site, Machine: peerMachine, Role: platformconfig.RolePrimary, IP: peerIP,
-			Nats: &platformconfig.PeerNats{ClientAddress: peerClientAddr, ClusterAddress: peerClusterAddr}},
-		{Site: site, Machine: peerMachine, Role: platformconfig.RoleStandby, IP: peerIP,
-			Nats: &platformconfig.PeerNats{ClientAddress: peerStandbyClient, ClusterAddress: peerStandbyCluster}},
-		{Site: site, Machine: machine, Role: platformconfig.RolePrimary, IP: machineIP,
-			Nats: &platformconfig.PeerNats{ClientAddress: clientAddr, ClusterAddress: clusterAddr}},
+		{Site: site, Machine: peerMachine, Role: platformconfig.RolePrimary, IP: peerIP},
+		{Site: site, Machine: peerMachine, Role: platformconfig.RoleStandby, IP: peerIP},
+		{Site: site, Machine: machine, Role: platformconfig.RolePrimary, IP: machineIP},
 	}
 	if !standbyDisabled {
 		builtPeers = append(builtPeers, builderdeployment.Peer{
 			Site: site, Machine: machine, Role: builderdeployment.RoleStandby, IP: machineIP,
-			Nats: &builderdeployment.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 		wantPeers = append(wantPeers, platformconfig.Peer{
 			Site: site, Machine: machine, Role: platformconfig.RoleStandby, IP: machineIP,
-			Nats: &platformconfig.PeerNats{ClientAddress: standbyClient, ClusterAddress: standbyCluster},
 		})
 	}
 
@@ -189,13 +163,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 				Disabled:   false,
 				DataDir:    dataDir,
 				APIAddress: apiAddr,
-				Nats: &builderdeployment.Nats{
-					JetStreamStoreDir: jetstreamStoreDir,
-					ClientAddress:     clientAddr,
-					ClusterAddress:    clusterAddr,
-					Routes:            []string{},
-					Servers:           servers,
-				},
 			},
 			Standby: builtStandby,
 		},
@@ -230,13 +197,6 @@ func checkRoundTripFor(standbyDisabled bool) error {
 				Disabled:   false,
 				DataDir:    dataDir,
 				APIAddress: apiAddr,
-				Nats: &platformconfig.Nats{
-					JetStreamStoreDir: jetstreamStoreDir,
-					ClientAddress:     clientAddr,
-					ClusterAddress:    clusterAddr,
-					Routes:            []string{},
-					Servers:           servers,
-				},
 			},
 			Standby: wantStandby,
 		},
@@ -281,22 +241,9 @@ func checkWireShape(data []byte, standbyDisabled bool) error {
 		if _, ok := fields["disabled"]; !ok {
 			return fmt.Errorf("builder descriptor omitted instances.%s.disabled", role)
 		}
-		nats, ok := fields["nats"]
-		if !ok {
-			continue
-		}
-		var natsFields map[string]json.RawMessage
-		if err := json.Unmarshal(nats, &natsFields); err != nil {
-			return err
-		}
-		if _, ok := natsFields["monitor_address"]; ok {
-			return fmt.Errorf("builder descriptor carries instances.%s.nats.monitor_address: the platform runs no NATS monitoring listener", role)
-		}
 	}
 
-	// The endpoints an instance binds belong to that instance. A machine-level
-	// NATS or API block would be an endpoint with two owners, which is what the
-	// per-instance shape exists to make impossible.
+	// The endpoints an instance binds belong to that instance.
 	for _, field := range []string{"event_fabric", "nats", "api_address"} {
 		if _, ok := wire[field]; ok {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints belong to an instance", field)

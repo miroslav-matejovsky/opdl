@@ -5,10 +5,7 @@
 # A user may modify runtime settings without rebuilding the binary or touching the
 # embedded deployment descriptor.
 #
-# What is required depends on the deployment this file is read by. lag_bound describes
-# a site journal: how far a projection may lag it. A deployment whose blueprint
-# authors no platform.event_storage block has no journal, so lag_bound is not
-# required of it and nothing reads it. Stating one anyway is allowed and still validated.
+# What is required depends on the deployment this file is read by.
 
 # Maximum duration allowed for reading HTTP request headers before closing the connection.
 read_header_timeout = "5s"
