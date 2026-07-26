@@ -122,20 +122,29 @@ func hasEventStorage(descriptor config.Descriptor, role redundancy.InstanceRole)
 // later reader that used it as a fencing token would be ordering against a
 // number no restart will reproduce. Run makes the process's own first advance
 // directly, because it happens before there is a process value to pass.
-func advanceEpoch(ctx context.Context, proc process, reason string) error {
-	epoch, err := proc.state.Advance()
+func advanceEpoch(ctx context.Context, proc process, reason instancestate.Reason) error {
+	state, err := proc.state.Advance(reason)
 	if err != nil {
 		return errors.Join(err, proc.local.Publish(ctx, EpochAdvanceFailed{
 			StateFile: proc.state.Path(),
-			Reason:    reason,
+			Reason:    string(reason),
 			Error:     err.Error(),
 		}))
 	}
-	return proc.local.Publish(ctx, EpochAdvanced{
-		StateFile: proc.state.Path(),
-		Epoch:     epoch,
-		Reason:    reason,
-	})
+	return proc.local.Publish(ctx, epochAdvanced(proc.state.Path(), reason, state))
+}
+
+// epochAdvanced describes a recorded advance. It is shared with Run, which makes
+// the process's own first advance before there is a process value to pass, so
+// both statements of the same fact carry the same fields.
+func epochAdvanced(stateFile string, reason instancestate.Reason, state instancestate.State) EpochAdvanced {
+	return EpochAdvanced{
+		StateFile:       stateFile,
+		Epoch:           state.Epoch,
+		Reason:          string(reason),
+		ProcessEpoch:    state.ProcessEpoch.Count,
+		ActivationEpoch: state.ActivationEpoch.Count,
+	}
 }
 
 // instanceIdentity describes this instance to its own API in the given state.
@@ -327,7 +336,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 	// advances before the instance serves anything, and a failure to record it
 	// stops the activation rather than letting it serve under an epoch nothing
 	// persisted.
-	if err := advanceEpoch(ctx, proc, EpochReasonActivated); err != nil {
+	if err := advanceEpoch(ctx, proc, instancestate.ReasonActivated); err != nil {
 		return err
 	}
 

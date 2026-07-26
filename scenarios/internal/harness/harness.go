@@ -621,22 +621,45 @@ func operationEvents(m *Machine) string {
 	return b.String()
 }
 
-// InstanceEpoch reads the epoch out of one instance's state file.
+// InstanceEpochs is what an instance's state file says about its incarnations:
+// the total, and how that total was reached.
+type InstanceEpochs struct {
+	// Epoch is how many incarnations the instance has had, of both kinds.
+	Epoch uint64
+	// Process is how many times it has been launched.
+	Process uint64
+	// Activation is how many times it has taken Primary Ownership.
+	Activation uint64
+}
+
+// InstanceEpoch reads one instance's epochs out of its state file.
 //
 // The epoch is how a scenario tells one incarnation of an instance from the
 // next: it advances by exactly one when a process starts and again when the
-// instance takes Primary Ownership. It is read out of the file rather than off
-// an endpoint because the file is the durable half, and outliving the process is
-// the whole point of it.
-func InstanceEpoch(t *testing.T, stateFile string) uint64 {
+// instance takes Primary Ownership. The two counts are read as well as the total
+// because a scenario that killed a process and a scenario that moved ownership
+// both raise the total, and only the counts tell them apart. It is read out of
+// the file rather than off an endpoint because the file is the durable half, and
+// outliving the process is the whole point of it.
+func InstanceEpoch(t *testing.T, stateFile string) InstanceEpochs {
 	t.Helper()
 	data, err := os.ReadFile(stateFile)
 	require.NoErrorf(t, err, "reading the instance state file %s", stateFile)
 	var state struct {
-		Epoch uint64 `json:"epoch"`
+		Epoch        uint64 `json:"epoch"`
+		ProcessEpoch struct {
+			Count uint64 `json:"count"`
+		} `json:"process_epoch"`
+		ActivationEpoch struct {
+			Count uint64 `json:"count"`
+		} `json:"activation_epoch"`
 	}
 	require.NoErrorf(t, json.Unmarshal(data, &state), "decoding the instance state file %s", stateFile)
-	return state.Epoch
+	return InstanceEpochs{
+		Epoch:      state.Epoch,
+		Process:    state.ProcessEpoch.Count,
+		Activation: state.ActivationEpoch.Count,
+	}
 }
 
 // prepareMachine takes a handle on one built machine without starting it.

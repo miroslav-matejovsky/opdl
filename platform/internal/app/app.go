@@ -77,11 +77,11 @@ func Run(args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	epoch, err := state.Advance()
+	incarnation, err := state.Advance(instancestate.ReasonProcessStarted)
 	if err != nil {
 		return errors.Join(err, local.Publish(context.Background(), EpochAdvanceFailed{
 			StateFile: state.Path(),
-			Reason:    EpochReasonProcessStarted,
+			Reason:    string(instancestate.ReasonProcessStarted),
 			Error:     err.Error(),
 		}))
 	}
@@ -97,8 +97,11 @@ func Run(args []string) (runErr error) {
 	fmt.Printf("    instance     role=%s standby=%t service=%s\n", role, descriptor.HasStandby(), serviceName)
 	// The epoch tells one incarnation of this instance from the previous one,
 	// which nothing else in this block can: every other value here is the same
-	// after a crash as it was before.
-	fmt.Printf("    epoch        %d (%s)\n", epoch, state.Path())
+	// after a crash as it was before. The two counts behind it are printed with it
+	// because they are what say whether this machine keeps restarting or keeps
+	// changing hands.
+	fmt.Printf("    epoch        %d (starts %d, activations %d) %s\n",
+		incarnation.Epoch, incarnation.ProcessEpoch.Count, incarnation.ActivationEpoch.Count, state.Path())
 
 	// os.Interrupt is the only signal Windows delivers: the runtime raises it for
 	// CTRL_C_EVENT and CTRL_BREAK_EVENT, which is how the service manager and the
@@ -120,9 +123,16 @@ func Run(args []string) (runErr error) {
 	if err := local.Publish(ctx, ProcessStarted{
 		EventsFile:     record.Path(),
 		StateFile:      state.Path(),
-		Epoch:          epoch,
+		Epoch:          incarnation.Epoch,
 		StandbyEnabled: descriptor.HasStandby(),
 	}); err != nil {
+		return err
+	}
+	// Stated after the opening fact, so the record still begins with the process
+	// starting, and stated at all so that every advance of either kind is one
+	// platform.app.epoch_advanced: a reader following that type alone sees every
+	// incarnation this instance has had, not every one except its launches.
+	if err := local.Publish(ctx, epochAdvanced(state.Path(), instancestate.ReasonProcessStarted, incarnation)); err != nil {
 		return err
 	}
 

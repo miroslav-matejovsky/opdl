@@ -211,6 +211,17 @@ reject anything stamped with an older one. An instance that cannot record a new
 epoch stops rather than running under a number a restart would hand out again.
 See `docs/drafts/data-priority.md` for where this is going.
 
+The record keeps the two kinds apart as well as their total: how many times the
+instance has been launched, how many times it has activated, and when each of
+those last happened, in UTC. Only the total fences writes, because neither count
+alone is monotonic in the order the two kinds interleaved. The counts are what
+say _why_ the total moved: an instance on epoch six that started once and
+activated five times is a machine whose ownership keeps moving, and one that
+started five times and activated once is a machine whose process keeps dying.
+Both facts reach the local event record too, as
+`platform.app.epoch_advanced`, so reading them does not mean holding the state
+file open.
+
 The platform API is machine-local: every API address is resolved onto `127.0.0.1`
 and none is reachable from the network. Any remote operational API would be a
 separate contract that must be platform-owned, authenticated, and authorized.

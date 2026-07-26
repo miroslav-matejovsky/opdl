@@ -152,8 +152,10 @@ func FailoverAndFailback(t *testing.T) {
 	// process and the failover it served through. The primary was killed and came
 	// back, so its second process is a third incarnation on top of the two its
 	// first process had, and reclaiming ownership makes a fourth.
-	require.Equal(t, uint64(2), harness.InstanceEpoch(t, node.Sockets.StandbyStateFile),
+	require.Equal(t, harness.InstanceEpochs{Epoch: 2, Process: 1, Activation: 1},
+		harness.InstanceEpoch(t, node.Sockets.StandbyStateFile),
 		"the standby started once and became Active once; stepping back down does not advance it")
-	require.Equal(t, uint64(4), harness.InstanceEpoch(t, node.Sockets.StateFile),
+	require.Equal(t, harness.InstanceEpochs{Epoch: 4, Process: 2, Activation: 2},
+		harness.InstanceEpoch(t, node.Sockets.StateFile),
 		"the primary started, activated, was killed, started again, and reclaimed ownership")
 }

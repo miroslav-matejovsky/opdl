@@ -21,6 +21,26 @@
 // nothing further, so there is nothing for a later reader to have to order
 // against, and the next activation advances the epoch anyway.
 //
+// # Each kind is counted on its own
+//
+// The record also keeps the two kinds apart: how many times this instance has
+// started, how many times it has activated, and when each of those last
+// happened. The total epoch is what fences writes, but on its own it says only
+// that an incarnation is a different one, never what made it different. An
+// instance on epoch six that started once and activated five times is a machine
+// whose ownership keeps moving; one that started five times and activated once
+// is a machine whose process keeps dying. The epoch is the same number in both.
+//
+// The counters are derived from nothing and derive nothing: the epoch is not
+// recomputed from them on read, because a record written by an older build may
+// carry an epoch the counters do not add up to, and the epoch is the value
+// already handed out. Neither counter is usable as a fencing token on its own,
+// since neither is monotonic in the order the two kinds actually interleaved.
+//
+// Timestamps are stored in UTC, so a record reads the same whatever the host's
+// zone is and can be lined up against the instance's event record and against
+// the other instance's state file.
+//
 // # Why it is durable
 //
 // A counter kept in memory would restart at one on every crash, which is the one

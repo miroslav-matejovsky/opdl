@@ -171,30 +171,27 @@ func (ProcessStopped) EventType() events.Type { return TypeProcessStopped }
 // Severity reports a failed run as an error and a clean stop as routine.
 func (e ProcessStopped) Severity() events.Severity { return failureSeverity(e.Error) }
 
-// Why an instance began a new incarnation. The two reasons are the two moments
-// an instance becomes one: a fresh process, and taking Primary Ownership. A
-// step-down is deliberately not one of them; see package instancestate.
-const (
-	// EpochReasonProcessStarted is a new process, whether after a clean stop or a
-	// crash.
-	EpochReasonProcessStarted = "process_started"
-	// EpochReasonActivated is the instance taking Primary Ownership and beginning
-	// to serve.
-	EpochReasonActivated = "activated"
-)
-
 // EpochAdvanced states that the instance began a new incarnation.
 //
 // The epoch is monotonic for the whole life of a deployed instance, so reading
 // the last one an instance stated is reading which incarnation is current. Which
 // instance it is about is the envelope's origin.
+//
+// It carries both per-kind counts as well as the total, so a reader of the
+// record can tell a machine whose ownership keeps moving from one whose process
+// keeps dying without opening the state file the counts came from.
 type EpochAdvanced struct {
 	// StateFile is the durable record the epoch was written to.
 	StateFile string `json:"state_file"`
 	// Epoch is the new incarnation number, one higher than the previous.
 	Epoch uint64 `json:"epoch"`
-	// Reason is why a new incarnation began, one of the EpochReason constants.
+	// Reason is why a new incarnation began, one of the instancestate.Reason
+	// values.
 	Reason string `json:"reason"`
+	// ProcessEpoch is how many times this instance has been launched, ever.
+	ProcessEpoch uint64 `json:"process_epoch"`
+	// ActivationEpoch is how many times it has taken Primary Ownership, ever.
+	ActivationEpoch uint64 `json:"activation_epoch"`
 }
 
 // EventType returns the event's stable dotted kind.
@@ -208,8 +205,8 @@ func (EpochAdvanced) EventType() events.Type { return TypeEpochAdvanced }
 type EpochAdvanceFailed struct {
 	// StateFile is the durable record that could not be written.
 	StateFile string `json:"state_file"`
-	// Reason is which new incarnation was being recorded, one of the EpochReason
-	// constants.
+	// Reason is which new incarnation was being recorded, one of the
+	// instancestate.Reason values.
 	Reason string `json:"reason"`
 	// Error is why it could not be recorded.
 	Error string `json:"error"`

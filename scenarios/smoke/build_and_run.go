@@ -74,8 +74,9 @@ func BuildAndRunSingleMachine(t *testing.T) {
 	// The instance recorded its incarnation durably. This one has had two: the
 	// process started, and then it took Primary Ownership. A machine with no
 	// standby takes ownership at once, so both happened before it served.
-	require.Equal(t, uint64(2), harness.InstanceEpoch(t, node.Sockets.StateFile),
-		"the epoch advances once for the process and once for the activation")
-	require.Contains(t, logs, "epoch        1",
-		"the startup block reports the epoch the process itself claimed")
+	require.Equal(t, harness.InstanceEpochs{Epoch: 2, Process: 1, Activation: 1},
+		harness.InstanceEpoch(t, node.Sockets.StateFile),
+		"the epoch advances once for the process and once for the activation, and each kind is counted on its own")
+	require.Contains(t, logs, "epoch        1 (starts 1, activations 0)",
+		"the startup block reports the epoch the process itself claimed, before it took ownership")
 }

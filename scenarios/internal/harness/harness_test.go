@@ -29,7 +29,10 @@ func writeScenarioEvents(t *testing.T, path, content string) {
 
 func TestInstanceEpochReadsTheStateFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	require.NoError(t, os.WriteFile(path, []byte(`{"epoch":7}`), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(
+		`{"epoch":7,"updated_at":"2026-07-26T09:15:42Z",`+
+			`"process_epoch":{"count":3,"updated_at":"2026-07-26T09:15:42Z"},`+
+			`"activation_epoch":{"count":4,"updated_at":"2026-07-26T08:04:11Z"}}`), 0o644))
 
-	require.Equal(t, uint64(7), InstanceEpoch(t, path))
+	require.Equal(t, InstanceEpochs{Epoch: 7, Process: 3, Activation: 4}, InstanceEpoch(t, path))
 }

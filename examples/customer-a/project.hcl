@@ -24,7 +24,8 @@ project "customer-a" {
       # is what it carries across restarts and crashes: it holds the instance's
       # epoch, a counter that advances by one every time the process starts and
       # every time the instance takes Primary Ownership, so one incarnation of an
-      # instance can be told from the next. No two of these paths may be the
+      # instance can be told from the next, along with each kind counted on its
+      # own and the time each last moved. No two of these paths may be the
       # same, on either instance. The lease file is the exception and is not one
       # of these: it is the machine's, and the two instances share it on purpose.
       #
