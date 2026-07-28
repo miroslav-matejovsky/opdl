@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,9 +15,9 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
@@ -91,6 +92,7 @@ func descriptorOnFreePorts(t *testing.T, cfg *config.Config) config.Descriptor {
 		instance.APIAddress = freeAddress(t)
 		instance.EventsFile = filepath.Join(dataRoot, string(role), "events.jsonl")
 		instance.StateFile = filepath.Join(dataRoot, string(role), "state.json")
+		instance.LogFile = filepath.Join(dataRoot, string(role), "platform.log")
 		return instance
 	}
 	descriptor.Primary = onFreePort(config.RolePrimary)
@@ -113,7 +115,7 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 	t.Helper()
 	factory, err := events.NewFactory(descriptor, role.String())
 	require.NoError(t, err)
-	record, err := jsonl.New(instanceOf(descriptor, role).EventsFile)
+	record, err := eventlog.New(instanceOf(descriptor, role).EventsFile)
 	if err != nil {
 		return process{}, err
 	}
@@ -130,6 +132,10 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 		local:      local,
 		record:     record,
 		state:      st,
+		// The application log is the process's, opened by Run from the descriptor.
+		// These tests compose the parts below it, so they discard what it would
+		// have written rather than opening a file nothing reads.
+		log: slog.New(slog.DiscardHandler),
 	}, nil
 }
 

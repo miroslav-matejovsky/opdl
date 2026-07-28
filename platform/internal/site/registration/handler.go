@@ -2,7 +2,7 @@ package registration
 
 import (
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
 // Handler is one node's durable registration decision worker.

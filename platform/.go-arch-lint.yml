@@ -24,13 +24,16 @@ components:
   cmd: { in: cmd }
   config: { in: config }
   app: { in: internal/app }
-  events: { in: internal/instance/events }
-  events-storage: { in: internal/instance/events/storage }
-  events-storage-jsonl: { in: internal/instance/events/storage/jsonl }
+  events: { in: internal/events }
+  events-storage: { in: internal/events/storage }
+  applog: { in: internal/instance/applog }
+  eventlog: { in: internal/instance/eventlog }
   httpapi: { in: internal/httpapi }
   state: { in: internal/instance/state }
   redundancy: { in: internal/machine/redundancy }
+  eventstore: { in: internal/machine/eventstore }
   registration: { in: internal/site/registration }
+  eventfabric: { in: internal/site/eventfabric }
 
 deps:
   api:
@@ -49,7 +52,12 @@ deps:
     # state is here for the same reason: composition is what knows this
     # process is a new incarnation of the instance, so it opens the state file
     # and advances the epoch. Nothing below app reads or writes it.
-    mayDependOn: [api, config, events, events-storage, events-storage-jsonl, httpapi, redundancy, registration, state]
+    mayDependOn: [api, applog, config, events, events-storage, eventlog, eventstore, httpapi, redundancy, registration, state]
+  # applog has no entry here on purpose, for the same reason config has none: it
+  # is a leaf. It is one local file behind log/slog, holding no descriptor and
+  # stating no event. The composition root opens it, stamps the process identity
+  # on it, and hands the runtime a logger; everything below the root reaches its
+  # records through slog's default logger rather than by importing it.
   state:
     # A leaf over one local file. It states no event and reads no descriptor, so
     # the component that advances the epoch is the one that also reports it.
@@ -72,11 +80,25 @@ deps:
     mayDependOn: [config]
   events-storage:
     mayDependOn: [events]
-  events-storage-jsonl:
+  eventlog:
     mayDependOn: [events, events-storage]
   httpapi:
     canUse: [huma]
     mayDependOn: [api, registration]
+  eventstore:
+    # The machine level's own store. It depends on the envelope it holds and on
+    # the backend contract that puts it behind a publisher, and on nothing else:
+    # it is a store, so it must not know which domain wrote what it stores.
+    mayDependOn: [events, events-storage]
+  eventfabric:
+    # Contract only, and deliberately kept at the same one dependency as
+    # eventstore: whatever the step 06 ADR chooses to distribute events with,
+    # the site level's readers depend on the shape of a delivery and not on a
+    # transport.
+    mayDependOn: [events]
   registration:
+    # eventfabric is here because the site journal's order is what registration
+    # folds. It is the contract, not an implementation: this package still
+    # constructs no subject, stream, or consumer.
     canUse: [stablehash]
-    mayDependOn: [api, events, events-storage]
+    mayDependOn: [api, events, eventfabric]

@@ -70,6 +70,11 @@ type Lease struct {
 	mu    sync.Mutex
 	held  bool
 	owned record
+	// releasedAt is when this instance last handed its own grant back, zero until
+	// it has. A released grant names its former owner, so without this an
+	// instance cannot tell "the peer gave me this" from "I gave this away a
+	// moment ago and nobody has picked it up yet".
+	releasedAt time.Time
 }
 
 // record is one lease grant as it is stored on disk. Every field is written and
@@ -200,7 +205,10 @@ func (l *Lease) renew(now time.Time) error {
 // promotes without waiting out the whole duration. It only writes when the lease
 // still names this instance, so a release after ownership was lost cannot clobber
 // the new owner. It is nil-safe and idempotent.
-func (l *Lease) release() error {
+//
+// It records when the handover was written, which is what handedOverAt reports
+// and what keeps this instance from taking straight back what it just gave away.
+func (l *Lease) release(now time.Time) error {
 	if l == nil {
 		return nil
 	}
@@ -220,7 +228,25 @@ func (l *Lease) release() error {
 	}
 	released := cur
 	released.Released = true
-	return writeRecord(l.cfg.File, released)
+	if err := writeRecord(l.cfg.File, released); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	l.releasedAt = now
+	l.mu.Unlock()
+	return nil
+}
+
+// handedOverAt reports when this instance last wrote a released grant, and the
+// zero time when it never has. It is how promotion tells a handover that is
+// still in flight from an old released grant nobody ever claimed.
+func (l *Lease) handedOverAt() time.Time {
+	if l == nil {
+		return time.Time{}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.releasedAt
 }
 
 // availability classifies what a promoter reads from the lease file. The

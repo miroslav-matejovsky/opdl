@@ -61,6 +61,7 @@ func TestSummaryShowsConfiguration(t *testing.T) {
 	require.Contains(t, s, "shutdown_timeout    10s")
 	require.Contains(t, s, "events_file  .data/platform/primary/events.jsonl")
 	require.Contains(t, s, "state_file   .data/platform/primary/state.json")
+	require.Contains(t, s, "log_file     .data/platform/primary/platform.log")
 }
 
 // TestSummaryNamesBothInstancesAndMarksThisOne checks a startup block states

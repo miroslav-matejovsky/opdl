@@ -147,6 +147,33 @@ func FailoverAndFailback(t *testing.T) {
 	require.Contains(t, string(record), `"platform.redundancy.failback_initiated"`,
 		"the handover back to the primary was the standby's own decision")
 
+	// The machine's own store tells the story once, from both sides. Each
+	// instance's record holds only what that instance did; this file is the
+	// machine's, so the standby's takeover and the primary's reclaim are in it
+	// in the order they happened, with nothing else mixed in.
+	stored := harness.MachineEvents(t, node)
+	var acquisitions []string
+	for _, event := range stored {
+		require.Equal(t, "machine", event.Scope,
+			"the machine's store holds machine-scoped events and nothing else, whichever package stated them")
+		if event.Type == "platform.redundancy.ownership_acquired" {
+			acquisitions = append(acquisitions, event.Origin.ProcessRole)
+		}
+	}
+	require.Equal(t, []string{"primary", "standby", "primary"}, acquisitions,
+		"one file holds the whole handover: the primary owned, the standby took over when it died, and the primary took it back")
+
+	// Nothing an instance said about itself reached it. The process starting,
+	// binding, and stopping are that process's own story and stay in its record.
+	instanceRecord, err := os.ReadFile(node.Sockets.EventsFile)
+	require.NoError(t, err)
+	require.Contains(t, string(instanceRecord), `"platform.app.process_started"`,
+		"the instance's own record holds what that process did")
+	for _, event := range stored {
+		require.NotContains(t, event.Type, "platform.app.",
+			"a fact about one process is not a fact about the machine")
+	}
+
 	// The epochs tell the same story as a pair of counters that outlive the
 	// processes. The standby never restarted, so its two incarnations are its
 	// process and the failover it served through. The primary was killed and came

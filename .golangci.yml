@@ -13,6 +13,7 @@ linters:
     - errorlint
     - nilnil
     - copyloopvar
+    - depguard      # level dependency rule of the Site -> Machine -> Instance hierarchy
     - gocyclo
     - exhaustive    # exhaustive handling of enum values in switch/select
     - goconst       # repeated string literals that should be constants
@@ -29,6 +30,52 @@ linters:
     - unparam       # function parameters that never vary across callers
 
   settings:
+    depguard:
+      # The level dependency rule of the Site -> Machine -> Instance hierarchy:
+      # a higher level may import a lower level, never the reverse, and the
+      # abstract event contract (platform/internal/events) is importable by
+      # everyone and imports no level.
+      #
+      # Each rule denies the levels *above* the files it matches, so the rule is
+      # structural: it is keyed on directory, applies to packages that do not
+      # exist yet, and covers _test.go files, which .go-arch-lint.yml excludes by
+      # configuration. go-arch-lint remains the per-package allow-list — the two
+      # answer different questions, and its "not attached to any component"
+      # error is what catches a new package nobody has classified.
+      #
+      # platform/internal/app and platform/internal/httpapi have no rule on
+      # purpose. app is the composition root, where publishers, stores, and
+      # consumers of all three levels are wired together, and httpapi is the
+      # HTTP edge. Both sit at no level, so neither can reverse one.
+      #
+      # "May import" is permission, not encouragement: site reaching into
+      # machine internals should stay rare and deliberate, and the common shared
+      # surface is platform/internal/events.
+      rules:
+        events-level:
+          files:
+            - "**/platform/internal/events/**"
+          deny:
+            - pkg: github.com/miroslav-matejovsky/opdl/platform/internal/instance
+              desc: the abstract event contract owns no level and must stay importable by all of them
+            - pkg: github.com/miroslav-matejovsky/opdl/platform/internal/machine
+              desc: the abstract event contract owns no level and must stay importable by all of them
+            - pkg: github.com/miroslav-matejovsky/opdl/platform/internal/site
+              desc: the abstract event contract owns no level and must stay importable by all of them
+        instance-level:
+          files:
+            - "**/platform/internal/instance/**"
+          deny:
+            - pkg: github.com/miroslav-matejovsky/opdl/platform/internal/machine
+              desc: instance is below machine; publish a fact through platform/internal/events instead
+            - pkg: github.com/miroslav-matejovsky/opdl/platform/internal/site
+              desc: instance is below site; publish a fact through platform/internal/events instead
+        machine-level:
+          files:
+            - "**/platform/internal/machine/**"
+          deny:
+            - pkg: github.com/miroslav-matejovsky/opdl/platform/internal/site
+              desc: machine is below site; publish a fact through platform/internal/events instead
     exhaustive:
       default-signifies-exhaustive: true
     gocyclo:

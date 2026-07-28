@@ -5,15 +5,18 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/applog"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/eventstore"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 
@@ -45,6 +48,41 @@ func Run(args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	// The application log is opened first, so every later failure to open
+	// something has somewhere to be described. It is closed last, by the deferred
+	// close below, after every other deferred stop has run and written what it had
+	// to say.
+	//
+	// Its two base attributes are the process's identity. They are stamped here so
+	// no call site repeats them and none can claim to be a different instance,
+	// which is the same reason the event factory stamps origin.
+	logger, err := applog.Open(instanceOf(descriptor, role).LogFile,
+		slog.String("machine", descriptor.Machine),
+		slog.String("instance", role.String()),
+	)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, logger.Close()) }()
+	// Registered after the close, so it runs before it: how this process ended is
+	// in the instance's own log file, not only on the stream of a service nobody
+	// is watching. It is stated either way, so a log that stops without one is a
+	// process that was killed rather than one that left. A failure to close the
+	// log is the one thing that cannot be logged, and it is joined onto the
+	// outcome above instead.
+	defer func() {
+		if runErr != nil {
+			logger.Error("platform stopped with an error", "error", runErr.Error())
+			return
+		}
+		logger.Info("platform stopped")
+	}()
+	// Packages below the composition root log through the default logger rather
+	// than through one this process hands them. They state facts through the
+	// publisher they were given; a diagnostic message is not a fact, and threading
+	// a logger through every one of them to carry it would say it was.
+	slog.SetDefault(logger.Logger)
+
 	// One factory per process stamps everything this process states, locally and
 	// into the site journal, so origin and occurrence identity are decided once
 	// and never by a caller.
@@ -56,13 +94,27 @@ func Run(args []string) (runErr error) {
 	// does, and it is mandatory: every fact the process states has to reach it,
 	// including the ones about failing to start. It is opened here rather than
 	// with the site because it has to outlive every site the process composes.
-	record, err := jsonl.New(instanceOf(descriptor, role).EventsFile)
+	record, err := eventlog.New(instanceOf(descriptor, role).EventsFile)
 	if err != nil {
 		return err
 	}
-	local, err := storage.NewPublisher(factory, record)
+	// The machine's shared store is opened next, and for the whole process rather
+	// than inside the active composition: a machine fact does not wait for a
+	// composition to exist before it happens, and ownership moving is stated by
+	// the ownership machine, which runs across both states. Only the instance
+	// that owns the machine has a machine-scoped fact to state, so the two
+	// instances holding it open at once is not two writers.
+	machineStore, err := eventstore.Open(descriptor.MachineEventsFile)
 	if err != nil {
 		return errors.Join(err, record.Close(context.Background()))
+	}
+	// One publisher, two backends, sorted per envelope: the instance's record
+	// takes everything this process states, and the machine's store takes the
+	// machine-scoped ones out of that same flow. Which package stated an event
+	// does not decide where it lands; its scope does.
+	local, err := storage.NewPublisher(factory, record, eventstore.NewBackend(machineStore))
+	if err != nil {
+		return errors.Join(err, machineStore.Close(context.Background()), record.Close(context.Background()))
 	}
 	// Closing the process publisher closes the record, and it happens last, after
 	// every site has released and every other deferred stop has run.
@@ -102,6 +154,20 @@ func Run(args []string) (runErr error) {
 	// changing hands.
 	fmt.Printf("    epoch        %d (starts %d, activations %d) %s\n",
 		incarnation.Epoch, incarnation.ProcessEpoch.Count, incarnation.ActivationEpoch.Count, stateStore.Path())
+	// The block above is for a person watching a process start. This is the same
+	// startup for whoever reads the log file afterwards: the block is not repeated
+	// into it, because a wrapped multi-line dump is worse to read as one record
+	// than the fields it was rendered from.
+	logger.Info("platform starting",
+		"service", serviceName,
+		"api_address", instanceOf(descriptor, role).APIAddress,
+		"standby_enabled", descriptor.HasStandby(),
+		"epoch", incarnation.Epoch,
+		"events_file", record.Path(),
+		"machine_events_file", machineStore.Path(),
+		"state_file", stateStore.Path(),
+		"log_file", logger.Path(),
+	)
 
 	// os.Interrupt is the only signal Windows delivers: the runtime raises it for
 	// CTRL_C_EVENT and CTRL_BREAK_EVENT, which is how the service manager and the
@@ -118,13 +184,15 @@ func Run(args []string) (runErr error) {
 		local:      local,
 		record:     record,
 		state:      stateStore,
+		log:        logger.Logger,
 	}
 
 	if err := local.Publish(ctx, ProcessStarted{
-		EventsFile:     record.Path(),
-		StateFile:      stateStore.Path(),
-		Epoch:          incarnation.Epoch,
-		StandbyEnabled: descriptor.HasStandby(),
+		EventsFile:        record.Path(),
+		MachineEventsFile: machineStore.Path(),
+		StateFile:         stateStore.Path(),
+		Epoch:             incarnation.Epoch,
+		StandbyEnabled:    descriptor.HasStandby(),
 	}); err != nil {
 		return err
 	}

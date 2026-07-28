@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 )
 
@@ -86,6 +86,12 @@ func TestApplicationEventsDeclareTheirContract(t *testing.T) {
 			want:     events.SeverityError,
 		},
 	}
+	// The scope assertion below goes through a real stamper rather than asking
+	// the event, because what this catalog claims is that it declares no scope at
+	// all: reading the default back off a stamped envelope is what proves the
+	// silence resolves the way the catalog header says it does.
+	factory, err := events.NewFactory(testDescriptor, "primary")
+	require.NoError(t, err)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.wantType, test.event.EventType())
@@ -98,6 +104,11 @@ func TestApplicationEventsDeclareTheirContract(t *testing.T) {
 				severity = severe.Severity()
 			}
 			require.Equal(t, test.want, severity)
+
+			envelope, err := factory.Wrap(t.Context(), test.event)
+			require.NoError(t, err)
+			require.Equal(t, events.ScopeInstance, envelope.Scope,
+				"every fact in this catalog is about one process, so none of them leaves it")
 		})
 	}
 }
@@ -124,14 +135,15 @@ func TestApplicationEventsAreStampedIntoValidEnvelopes(t *testing.T) {
 	require.Equal(t, "primary", waiting.Origin.ProcessRole)
 
 	started, err := factory.Wrap(t.Context(), ProcessStarted{
-		EventsFile: `D:\opdl\events\events.jsonl`,
-		StateFile:  `D:\opdl\state.json`,
-		Epoch:      3,
+		EventsFile:        `D:\opdl\events\events.jsonl`,
+		MachineEventsFile: `D:\opdl\events\machine-events.jsonl`,
+		StateFile:         `D:\opdl\state.json`,
+		Epoch:             3,
 	})
 	require.NoError(t, err)
 	require.NoError(t, started.Validate())
-	require.JSONEq(t, `{"events_file":"D:\\opdl\\events\\events.jsonl","state_file":"D:\\opdl\\state.json","epoch":3,"standby_enabled":false}`, string(started.Data),
-		"a started process names both local files and which incarnation of the instance it is")
+	require.JSONEq(t, `{"events_file":"D:\\opdl\\events\\events.jsonl","machine_events_file":"D:\\opdl\\events\\machine-events.jsonl","state_file":"D:\\opdl\\state.json","epoch":3,"standby_enabled":false}`, string(started.Data),
+		"a started process names every file it opened before it could state anything, and which incarnation of the instance it is")
 
 	// The epoch facts carry the counter and why it moved, so a reader of the
 	// record can order incarnations without holding the state file open.

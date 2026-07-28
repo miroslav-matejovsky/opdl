@@ -101,8 +101,9 @@ func TestLeaseReleaseFreesTheGrantForThePeer(t *testing.T) {
 	require.Equal(t, leaseHeld, avail, "a valid grant is not promotable")
 	require.Equal(t, RolePrimary, owner)
 
-	require.NoError(t, holder.release())
+	require.NoError(t, holder.release(now))
 	require.False(t, holder.Held())
+	require.Equal(t, now, holder.handedOverAt(), "the handover is timed, so the releaser can leave it alone")
 
 	avail, owner, err = standby.observe(now)
 	require.NoError(t, err)
@@ -172,5 +173,6 @@ func TestOpenLeaseWithNoFileIsNilAndActiveByConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, acquired.Held)
 	require.NoError(t, lease.renew(time.Now()))
-	require.NoError(t, lease.release())
+	require.NoError(t, lease.release(time.Now()))
+	require.Zero(t, lease.handedOverAt(), "a standby-less machine never hands anything over")
 }

@@ -3,78 +3,81 @@ project "customer-a" {
 
   site "north" {
     machine "sensor" {
-      profile  = "sensor-node"
-      ip       = "10.0.1.10"
-      services = ["sensor-services"]
+      profile         = "sensor-node"
+      ip              = "10.0.1.10"
+      services        = ["sensor-services"]
+      eventstore_file = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
 
-      # Every platform block is mandatory. The blocks directly under platform are
-      # the Primary Instance's; standby is the Standby Instance's. This machine
-      # opts out of a standby, so it states that and authors nothing further.
-      platform {
-        events_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/north/sensor/primary/state.json"
+      primary {
+        eventlog_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
+        state_file    = "D:/opdl/customer-a/north/sensor/primary/state.json"
+        log_file      = "D:/opdl/customer-a/north/sensor/primary/platform.log"
 
         api {
-          local_port = 8080
+          local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
         }
 
         winservice {
-          name = "opdl-customer-a-north-sensor-primary"
+          name         = "opdl-customer-a-north-sensor-primary"
+          display_name = "OPDL customer-a north sensor (Primary Instance)"
+          description  = "OPDL platform Primary Instance for machine sensor."
         }
+      }
 
-        standby {
-          disabled = true
-        }
+      standby {
+        disabled = true
       }
     }
 
     machine "local-server" {
-      profile  = "local-server"
-      ip       = "10.0.1.11"
-      services = ["core-services"]
+      profile         = "local-server"
+      ip              = "10.0.1.11"
+      services        = ["core-services"]
+      eventstore_file = "D:/opdl/customer-a/north/local-server/machine-events.jsonl"
 
-      # This machine deploys both instances. They run together on one host, so
-      # every port below is distinct: nothing is shared between them except the
-      # ownership object, which is not a port.
-      platform {
-        events_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/north/local-server/primary/state.json"
+      primary {
+        eventlog_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
+        state_file    = "D:/opdl/customer-a/north/local-server/primary/state.json"
+        log_file      = "D:/opdl/customer-a/north/local-server/primary/platform.log"
 
         api {
-          local_port = 8080
+          local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
         }
 
         winservice {
-          name = "opdl-customer-a-north-local-server-primary"
+          name         = "opdl-customer-a-north-local-server-primary"
+          display_name = "OPDL customer-a north local-server (Primary Instance)"
+        }
+      }
+
+      standby {
+        disabled      = false
+        eventlog_file = "D:/opdl/customer-a/north/local-server/standby/events.jsonl"
+        state_file    = "D:/opdl/customer-a/north/local-server/standby/state.json"
+        log_file      = "D:/opdl/customer-a/north/local-server/standby/platform.log"
+
+        lease {
+          file                   = "D:/opdl/customer-a/north/local-server/lease"
+          duration               = "15s"
+          renewal_interval       = "5s"
+          health_check_interval  = "2s"
+          failback_stabilization = "30s"
+          lag_bound              = "30s"
         }
 
-        standby {
-          disabled    = false
-          events_file = "D:/opdl/customer-a/north/local-server/standby/events.jsonl"
-          state_file  = "D:/opdl/customer-a/north/local-server/standby/state.json"
+        api {
+          local_port          = 8081
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
+        }
 
-          lease {
-            file                   = "D:/opdl/customer-a/north/local-server/lease"
-            duration               = "15s"
-            renewal_interval       = "5s"
-            health_check_interval  = "2s"
-            failback_stabilization = "30s"
-            lag_bound              = "30s"
-          }
-
-          api {
-            local_port = 8081
-            read_header_timeout = "5s"
-            shutdown_timeout    = "10s"
-          }
-
-          winservice {
-            name = "opdl-customer-a-north-local-server-standby"
-          }
+        winservice {
+          name         = "opdl-customer-a-north-local-server-standby"
+          display_name = "OPDL customer-a north local-server (Standby Instance)"
         }
       }
     }
@@ -82,136 +85,154 @@ project "customer-a" {
 
   site "control-room" {
     machine "master" {
-      profile  = "master-server"
-      ip       = "10.0.2.10"
-      services = ["core-services"]
-      platform {
-        events_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/master/primary/state.json"
+      profile         = "master-server"
+      ip              = "10.0.2.10"
+      services        = ["core-services"]
+      eventstore_file = "D:/opdl/customer-a/control-room/master/machine-events.jsonl"
+
+      primary {
+        eventlog_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
+        state_file    = "D:/opdl/customer-a/control-room/master/primary/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/master/primary/platform.log"
 
         api {
-          local_port = 8080
+          local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
         }
 
         winservice {
-          name = "opdl-customer-a-control-room-master-primary"
+          name         = "opdl-customer-a-control-room-master-primary"
+          display_name = "OPDL customer-a control-room master (Primary Instance)"
+        }
+      }
+
+      standby {
+        disabled      = false
+        eventlog_file = "D:/opdl/customer-a/control-room/master/standby/events.jsonl"
+        state_file    = "D:/opdl/customer-a/control-room/master/standby/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/master/standby/platform.log"
+
+        lease {
+          file                   = "D:/opdl/customer-a/control-room/master/lease"
+          duration               = "15s"
+          renewal_interval       = "5s"
+          health_check_interval  = "2s"
+          failback_stabilization = "30s"
+          lag_bound              = "30s"
         }
 
-        standby {
-          disabled    = false
-          events_file = "D:/opdl/customer-a/control-room/master/standby/events.jsonl"
-          state_file  = "D:/opdl/customer-a/control-room/master/standby/state.json"
+        api {
+          local_port          = 8081
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
+        }
 
-          lease {
-            file                   = "D:/opdl/customer-a/control-room/master/lease"
-            duration               = "15s"
-            renewal_interval       = "5s"
-            health_check_interval  = "2s"
-            failback_stabilization = "30s"
-            lag_bound              = "30s"
-          }
-
-          api {
-            local_port = 8081
-            read_header_timeout = "5s"
-            shutdown_timeout    = "10s"
-          }
-
-          winservice {
-            name = "opdl-customer-a-control-room-master-standby"
-          }
+        winservice {
+          name         = "opdl-customer-a-control-room-master-standby"
+          display_name = "OPDL customer-a control-room master (Standby Instance)"
         }
       }
     }
 
     machine "slave" {
-      profile  = "slave-server"
-      ip       = "10.0.2.11"
-      services = ["core-services"]
-      platform {
-        events_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/slave/primary/state.json"
+      profile         = "slave-server"
+      ip              = "10.0.2.11"
+      services        = ["core-services"]
+      eventstore_file = "D:/opdl/customer-a/control-room/slave/machine-events.jsonl"
+
+      primary {
+        eventlog_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
+        state_file    = "D:/opdl/customer-a/control-room/slave/primary/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/slave/primary/platform.log"
 
         api {
-          local_port = 8080
+          local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
         }
 
         winservice {
-          name = "opdl-customer-a-control-room-slave-primary"
+          name         = "opdl-customer-a-control-room-slave-primary"
+          display_name = "OPDL customer-a control-room slave (Primary Instance)"
+        }
+      }
+
+      standby {
+        disabled      = false
+        eventlog_file = "D:/opdl/customer-a/control-room/slave/standby/events.jsonl"
+        state_file    = "D:/opdl/customer-a/control-room/slave/standby/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/slave/standby/platform.log"
+
+        lease {
+          file                   = "D:/opdl/customer-a/control-room/slave/lease"
+          duration               = "15s"
+          renewal_interval       = "5s"
+          health_check_interval  = "2s"
+          failback_stabilization = "30s"
+          lag_bound              = "30s"
         }
 
-        standby {
-          disabled    = false
-          events_file = "D:/opdl/customer-a/control-room/slave/standby/events.jsonl"
-          state_file  = "D:/opdl/customer-a/control-room/slave/standby/state.json"
+        api {
+          local_port          = 8081
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
+        }
 
-          lease {
-            file                   = "D:/opdl/customer-a/control-room/slave/lease"
-            duration               = "15s"
-            renewal_interval       = "5s"
-            health_check_interval  = "2s"
-            failback_stabilization = "30s"
-            lag_bound              = "30s"
-          }
-
-          api {
-            local_port = 8081
-            read_header_timeout = "5s"
-            shutdown_timeout    = "10s"
-          }
-
-          winservice {
-            name = "opdl-customer-a-control-room-slave-standby"
-          }
+        winservice {
+          name         = "opdl-customer-a-control-room-slave-standby"
+          display_name = "OPDL customer-a control-room slave (Standby Instance)"
         }
       }
     }
 
     machine "integration" {
-      profile  = "integration-server"
-      ip       = "10.0.2.12"
-      services = ["integration-services"]
-      platform {
-        events_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/integration/primary/state.json"
+      profile         = "integration-server"
+      ip              = "10.0.2.12"
+      services        = ["integration-services"]
+      eventstore_file = "D:/opdl/customer-a/control-room/integration/machine-events.jsonl"
+
+      primary {
+        eventlog_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
+        state_file    = "D:/opdl/customer-a/control-room/integration/primary/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/integration/primary/platform.log"
 
         api {
-          local_port = 8080
+          local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
         }
 
         winservice {
-          name = "opdl-customer-a-control-room-integration-primary"
+          name         = "opdl-customer-a-control-room-integration-primary"
+          display_name = "OPDL customer-a control-room integration (Primary Instance)"
+        }
+      }
+
+      standby {
+        disabled      = false
+        eventlog_file = "D:/opdl/customer-a/control-room/integration/standby/events.jsonl"
+        state_file    = "D:/opdl/customer-a/control-room/integration/standby/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/integration/standby/platform.log"
+
+        lease {
+          file                   = "D:/opdl/customer-a/control-room/integration/lease"
+          duration               = "15s"
+          renewal_interval       = "5s"
+          health_check_interval  = "2s"
+          failback_stabilization = "30s"
+          lag_bound              = "30s"
         }
 
-        standby {
-          disabled    = false
-          events_file = "D:/opdl/customer-a/control-room/integration/standby/events.jsonl"
-          state_file  = "D:/opdl/customer-a/control-room/integration/standby/state.json"
+        api {
+          local_port          = 8081
+          read_header_timeout = "5s"
+          shutdown_timeout    = "10s"
+        }
 
-          lease {
-            file                   = "D:/opdl/customer-a/control-room/integration/lease"
-            duration               = "15s"
-            renewal_interval       = "5s"
-            health_check_interval  = "2s"
-            failback_stabilization = "30s"
-            lag_bound              = "30s"
-          }
-
-          api {
-            local_port = 8081
-            read_header_timeout = "5s"
-            shutdown_timeout    = "10s"
-          }
-
-          winservice {
-            name = "opdl-customer-a-control-room-integration-standby"
-          }
+        winservice {
+          name         = "opdl-customer-a-control-room-integration-standby"
+          display_name = "OPDL customer-a control-room integration (Standby Instance)"
         }
       }
     }

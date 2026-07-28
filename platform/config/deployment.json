@@ -9,6 +9,7 @@
   "services": [
     "core-services"
   ],
+  "machine_events_file": ".data/platform/machine-events.jsonl",
   "primary": {
     "service": {
       "name": "opdl-mock-local-mock-primary",
@@ -16,6 +17,7 @@
     },
     "events_file": ".data/platform/primary/events.jsonl",
     "state_file": ".data/platform/primary/state.json",
+    "log_file": ".data/platform/primary/platform.log",
     "api_address": "127.0.0.1:8080",
     "api_read_header_timeout": "5s",
     "api_shutdown_timeout": "10s"

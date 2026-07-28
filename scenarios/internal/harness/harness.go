@@ -88,16 +88,21 @@ var projectFixtures = map[string][]machineFixture{
 type renderedMachine struct {
 	Name string
 	IP   string
+	// MachineEventsFile is the machine's own event store, shared by both of its
+	// instances. Every machine authors one, standby or not.
+	MachineEventsFile string
 	// The Primary Instance's port and local files.
 	APIPort    int
 	EventsFile string
 	StateFile  string
+	LogFile    string
 	// The Standby Instance's, empty or zero when the machine deploys none. The
 	// two instances run together on one host, so every one of these is its own
 	// listener or file and none may repeat.
 	StandbyAPIPort    int
 	StandbyEventsFile string
 	StandbyStateFile  string
+	StandbyLogFile    string
 	StandbyDisabled   bool
 	// LeaseFile is the machine-wide Primary Ownership lease file both instances
 	// share, set only when the machine deploys a standby.
@@ -256,6 +261,19 @@ func stateFileFor(workDir, machine, role string) string {
 	return instanceDirFor(workDir, machine, role) + "/state.json"
 }
 
+// logFileFor is one instance's structured application log: what the process said
+// it was doing, beside the events file, which is what it stated.
+func logFileFor(workDir, machine, role string) string {
+	return instanceDirFor(workDir, machine, role) + "/platform.log"
+}
+
+// machineEventsFileFor is a machine's own event store: the file both of its
+// instances append machine-scoped events to. Every machine has one, standby or
+// not, so it sits beside the lease rather than with an instance's files.
+func machineEventsFileFor(workDir, machine string) string {
+	return filepath.ToSlash(filepath.Join(workDir, "data-"+machine, "machine-events.jsonl"))
+}
+
 // leaseFileFor is a machine's Primary Ownership lease file, shared by its two
 // instances and by nothing else.
 func leaseFileFor(workDir, machine string) string {
@@ -289,17 +307,20 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 
 	for _, fixture := range fixtures {
 		machine := renderedMachine{
-			Name:            fixture.name,
-			IP:              fixture.ip,
-			APIPort:         takeAPIPort(),
-			EventsFile:      eventsFileFor(workDir, fixture.name, RolePrimary),
-			StateFile:       stateFileFor(workDir, fixture.name, RolePrimary),
-			StandbyDisabled: fixture.standbyDisabled,
+			Name:              fixture.name,
+			IP:                fixture.ip,
+			MachineEventsFile: machineEventsFileFor(workDir, fixture.name),
+			APIPort:           takeAPIPort(),
+			EventsFile:        eventsFileFor(workDir, fixture.name, RolePrimary),
+			StateFile:         stateFileFor(workDir, fixture.name, RolePrimary),
+			LogFile:           logFileFor(workDir, fixture.name, RolePrimary),
+			StandbyDisabled:   fixture.standbyDisabled,
 		}
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
 			machine.StandbyEventsFile = eventsFileFor(workDir, fixture.name, RoleStandby)
 			machine.StandbyStateFile = stateFileFor(workDir, fixture.name, RoleStandby)
+			machine.StandbyLogFile = logFileFor(workDir, fixture.name, RoleStandby)
 			machine.LeaseFile = leaseFileFor(workDir, fixture.name)
 		}
 		data.Machines = append(data.Machines, machine)
@@ -399,11 +420,21 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 // There is no monitor address. Each instance's event record is the local
 // operational surface.
 type Sockets struct {
+	// MachineEventsFile is the machine's own event store, which both instances
+	// append machine-scoped events to. It is the machine's rather than an
+	// instance's, so a scenario reads the machine's account of a failover from
+	// one file instead of stitching two instances' records together.
+	MachineEventsFile string
+
 	EventsFile string
 	StateFile  string
+	// LogFile is the instance's structured application log, which a failing
+	// scenario dumps beside the events its machine stated.
+	LogFile string
 	// The Standby Instance's own, empty on a machine that deploys no standby.
 	StandbyEventsFile string
 	StandbyStateFile  string
+	StandbyLogFile    string
 
 	// API and StandbyAPI are the blueprint's, for reaching a machine and for
 	// assertions.
@@ -442,10 +473,13 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	for _, fixture := range fixtures {
 		reserved := endpoints[fixture.name]
 		sockets := Sockets{
+			// The machine's own store, matching the path authored in the blueprint.
+			MachineEventsFile: filepath.FromSlash(machineEventsFileFor(workDir, fixture.name)),
 			// The Primary Instance's own local files, matching the paths authored
 			// in the blueprint.
 			EventsFile: filepath.FromSlash(eventsFileFor(workDir, fixture.name, RolePrimary)),
 			StateFile:  filepath.FromSlash(stateFileFor(workDir, fixture.name, RolePrimary)),
+			LogFile:    filepath.FromSlash(logFileFor(workDir, fixture.name, RolePrimary)),
 			// The API address the builder resolved: this machine's authored
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
 			// than at an address it chose, because it no longer chooses one.
@@ -454,6 +488,7 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 		if !fixture.standbyDisabled {
 			sockets.StandbyEventsFile = filepath.FromSlash(eventsFileFor(workDir, fixture.name, RoleStandby))
 			sockets.StandbyStateFile = filepath.FromSlash(stateFileFor(workDir, fixture.name, RoleStandby))
+			sockets.StandbyLogFile = filepath.FromSlash(logFileFor(workDir, fixture.name, RoleStandby))
 			sockets.StandbyAPI = net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.standbyAPIPort))
 		}
 		s.Machines = append(s.Machines, prepareMachine(t, s, fixture.name, sockets))
@@ -599,7 +634,9 @@ func WaitFor(t *testing.T, what string, timeout, interval time.Duration, cond fu
 // operationEvents reads each deployed instance's canonical JSONL event record.
 // Restarts append to the same per-instance file.
 func operationEvents(m *Machine) string {
-	paths := []string{m.Sockets.EventsFile}
+	// The machine's own store comes first: on a failure that involves ownership
+	// it is the one file that holds both instances' side of it.
+	paths := []string{m.Sockets.MachineEventsFile, m.Sockets.EventsFile}
 	if m.Sockets.StandbyEventsFile != "" {
 		paths = append(paths, m.Sockets.StandbyEventsFile)
 	}
@@ -619,6 +656,79 @@ func operationEvents(m *Machine) string {
 		return "(none)\n"
 	}
 	return b.String()
+}
+
+// StoredEvent is the part of a stored envelope a scenario asserts on: what
+// happened, which level it belongs to, and which instance stated it.
+//
+// It is declared here rather than imported from the platform so a scenario reads
+// the shipped file as a black box, the same way an operator's tooling would.
+type StoredEvent struct {
+	Type   string `json:"type"`
+	Scope  string `json:"scope"`
+	Origin struct {
+		ProcessRole string `json:"process_role"`
+	} `json:"origin"`
+}
+
+// MachineEvents reads a machine's own event store: the file both of its
+// instances append machine-scoped events to, in the order they were appended.
+//
+// The store is append-only and nothing in the platform reads it back, so this
+// is the reader it is written for — an assertion, or an operator, opening a
+// JSON Lines file.
+func MachineEvents(t *testing.T, m *Machine) []StoredEvent {
+	t.Helper()
+	data, err := os.ReadFile(m.Sockets.MachineEventsFile)
+	require.NoError(t, err, "the machine's own event store is opened at startup, so it exists")
+
+	var stored []StoredEvent
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event StoredEvent
+		require.NoErrorf(t, json.Unmarshal([]byte(line), &event), "machine store line does not decode: %s", line)
+		stored = append(stored, event)
+	}
+	return stored
+}
+
+// LogRecord is the part of an application log line a scenario asserts on: what
+// the process said, at which level, and which instance said it.
+//
+// It is declared here rather than imported from the platform because the log
+// file is read as a black box, the same way an operator's tooling would read it.
+type LogRecord struct {
+	Level    string `json:"level"`
+	Message  string `json:"msg"`
+	Machine  string `json:"machine"`
+	Instance string `json:"instance"`
+}
+
+// ApplicationLog reads one instance's structured application log.
+//
+// It is a different file from the instance's event record and answers a
+// different question: the event record is what the instance stated, and this is
+// what the process was doing. Nothing in the platform reads it back, so this is
+// the reader it is written for.
+func ApplicationLog(t *testing.T, path string) []LogRecord {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoErrorf(t, err, "the instance opens its application log at startup, so %s exists", path)
+
+	var records []LogRecord
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var record LogRecord
+		require.NoErrorf(t, json.Unmarshal([]byte(line), &record), "application log line does not decode: %s", line)
+		records = append(records, record)
+	}
+	return records
 }
 
 // InstanceEpochs is what an instance's state file says about its incarnations:

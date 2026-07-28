@@ -32,6 +32,15 @@ type Descriptor struct {
 	IP string `json:"ip"`
 	// Services are the service groups this machine hosts.
 	Services []string `json:"services"`
+	// MachineEventsFile is the machine's own append-only event store: the shared
+	// file both of its instances append machine-scoped events to.
+	//
+	// It is the machine's, like the lease, and unlike the lease it is present on
+	// every machine. A machine that deploys one instance still has machine facts
+	// — which instance owns it, how each activation ended — and they belong in
+	// the machine's file rather than in whichever instance happened to state
+	// them.
+	MachineEventsFile string `json:"machine_events_file"`
 	// Primary is the machine's Primary Instance. It is mandatory: a machine with
 	// no Primary Instance would deploy nothing that can serve.
 	Primary Instance `json:"primary"`
@@ -167,6 +176,14 @@ type Instance struct {
 	// by exactly one every time the process starts and every time the instance
 	// becomes Active.
 	StateFile string `json:"state_file"`
+	// LogFile is the instance's own structured application log: the file its slog
+	// records are appended to.
+	//
+	// It is beside EventsFile rather than part of it because the two are different
+	// records. The event log carries the facts the instance stated, which other
+	// levels consume and tooling asserts on; the application log carries what the
+	// process was doing, which only a human reads.
+	LogFile string `json:"log_file"`
 	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
 	// the instance's authored api local_port.
 	//
@@ -232,6 +249,9 @@ func (d Descriptor) Validate() error {
 	if len(d.Services) == 0 {
 		return fmt.Errorf("at least one service is required")
 	}
+	if strings.TrimSpace(d.MachineEventsFile) == "" {
+		return fmt.Errorf("machine_events_file is required")
+	}
 	if !d.HasStandby() {
 		if d.Lease != nil {
 			return fmt.Errorf("lease is set but no standby is deployed; omit lease when standby is absent")
@@ -242,7 +262,10 @@ func (d Descriptor) Validate() error {
 	if err := d.validateServices(); err != nil {
 		return err
 	}
-	return d.validateEndpoints()
+	if err := d.validateEndpoints(); err != nil {
+		return err
+	}
+	return d.validateLocalFiles()
 }
 
 // validateServices checks each instance's Windows Service identity is present
@@ -294,24 +317,44 @@ func (d Descriptor) validateEndpoints() error {
 	if err := validateInstanceEndpoints("standby", *d.Standby); err != nil {
 		return err
 	}
-	// Every local file belongs to exactly one instance. The two run together on
-	// one host, so a path resolved onto both is two runtimes writing one file.
-	taken := map[string]string{}
-	for _, f := range []struct{ where, path string }{
+	if d.Primary.APIAddress == d.Standby.APIAddress {
+		return fmt.Errorf("primary.api_address and standby.api_address are both %q; the two instances run together and cannot share a listener",
+			d.Primary.APIAddress)
+	}
+	return nil
+}
+
+// validateLocalFiles checks every local file the machine resolved has its own
+// path.
+//
+// Each instance's files belong to that instance, and the two run together on one
+// host, so a path resolved onto both is two runtimes writing one file. The
+// machine's own store is in the same set: it is not an instance's file either,
+// and a machine that wrote its shared account into one instance's record would
+// lose it the moment that instance stopped being the one that owns the machine.
+func (d Descriptor) validateLocalFiles() error {
+	files := []struct{ where, path string }{
+		{"machine_events_file", d.MachineEventsFile},
 		{"primary.events_file", d.Primary.EventsFile},
 		{"primary.state_file", d.Primary.StateFile},
-		{"standby.events_file", d.Standby.EventsFile},
-		{"standby.state_file", d.Standby.StateFile},
-	} {
+		{"primary.log_file", d.Primary.LogFile},
+	}
+	if d.HasStandby() {
+		files = append(files,
+			struct{ where, path string }{"standby.events_file", d.Standby.EventsFile},
+			struct{ where, path string }{"standby.state_file", d.Standby.StateFile},
+			struct{ where, path string }{"standby.log_file", d.Standby.LogFile},
+			struct{ where, path string }{"lease.file", d.Lease.File},
+		)
+	}
+
+	taken := make(map[string]string, len(files))
+	for _, f := range files {
 		key := pathKey(f.path)
 		if owner, used := taken[key]; used {
 			return fmt.Errorf("%s and %s are both %q; every file an instance owns needs its own path", owner, f.where, f.path)
 		}
 		taken[key] = f.where
-	}
-	if d.Primary.APIAddress == d.Standby.APIAddress {
-		return fmt.Errorf("primary.api_address and standby.api_address are both %q; the two instances run together and cannot share a listener",
-			d.Primary.APIAddress)
 	}
 	return nil
 }
@@ -328,6 +371,9 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	}
 	if strings.TrimSpace(instance.StateFile) == "" {
 		return fmt.Errorf("%s.state_file is required", prefix)
+	}
+	if strings.TrimSpace(instance.LogFile) == "" {
+		return fmt.Errorf("%s.log_file is required", prefix)
 	}
 	if pathKey(instance.EventsFile) == pathKey(instance.StateFile) {
 		return fmt.Errorf("%s.events_file and %s.state_file are both %q; every file an instance owns needs its own path", prefix, prefix, instance.EventsFile)

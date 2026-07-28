@@ -4,16 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
@@ -36,22 +36,35 @@ type process struct {
 	started time.Time
 	// factory stamps every envelope this process produces, local or journalled.
 	factory events.Factory
-	// local is the process-local publisher. Its only backend is record, so a fact
-	// stated through it reaches the local append-only file and nothing else. It is
-	// what composition, ownership, and the transport adapter state through: all
-	// three describe a process that may have no journal to write to, and the
+	// local is the process-local publisher: the instance's own record, and the
+	// machine's shared store for the machine-scoped facts in the same flow. It
+	// reaches no site, so a fact stated through it never leaves this machine. It
+	// is what composition, ownership, and the transport adapter state through:
+	// all three describe a process that may have no journal to write to, and the
 	// transport adapter must never describe itself through itself.
+	//
+	// Sorting by scope happens inside it, in eventstore.Backend, rather than by
+	// a caller choosing a publisher. A caller states what happened; where a fact
+	// belongs is the fact's own property.
 	local events.Publisher
 	// record is the process's mandatory JSONL backend. A site borrows it as the
 	// first backend of its own fan-out publisher, so a journalled fact lands in
 	// the same local file in the same order as a local one. The process owns it
 	// and closes it; see storage.Borrowed.
-	record *jsonl.Backend
+	record *eventlog.Backend
 	// state is this instance's durable state file, carrying the epoch counter
 	// across restarts and crashes. Run advanced it once for this process; the
 	// active composition advances it again each time the instance takes ownership.
 	// There is nothing to close: every write is complete when it returns.
 	state *state.Store
+	// log is this process's application log, already stamped with the machine and
+	// the instance role. It is what the runtime says things through; what it
+	// states goes through local. A record here is for a person reading a failure,
+	// so nothing routes, consumes, or asserts on one.
+	//
+	// The process owns the open file behind it and closes it; this is a view on
+	// it. See internal/instance/applog.
+	log *slog.Logger
 }
 
 // monitorInterval is how often a running process re-reads its projection
@@ -200,7 +213,7 @@ func runProcess(ctx context.Context, proc process) (runErr error) {
 	// Whatever else happens, the listener drains before the process leaves.
 	defer func() { runErr = errors.Join(runErr, server.shutdown(proc.cfg.ShutdownTimeout(standby))) }()
 
-	fmt.Printf("platform: %s listening on %s\n", role, address)
+	proc.log.Info("listening", "address", address, "instance_state", api.InstanceStatePassive)
 	// A Passive instance is reachable too, and answers a different surface. Which
 	// one it is serving is the thing an operator is asking about.
 	if err := proc.local.Publish(ctx, APIListening{Address: address, InstanceState: api.InstanceStatePassive}); err != nil {
@@ -239,7 +252,7 @@ func runPassive(ctx context.Context, proc process) error {
 	// instance is already as current as it can be, and taking over costs it no
 	// catch-up. It waits for ownership and nothing else.
 	if !hasEventStorage(proc.descriptor, role) {
-		fmt.Printf("platform: %s waiting for Primary Ownership; this deployment has no event storage\n", role)
+		proc.log.Info("waiting for Primary Ownership", "reason", "this deployment has no event storage")
 		if err := proc.local.Publish(ctx, StandbyWaiting{}); err != nil {
 			return err
 		}
@@ -265,7 +278,7 @@ func runPassive(ctx context.Context, proc process) error {
 		return errors.Join(err, site.close(ctx))
 	}
 
-	fmt.Printf("platform: %s caught up and waiting for Primary Ownership\n", role)
+	proc.log.Info("waiting for Primary Ownership", "reason", "the projection is caught up")
 	if err := proc.local.Publish(ctx, StandbyWaiting{}); err != nil {
 		stopMonitor()
 		return errors.Join(err, <-monitorDone, site.close(context.WithoutCancel(ctx)))
@@ -291,7 +304,6 @@ func runPassive(ctx context.Context, proc process) error {
 // It returns ctx.Err() when the context ended first, which the caller reads as
 // "won ownership, or stopping" rather than as a failure.
 func openPassiveSite(ctx context.Context, proc process) (*site, error) {
-	role := proc.role
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -303,7 +315,8 @@ func openPassiveSite(ctx context.Context, proc process) (*site, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		fmt.Fprintf(os.Stderr, "platform: %s standby projection unavailable: %v; waiting for Primary Ownership\n", role, err)
+		proc.log.Warn("standby projection unavailable; waiting for Primary Ownership",
+			"attempt", attempt, "error", err.Error())
 		if attempt == 1 || attempt%10 == 0 {
 			if stateErr := proc.local.Publish(ctx, StandbyOpenRetry{Attempt: attempt, Error: err.Error()}); stateErr != nil {
 				return nil, errors.Join(err, stateErr)
@@ -326,9 +339,10 @@ func openPassiveSite(ctx context.Context, proc process) (*site, error) {
 func runActive(ctx context.Context, proc process, server *instanceServer, lease *redundancy.Lease, passive http.Handler, kind redundancy.ActivationKind) error {
 	cfg, descriptor, role := proc.cfg, proc.descriptor, proc.role
 	// That this instance is activating was stated by the ownership machine before
-	// it called this, so there is nothing to report here that is not already in
-	// the record.
-	fmt.Printf("platform: %s started for %s\n", kind, role)
+	// it called this, so there is no fact to state here that is not already in the
+	// record. The log record is not that fact: it is so a reader of this process's
+	// log sees the activation without opening the event record beside it.
+	proc.log.Info("activating", "activation", string(kind))
 
 	// Becoming Active is a new incarnation: from here this instance produces
 	// decisions and writes on the machine's behalf, and anything it writes must be
@@ -389,14 +403,14 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 		// exposeSpec is false: the authoritative OpenAPI artifact is
 		// api-specifications/openapi.yaml in git, not an endpoint on the runtime.
 		false))
-	fmt.Printf("platform: %s active, serving on %s\n", role, address)
+	proc.log.Info("active", "address", address, "instance_state", api.InstanceStateActive)
 	// An instance that cannot state that it is serving does not stay serving. The
 	// failure takes the place of the reason it would otherwise have stopped, and
 	// the ordered shutdown below runs on it exactly as it does on a signal, so the
 	// site still releases in the right order.
 	serveErr := proc.local.Publish(ctx, APIActive{Address: address, InstanceState: api.InstanceStateActive})
 	if serveErr == nil {
-		serveErr = awaitStop(serveCtx, site, server)
+		serveErr = awaitStop(serveCtx, proc.log, site, server)
 	}
 
 	// Reverse of startup: the Passive surface takes over the listener at once, so
@@ -446,7 +460,8 @@ func runActiveWithoutJournal(ctx context.Context, proc process, server *instance
 	server.serveWith(httpapi.NewJournallessHandler(func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStateActive)
 	}, proc.started, func() api.LeaseView { return leaseViewOf(lease) }))
-	fmt.Printf("platform: %s active, serving on %s (no event storage: domain operations are refused)\n", role, address)
+	proc.log.Info("active; domain operations are refused",
+		"address", address, "instance_state", api.InstanceStateActive, "reason", "this deployment has no event storage")
 
 	serveErr := proc.local.Publish(ctx, APIActive{Address: address, InstanceState: api.InstanceStateActive})
 	if serveErr == nil {
@@ -483,7 +498,7 @@ func runActiveWithoutJournal(ctx context.Context, proc process, server *instance
 // is what every query is answered from, so a node that stopped folding the
 // journal cannot answer for the site any more; serving on would mean quietly
 // returning a view the platform already knows is incomplete.
-func awaitStop(ctx context.Context, site *site, server *instanceServer) error {
+func awaitStop(ctx context.Context, log *slog.Logger, site *site, server *instanceServer) error {
 	select {
 	case err := <-server.stopped:
 		// The listener died without being asked to. Hand it back so shutdown does
@@ -491,7 +506,7 @@ func awaitStop(ctx context.Context, site *site, server *instanceServer) error {
 		server.stopped <- err
 		return listenError(err)
 	case <-site.stopped:
-		fmt.Fprintln(os.Stderr, "platform: the event fabric stopped carrying events; shutting down")
+		log.Error("the event fabric stopped carrying events; shutting down")
 	case <-ctx.Done():
 	}
 	return nil

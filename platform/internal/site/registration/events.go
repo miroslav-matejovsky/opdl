@@ -3,13 +3,10 @@ package registration
 import (
 	"slices"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
-// This file is the registration domain's event catalog: every fact this package
-// can state, and nothing else. Each event is a published contract,
-// self-contained enough that a reader reconstructs a registration from the
-// journal alone.
+// This file declares the registration event catalog:
 //
 //   - platform.registration.proposed: the origin proposes to register a unit.
 //   - platform.registration.confirmed: one expected node accepts the claiming
@@ -19,8 +16,8 @@ import (
 //   - platform.registration.accepted: the origin commits a fully confirmed
 //     proposal.
 //
-// The deterministic identities these payloads carry are derived in
-// identifiers.go.
+// Every event is site-scoped and also reaches the stating instance's event log.
+// Deterministic identities are derived in identifiers.go.
 
 // eventSource is the subsystem every event in this catalog comes from. It is
 // the middle token of every type below, which is where a reader gets it: no
@@ -84,6 +81,10 @@ func (Proposed) EventType() events.Type { return TypeProposed }
 // SchemaVersion returns the proposal payload schema version.
 func (Proposed) SchemaVersion() int { return schemaVersion }
 
+// Scope reports that the site owns the fact: every expected machine has to see
+// the proposal to decide on it.
+func (Proposed) Scope() events.Scope { return events.ScopeSite }
+
 // StableID returns the identity that makes a restated proposal the same fact.
 func (p Proposed) StableID() string { return "registration.proposal." + p.ProposalID }
 
@@ -106,6 +107,10 @@ func (Confirmed) EventType() events.Type { return TypeConfirmed }
 // SchemaVersion returns the decision payload schema version.
 func (Confirmed) SchemaVersion() int { return schemaVersion }
 
+// Scope reports that the site owns the fact: the origin commits only once every
+// expected machine's decision has reached it.
+func (Confirmed) Scope() events.Scope { return events.ScopeSite }
+
 // StableID returns the identity that makes a restated decision the same fact.
 func (c Confirmed) StableID() string { return "registration.decision." + c.DecisionID }
 
@@ -127,6 +132,10 @@ func (Rejected) EventType() events.Type { return TypeRejected }
 
 // SchemaVersion returns the decision payload schema version.
 func (Rejected) SchemaVersion() int { return schemaVersion }
+
+// Scope reports that the site owns the fact: a refusal decides the proposal for
+// every machine, not just for the one that refused.
+func (Rejected) Scope() events.Scope { return events.ScopeSite }
 
 // Severity marks the refusal as an operational anomaly rather than a routine
 // transition: a registration that does not happen is what an operator looks for.
@@ -159,6 +168,10 @@ func (Accepted) EventType() events.Type { return TypeAccepted }
 
 // SchemaVersion returns the acceptance payload schema version.
 func (Accepted) SchemaVersion() int { return schemaVersion }
+
+// Scope reports that the site owns the fact: the registration is now the whole
+// site's, and every machine builds its read model from it.
+func (Accepted) Scope() events.Scope { return events.ScopeSite }
 
 // StableID returns the identity that makes a restated acceptance the same fact.
 func (a Accepted) StableID() string { return "registration.acceptance." + a.ProposalID }

@@ -11,97 +11,112 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
 
 func TestRedundancyEventsDeclareTheirContract(t *testing.T) {
 	t.Parallel()
 
+	// wantScope is per row because this is the one catalog that straddles two
+	// levels: an owner's transitions belong to the machine, and a passive
+	// instance's own waiting and declining belong to the instance.
 	tests := []struct {
-		name     string
-		event    events.Event
-		wantType events.Type
-		want     events.Severity
-		wantJSON string
+		name      string
+		event     events.Event
+		wantType  events.Type
+		want      events.Severity
+		wantScope events.Scope
+		wantJSON  string
 	}{
 		{
-			name:     "lease opened",
-			event:    redundancy.LeaseOpened{File: "D:/opdl/lease"},
-			wantType: redundancy.TypeLeaseOpened,
-			want:     events.SeverityInfo,
-			wantJSON: `{"file":"D:/opdl/lease"}`,
+			name:      "lease opened",
+			event:     redundancy.LeaseOpened{File: "D:/opdl/lease"},
+			wantType:  redundancy.TypeLeaseOpened,
+			want:      events.SeverityInfo,
+			wantScope: events.ScopeInstance,
+			wantJSON:  `{"file":"D:/opdl/lease"}`,
 		},
 		{
-			name:     "ownership waiting",
-			event:    redundancy.OwnershipWaiting{File: "D:/opdl/lease"},
-			wantType: redundancy.TypeOwnershipWaiting,
-			want:     events.SeverityInfo,
-			wantJSON: `{"file":"D:/opdl/lease"}`,
+			name:      "ownership waiting",
+			event:     redundancy.OwnershipWaiting{File: "D:/opdl/lease"},
+			wantType:  redundancy.TypeOwnershipWaiting,
+			want:      events.SeverityInfo,
+			wantScope: events.ScopeInstance,
+			wantJSON:  `{"file":"D:/opdl/lease"}`,
 		},
 		{
-			name:     "ownership handed over",
-			event:    redundancy.OwnershipAcquired{File: "D:/opdl/lease"},
-			wantType: redundancy.TypeOwnershipAcquired,
-			want:     events.SeverityInfo,
-			wantJSON: `{"file":"D:/opdl/lease","abandoned":false}`,
+			name:      "ownership handed over",
+			event:     redundancy.OwnershipAcquired{File: "D:/opdl/lease"},
+			wantType:  redundancy.TypeOwnershipAcquired,
+			want:      events.SeverityInfo,
+			wantScope: events.ScopeMachine,
+			wantJSON:  `{"file":"D:/opdl/lease","abandoned":false}`,
 		},
 		{
-			name:     "ownership taken from a lapsed lease",
-			event:    redundancy.OwnershipAcquired{File: "D:/opdl/lease", Abandoned: true},
-			wantType: redundancy.TypeOwnershipAcquired,
-			want:     events.SeverityWarn,
-			wantJSON: `{"file":"D:/opdl/lease","abandoned":true}`,
+			name:      "ownership taken from a lapsed lease",
+			event:     redundancy.OwnershipAcquired{File: "D:/opdl/lease", Abandoned: true},
+			wantType:  redundancy.TypeOwnershipAcquired,
+			want:      events.SeverityWarn,
+			wantScope: events.ScopeMachine,
+			wantJSON:  `{"file":"D:/opdl/lease","abandoned":true}`,
 		},
 		{
-			name:     "promotion declined",
-			event:    redundancy.PromotionDeclined{Reason: "peer is healthy"},
-			wantType: redundancy.TypePromotionDeclined,
-			want:     events.SeverityInfo,
-			wantJSON: `{"reason":"peer is healthy"}`,
+			name:      "promotion declined",
+			event:     redundancy.PromotionDeclined{Reason: "peer is healthy"},
+			wantType:  redundancy.TypePromotionDeclined,
+			want:      events.SeverityInfo,
+			wantScope: events.ScopeInstance,
+			wantJSON:  `{"reason":"peer is healthy"}`,
 		},
 		{
-			name:     "lease renewal failed",
-			event:    redundancy.LeaseRenewalFailed{Error: "disk stalled"},
-			wantType: redundancy.TypeLeaseRenewalFailed,
-			want:     events.SeverityWarn,
-			wantJSON: `{"error":"disk stalled"}`,
+			name:      "lease renewal failed",
+			event:     redundancy.LeaseRenewalFailed{Error: "disk stalled"},
+			wantType:  redundancy.TypeLeaseRenewalFailed,
+			want:      events.SeverityWarn,
+			wantScope: events.ScopeInstance,
+			wantJSON:  `{"error":"disk stalled"}`,
 		},
 		{
-			name:     "stepped down",
-			event:    redundancy.SteppedDown{Reason: "ownership was taken over"},
-			wantType: redundancy.TypeSteppedDown,
-			want:     events.SeverityWarn,
-			wantJSON: `{"reason":"ownership was taken over"}`,
+			name:      "stepped down",
+			event:     redundancy.SteppedDown{Reason: "ownership was taken over"},
+			wantType:  redundancy.TypeSteppedDown,
+			want:      events.SeverityWarn,
+			wantScope: events.ScopeMachine,
+			wantJSON:  `{"reason":"ownership was taken over"}`,
 		},
 		{
-			name:     "failback initiated",
-			event:    redundancy.FailbackInitiated{},
-			wantType: redundancy.TypeFailbackInitiated,
-			want:     events.SeverityInfo,
-			wantJSON: `{}`,
+			name:      "failback initiated",
+			event:     redundancy.FailbackInitiated{},
+			wantType:  redundancy.TypeFailbackInitiated,
+			want:      events.SeverityInfo,
+			wantScope: events.ScopeMachine,
+			wantJSON:  `{}`,
 		},
 		{
-			name:     "activation started",
-			event:    redundancy.ActivationStarted{Kind: redundancy.ActivationFailover},
-			wantType: redundancy.TypeActivationStarted,
-			want:     events.SeverityInfo,
-			wantJSON: `{"activation_kind":"failover"}`,
+			name:      "activation started",
+			event:     redundancy.ActivationStarted{Kind: redundancy.ActivationFailover},
+			wantType:  redundancy.TypeActivationStarted,
+			want:      events.SeverityInfo,
+			wantScope: events.ScopeMachine,
+			wantJSON:  `{"activation_kind":"failover"}`,
 		},
 		{
-			name:     "activation failed",
-			event:    redundancy.ActivationFailed{Kind: redundancy.ActivationFailback, DurationMS: 1200, Error: "journal unreachable"},
-			wantType: redundancy.TypeActivationFailed,
-			want:     events.SeverityError,
-			wantJSON: `{"activation_kind":"failback","duration_ms":1200,"error":"journal unreachable"}`,
+			name:      "activation failed",
+			event:     redundancy.ActivationFailed{Kind: redundancy.ActivationFailback, DurationMS: 1200, Error: "journal unreachable"},
+			wantType:  redundancy.TypeActivationFailed,
+			want:      events.SeverityError,
+			wantScope: events.ScopeMachine,
+			wantJSON:  `{"activation_kind":"failback","duration_ms":1200,"error":"journal unreachable"}`,
 		},
 		{
-			name:     "activation completed",
-			event:    redundancy.ActivationCompleted{Kind: redundancy.ActivationInitial, DurationMS: 90},
-			wantType: redundancy.TypeActivationCompleted,
-			want:     events.SeverityInfo,
-			wantJSON: `{"activation_kind":"initial activation","duration_ms":90}`,
+			name:      "activation completed",
+			event:     redundancy.ActivationCompleted{Kind: redundancy.ActivationInitial, DurationMS: 90},
+			wantType:  redundancy.TypeActivationCompleted,
+			want:      events.SeverityInfo,
+			wantScope: events.ScopeMachine,
+			wantJSON:  `{"activation_kind":"initial activation","duration_ms":90}`,
 		},
 	}
 	for _, test := range tests {
@@ -118,6 +133,13 @@ func TestRedundancyEventsDeclareTheirContract(t *testing.T) {
 				severity = severe.Severity()
 			}
 			require.Equal(t, test.want, severity)
+
+			scope := events.DefaultScope
+			if scoped, ok := test.event.(events.Scoped); ok {
+				scope = scoped.Scope()
+			}
+			require.Equal(t, test.wantScope, scope,
+				"the level a redundancy fact belongs to is who it is about, not who stated it")
 
 			data, err := json.Marshal(test.event)
 			require.NoError(t, err)

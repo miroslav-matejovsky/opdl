@@ -50,11 +50,16 @@ const (
 	// machine ip.
 	// Each instance names every local file it owns outright, so a round trip that
 	// dropped one, or resolved both instances onto the same path, would fail.
+	// The machine's own store is in the fixture for the same reason and is not an
+	// instance's: it is the file both instances append machine-scoped events to.
+	machineEventsFile = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
 	eventsFile        = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
 	stateFile         = "D:/opdl/customer-a/north/sensor/primary/state.json"
+	logFile           = "D:/opdl/customer-a/north/sensor/primary/platform.log"
 	apiAddr           = "127.0.0.1:8080"
 	standbyEventsFile = "D:/opdl/customer-a/north/sensor/standby/events.jsonl"
 	standbyStateFile  = "D:/opdl/customer-a/north/sensor/standby/state.json"
+	standbyLogFile    = "D:/opdl/customer-a/north/sensor/standby/platform.log"
 	standbyAPIAddr    = "127.0.0.1:8081"
 
 	// The listener timeouts are on the instance record for the same reason the
@@ -100,6 +105,7 @@ func checkRoundTripFor(hasStandby bool) error {
 		builtStandby = &builderdeployment.Instance{
 			EventsFile:           standbyEventsFile,
 			StateFile:            standbyStateFile,
+			LogFile:              standbyLogFile,
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
@@ -107,6 +113,7 @@ func checkRoundTripFor(hasStandby bool) error {
 		wantStandby = &platformconfig.Instance{
 			EventsFile:           standbyEventsFile,
 			StateFile:            standbyStateFile,
+			LogFile:              standbyLogFile,
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
@@ -130,17 +137,19 @@ func checkRoundTripFor(hasStandby bool) error {
 	}
 
 	built := builderdeployment.Descriptor{
-		Platform:       "opdl",
-		Project:        "customer-a",
-		Environment:    "production",
-		Site:           site,
-		Machine:        machine,
-		MachineProfile: "sensor-node",
-		IP:             machineIP,
-		Services:       []string{"sensor-services", "core-services"},
+		Platform:          "opdl",
+		Project:           "customer-a",
+		Environment:       "production",
+		Site:              site,
+		Machine:           machine,
+		MachineProfile:    "sensor-node",
+		IP:                machineIP,
+		Services:          []string{"sensor-services", "core-services"},
+		MachineEventsFile: machineEventsFile,
 		Primary: builderdeployment.Instance{
 			EventsFile:           eventsFile,
 			StateFile:            stateFile,
+			LogFile:              logFile,
 			APIAddress:           apiAddr,
 			APIReadHeaderTimeout: readHeaderTimeout,
 			APIShutdownTimeout:   shutdownTimeout,
@@ -163,17 +172,19 @@ func checkRoundTripFor(hasStandby bool) error {
 	}
 
 	want := platformconfig.Descriptor{
-		Platform:       "opdl",
-		Project:        "customer-a",
-		Environment:    "production",
-		Site:           site,
-		Machine:        machine,
-		MachineProfile: "sensor-node",
-		IP:             machineIP,
-		Services:       []string{"sensor-services", "core-services"},
+		Platform:          "opdl",
+		Project:           "customer-a",
+		Environment:       "production",
+		Site:              site,
+		Machine:           machine,
+		MachineProfile:    "sensor-node",
+		IP:                machineIP,
+		Services:          []string{"sensor-services", "core-services"},
+		MachineEventsFile: machineEventsFile,
 		Primary: platformconfig.Instance{
 			EventsFile:           eventsFile,
 			StateFile:            stateFile,
+			LogFile:              logFile,
 			APIAddress:           apiAddr,
 			APIReadHeaderTimeout: readHeaderTimeout,
 			APIShutdownTimeout:   shutdownTimeout,
@@ -208,10 +219,16 @@ func checkWireShape(data []byte, hasStandby bool) error {
 
 	// The endpoints an instance binds and the files it owns belong to that
 	// instance.
-	for _, field := range []string{"events_file", "state_file", "api_address"} {
+	for _, field := range []string{"events_file", "state_file", "log_file", "api_address"} {
 		if _, ok := wire[field]; ok {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints and local files belong to an instance", field)
 		}
+	}
+	// The machine's own store is the other way round: it is machine-level on
+	// every machine, so a descriptor that omitted it, or put it on an instance,
+	// would leave the machine with nowhere to keep its own account.
+	if _, ok := wire["machine_events_file"]; !ok {
+		return fmt.Errorf("builder descriptor omitted machine_events_file: the machine's shared event store is not an instance's file")
 	}
 	return verifyWireLease(wire, hasStandby)
 }
@@ -233,7 +250,7 @@ func checkWireInstance(wire map[string]json.RawMessage, role string, deployed bo
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
-	for _, field := range []string{"events_file", "state_file", "api_address", "api_read_header_timeout", "api_shutdown_timeout"} {
+	for _, field := range []string{"events_file", "state_file", "log_file", "api_address", "api_read_header_timeout", "api_shutdown_timeout"} {
 		if _, ok := fields[field]; !ok {
 			return fmt.Errorf("builder descriptor omitted %s.%s", role, field)
 		}

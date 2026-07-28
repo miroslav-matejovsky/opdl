@@ -32,21 +32,29 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 			FailbackStabilization: "30s",
 			LagBound:              "30s",
 		}
-		standby.EventsFile = eventsFile(name, "standby")
+		standby.EventlogFile = eventsFile(name, "standby")
 		standby.StateFile = stateFile(name, "standby")
+		standby.LogFile = logFile(name, "standby")
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	}
 	return blueprint.Machine{
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
-		Platform: &blueprint.Platform{
-			EventsFile: eventsFile(name, "primary"),
-			StateFile:  stateFile(name, "primary"),
-			API:        &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
-			WinService: &blueprint.WinService{Name: name + "-primary"},
-			Standby:    standby,
+		EventstoreFile: machineEventsFile(name),
+		Primary: &blueprint.Primary{
+			EventlogFile: eventsFile(name, "primary"),
+			StateFile:    stateFile(name, "primary"),
+			LogFile:      logFile(name, "primary"),
+			API:          &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
+			WinService:   &blueprint.WinService{Name: name + "-primary"},
 		},
+		Standby: standby,
 	}
+}
+
+// machineEventsFile is the machine's own event store, shared by its instances.
+func machineEventsFile(machine string) string {
+	return fmt.Sprintf("D:/opdl-data/%s/machine-events.jsonl", machine)
 }
 
 // eventsFile is one instance's append-only event record.
@@ -57,6 +65,11 @@ func eventsFile(machine, role string) string {
 // stateFile is one instance's durable state record.
 func stateFile(machine, role string) string {
 	return fmt.Sprintf("D:/opdl-data/%s/%s/state.json", machine, role)
+}
+
+// logFile is one instance's structured application log.
+func logFile(machine, role string) string {
+	return fmt.Sprintf("D:/opdl-data/%s/%s/platform.log", machine, role)
 }
 
 // companion is a second machine carrying a Standby Instance, for fixtures whose
@@ -128,6 +141,7 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	// runtime that quietly wrote somewhere else.
 	require.Equal(t, eventsFile("sensor", "primary"), m.Primary.EventsFile)
 	require.Equal(t, stateFile("sensor", "primary"), m.Primary.StateFile)
+	require.Equal(t, logFile("sensor", "primary"), m.Primary.LogFile)
 }
 
 // TestBuildCarriesInstanceFiles checks each deployed instance's own files reach
@@ -142,9 +156,11 @@ func TestBuildCarriesInstanceFiles(t *testing.T) {
 	m := plan.Machines[0]
 	require.Equal(t, eventsFile("node-a", "primary"), m.Primary.EventsFile)
 	require.Equal(t, stateFile("node-a", "primary"), m.Primary.StateFile)
+	require.Equal(t, logFile("node-a", "primary"), m.Primary.LogFile)
 	require.NotNil(t, m.Standby)
 	require.Equal(t, eventsFile("node-a", "standby"), m.Standby.EventsFile)
 	require.Equal(t, stateFile("node-a", "standby"), m.Standby.StateFile)
+	require.Equal(t, logFile("node-a", "standby"), m.Standby.LogFile)
 }
 
 // TestBuildCopiesStandbyDecision checks the resolved descriptor carries a standby
@@ -190,9 +206,9 @@ func TestBuildStandbyIsPerMachine(t *testing.T) {
 
 func TestBuildValidatesBlueprint(t *testing.T) {
 	p := project()
-	p.Sites[0].Machines[0].Platform.Standby = nil
+	p.Sites[0].Machines[0].Standby = nil
 	_, err := resolve.Build(p, "acme-opdl")
-	require.ErrorContains(t, err, "platform.standby block is required")
+	require.ErrorContains(t, err, "standby block is required")
 }
 
 func TestBuildValidatesDescriptors(t *testing.T) {
@@ -205,6 +221,23 @@ func TestBuildValidatesDescriptors(t *testing.T) {
 func TestBuildRequiresPlatformName(t *testing.T) {
 	_, err := resolve.Build(project(), "")
 	require.ErrorContains(t, err, "platform is required")
+}
+
+// TestBuildCarriesTheMachineStore checks the machine's own event store reaches
+// the descriptor on every machine, with or without a standby: a machine's facts
+// are the machine's whether or not a second instance exists to read them.
+func TestBuildCarriesTheMachineStore(t *testing.T) {
+	for name, standbyDisabled := range map[string]bool{"standby deployed": false, "standby disabled": true} {
+		t.Run(name, func(t *testing.T) {
+			p := projectOf(blueprint.Site{
+				Name:     "north",
+				Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", standbyDisabled), companion()},
+			})
+			plan, err := resolve.Build(p, "acme-opdl")
+			require.NoError(t, err)
+			require.Equal(t, machineEventsFile("sensor"), plan.Machines[0].MachineEventsFile)
+		})
+	}
 }
 
 // TestBuildCarriesAuthoredLock checks the lock policy is carried onto the descriptor when

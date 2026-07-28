@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
 // Location is one trusted platform machine identity from the deployment
