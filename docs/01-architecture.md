@@ -76,6 +76,45 @@ setting has two sources needing a precedence rule to tell them apart.
 | `internal/instance/eventlog` | Writes the mandatory process-local JSONL record under the instance data root. |
 | `internal/machine/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
 
+### The level dependency rule
+
+A higher level may import a lower level, never the reverse. The abstract event
+contract is importable by everyone and imports no level.
+
+| Package | May import |
+| --- | --- |
+| `internal/site/...` | `internal/machine/...`, `internal/instance/...`, `internal/events/...` |
+| `internal/machine/...` | `internal/instance/...`, `internal/events/...` |
+| `internal/instance/...` | `internal/events/...` |
+| `internal/events/...` | none of the above |
+| `internal/app`, `internal/httpapi` | anything (composition root and HTTP edge) |
+
+"May import" is permission, not encouragement. Site reaching into machine
+internals should stay rare and deliberate; the common shared surface is
+`internal/events`. A level states a fact for a higher level to observe by
+publishing an event, not by importing it.
+
+`internal/app` is exempt because it is the composition root: it is where
+publishers, stores, and consumers of all three levels are wired together, so it
+necessarily sees all of them. `internal/httpapi` is the HTTP edge. Neither sits
+at a level, so neither can reverse one.
+
+Two tools enforce this, and they answer different questions:
+
+- **`depguard`** (in `.golangci.yml`, so it runs in `task lint`) enforces the
+  table above. It is keyed on directory rather than on a list of packages, so it
+  governs packages that do not exist yet, and it covers `_test.go` files.
+- **`go-arch-lint`** (in `platform/.go-arch-lint.yml`, so it runs in `task arch`)
+  is the per-package allow-list: it states exactly which components each package
+  may reach, which is stricter than the level rule and carries the reasoning for
+  each exception. It is also default-deny for packages no component claims, so a
+  new package fails the build until someone classifies it.
+
+Do not express the level rule with overlapping `go-arch-lint` components. When
+two components' `in` globs match the same directory, which one claims it is not
+predictable from the spec, so a level catch-all alongside a per-package
+component can silently take that package's files and its rules with them.
+
 ## Event Fabric contract
 
 > **TODO — this section is a design, not the current tree.** Event storage and
