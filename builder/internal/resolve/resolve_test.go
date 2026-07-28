@@ -32,21 +32,21 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 			FailbackStabilization: "30s",
 			LagBound:              "30s",
 		}
-		standby.EventsFile = eventsFile(name, "standby")
+		standby.EventlogFile = eventsFile(name, "standby")
 		standby.StateFile = stateFile(name, "standby")
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	}
 	return blueprint.Machine{
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
-		Platform: &blueprint.Platform{
-			MachineEventsFile: machineEventsFile(name),
-			EventsFile:        eventsFile(name, "primary"),
-			StateFile:         stateFile(name, "primary"),
-			API:               &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
-			WinService:        &blueprint.WinService{Name: name + "-primary"},
-			Standby:           standby,
+		EventstoreFile: machineEventsFile(name),
+		Primary: &blueprint.Primary{
+			EventlogFile: eventsFile(name, "primary"),
+			StateFile:    stateFile(name, "primary"),
+			API:          &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
+			WinService:   &blueprint.WinService{Name: name + "-primary"},
 		},
+		Standby: standby,
 	}
 }
 
@@ -196,9 +196,9 @@ func TestBuildStandbyIsPerMachine(t *testing.T) {
 
 func TestBuildValidatesBlueprint(t *testing.T) {
 	p := project()
-	p.Sites[0].Machines[0].Platform.Standby = nil
+	p.Sites[0].Machines[0].Standby = nil
 	_, err := resolve.Build(p, "acme-opdl")
-	require.ErrorContains(t, err, "platform.standby block is required")
+	require.ErrorContains(t, err, "standby block is required")
 }
 
 func TestBuildValidatesDescriptors(t *testing.T) {

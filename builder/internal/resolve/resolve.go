@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/miroslav-matejovsky/opdl/builder/deployment"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
@@ -56,7 +57,7 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		// The machine's own store is resolved for every machine, standby or not:
 		// a machine's facts are the machine's whether or not a second instance
 		// exists to read them.
-		MachineEventsFile: machine.MachineEventsFile(),
+		MachineEventsFile: strings.TrimSpace(machine.EventstoreFile),
 		Primary:           primaryInstance(machine),
 		Standby:           instance(machine, deployment.RoleStandby),
 		Lease:             lease(machine),
@@ -98,7 +99,7 @@ func instance(machine blueprint.Machine, role deployment.PlatformInstanceRole) *
 	files := machine.Files(standby)
 	return &deployment.Instance{
 		Service:              winService(machine, standby),
-		EventsFile:           files.EventsFile,
+		EventsFile:           files.EventlogFile,
 		StateFile:            files.StateFile,
 		APIAddress:           loopbackAddress(endpoints.APILocalPort),
 		APIReadHeaderTimeout: endpoints.APIReadHeaderTimeout,
