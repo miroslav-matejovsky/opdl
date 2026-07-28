@@ -27,6 +27,21 @@ const (
 	standbyEventsFile = "D:/opdl-data/sensor/standby/events.jsonl"
 	standbyStateFile  = "D:/opdl-data/sensor/standby/state.json"
 	standbyLogFile    = "D:/opdl-data/sensor/standby/platform.log"
+
+	// Each instance's embedded event fabric server: its own identity, its own
+	// route listener on the machine's ip, and the one cluster every server at the
+	// site belongs to. The route listeners are the only endpoints in a descriptor
+	// that are not on loopback, because the site's cluster spans machines.
+	natsCluster        = "customer-a-north"
+	primaryNATSServer  = "sensor-primary"
+	primaryNATSCluster = machineIP + ":6222"
+	standbyNATSServer  = "sensor-standby"
+	standbyNATSCluster = machineIP + ":6223"
+
+	// The peer at the other machine of the site. Its address is on a different
+	// machine's ip, which is what a route is: the two instances here route to
+	// each other and to it.
+	peerNATSRoute = "nats://10.0.1.11:6222"
 )
 
 func validDescriptor() deployment.Descriptor {
@@ -48,6 +63,12 @@ func validDescriptor() deployment.Descriptor {
 			APIAddress:           primaryAPI,
 			APIReadHeaderTimeout: "5s",
 			APIShutdownTimeout:   "10s",
+			NATS: deployment.NATS{
+				ServerName:     primaryNATSServer,
+				ClusterName:    natsCluster,
+				ClusterAddress: primaryNATSCluster,
+				Routes:         []string{"nats://" + standbyNATSCluster, peerNATSRoute},
+			},
 		},
 		Standby: &deployment.Instance{
 			Service:              &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
@@ -57,6 +78,12 @@ func validDescriptor() deployment.Descriptor {
 			APIAddress:           standbyAPI,
 			APIReadHeaderTimeout: "5s",
 			APIShutdownTimeout:   "10s",
+			NATS: deployment.NATS{
+				ServerName:     standbyNATSServer,
+				ClusterName:    natsCluster,
+				ClusterAddress: standbyNATSCluster,
+				Routes:         []string{"nats://" + primaryNATSCluster, peerNATSRoute},
+			},
 		},
 		Lease: &deployment.Lease{
 			File:                  "D:/opdl-data/sensor/lease",
@@ -184,7 +211,91 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{
 			"instances share an api address",
 			func(d *deployment.Descriptor) { d.Standby.APIAddress = d.Primary.APIAddress },
-			"cannot share a listener",
+			"cannot share one",
+		},
+		// Each instance binds two listeners, so the rule is about every listener
+		// on the machine rather than about the two APIs: a server resolved onto
+		// its own instance's API port is the same failure to bind.
+		{
+			"instances share a nats cluster address",
+			func(d *deployment.Descriptor) {
+				d.Standby.NATS.ClusterAddress = d.Primary.NATS.ClusterAddress
+				// The standby routed to the primary, which it now is, so the
+				// route goes with the address. What is left is the collision.
+				d.Standby.NATS.Routes = []string{peerNATSRoute}
+			},
+			"cannot share one",
+		},
+		// The two are on different interfaces now — the API on loopback and the
+		// route listener on the machine's ip — so the check is on the port. A
+		// machine whose ip is 127.0.0.1, which is every scenario and every
+		// developer's box, would otherwise resolve two listeners onto one socket
+		// and be told nothing.
+		{
+			"an instance's server takes its own api port",
+			func(d *deployment.Descriptor) { d.Primary.NATS.ClusterAddress = machineIP + ":8080" },
+			"cannot share one",
+		},
+		{
+			"missing primary nats server name",
+			func(d *deployment.Descriptor) { d.Primary.NATS.ServerName = "" },
+			"primary.nats.server_name is required",
+		},
+		{
+			"missing standby nats cluster name",
+			func(d *deployment.Descriptor) { d.Standby.NATS.ClusterName = "" },
+			"standby.nats.cluster_name is required",
+		},
+		{
+			"missing primary nats cluster address",
+			func(d *deployment.Descriptor) { d.Primary.NATS.ClusterAddress = "" },
+			"primary.nats.cluster_address is required",
+		},
+		// A route listener on loopback is reachable only from the machine that
+		// binds it, which is a site cluster that can never have a second member.
+		{
+			"nats cluster address on loopback",
+			func(d *deployment.Descriptor) { d.Primary.NATS.ClusterAddress = "127.0.0.1:6222" },
+			`is not on the machine's ip "10.0.1.10"`,
+		},
+		{
+			"nats cluster address on another machine's ip",
+			func(d *deployment.Descriptor) { d.Primary.NATS.ClusterAddress = "10.0.1.11:6222" },
+			`is not on the machine's ip "10.0.1.10"`,
+		},
+		{
+			"a route is not a url",
+			func(d *deployment.Descriptor) { d.Primary.NATS.Routes = []string{"nats://%zz"} },
+			"primary.nats.routes[0]: route \"nats://%zz\" is not a URL",
+		},
+		{
+			"a route is a bare address",
+			func(d *deployment.Descriptor) { d.Primary.NATS.Routes = []string{"10.0.1.11:6222"} },
+			"primary.nats.routes[0]",
+		},
+		{
+			"a route is dialed as something other than a route",
+			func(d *deployment.Descriptor) { d.Primary.NATS.Routes = []string{"tcp://10.0.1.11:6222"} },
+			"must use the nats:// scheme",
+		},
+		{
+			"a route has no port",
+			func(d *deployment.Descriptor) { d.Primary.NATS.Routes = []string{"nats://10.0.1.11"} },
+			"must be host:port",
+		},
+		{
+			"a route points at this instance's own listener",
+			func(d *deployment.Descriptor) {
+				d.Primary.NATS.Routes = []string{"nats://" + primaryNATSCluster}
+			},
+			"is this instance's own cluster address",
+		},
+		{
+			"a peer is routed to twice",
+			func(d *deployment.Descriptor) {
+				d.Primary.NATS.Routes = []string{peerNATSRoute, peerNATSRoute}
+			},
+			"each peer is routed to once",
 		},
 	}
 	for _, tc := range tests {
@@ -203,5 +314,20 @@ func TestDescriptorValidateAcceptsOneInstanceMachine(t *testing.T) {
 	d := validDescriptor()
 	d.Standby = nil
 	d.Lease = nil
+	d.Primary.NATS.Routes = []string{peerNATSRoute}
+	require.NoError(t, d.Validate())
+}
+
+// TestDescriptorValidateAcceptsASiteOfOneInstance checks the one member with
+// nobody to route to.
+//
+// An empty route list is the correct resolution for a site that deploys a single
+// instance, not a truncated one. The instance still runs its own server, so the
+// fabric it serves health checks about is there; there is simply no peer.
+func TestDescriptorValidateAcceptsASiteOfOneInstance(t *testing.T) {
+	d := validDescriptor()
+	d.Standby = nil
+	d.Lease = nil
+	d.Primary.NATS.Routes = nil
 	require.NoError(t, d.Validate())
 }

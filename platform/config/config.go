@@ -157,7 +157,28 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "  this instance's api:\n")
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", timeouts.readHeader)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", timeouts.shutdown)
+	// The embedded event fabric server is this instance's too, and it is the
+	// other listener the process binds, so it is printed beside the API rather
+	// than with the descriptor block above.
+	fmt.Fprintf(&b, "  this instance's event fabric:\n")
+	fmt.Fprintf(&b, "    nats_server_name     %s\n", inst.NATS.ServerName)
+	fmt.Fprintf(&b, "    nats_cluster_name    %s\n", inst.NATS.ClusterName)
+	fmt.Fprintf(&b, "    nats_cluster_address %s\n", inst.NATS.ClusterAddress)
+	fmt.Fprintf(&b, "    nats_routes          %s\n", routesSummary(inst.NATS.Routes))
 	return b.String()
+}
+
+// routesSummary renders the peers this instance's embedded server routes to.
+//
+// An empty list is printed as a statement rather than as a blank, because on a
+// site that deploys one instance it is the correct answer and an operator
+// reading a blank line would have no way to tell that from a truncated
+// descriptor.
+func routesSummary(routes []string) string {
+	if len(routes) == 0 {
+		return "(none; this instance is the only one at its site)"
+	}
+	return strings.Join(routes, " ")
 }
 
 // instancesSummary renders which of the machine's two instances are deployed,

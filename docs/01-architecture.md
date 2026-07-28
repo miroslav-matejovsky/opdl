@@ -40,7 +40,7 @@ only `-instance primary|standby`.
 | Descriptor part | Contents |
 | --- | --- |
 | Machine | platform, project, environment, site, machine, profile, IP, services, and `machine_events_file` |
-| `primary` | mandatory service identity, local event, state, and log files, loopback API address, and listener timeouts |
+| `primary` | mandatory service identity, local event, state, and log files, loopback API address, listener timeouts, and the embedded event fabric broker (`nats`) |
 | `standby` | the same instance fields, present only when deployed |
 | `lease` | shared Primary Ownership file and failover timings, present exactly when `standby` is present |
 
@@ -48,11 +48,26 @@ The blueprint calls the machine file `eventstore_file` and the instance files
 `eventlog_file`, `state_file`, and `log_file`. The resolved descriptor names them
 `machine_events_file`, `events_file`, `state_file`, and `log_file`.
 
+Each site authors one `nats` block naming its event fabric cluster, and each
+deployed instance authors one stating the `cluster_port` its embedded server
+binds. From those the builder resolves, per instance, `nats.server_name`
+(`<machine>-<role>`), `nats.cluster_name` (the site's), `nats.cluster_address`
+(the machine's ip joined to the authored port), and `nats.routes` — every other
+deployed instance at the site, as `nats://ip:port`.
+
+The cluster address is the one listener a descriptor resolves off loopback. A
+site's cluster spans machines, so a member has to be reachable from another
+host; an address on 127.0.0.1 would be a cluster that can never have a second
+machine. There is still no client port: the platform's client reaches its own
+server in process.
+
 The machine event store exists on every machine. The lease exists only on a
 machine with a standby. The builder rejects file collisions across instance
 event logs, state files, application logs, the machine event store, and the
-lease. It also rejects duplicate local API addresses and duplicate Windows
-Service names on one machine.
+lease. It also rejects duplicate listener ports on one machine — the two
+instances' APIs, their two servers, and the service health checks are one set —
+duplicate cluster names across the project's sites, and duplicate Windows
+Service names.
 
 `builder/deployment` and `platform/config` define independent copies of the
 descriptor contract. `conformance-tests` keeps them compatible.
@@ -63,9 +78,9 @@ Runtime packages are grouped by the owner of their state:
 
 | Level | Identity | Current responsibilities |
 | --- | --- | --- |
-| Instance | one process in a fixed role | local event log, application log, durable epoch, and one loopback API |
+| Instance | one process in a fixed role | local event log, application log, durable epoch, one loopback API, and its own embedded NATS server |
 | Machine | one Windows host | Primary Ownership, active/passive sequencing, and the shared machine event store |
-| Site | all machines in one deployment site | site event contract |
+| Site | all machines in one deployment site | one NATS cluster spanning every instance, the site event contract, and the client onto this instance's server |
 
 The detailed level documentation lives beside the code:
 

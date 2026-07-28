@@ -91,8 +91,11 @@ type renderedMachine struct {
 	// MachineEventsFile is the machine's own event store, shared by both of its
 	// instances. Every machine authors one, standby or not.
 	MachineEventsFile string
-	// The Primary Instance's port and local files.
+	// The Primary Instance's ports and local files. NATSPort is its own embedded
+	// event fabric broker's cluster port, the other listener every deployed
+	// instance binds.
 	APIPort    int
+	NATSPort   int
 	EventsFile string
 	StateFile  string
 	LogFile    string
@@ -100,6 +103,7 @@ type renderedMachine struct {
 	// two instances run together on one host, so every one of these is its own
 	// listener or file and none may repeat.
 	StandbyAPIPort    int
+	StandbyNATSPort   int
 	StandbyEventsFile string
 	StandbyStateFile  string
 	StandbyLogFile    string
@@ -219,14 +223,19 @@ func ScenarioDir(t *testing.T) string {
 	return scenarioDir(t)
 }
 
-// apiPortsWanted counts the API ports a project's instances need: one per
-// deployed instance.
-func apiPortsWanted(fixtures []machineFixture) int {
+// listenerPortsWanted counts the loopback ports a project's instances need.
+//
+// Every deployed instance binds two: its API listener and its own embedded
+// event fabric broker. Both are reserved from the same pool, because both are
+// on 127.0.0.1 and a collision between them is the same failure to bind as a
+// collision between two APIs.
+func listenerPortsWanted(fixtures []machineFixture) int {
+	const perInstance = 2
 	wanted := 0
 	for _, fixture := range fixtures {
-		wanted++
+		wanted += perInstance
 		if !fixture.standbyDisabled {
-			wanted++
+			wanted += perInstance
 		}
 	}
 	return wanted
@@ -291,17 +300,17 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 	data := renderedProject{Name: project, Site: scenarioSite, RunToken: runToken(t)}
 	endpoints = make(map[string]reservedEndpoints, len(fixtures))
 
-	// Every instance's API port comes from one reservation on 127.0.0.1, because
-	// that is the only interface any of them is resolved onto. Reserving per
-	// machine ip would say nothing about whether two machines had been given the
-	// same loopback port, and the collision would only appear as the second
-	// machine failing to bind.
-	apiPorts, err := testnet.Take("127.0.0.1", apiPortsWanted(fixtures))
+	// Every listener comes from one reservation on 127.0.0.1, because that is the
+	// only interface any of them is resolved onto. Reserving per machine ip would
+	// say nothing about whether two machines had been given the same loopback
+	// port, and the collision would only appear as the second machine failing to
+	// bind.
+	ports, err := testnet.Take("127.0.0.1", listenerPortsWanted(fixtures))
 	require.NoError(t, err)
-	nextAPIPort := 0
-	takeAPIPort := func() int {
-		port := apiPorts[nextAPIPort]
-		nextAPIPort++
+	nextPort := 0
+	takePort := func() int {
+		port := ports[nextPort]
+		nextPort++
 		return port
 	}
 
@@ -310,14 +319,16 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 			Name:              fixture.name,
 			IP:                fixture.ip,
 			MachineEventsFile: machineEventsFileFor(workDir, fixture.name),
-			APIPort:           takeAPIPort(),
+			APIPort:           takePort(),
+			NATSPort:          takePort(),
 			EventsFile:        eventsFileFor(workDir, fixture.name, RolePrimary),
 			StateFile:         stateFileFor(workDir, fixture.name, RolePrimary),
 			LogFile:           logFileFor(workDir, fixture.name, RolePrimary),
 			StandbyDisabled:   fixture.standbyDisabled,
 		}
 		if !fixture.standbyDisabled {
-			machine.StandbyAPIPort = takeAPIPort()
+			machine.StandbyAPIPort = takePort()
+			machine.StandbyNATSPort = takePort()
 			machine.StandbyEventsFile = eventsFileFor(workDir, fixture.name, RoleStandby)
 			machine.StandbyStateFile = stateFileFor(workDir, fixture.name, RoleStandby)
 			machine.StandbyLogFile = logFileFor(workDir, fixture.name, RoleStandby)

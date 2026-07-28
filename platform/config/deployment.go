@@ -201,6 +201,31 @@ func validateInstanceFields(role PlatformInstanceRole, raw json.RawMessage) erro
 			return err
 		}
 	}
+	return validateNATSFields(role, instance)
+}
+
+// validateNATSFields checks one instance's embedded event fabric record is
+// present and complete.
+//
+// It is required for the same reason the listener timeouts are: the instance
+// starts its embedded server before it runs, and both fields would decode as the
+// empty string if omitted. An unnamed server and an empty listen address are not
+// values the runtime could fall back to, so a truncated descriptor fails at load
+// rather than when the fabric is first needed.
+func validateNATSFields(role PlatformInstanceRole, instance map[string]json.RawMessage) error {
+	raw, err := requiredField(instance, string(role)+".nats")
+	if err != nil {
+		return err
+	}
+	var nats map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &nats); err != nil {
+		return fmt.Errorf("deployment descriptor: invalid %s.nats: %w", role, err)
+	}
+	for _, field := range []string{"server_name", "cluster_name", "cluster_address"} {
+		if _, err := requiredField(nats, string(role)+".nats."+field); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -335,4 +360,39 @@ type Instance struct {
 	// when it stops serving, whether it is stepping down or the process is
 	// leaving.
 	APIShutdownTimeout string `json:"api_shutdown_timeout"`
+	// NATS is this instance's embedded event fabric server. Every deployed
+	// instance runs one for its whole lifetime, Active or Passive, so the record
+	// is a value rather than an optional block.
+	NATS NATS `json:"nats"`
+}
+
+// NATS is one instance's embedded event fabric server: what it is called, which
+// cluster it belongs to, and where its peers reach it.
+//
+// The server belongs to the instance level and runs for as long as the process
+// does. The client that reaches it belongs to the site level and reaches it in
+// process, through the server's own pipe, which is why there is no client
+// address here: the server binds no client listener at all.
+type NATS struct {
+	// ServerName is the embedded server's identity, resolved by the builder as
+	// "<machine>-<role>" and unique within the project.
+	ServerName string `json:"server_name"`
+	// ClusterName is the NATS cluster this server belongs to, resolved from the
+	// site's authored cluster name. Servers route only to peers naming the same
+	// cluster, so it is what bounds the fabric to the site.
+	ClusterName string `json:"cluster_name"`
+	// ClusterAddress is where this server accepts route connections from its
+	// peers: the machine's own ip joined to the instance's authored cluster
+	// port. It is the only address the server binds, and the one listener in the
+	// descriptor that is not on loopback, because the site's cluster spans
+	// machines.
+	ClusterAddress string `json:"cluster_address"`
+	// Routes are the peers this server dials to join the cluster, as NATS route
+	// URLs. They are every other deployed instance at the site, this machine's
+	// other instance included.
+	//
+	// It is absent exactly when the site deploys one instance in total. Unlike
+	// every other field here, absent and empty say the same true thing — this
+	// server has no peer — so there is nothing to guard at load.
+	Routes []string `json:"routes,omitempty"`
 }

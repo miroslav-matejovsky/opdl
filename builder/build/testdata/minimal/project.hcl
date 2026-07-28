@@ -9,6 +9,10 @@ project "buildtest" {
   environment = "test"
 
   site "solo" {
+    nats {
+      cluster_name = "buildtest-solo"
+    }
+
     machine "node-a" {
       profile         = "test-node"
       ip              = "10.0.0.10"
@@ -36,6 +40,10 @@ project "buildtest" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -78,6 +86,10 @@ project "buildtest" {
           shutdown_timeout    = "10s"
         }
 
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-buildtest-solo-node-b-primary"
           display_name = "OPDL buildtest solo node-b (Primary Instance)"
@@ -103,6 +115,10 @@ project "buildtest" {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {

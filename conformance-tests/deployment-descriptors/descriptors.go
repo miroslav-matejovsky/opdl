@@ -70,6 +70,27 @@ const (
 	standbyReadHeaderTimeout = "6s"
 	standbyShutdownTimeout   = "11s"
 
+	// The embedded event fabric is on the instance record for the same reason
+	// the api address is: each instance runs its own server on its own port.
+	// Both roles carry one, and their addresses differ, so a round trip that
+	// dropped the record or resolved both instances onto one server would fail.
+	// The cluster name is the site's, and it is the one field the two share.
+	//
+	// The cluster addresses are on the machine ip rather than on loopback, which
+	// is the one place the two differ from the api addresses above: the site's
+	// cluster spans machines, so a member has to be reachable from another host.
+	natsServerName         = "sensor-primary"
+	natsClusterName        = "customer-a-north"
+	natsClusterAddr        = machineIP + ":6222"
+	standbyNATSServerName  = "sensor-standby"
+	standbyNATSClusterAddr = machineIP + ":6223"
+
+	// A member of the site on another machine. Its presence is what makes the
+	// route lists below different from each other: a route list is per instance
+	// and leaves that instance out, so a round trip that resolved one instance's
+	// peers onto the other would fail.
+	peerNATSRoute = "nats://10.0.1.11:6222"
+
 	// The Primary Ownership lease a standby machine carries: a shared file, the
 	// failover timings, and the projection lag bound that gates a failover, all
 	// round-tripped through the platform's type intact.
@@ -80,6 +101,20 @@ const (
 	leaseFailbackStabilization = "30s"
 	leaseLagBound              = "30s"
 )
+
+// standbyNATSRoutes are the peers the Standby Instance's server dials: the other
+// instance on its own machine, and the member on the other machine.
+var standbyNATSRoutes = []string{"nats://" + natsClusterAddr, peerNATSRoute}
+
+// primaryNATSRoutes are the peers the Primary Instance's server dials. They
+// depend on the standby policy, because a standby that is not deployed runs no
+// server and is nobody's peer.
+func primaryNATSRoutes(hasStandby bool) []string {
+	if hasStandby {
+		return []string{"nats://" + standbyNATSClusterAddr, peerNATSRoute}
+	}
+	return []string{peerNATSRoute}
+}
 
 // checkRoundTrip checks the contract behaviorally: a descriptor the builder
 // produces marshals to JSON the platform reads back with every field intact.
@@ -109,6 +144,12 @@ func checkRoundTripFor(hasStandby bool) error {
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
+			NATS: builderdeployment.NATS{
+				ServerName:     standbyNATSServerName,
+				ClusterName:    natsClusterName,
+				ClusterAddress: standbyNATSClusterAddr,
+				Routes:         standbyNATSRoutes,
+			},
 		}
 		wantStandby = &platformconfig.Instance{
 			EventsFile:           standbyEventsFile,
@@ -117,6 +158,12 @@ func checkRoundTripFor(hasStandby bool) error {
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
+			NATS: platformconfig.NATS{
+				ServerName:     standbyNATSServerName,
+				ClusterName:    natsClusterName,
+				ClusterAddress: standbyNATSClusterAddr,
+				Routes:         standbyNATSRoutes,
+			},
 		}
 		builtLease = &builderdeployment.Lease{
 			File:                  leaseFile,
@@ -153,6 +200,12 @@ func checkRoundTripFor(hasStandby bool) error {
 			APIAddress:           apiAddr,
 			APIReadHeaderTimeout: readHeaderTimeout,
 			APIShutdownTimeout:   shutdownTimeout,
+			NATS: builderdeployment.NATS{
+				ServerName:     natsServerName,
+				ClusterName:    natsClusterName,
+				ClusterAddress: natsClusterAddr,
+				Routes:         primaryNATSRoutes(hasStandby),
+			},
 		},
 		Standby: builtStandby,
 		Lease:   builtLease,
@@ -188,6 +241,12 @@ func checkRoundTripFor(hasStandby bool) error {
 			APIAddress:           apiAddr,
 			APIReadHeaderTimeout: readHeaderTimeout,
 			APIShutdownTimeout:   shutdownTimeout,
+			NATS: platformconfig.NATS{
+				ServerName:     natsServerName,
+				ClusterName:    natsClusterName,
+				ClusterAddress: natsClusterAddr,
+				Routes:         primaryNATSRoutes(hasStandby),
+			},
 		},
 		Standby: wantStandby,
 		Lease:   wantLease,
@@ -219,7 +278,7 @@ func checkWireShape(data []byte, hasStandby bool) error {
 
 	// The endpoints an instance binds and the files it owns belong to that
 	// instance.
-	for _, field := range []string{"events_file", "state_file", "log_file", "api_address"} {
+	for _, field := range []string{"events_file", "state_file", "log_file", "api_address", "nats"} {
 		if _, ok := wire[field]; ok {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints and local files belong to an instance", field)
 		}
@@ -254,6 +313,35 @@ func checkWireInstance(wire map[string]json.RawMessage, role string, deployed bo
 		if _, ok := fields[field]; !ok {
 			return fmt.Errorf("builder descriptor omitted %s.%s", role, field)
 		}
+	}
+	return checkWireNATS(fields, role)
+}
+
+// checkWireNATS verifies one instance's embedded event fabric record is on the
+// wire and complete.
+//
+// It is nested rather than flat because the broker belongs to the instance, like
+// its listener: a machine-level nats block would say the two processes share one
+// broker, which they do not.
+func checkWireNATS(fields map[string]json.RawMessage, role string) error {
+	raw, ok := fields["nats"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted %s.nats: every deployed instance runs its own embedded broker", role)
+	}
+	var nats map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &nats); err != nil {
+		return err
+	}
+	for _, field := range []string{"server_name", "cluster_name", "cluster_address"} {
+		if _, ok := nats[field]; !ok {
+			return fmt.Errorf("builder descriptor omitted %s.nats.%s", role, field)
+		}
+	}
+	// The routes are checked separately because they are the one part of the
+	// record that is legitimately absent: a site deploying a single instance has
+	// no peer. The fixture does have peers, so on this wire they must be there.
+	if _, ok := nats["routes"]; !ok {
+		return fmt.Errorf("builder descriptor omitted %s.nats.routes: this fixture's instances have peers at their site", role)
 	}
 	return nil
 }

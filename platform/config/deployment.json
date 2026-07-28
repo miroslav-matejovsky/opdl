@@ -20,6 +20,11 @@
     "log_file": ".data/platform/primary/platform.log",
     "api_address": "127.0.0.1:8080",
     "api_read_header_timeout": "5s",
-    "api_shutdown_timeout": "10s"
+    "api_shutdown_timeout": "10s",
+    "nats": {
+      "server_name": "mock-primary",
+      "cluster_name": "local",
+      "cluster_address": "127.0.0.1:6222"
+    }
   }
 }

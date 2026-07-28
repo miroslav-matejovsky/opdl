@@ -7,6 +7,14 @@ project "customer-a" {
   environment = "production"
 
   site "north" {
+    # The site's event fabric cluster. Every deployed instance of every machine
+    # here runs an embedded NATS server, and all of them join this one cluster,
+    # primaries and standbys alike. It is named at the site because the site is
+    # what it spans; each instance authors only the port its own server binds.
+    nats {
+      cluster_name = "customer-a-north"
+    }
+
     machine "sensor" {
       profile         = "sensor-node"
       ip              = "10.0.1.10"
@@ -37,6 +45,15 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        # The instance's own embedded event fabric server, and the only port it
+        # binds: the platform's client reaches its own server in process, and
+        # this port is where the site's other servers reach it. It is bound on
+        # the machine's ip, so the port has to be open between the machines of
+        # the site.
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -97,6 +114,10 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-customer-a-north-local-server-primary"
           display_name = "OPDL customer-a north local-server (Primary Instance)"
@@ -124,6 +145,10 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        nats {
+          cluster_port = 6223
+        }
+
         winservice {
           name         = "opdl-customer-a-north-local-server-standby"
           display_name = "OPDL customer-a north local-server (Standby Instance)"
@@ -133,6 +158,13 @@ project "customer-a" {
   }
 
   site "control-room" {
+    # A second site is a second cluster. The servers here route only to each
+    # other, never to the ones at "north", because a server accepts a route only
+    # from a peer naming the same cluster.
+    nats {
+      cluster_name = "customer-a-control-room"
+    }
+
     machine "master" {
       profile         = "master-server"
       ip              = "10.0.2.10"
@@ -162,6 +194,14 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        # The instance's own embedded event fabric broker. Every deployed
+        # instance runs one, and the only port it binds is this one: the
+        # platform's client reaches its own broker in process, and what the
+        # cluster port is for is the brokers of a site reaching each other.
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-customer-a-control-room-master-primary"
           display_name = "OPDL customer-a control-room master (Primary Instance)"
@@ -187,6 +227,10 @@ project "customer-a" {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -225,6 +269,14 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        # The instance's own embedded event fabric broker. Every deployed
+        # instance runs one, and the only port it binds is this one: the
+        # platform's client reaches its own broker in process, and what the
+        # cluster port is for is the brokers of a site reaching each other.
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-customer-a-control-room-slave-primary"
           display_name = "OPDL customer-a control-room slave (Primary Instance)"
@@ -250,6 +302,10 @@ project "customer-a" {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -291,6 +347,14 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        # The instance's own embedded event fabric broker. Every deployed
+        # instance runs one, and the only port it binds is this one: the
+        # platform's client reaches its own broker in process, and what the
+        # cluster port is for is the brokers of a site reaching each other.
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-customer-a-control-room-integration-primary"
           display_name = "OPDL customer-a control-room integration (Primary Instance)"
@@ -316,6 +380,10 @@ project "customer-a" {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {

@@ -31,6 +31,7 @@ func (p *Project) Validate() error {
 	}
 
 	siteNames := make(map[string]bool, len(p.Sites))
+	clusterNames := make(map[string]string, len(p.Sites))
 	machineNames := make(map[string]bool)
 	machineIPs := make(map[string]string)
 	for _, site := range p.Sites {
@@ -41,6 +42,20 @@ func (p *Project) Validate() error {
 			return fmt.Errorf("project %q: duplicate site %q", p.Name, site.Name)
 		}
 		siteNames[site.Name] = true
+
+		if err := validateSiteNATS(site); err != nil {
+			return err
+		}
+		// Two sites naming one cluster is rejected rather than allowed to mean
+		// two separate clusters that happen to share a name. Cluster membership
+		// is what an embedded server checks before it accepts a route, so a
+		// repeated name is the one thing that could let a route authored across
+		// sites be accepted instead of refused.
+		if owner, taken := clusterNames[site.ClusterName()]; taken {
+			return fmt.Errorf("project %q: sites %q and %q both name their event fabric cluster %q; each site forms its own",
+				p.Name, owner, site.Name, site.ClusterName())
+		}
+		clusterNames[site.ClusterName()] = site.Name
 
 		for _, machine := range site.Machines {
 			if err := p.validateMachine(site, machine, machineNames); err != nil {

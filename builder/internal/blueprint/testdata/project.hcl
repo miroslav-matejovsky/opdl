@@ -2,6 +2,10 @@ project "customer-a" {
   environment = "production"
 
   site "north" {
+    nats {
+      cluster_name = "customer-a-north"
+    }
+
     machine "sensor" {
       profile         = "sensor-node"
       ip              = "10.0.1.10"
@@ -29,6 +33,10 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -85,6 +93,10 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-customer-a-north-local-server-primary"
           display_name = "OPDL customer-a north local-server (Primary Instance)"
@@ -112,6 +124,10 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        nats {
+          cluster_port = 6223
+        }
+
         winservice {
           name         = "opdl-customer-a-north-local-server-standby"
           display_name = "OPDL customer-a north local-server (Standby Instance)"
@@ -121,6 +137,10 @@ project "customer-a" {
   }
 
   site "control-room" {
+    nats {
+      cluster_name = "customer-a-control-room"
+    }
+
     machine "master" {
       profile         = "master-server"
       ip              = "10.0.2.10"
@@ -150,6 +170,10 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-customer-a-control-room-master-primary"
           display_name = "OPDL customer-a control-room master (Primary Instance)"
@@ -175,6 +199,10 @@ project "customer-a" {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -213,6 +241,10 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-customer-a-control-room-slave-primary"
           display_name = "OPDL customer-a control-room slave (Primary Instance)"
@@ -238,6 +270,10 @@ project "customer-a" {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -279,6 +315,10 @@ project "customer-a" {
           shutdown_timeout    = "10s"
         }
 
+        nats {
+          cluster_port = 6222
+        }
+
         winservice {
           name         = "opdl-customer-a-control-room-integration-primary"
           display_name = "OPDL customer-a control-room integration (Primary Instance)"
@@ -304,6 +344,10 @@ project "customer-a" {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {

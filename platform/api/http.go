@@ -55,7 +55,11 @@ type Handlers struct {
 	// Ownership moves.
 	Instance func() Instance
 	// Health reports primary operational health information.
-	Health func() HealthResponse
+	//
+	// It takes the request's context because it is the one health operation that
+	// probes a dependency, and a probe needs something to bound and cancel it.
+	// The other three answer from what the process already knows.
+	Health func(context.Context) HealthResponse
 	// HealthLive reports process liveness information.
 	HealthLive func() HealthLiveResponse
 	// HealthReady reports operational readiness information.
@@ -125,29 +129,46 @@ type LeaseView struct {
 }
 
 // NewHealth builds the health handler funcs the runtime serves, deriving each
-// response from the live instance identity, the process start time, and the
-// current lease. It is read on every request rather than captured once, because
-// Role, State, and the lease change as Primary Ownership moves.
+// response from the live instance identity, the process start time, the current
+// lease, and this instance's event fabric. They are read on every request rather
+// than captured once, because Role, State, the lease, and the fabric all change
+// while the process runs.
 //
-// The status is Healthy for now: the platform runs no dependency checks yet, so
-// there is nothing that could report Degraded or Unhealthy. leaseView may be nil,
-// in which case /health/ha derives ownership from the runtime state alone — the
-// shape spec generation and boundary tests use.
-func NewHealth(instance func() Instance, started time.Time, leaseView func() LeaseView) Handlers {
+// leaseView may be nil, in which case /health/ha derives ownership from the
+// runtime state alone. eventFabric may be nil, in which case /health reports no
+// fabric check rather than claiming a healthy one. Both are nil for spec
+// generation and the boundary tests, which serve the shape without a runtime
+// behind it.
+//
+// A failing event fabric makes the instance Degraded, not Unhealthy. Unhealthy
+// on this endpoint is the gate a Passive instance promotes through, and moving
+// Primary Ownership would not fix a broken fabric: the other instance runs its
+// own embedded broker and its own client, so it has nothing better to offer. The
+// instance stays the machine's serving instance and says what is wrong with it.
+func NewHealth(instance func() Instance, started time.Time, leaseView func() LeaseView, eventFabric func(context.Context) error) Handlers {
 	return Handlers{
-		Health: func() HealthResponse {
+		Health: func(ctx context.Context) HealthResponse {
 			inst := instance()
+			checks := map[string]string{
+				HealthCheckConfiguration:    HealthStatusHealthy,
+				HealthCheckInternalServices: HealthStatusHealthy,
+			}
+			status := HealthStatusHealthy
+			if eventFabric != nil {
+				checks[HealthCheckEventFabric] = HealthStatusHealthy
+				if err := eventFabric(ctx); err != nil {
+					checks[HealthCheckEventFabric] = HealthStatusUnhealthy
+					status = HealthStatusDegraded
+				}
+			}
 			return HealthResponse{
-				Status:       HealthStatusHealthy,
+				Status:       status,
 				InstanceID:   inst.Role,
 				Role:         inst.Role,
 				RuntimeState: inst.State,
 				Version:      apiVersion,
 				Uptime:       humanizeUptime(time.Since(started)),
-				Checks: map[string]string{
-					"configuration":    HealthStatusHealthy,
-					"internalServices": HealthStatusHealthy,
-				},
+				Checks:       checks,
 			}
 		},
 		HealthLive: func() HealthLiveResponse {
@@ -202,9 +223,9 @@ func RegisterHealth(hapi huma.API, h Handlers) {
 		Path:        PathHealth,
 		Summary:     "Report primary operational health",
 		Description: "Overall health assessment, operational status, dependency status, readiness, and basic redundancy visibility.",
-	}, func(_ context.Context, _ *struct{}) (*healthOutput, error) {
+	}, func(ctx context.Context, _ *struct{}) (*healthOutput, error) {
 		if h.Health != nil {
-			return &healthOutput{Body: h.Health()}, nil
+			return &healthOutput{Body: h.Health(ctx)}, nil
 		}
 		inst := Instance{Role: InstanceRolePrimary, State: InstanceStateActive}
 		if h.Instance != nil {
@@ -227,8 +248,8 @@ func RegisterHealth(hapi huma.API, h Handlers) {
 				Version:      apiVersion,
 				Uptime:       "0s",
 				Checks: map[string]string{
-					"configuration":    HealthStatusHealthy,
-					"internalServices": HealthStatusHealthy,
+					HealthCheckConfiguration:    HealthStatusHealthy,
+					HealthCheckInternalServices: HealthStatusHealthy,
 				},
 			},
 		}, nil

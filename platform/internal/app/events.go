@@ -33,6 +33,13 @@ const (
 	// TypeAPIStopped is stated when the instance stops serving.
 	TypeAPIStopped events.Type = "platform.app.api_stopped"
 
+	// TypeEventFabricStarted is stated once the instance's embedded broker is
+	// running and its own client is connected to it.
+	TypeEventFabricStarted events.Type = "platform.app.event_fabric_started"
+	// TypeEventFabricStartFailed is stated when either of those could not be
+	// brought up.
+	TypeEventFabricStartFailed events.Type = "platform.app.event_fabric_start_failed"
+
 	// TypeStandbyWaiting is stated when a standby is caught up and waiting.
 	TypeStandbyWaiting events.Type = "platform.app.standby_waiting"
 	// TypeStandbyOpenRetry is stated while a standby retries its projection.
@@ -234,6 +241,56 @@ func (APIStopped) EventType() events.Type { return TypeAPIStopped }
 
 // Severity reports a failed stop as an error and a clean one as routine.
 func (e APIStopped) Severity() events.Severity { return failureSeverity(e.Error) }
+
+// EventFabricStarted states that this instance's embedded broker is running and
+// its own client is connected to it.
+//
+// Both instances of a machine state it, because both run their own broker for
+// their whole lifetime. It is the fact an operator reads to learn which server
+// name and which cluster address belong to which process, and which peers that
+// process set out to join.
+//
+// It says the broker is up and reachable, not that the site's cluster has
+// formed. Routes are dialed in the background and a peer that is down is
+// retried, so membership is a later and separate thing to observe.
+type EventFabricStarted struct {
+	// ServerName is the embedded broker's identity, unique within the project.
+	ServerName string `json:"server_name"`
+	// ClusterName is the NATS cluster it belongs to, which is the site's.
+	ClusterName string `json:"cluster_name"`
+	// ClusterAddress is where its peers reach it, on the machine's own ip. It is
+	// the only address the broker binds: the platform's own client connects in
+	// process.
+	ClusterAddress string `json:"cluster_address"`
+	// Routes are the peers it dials, as the descriptor stated them. Empty on a
+	// site that deploys one instance in total.
+	Routes []string `json:"routes,omitempty"`
+}
+
+// EventType returns the event's stable dotted kind.
+func (EventFabricStarted) EventType() events.Type { return TypeEventFabricStarted }
+
+// EventFabricStartFailed states that this instance could not bring its event
+// fabric up, either because the broker would not start or because the client
+// would not connect to it.
+type EventFabricStartFailed struct {
+	// ServerName is the embedded broker's identity, as the descriptor stated it.
+	ServerName string `json:"server_name"`
+	// ClusterName is the cluster it was to join, as the descriptor stated it.
+	ClusterName string `json:"cluster_name"`
+	// ClusterAddress is the address it was to bind, as the descriptor stated it.
+	// A port already taken is the usual reason it did not.
+	ClusterAddress string `json:"cluster_address"`
+	// Error is what went wrong.
+	Error string `json:"error"`
+}
+
+// EventType returns the event's stable dotted kind.
+func (EventFabricStartFailed) EventType() events.Type { return TypeEventFabricStartFailed }
+
+// Severity reports an instance with no event fabric at all as an error. It stops
+// rather than running detached from the site.
+func (EventFabricStartFailed) Severity() events.Severity { return events.SeverityError }
 
 // StandbyWaiting states that a standby is caught up and waiting for Primary
 // Ownership. It carries no payload: the fact is the whole of it, and which

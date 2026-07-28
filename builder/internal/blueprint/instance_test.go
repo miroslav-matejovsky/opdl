@@ -17,6 +17,9 @@ func TestMachinePlatformStandby(t *testing.T) {
 		p := decodeHCL(t, `project "p" {
 		  environment = "production"
 		  site "north" {
+		    nats {
+		      cluster_name = "north-fabric"
+		    }
 		    machine "m1" {
 		      profile = "node"
 		      ip      = "10.0.1.10"
@@ -90,6 +93,9 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 			src := `project "p" {
 			  environment = "production"
 			  site "north" {
+			    nats {
+			      cluster_name = "north-fabric"
+			    }
 			    machine "m1" {
 			      profile = "node"
 			      ip      = "10.0.1.10"

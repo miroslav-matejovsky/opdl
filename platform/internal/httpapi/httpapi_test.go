@@ -53,10 +53,10 @@ func testPassiveInstance() api.Instance {
 // owns its lease, the Passive instance does not, and neither invents a lease
 // expiration the runtime has no lease subsystem to give.
 func TestHandlerServesHealthEndpoints(t *testing.T) {
-	activeSrv := httptest.NewServer(httpapi.NewHandler(testInstance, time.Now(), nil, false))
+	activeSrv := httptest.NewServer(httpapi.NewHandler(testInstance, time.Now(), nil, nil, false))
 	defer activeSrv.Close()
 
-	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
+	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil, nil))
 	defer passiveSrv.Close()
 
 	cases := []struct {
@@ -123,7 +123,7 @@ func do(t *testing.T, method, url string, body []byte, contentType string) *http
 // None of it comes from the journal, so it is answerable while the instance's
 // projection is still catching up and while it never will.
 func TestPassiveHandlerAnswersForItself(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil, nil))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
@@ -145,7 +145,7 @@ func TestPassiveHandlerAnswersForItself(t *testing.T) {
 // typo that the platform is temporarily unavailable, and they would retry
 // forever. Refusing is about who serves an operation, not about whether it exists.
 func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil, nil))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
@@ -160,7 +160,7 @@ func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 // regardless of path: the structural guard does not need a path to exist to
 // refuse writing to it.
 func TestPassiveHandlerServingModeMatrix(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil, nil))
 	defer srv.Close()
 
 	methods := []string{
@@ -230,7 +230,7 @@ func testJournallessInstance() api.Instance {
 // reports itself active and healthy: it holds Primary Ownership and there is
 // nothing wrong with it, even though it has no domain operation to serve.
 func TestJournallessHandlerIsActive(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now(), nil))
+	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now(), nil, nil))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
@@ -247,7 +247,7 @@ func TestJournallessHandlerIsActive(t *testing.T) {
 // TestJournallessHandlerStillReportsUnknownPathsAsNotFound checks the refusal is
 // scoped to the operations that exist, for the same reason the Passive one is.
 func TestJournallessHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now(), nil))
+	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now(), nil, nil))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
@@ -259,7 +259,7 @@ func TestJournallessHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 // the identity operation on one path with one shape, so an operator asks the same
 // question of either and the specification describes one endpoint.
 func TestActiveHandlerAnswersTheSameInstanceOperation(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewHandler(testInstance, time.Now(), nil, false))
+	srv := httptest.NewServer(httpapi.NewHandler(testInstance, time.Now(), nil, nil, false))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")

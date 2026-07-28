@@ -9,6 +9,13 @@ project "{{ .Name }}" {
   environment = "development"
 
   site "{{ .Site }}" {
+    # The site's event fabric cluster. Every instance the scenario deploys joins
+    # it, so the name is per run: two suites running at once on one host must not
+    # end up with servers routing into each other's cluster.
+    nats {
+      cluster_name = "{{ .RunToken }}"
+    }
+
 {{- range .Machines }}
     machine "{{ .Name }}" {
       profile         = "all-in-one"
@@ -43,6 +50,13 @@ project "{{ .Name }}" {
           shutdown_timeout    = "10s"
         }
 
+        # The instance's own embedded event fabric broker. Its cluster port is
+        # reserved from the same loopback pool as the API port, because it is
+        # the other listener the process binds.
+        nats {
+          cluster_port = {{ .NATSPort }}
+        }
+
         winservice {
           name         = "{{ $.RunToken }}-{{ $.Name }}-{{ .Name }}-primary"
           display_name = "OPDL {{ $.Name }} {{ .Name }} (Primary Instance)"
@@ -69,6 +83,10 @@ project "{{ .Name }}" {
           local_port          = {{ .StandbyAPIPort }}
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = {{ .StandbyNATSPort }}
         }
 
         winservice {

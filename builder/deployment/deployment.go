@@ -3,11 +3,16 @@ package deployment
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// routeScheme is the URL scheme a NATS route is written with. It is what says a
+// peer address is dialed as a route rather than as a client connection.
+const routeScheme = "nats"
 
 // Descriptor is one machine's deployment definition: everything the platform
 // needs to run on that machine, projected from the project blueprint. It is the
@@ -202,6 +207,48 @@ type Instance struct {
 	// APIShutdownTimeout bounds the graceful drain of this instance's listener
 	// when it stops serving.
 	APIShutdownTimeout string `json:"api_shutdown_timeout"`
+	// NATS is this instance's embedded event fabric server. Every deployed
+	// instance runs one, so the record is a value rather than an optional block:
+	// there is no instance in a descriptor that has no fabric.
+	NATS NATS `json:"nats"`
+}
+
+// NATS is one instance's resolved embedded event fabric server: what it is
+// called, which cluster it belongs to, and where its peers reach it.
+//
+// The server belongs to the instance and runs for the whole life of the
+// process, whether that instance is Active or Passive. The client that reaches
+// it belongs to the site, and reaches it in process rather than over any
+// listener, which is why there is no client address here: the server binds none.
+type NATS struct {
+	// ServerName is the embedded server's identity, resolved by the builder as
+	// "<machine>-<role>". Machine names are unique within a project, so no two
+	// servers a project deploys are named the same.
+	ServerName string `json:"server_name"`
+	// ClusterName is the NATS cluster this server belongs to, resolved by the
+	// builder from the site's authored nats.cluster_name.
+	//
+	// The site is the boundary because the site is what has to converge: servers
+	// route only to peers naming the same cluster, so two sites of one project
+	// form two clusters and never exchange a message by accident.
+	ClusterName string `json:"cluster_name"`
+	// ClusterAddress is where this server accepts route connections from its
+	// peers: the machine's own ip joined to the instance's authored nats
+	// cluster_port.
+	//
+	// It is the one listener in a descriptor that is not on loopback, and it has
+	// to be: the site's cluster spans machines, so a peer on another host has to
+	// be able to reach it. It carries no client traffic; the platform's own
+	// client never touches a socket.
+	ClusterAddress string `json:"cluster_address"`
+	// Routes are the peers this server dials to join the cluster, as NATS route
+	// URLs ("nats://10.0.1.11:6222").
+	//
+	// They are every other deployed instance at the site, including the other
+	// instance of this machine. The list is empty exactly when the site deploys
+	// one instance in total, which is the one case where a member has nobody to
+	// route to, so it is omitted rather than written as an empty array.
+	Routes []string `json:"routes,omitempty"`
 }
 
 // WinService is one instance's resolved Windows Service identity.
@@ -300,26 +347,44 @@ func validateService(prefix string, instance Instance) error {
 }
 
 // validateEndpoints checks each deployed instance carries the endpoints it binds,
-// and that no two listeners on the machine were resolved onto the same address.
+// and that no two listeners on the machine were resolved onto the same port.
 //
-// The addresses are checked against each other rather than only for validity
-// because both instances run at once on one host. Two listeners resolved to one
-// address is a machine where the second process cannot start, and every address
-// here derives from the same machine ip, so a repeated port is a repeated
-// address.
+// The ports are checked against each other rather than only for validity because
+// both instances run at once on one host, and each one binds two listeners: its
+// API and its embedded event fabric server. Ports rather than addresses, because
+// the two kinds no longer sit on one interface: an API is on loopback and a
+// cluster address is on the machine's ip. Comparing addresses would call those
+// distinct on a machine whose ip is 127.0.0.1, where they are the same socket.
 func (d Descriptor) validateEndpoints() error {
-	if err := validateInstanceEndpoints("primary", d.Primary); err != nil {
+	if err := validateInstanceEndpoints("primary", d.IP, d.Primary); err != nil {
 		return err
 	}
-	if !d.HasStandby() {
-		return nil
+	if d.HasStandby() {
+		if err := validateInstanceEndpoints("standby", d.IP, *d.Standby); err != nil {
+			return err
+		}
 	}
-	if err := validateInstanceEndpoints("standby", *d.Standby); err != nil {
-		return err
+
+	listeners := []struct{ where, address string }{
+		{"primary.api_address", d.Primary.APIAddress},
+		{"primary.nats.cluster_address", d.Primary.NATS.ClusterAddress},
 	}
-	if d.Primary.APIAddress == d.Standby.APIAddress {
-		return fmt.Errorf("primary.api_address and standby.api_address are both %q; the two instances run together and cannot share a listener",
-			d.Primary.APIAddress)
+	if d.HasStandby() {
+		listeners = append(listeners,
+			struct{ where, address string }{"standby.api_address", d.Standby.APIAddress},
+			struct{ where, address string }{"standby.nats.cluster_address", d.Standby.NATS.ClusterAddress},
+		)
+	}
+	taken := make(map[string]string, len(listeners))
+	for _, l := range listeners {
+		_, port, err := net.SplitHostPort(l.address)
+		if err != nil {
+			return fmt.Errorf("%s: %q must be host:port: %w", l.where, l.address, err)
+		}
+		if owner, used := taken[port]; used {
+			return fmt.Errorf("%s and %s are both on port %s; the machine's listeners run together and cannot share one", owner, l.where, port)
+		}
+		taken[port] = l.where
 	}
 	return nil
 }
@@ -359,7 +424,7 @@ func (d Descriptor) validateLocalFiles() error {
 	return nil
 }
 
-func validateInstanceEndpoints(prefix string, instance Instance) error {
+func validateInstanceEndpoints(prefix, machineIP string, instance Instance) error {
 	if err := requireAddress(prefix+".api_address", instance.APIAddress); err != nil {
 		return err
 	}
@@ -381,8 +446,64 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	if _, err := validatePositiveDuration(prefix+".api_read_header_timeout", instance.APIReadHeaderTimeout); err != nil {
 		return err
 	}
-	_, err := validatePositiveDuration(prefix+".api_shutdown_timeout", instance.APIShutdownTimeout)
-	return err
+	if _, err := validatePositiveDuration(prefix+".api_shutdown_timeout", instance.APIShutdownTimeout); err != nil {
+		return err
+	}
+	if strings.TrimSpace(instance.NATS.ServerName) == "" {
+		return fmt.Errorf("%s.nats.server_name is required", prefix)
+	}
+	if strings.TrimSpace(instance.NATS.ClusterName) == "" {
+		return fmt.Errorf("%s.nats.cluster_name is required", prefix)
+	}
+	if err := requireAddress(prefix+".nats.cluster_address", instance.NATS.ClusterAddress); err != nil {
+		return err
+	}
+	if err := requireMachineHost(prefix+".nats.cluster_address", machineIP, instance.NATS.ClusterAddress); err != nil {
+		return err
+	}
+	return validateRoutes(prefix, instance.NATS)
+}
+
+// validateRoutes checks the peers this instance's embedded server dials are
+// usable route URLs, distinct, and not this server's own listener.
+//
+// An empty list is valid: a site that deploys one instance in total has no peer
+// to route to. What is not valid is a route to this instance's own cluster
+// address, which would be a server dialing itself, or one peer listed twice,
+// which is a resolution that lost track of the site's membership.
+func validateRoutes(prefix string, nats NATS) error {
+	seen := make(map[string]int, len(nats.Routes))
+	for index, route := range nats.Routes {
+		where := fmt.Sprintf("%s.nats.routes[%d]", prefix, index)
+		address, err := routeAddress(route)
+		if err != nil {
+			return fmt.Errorf("%s: %w", where, err)
+		}
+		if address == nats.ClusterAddress {
+			return fmt.Errorf("%s %q is this instance's own cluster address; a server's routes are its peers", where, route)
+		}
+		if first, repeated := seen[address]; repeated {
+			return fmt.Errorf("%s and %s.nats.routes[%d] are both %q; each peer is routed to once", where, prefix, first, route)
+		}
+		seen[address] = index
+	}
+	return nil
+}
+
+// routeAddress returns the host:port a route URL points at, checking the URL is
+// one the embedded server can dial.
+func routeAddress(route string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(route))
+	if err != nil {
+		return "", fmt.Errorf("route %q is not a URL: %w", route, err)
+	}
+	if parsed.Scheme != routeScheme {
+		return "", fmt.Errorf("route %q must use the %s:// scheme", route, routeScheme)
+	}
+	if err := validateAddress(parsed.Host); err != nil {
+		return "", fmt.Errorf("route %q: %w", route, err)
+	}
+	return parsed.Host, nil
 }
 
 // pathKey normalizes a resolved path for comparison. This repo is Windows-only,
@@ -405,6 +526,11 @@ func requireAddress(where, addr string) error {
 
 // requireLoopback checks a host:port field is bound on the loopback interface, so
 // nothing outside the machine can reach it.
+//
+// The platform API is what this holds for. It answers for the instance running
+// on its own host, to an operator or a co-located service, and is never reached
+// from another machine. The event fabric's cluster address is the deliberate
+// exception and is checked by requireMachineHost instead.
 func requireLoopback(where, addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -413,6 +539,25 @@ func requireLoopback(where, addr string) error {
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
 		return fmt.Errorf("%s %q is not on the loopback interface; the platform API is machine-local and is never exposed to the network", where, addr)
+	}
+	return nil
+}
+
+// requireMachineHost checks a host:port field is bound on the machine's own ip.
+//
+// The event fabric's cluster address is what this holds for, and it is why the
+// machine states an ip at all. The site's embedded servers form one cluster
+// across machines, so each one has to be reachable at an address its peers can
+// dial. Binding it anywhere else is either unreachable to the site or a listener
+// on an interface the deployment did not declare.
+func requireMachineHost(where, machineIP, addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%s: %q must be host:port: %w", where, addr, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.Equal(net.ParseIP(machineIP)) {
+		return fmt.Errorf("%s %q is not on the machine's ip %q; the site's event fabric peers reach this server there", where, addr, machineIP)
 	}
 	return nil
 }

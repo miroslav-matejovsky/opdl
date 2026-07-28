@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -35,7 +36,11 @@ const (
 // endpoints are served alongside the operations; otherwise only the operations
 // are, and the authoritative specification is the checked-in
 // api-specifications/openapi.yaml.
-func NewHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, exposeSpec bool) http.Handler {
+//
+// eventFabric probes this instance's embedded event fabric for /health. It may
+// be nil, which is what the boundary tests serve; a running instance always has
+// one, because it starts its broker before it serves anything.
+func NewHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, eventFabric func(context.Context) error, exposeSpec bool) http.Handler {
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	if !exposeSpec {
@@ -43,7 +48,7 @@ func NewHandler(instance func() api.Instance, started time.Time, leaseView func(
 		cfg.DocsPath = ""
 		cfg.SchemasPath = ""
 	}
-	handlers := api.NewHealth(instance, started, leaseView)
+	handlers := api.NewHealth(instance, started, leaseView, eventFabric)
 	handlers.Instance = instance
 	api.Register(humago.New(mux, cfg), handlers)
 	return mux
@@ -67,8 +72,8 @@ func NewHandler(instance func() api.Instance, started time.Time, leaseView func(
 // It takes no domain services because there are none to take. A Passive
 // instance's projection is opened for catch-up so it can take over quickly, and
 // it is never wired to a listener.
-func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView) http.Handler {
-	return newRefusingHandler(ModePassive, instance, started, leaseView, func(current api.Instance) string {
+func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, eventFabric func(context.Context) error) http.Handler {
+	return newRefusingHandler(ModePassive, instance, started, leaseView, eventFabric, func(current api.Instance) string {
 		detail := "this instance is passive and does not serve domain operations"
 		if current.PeerAddress != "" {
 			detail += "; the machine's other instance holds Primary Ownership and serves at " + current.PeerAddress
@@ -89,8 +94,8 @@ func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseVie
 // The refusal is permanent for the life of the deployment rather than a state
 // that will pass, which is why it names the deployment rather than the instance:
 // a caller that retries elsewhere, or later, gets the same answer.
-func NewJournallessHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView) http.Handler {
-	return newRefusingHandler(ModeActive, instance, started, leaseView, func(api.Instance) string {
+func NewJournallessHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, eventFabric func(context.Context) error) http.Handler {
+	return newRefusingHandler(ModeActive, instance, started, leaseView, eventFabric, func(api.Instance) string {
 		return "this deployment has no event storage, so it serves no domain operations; " +
 			"author a platform.event_storage block and rebuild to get a site journal"
 	}, "no_event_storage")
@@ -107,12 +112,12 @@ func NewJournallessHandler(instance func() api.Instance, started time.Time, leas
 //
 // In ModePassive, a structural guard ensures that any non-GET/HEAD request is
 // refused even if an operation is omitted from DomainPaths.
-func newRefusingHandler(mode ServingMode, instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, describe func(api.Instance) string, title string) http.Handler {
+func newRefusingHandler(mode ServingMode, instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, eventFabric func(context.Context) error, describe func(api.Instance) string, title string) http.Handler {
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	cfg.OpenAPIPath, cfg.DocsPath, cfg.SchemasPath = "", "", ""
 	hapi := humago.New(mux, cfg)
-	health := api.NewHealth(instance, started, leaseView)
+	health := api.NewHealth(instance, started, leaseView, eventFabric)
 	health.Instance = instance
 	api.RegisterInstance(hapi, instance)
 	api.RegisterHealth(hapi, health)

@@ -15,9 +15,11 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/applog"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/natsserver"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/eventstore"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/eventfabric"
 )
 
 // Run starts the platform runtime with the given command-line arguments. It
@@ -175,18 +177,6 @@ func Run(args []string) (runErr error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	proc := process{
-		descriptor: descriptor,
-		cfg:        cfg,
-		role:       role,
-		started:    started,
-		factory:    factory,
-		local:      local,
-		record:     record,
-		state:      stateStore,
-		log:        logger.Logger,
-	}
-
 	if err := local.Publish(ctx, ProcessStarted{
 		EventsFile:        record.Path(),
 		MachineEventsFile: machineStore.Path(),
@@ -202,6 +192,66 @@ func Run(args []string) (runErr error) {
 	// incarnation this instance has had, not every one except its launches.
 	if err := local.Publish(ctx, epochAdvanced(stateStore.Path(), state.ReasonProcessStarted, incarnation)); err != nil {
 		return err
+	}
+
+	// The instance's embedded broker comes up before the runtime does and stays
+	// up for the whole process, in every state it later serves: it is the
+	// instance's own infrastructure, like its listener, and not something an
+	// activation composes. A broker that will not start stops the process here,
+	// where the failure is one thing, rather than at the first activation.
+	//
+	// The site's client is opened onto it immediately, because a broker nothing
+	// is connected to proves nothing. What the runtime is handed is the client's
+	// Check, and the health endpoints are what call it.
+	fabricConfig := fabricServerConfig(instanceOf(descriptor, role))
+	fabricFailed := func(err error) EventFabricStartFailed {
+		return EventFabricStartFailed{
+			ServerName:     fabricConfig.Name,
+			ClusterName:    fabricConfig.ClusterName,
+			ClusterAddress: fabricConfig.ClusterAddress,
+			Error:          err.Error(),
+		}
+	}
+	broker, err := natsserver.Start(fabricConfig)
+	if err != nil {
+		return errors.Join(err, local.Publish(ctx, fabricFailed(err)))
+	}
+	// Registered before the client's close so it runs after it: the broker is not
+	// shut down under a connection that is still open.
+	defer broker.Close()
+
+	fabric, err := eventfabric.Connect(broker, fabricClientName(descriptor, role))
+	if err != nil {
+		return errors.Join(err, local.Publish(ctx, fabricFailed(err)))
+	}
+	defer fabric.Close()
+
+	logger.Info("event fabric started",
+		"nats_server_name", fabricConfig.Name,
+		"nats_cluster_name", fabricConfig.ClusterName,
+		"nats_cluster_address", fabricConfig.ClusterAddress,
+		"nats_routes", fabricConfig.Routes,
+	)
+	if err := local.Publish(ctx, EventFabricStarted{
+		ServerName:     fabricConfig.Name,
+		ClusterName:    fabricConfig.ClusterName,
+		ClusterAddress: fabricConfig.ClusterAddress,
+		Routes:         fabricConfig.Routes,
+	}); err != nil {
+		return err
+	}
+
+	proc := process{
+		descriptor:   descriptor,
+		cfg:          cfg,
+		role:         role,
+		started:      started,
+		factory:      factory,
+		local:        local,
+		record:       record,
+		state:        stateStore,
+		fabricHealth: fabric.Check,
+		log:          logger.Logger,
 	}
 
 	runErr = runProcess(ctx, proc)

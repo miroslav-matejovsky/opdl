@@ -35,6 +35,18 @@ func TestApplicationEventsDeclareTheirContract(t *testing.T) {
 		{name: "api active", event: APIActive{}, wantType: TypeAPIActive, want: events.SeverityInfo},
 		{name: "api stopped cleanly", event: APIStopped{}, wantType: TypeAPIStopped, want: events.SeverityInfo},
 		{name: "api stopped failing", event: APIStopped{Error: "boom"}, wantType: TypeAPIStopped, want: events.SeverityError},
+		{
+			name:     "event fabric started",
+			event:    EventFabricStarted{},
+			wantType: TypeEventFabricStarted,
+			want:     events.SeverityInfo,
+		},
+		{
+			name:     "event fabric start failed",
+			event:    EventFabricStartFailed{},
+			wantType: TypeEventFabricStartFailed,
+			want:     events.SeverityError,
+		},
 		{name: "standby waiting", event: StandbyWaiting{}, wantType: TypeStandbyWaiting, want: events.SeverityInfo},
 		{name: "standby open retry", event: StandbyOpenRetry{}, wantType: TypeStandbyOpenRetry, want: events.SeverityWarn},
 		{name: "standby ready", event: StandbyReady{}, wantType: TypeStandbyReady, want: events.SeverityInfo},

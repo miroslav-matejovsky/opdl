@@ -15,10 +15,16 @@ import (
 const (
 	// machineJSON is the machine's own record: the shared event store every
 	// machine states, standby or not.
-	machineJSON  = `"machine_events_file":".data/platform/machine-events.jsonl"`
-	primaryJSON  = `"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080",` + timeoutsJSON + `}`
-	standbyJSON  = `"standby":{` + standbyFilesJSON + `,"api_address":"127.0.0.1:8081",` + timeoutsJSON + `}`
-	timeoutsJSON = `"api_read_header_timeout":"5s","api_shutdown_timeout":"10s"`
+	machineJSON = `"machine_events_file":".data/platform/machine-events.jsonl"`
+	primaryJSON = `"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080",` + instanceExtrasJSON + `}`
+	standbyJSON = `"standby":{` + standbyFilesJSON + `,"api_address":"127.0.0.1:8081",` + instanceExtrasJSON + `}`
+	// instanceExtrasJSON is what every instance record carries beyond its files
+	// and its API address: the listener timeouts, and the embedded event fabric
+	// broker the instance runs. Tests that remove one of these spell the rest
+	// out inline instead.
+	instanceExtrasJSON = `"api_read_header_timeout":"5s","api_shutdown_timeout":"10s",` + natsJSON
+	// natsJSON is one instance's complete embedded event fabric record.
+	natsJSON = `"nats":{"server_name":"mock-primary","cluster_name":"local","cluster_address":"127.0.0.1:6222"}`
 	// The local files an instance owns. Each is stated on its own instance record,
 	// so a descriptor missing either is a startup failure rather than an instance
 	// that opens a path nothing authored.
@@ -46,35 +52,62 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 		"missing primary": {json: `{` + machineJSON + `,` + standbyJSON + `,` + leaseJSON + `}`, err: "primary is required"},
 		"null primary":    {json: `{` + machineJSON + `,"primary":null}`, err: "primary is required"},
 		"missing primary events file": {
-			json: `{` + machineJSON + `,"primary":{"state_file":".data/state.json","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
+			json: `{` + machineJSON + `,"primary":{"state_file":".data/state.json","api_address":"127.0.0.1:8080",` + instanceExtrasJSON + `}}`,
 			err:  "primary.events_file is required",
 		},
 		"missing primary state file": {
-			json: `{` + machineJSON + `,"primary":{"events_file":".data/events.jsonl","log_file":".data/platform.log","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
+			json: `{` + machineJSON + `,"primary":{"events_file":".data/events.jsonl","log_file":".data/platform.log","api_address":"127.0.0.1:8080",` + instanceExtrasJSON + `}}`,
 			err:  "primary.state_file is required",
 		},
 		"missing primary log file": {
-			json: `{` + machineJSON + `,"primary":{"events_file":".data/events.jsonl","state_file":".data/state.json","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
+			json: `{` + machineJSON + `,"primary":{"events_file":".data/events.jsonl","state_file":".data/state.json","api_address":"127.0.0.1:8080",` + instanceExtrasJSON + `}}`,
 			err:  "primary.log_file is required",
 		},
 		"missing primary read header timeout": {
-			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_shutdown_timeout":"10s"}}`,
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_shutdown_timeout":"10s",` + natsJSON + `}}`,
 			err:  "primary.api_read_header_timeout is required",
 		},
 		"bad primary shutdown timeout": {
-			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_read_header_timeout":"5s","api_shutdown_timeout":"soon"}}`,
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_read_header_timeout":"5s","api_shutdown_timeout":"soon",` + natsJSON + `}}`,
 			err:  "primary.api_shutdown_timeout",
 		},
+		// The embedded broker is required on every deployed instance, and an
+		// omitted field would decode as an unnamed server on no address rather
+		// than as an omission, so each part is guarded on its own.
+		"missing primary nats": {
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080","api_read_header_timeout":"5s","api_shutdown_timeout":"10s"}}`,
+			err:  "primary.nats is required",
+		},
+		"null primary nats": {
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080","api_read_header_timeout":"5s","api_shutdown_timeout":"10s","nats":null}}`,
+			err:  "primary.nats is required",
+		},
+		"missing primary nats server name": {
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080","api_read_header_timeout":"5s","api_shutdown_timeout":"10s","nats":{"cluster_name":"local","cluster_address":"127.0.0.1:6222"}}}`,
+			err:  "primary.nats.server_name is required",
+		},
+		"missing primary nats cluster name": {
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080","api_read_header_timeout":"5s","api_shutdown_timeout":"10s","nats":{"server_name":"mock-primary","cluster_address":"127.0.0.1:6222"}}}`,
+			err:  "primary.nats.cluster_name is required",
+		},
+		"missing primary nats cluster address": {
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080","api_read_header_timeout":"5s","api_shutdown_timeout":"10s","nats":{"server_name":"mock-primary","cluster_name":"local"}}}`,
+			err:  "primary.nats.cluster_address is required",
+		},
+		"missing standby nats": {
+			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{` + standbyFilesJSON + `,"api_address":"127.0.0.1:8081","api_read_header_timeout":"5s","api_shutdown_timeout":"10s"},` + leaseJSON + `}`,
+			err:  "standby.nats is required",
+		},
 		"missing standby events file": {
-			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"state_file":".data/standby/state.json","log_file":".data/standby/platform.log","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"state_file":".data/standby/state.json","log_file":".data/standby/platform.log","api_address":"127.0.0.1:8081",` + instanceExtrasJSON + `},` + leaseJSON + `}`,
 			err:  "standby.events_file is required",
 		},
 		"missing standby state file": {
-			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"events_file":".data/standby/events.jsonl","log_file":".data/standby/platform.log","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"events_file":".data/standby/events.jsonl","log_file":".data/standby/platform.log","api_address":"127.0.0.1:8081",` + instanceExtrasJSON + `},` + leaseJSON + `}`,
 			err:  "standby.state_file is required",
 		},
 		"missing standby log file": {
-			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"events_file":".data/standby/events.jsonl","state_file":".data/standby/state.json","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"events_file":".data/standby/events.jsonl","state_file":".data/standby/state.json","api_address":"127.0.0.1:8081",` + instanceExtrasJSON + `},` + leaseJSON + `}`,
 			err:  "standby.log_file is required",
 		},
 		"lease without a standby": {
@@ -149,6 +182,33 @@ func TestDescriptorDecodesARedundantMachine(t *testing.T) {
 	require.Equal(t, "127.0.0.1:8081", descriptor.Standby.APIAddress)
 	require.NotNil(t, descriptor.Lease)
 	require.Equal(t, "30s", descriptor.Lease.LagBound)
+}
+
+// TestDescriptorDecodesTheEventFabricRoutes checks the peers an instance's
+// embedded server dials survive the descriptor, and that having none decodes as
+// having none.
+//
+// The routes are the one part of the fabric record with no required check on
+// them, because a site that deploys a single instance correctly carries an empty
+// list. That makes it the part worth decoding explicitly: a truncated list is
+// indistinguishable from a lone instance, so this pins what each shape means.
+func TestDescriptorDecodesTheEventFabricRoutes(t *testing.T) {
+	const routed = `{` + machineJSON + `,"primary":{` + primaryFilesJSON +
+		`,"api_address":"127.0.0.1:8080","api_read_header_timeout":"5s","api_shutdown_timeout":"10s"` +
+		`,"nats":{"server_name":"mock-primary","cluster_name":"local","cluster_address":"10.0.1.10:6222"` +
+		`,"routes":["nats://10.0.1.10:6223","nats://10.0.1.11:6222"]}}}`
+
+	var descriptor config.Descriptor
+	require.NoError(t, json.Unmarshal([]byte(routed), &descriptor))
+	require.Equal(t, "10.0.1.10:6222", descriptor.Primary.NATS.ClusterAddress,
+		"the cluster address is on the machine's ip, not on loopback: the site's cluster spans machines")
+	require.Equal(t, []string{"nats://10.0.1.10:6223", "nats://10.0.1.11:6222"}, descriptor.Primary.NATS.Routes)
+
+	// The mock descriptor is a site of one instance, so it carries no routes at
+	// all and is still a complete record.
+	var alone config.Descriptor
+	require.NoError(t, json.Unmarshal([]byte(standbyless), &alone))
+	require.Empty(t, alone.Primary.NATS.Routes)
 }
 
 // TestDescriptorInstanceSelectsByRole checks the accessor the runtime uses to

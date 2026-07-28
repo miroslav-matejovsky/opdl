@@ -33,6 +33,7 @@ func validProject() *blueprint.Project {
 		Environment: "production",
 		Sites: []blueprint.Site{{
 			Name:     "north",
+			NATS:     &blueprint.SiteNATS{ClusterName: "customer-a-north"},
 			Machines: []blueprint.Machine{validMachine(), namedMachine("relay", "10.0.1.11")},
 		}},
 	}
@@ -50,6 +51,7 @@ func validMachine() blueprint.Machine {
 			StateFile:    "D:/opdl/sensor/primary/state.json",
 			LogFile:      "D:/opdl/sensor/primary/platform.log",
 			API:          &blueprint.API{LocalPort: 8080, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
+			NATS:         &blueprint.NATS{ClusterPort: 6222},
 			WinService:   &blueprint.WinService{Name: "primary"},
 		},
 		Standby: &blueprint.Standby{
@@ -58,6 +60,7 @@ func validMachine() blueprint.Machine {
 			LogFile:      "D:/opdl/sensor/standby/platform.log",
 			Lease:        validLease("D:/opdl/sensor/lease"),
 			API:          &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
+			NATS:         &blueprint.NATS{ClusterPort: 6223},
 			WinService:   &blueprint.WinService{Name: "standby"},
 		},
 	}
@@ -118,5 +121,6 @@ func disableStandby(p *blueprint.Project) {
 	standby.LogFile = ""
 	standby.Lease = nil
 	standby.API = nil
+	standby.NATS = nil
 	standby.WinService = nil
 }

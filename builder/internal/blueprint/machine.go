@@ -49,27 +49,37 @@ func (m Machine) Lease() *Lease {
 
 // Endpoints resolves one instance's authored endpoint ports, or nil when that
 // instance is not deployed.
+//
+// The embedded event fabric port is resolved alongside the API port because the
+// instance binds both for its whole lifetime. A deployed instance is required to
+// author both, so a zero NATSClientPort here is a blueprint that did not pass
+// validation.
 func (m Machine) Endpoints(standby bool) *Endpoints {
 	var api *API
+	var nats *NATS
 	if !standby {
 		if m.Primary == nil {
 			return nil
 		}
-		api = m.Primary.API
+		api, nats = m.Primary.API, m.Primary.NATS
 	} else {
 		if m.Standby == nil || m.Standby.Disabled {
 			return nil
 		}
-		api = m.Standby.API
+		api, nats = m.Standby.API, m.Standby.NATS
 	}
 	if api == nil {
 		return nil
 	}
-	return &Endpoints{
+	resolved := &Endpoints{
 		APILocalPort:         api.LocalPort,
 		APIReadHeaderTimeout: strings.TrimSpace(api.ReadHeaderTimeout),
 		APIShutdownTimeout:   strings.TrimSpace(api.ShutdownTimeout),
 	}
+	if nats != nil {
+		resolved.NATSClusterPort = nats.ClusterPort
+	}
+	return resolved
 }
 
 // Files returns one instance's authored local files, or the zero InstanceFiles
@@ -177,10 +187,12 @@ func validateMachinePorts(machine Machine) error {
 	}
 	listeners := []listener{
 		{"primary.api.local_port", machine.Primary.API.LocalPort},
+		{"primary.nats.cluster_port", machine.Primary.NATS.ClusterPort},
 	}
 	if !machine.Standby.Disabled {
 		listeners = append(listeners,
 			listener{"standby.api.local_port", machine.Standby.API.LocalPort},
+			listener{"standby.nats.cluster_port", machine.Standby.NATS.ClusterPort},
 		)
 	}
 	// A service's health check port is a listener on this machine like any other.

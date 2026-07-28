@@ -57,6 +57,16 @@ type process struct {
 	// active composition advances it again each time the instance takes ownership.
 	// There is nothing to close: every write is complete when it returns.
 	state *state.Store
+	// fabricHealth probes this instance's event fabric for the health endpoint:
+	// it round-trips a message through the embedded broker and reports what
+	// happened. It is the site client's Check, held as a func so nothing below
+	// the composition root takes the client itself and starts using it for
+	// something other than saying whether it works.
+	//
+	// It is set for every running process, because an instance starts its broker
+	// and connects to it before it runs anything. It is nil only in a test that
+	// composes a process without one.
+	fabricHealth func(context.Context) error
 	// log is this process's application log, already stamped with the machine and
 	// the instance role. It is what the runtime says things through; what it
 	// states goes through local. A record here is for a person reading a failure,
@@ -204,7 +214,7 @@ func runProcess(ctx context.Context, proc process) (runErr error) {
 	address := instanceOf(descriptor, role).APIAddress
 	passive := httpapi.NewPassiveHandler(func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStatePassive)
-	}, proc.started, leaseView)
+	}, proc.started, leaseView, proc.fabricHealth)
 	standby := role == redundancy.RoleStandby
 	server, err := openInstanceServer(ctx, address, proc.cfg.ReadHeaderTimeout(standby), passive)
 	if err != nil {
@@ -400,6 +410,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 	},
 		proc.started,
 		func() api.LeaseView { return leaseViewOf(lease) },
+		proc.fabricHealth,
 		// exposeSpec is false: the authoritative OpenAPI artifact is
 		// api-specifications/openapi.yaml in git, not an endpoint on the runtime.
 		false))
@@ -459,7 +470,7 @@ func runActiveWithoutJournal(ctx context.Context, proc process, server *instance
 
 	server.serveWith(httpapi.NewJournallessHandler(func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStateActive)
-	}, proc.started, func() api.LeaseView { return leaseViewOf(lease) }))
+	}, proc.started, func() api.LeaseView { return leaseViewOf(lease) }, proc.fabricHealth))
 	proc.log.Info("active; domain operations are refused",
 		"address", address, "instance_state", api.InstanceStateActive, "reason", "this deployment has no event storage")
 
