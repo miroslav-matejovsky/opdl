@@ -3,6 +3,7 @@ package smoke
 import (
 	"net/http"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -70,6 +71,23 @@ func BuildAndRunSingleMachine(t *testing.T) {
 	require.Contains(t, logs, "state_file   "+filepath.ToSlash(node.Sockets.StateFile))
 	require.NotContains(t, logs, "event fabric configuration",
 		"a deployment with no event storage starts no Event Fabric to report one")
+
+	// The application log is the other local file the blueprint authored, and it
+	// is a separate record from the events: the instance says what it was doing
+	// here and states facts there. Every line names the instance that wrote it, so
+	// a line lifted out of the file still says where it came from.
+	records := harness.ApplicationLog(t, node.Sockets.LogFile)
+	require.NotEmpty(t, records, "the process logs its startup before it serves")
+	for _, record := range records {
+		require.Equal(t, "node-a", record.Machine)
+		require.Equal(t, harness.RolePrimary, record.Instance)
+	}
+	require.True(t, slices.ContainsFunc(records, func(r harness.LogRecord) bool {
+		return r.Message == "platform starting"
+	}), "the log opens with the startup record: %+v", records)
+	require.True(t, slices.ContainsFunc(records, func(r harness.LogRecord) bool {
+		return r.Message == "active; domain operations are refused"
+	}), "a deployment with no journal says so in its log as well as in its refusals: %+v", records)
 
 	// The instance recorded its incarnation durably. This one has had two: the
 	// process started, and then it took Primary Ownership. A machine with no

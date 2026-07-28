@@ -55,9 +55,11 @@ const (
 	machineEventsFile = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
 	eventsFile        = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
 	stateFile         = "D:/opdl/customer-a/north/sensor/primary/state.json"
+	logFile           = "D:/opdl/customer-a/north/sensor/primary/platform.log"
 	apiAddr           = "127.0.0.1:8080"
 	standbyEventsFile = "D:/opdl/customer-a/north/sensor/standby/events.jsonl"
 	standbyStateFile  = "D:/opdl/customer-a/north/sensor/standby/state.json"
+	standbyLogFile    = "D:/opdl/customer-a/north/sensor/standby/platform.log"
 	standbyAPIAddr    = "127.0.0.1:8081"
 
 	// The listener timeouts are on the instance record for the same reason the
@@ -103,6 +105,7 @@ func checkRoundTripFor(hasStandby bool) error {
 		builtStandby = &builderdeployment.Instance{
 			EventsFile:           standbyEventsFile,
 			StateFile:            standbyStateFile,
+			LogFile:              standbyLogFile,
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
@@ -110,6 +113,7 @@ func checkRoundTripFor(hasStandby bool) error {
 		wantStandby = &platformconfig.Instance{
 			EventsFile:           standbyEventsFile,
 			StateFile:            standbyStateFile,
+			LogFile:              standbyLogFile,
 			APIAddress:           standbyAPIAddr,
 			APIReadHeaderTimeout: standbyReadHeaderTimeout,
 			APIShutdownTimeout:   standbyShutdownTimeout,
@@ -145,6 +149,7 @@ func checkRoundTripFor(hasStandby bool) error {
 		Primary: builderdeployment.Instance{
 			EventsFile:           eventsFile,
 			StateFile:            stateFile,
+			LogFile:              logFile,
 			APIAddress:           apiAddr,
 			APIReadHeaderTimeout: readHeaderTimeout,
 			APIShutdownTimeout:   shutdownTimeout,
@@ -179,6 +184,7 @@ func checkRoundTripFor(hasStandby bool) error {
 		Primary: platformconfig.Instance{
 			EventsFile:           eventsFile,
 			StateFile:            stateFile,
+			LogFile:              logFile,
 			APIAddress:           apiAddr,
 			APIReadHeaderTimeout: readHeaderTimeout,
 			APIShutdownTimeout:   shutdownTimeout,
@@ -213,7 +219,7 @@ func checkWireShape(data []byte, hasStandby bool) error {
 
 	// The endpoints an instance binds and the files it owns belong to that
 	// instance.
-	for _, field := range []string{"events_file", "state_file", "api_address"} {
+	for _, field := range []string{"events_file", "state_file", "log_file", "api_address"} {
 		if _, ok := wire[field]; ok {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints and local files belong to an instance", field)
 		}
@@ -244,7 +250,7 @@ func checkWireInstance(wire map[string]json.RawMessage, role string, deployed bo
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
-	for _, field := range []string{"events_file", "state_file", "api_address", "api_read_header_timeout", "api_shutdown_timeout"} {
+	for _, field := range []string{"events_file", "state_file", "log_file", "api_address", "api_read_header_timeout", "api_shutdown_timeout"} {
 		if _, ok := fields[field]; !ok {
 			return fmt.Errorf("builder descriptor omitted %s.%s", role, field)
 		}

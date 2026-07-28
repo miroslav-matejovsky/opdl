@@ -16,6 +16,7 @@ project "customer-a" {
       primary {
         eventlog_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
         state_file    = "D:/opdl/customer-a/north/sensor/primary/state.json"
+        log_file      = "D:/opdl/customer-a/north/sensor/primary/platform.log"
 
         api {
           local_port          = 8080
@@ -44,6 +45,7 @@ project "customer-a" {
       primary {
         eventlog_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
         state_file    = "D:/opdl/customer-a/north/local-server/primary/state.json"
+        log_file      = "D:/opdl/customer-a/north/local-server/primary/platform.log"
 
         api {
           local_port          = 8080
@@ -61,6 +63,7 @@ project "customer-a" {
         disabled      = false
         eventlog_file = "D:/opdl/customer-a/north/local-server/standby/events.jsonl"
         state_file    = "D:/opdl/customer-a/north/local-server/standby/state.json"
+        log_file      = "D:/opdl/customer-a/north/local-server/standby/platform.log"
 
         lease {
           file                   = "D:/opdl/customer-a/north/local-server/lease"
@@ -95,6 +98,7 @@ project "customer-a" {
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
         state_file    = "D:/opdl/customer-a/control-room/master/primary/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/master/primary/platform.log"
 
         api {
           local_port          = 8080
@@ -112,6 +116,7 @@ project "customer-a" {
         disabled      = false
         eventlog_file = "D:/opdl/customer-a/control-room/master/standby/events.jsonl"
         state_file    = "D:/opdl/customer-a/control-room/master/standby/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/master/standby/platform.log"
 
         lease {
           file                   = "D:/opdl/customer-a/control-room/master/lease"
@@ -144,6 +149,7 @@ project "customer-a" {
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
         state_file    = "D:/opdl/customer-a/control-room/slave/primary/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/slave/primary/platform.log"
 
         api {
           local_port          = 8080
@@ -161,6 +167,7 @@ project "customer-a" {
         disabled      = false
         eventlog_file = "D:/opdl/customer-a/control-room/slave/standby/events.jsonl"
         state_file    = "D:/opdl/customer-a/control-room/slave/standby/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/slave/standby/platform.log"
 
         lease {
           file                   = "D:/opdl/customer-a/control-room/slave/lease"
@@ -193,6 +200,7 @@ project "customer-a" {
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
         state_file    = "D:/opdl/customer-a/control-room/integration/primary/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/integration/primary/platform.log"
 
         api {
           local_port          = 8080
@@ -210,6 +218,7 @@ project "customer-a" {
         disabled      = false
         eventlog_file = "D:/opdl/customer-a/control-room/integration/standby/events.jsonl"
         state_file    = "D:/opdl/customer-a/control-room/integration/standby/state.json"
+        log_file      = "D:/opdl/customer-a/control-room/integration/standby/platform.log"
 
         lease {
           file                   = "D:/opdl/customer-a/control-room/integration/lease"

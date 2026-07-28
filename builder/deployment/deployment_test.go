@@ -22,9 +22,11 @@ const (
 	primaryAPI        = "127.0.0.1:8080"
 	primaryEventsFile = "D:/opdl-data/sensor/primary/events.jsonl"
 	primaryStateFile  = "D:/opdl-data/sensor/primary/state.json"
+	primaryLogFile    = "D:/opdl-data/sensor/primary/platform.log"
 	standbyAPI        = "127.0.0.1:8081"
 	standbyEventsFile = "D:/opdl-data/sensor/standby/events.jsonl"
 	standbyStateFile  = "D:/opdl-data/sensor/standby/state.json"
+	standbyLogFile    = "D:/opdl-data/sensor/standby/platform.log"
 )
 
 func validDescriptor() deployment.Descriptor {
@@ -42,6 +44,7 @@ func validDescriptor() deployment.Descriptor {
 			Service:              &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
 			EventsFile:           primaryEventsFile,
 			StateFile:            primaryStateFile,
+			LogFile:              primaryLogFile,
 			APIAddress:           primaryAPI,
 			APIReadHeaderTimeout: "5s",
 			APIShutdownTimeout:   "10s",
@@ -50,6 +53,7 @@ func validDescriptor() deployment.Descriptor {
 			Service:              &deployment.WinService{Name: "sensor-standby", DisplayName: "sensor standby"},
 			EventsFile:           standbyEventsFile,
 			StateFile:            standbyStateFile,
+			LogFile:              standbyLogFile,
 			APIAddress:           standbyAPI,
 			APIReadHeaderTimeout: "5s",
 			APIShutdownTimeout:   "10s",
@@ -102,9 +106,11 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing primary api address", func(d *deployment.Descriptor) { d.Primary.APIAddress = "" }, "primary.api_address is required"},
 		{"missing primary events file", func(d *deployment.Descriptor) { d.Primary.EventsFile = "" }, "primary.events_file is required"},
 		{"missing primary state file", func(d *deployment.Descriptor) { d.Primary.StateFile = "" }, "primary.state_file is required"},
+		{"missing primary log file", func(d *deployment.Descriptor) { d.Primary.LogFile = "" }, "primary.log_file is required"},
 		{"missing standby api address", func(d *deployment.Descriptor) { d.Standby.APIAddress = "" }, "standby.api_address is required"},
 		{"missing standby events file", func(d *deployment.Descriptor) { d.Standby.EventsFile = "" }, "standby.events_file is required"},
 		{"missing standby state file", func(d *deployment.Descriptor) { d.Standby.StateFile = "" }, "standby.state_file is required"},
+		{"missing standby log file", func(d *deployment.Descriptor) { d.Standby.LogFile = "" }, "standby.log_file is required"},
 		{
 			"one instance points both its files at one path",
 			func(d *deployment.Descriptor) { d.Primary.StateFile = d.Primary.EventsFile },
@@ -114,6 +120,16 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"instances share an events file",
 			func(d *deployment.Descriptor) { d.Standby.EventsFile = d.Primary.EventsFile },
 			"primary.events_file and standby.events_file are both",
+		},
+		{
+			"instances share a log file",
+			func(d *deployment.Descriptor) { d.Standby.LogFile = d.Primary.LogFile },
+			"primary.log_file and standby.log_file are both",
+		},
+		{
+			"an instance logs into its own events file",
+			func(d *deployment.Descriptor) { d.Primary.LogFile = d.Primary.EventsFile },
+			"primary.events_file and primary.log_file are both",
 		},
 		{
 			"instances share a state file",

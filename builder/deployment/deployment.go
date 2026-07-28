@@ -176,6 +176,14 @@ type Instance struct {
 	// by exactly one every time the process starts and every time the instance
 	// becomes Active.
 	StateFile string `json:"state_file"`
+	// LogFile is the instance's own structured application log: the file its slog
+	// records are appended to.
+	//
+	// It is beside EventsFile rather than part of it because the two are different
+	// records. The event log carries the facts the instance stated, which other
+	// levels consume and tooling asserts on; the application log carries what the
+	// process was doing, which only a human reads.
+	LogFile string `json:"log_file"`
 	// APIAddress is where this instance serves its local API: 127.0.0.1 joined to
 	// the instance's authored api local_port.
 	//
@@ -329,11 +337,13 @@ func (d Descriptor) validateLocalFiles() error {
 		{"machine_events_file", d.MachineEventsFile},
 		{"primary.events_file", d.Primary.EventsFile},
 		{"primary.state_file", d.Primary.StateFile},
+		{"primary.log_file", d.Primary.LogFile},
 	}
 	if d.HasStandby() {
 		files = append(files,
 			struct{ where, path string }{"standby.events_file", d.Standby.EventsFile},
 			struct{ where, path string }{"standby.state_file", d.Standby.StateFile},
+			struct{ where, path string }{"standby.log_file", d.Standby.LogFile},
 			struct{ where, path string }{"lease.file", d.Lease.File},
 		)
 	}
@@ -361,6 +371,9 @@ func validateInstanceEndpoints(prefix string, instance Instance) error {
 	}
 	if strings.TrimSpace(instance.StateFile) == "" {
 		return fmt.Errorf("%s.state_file is required", prefix)
+	}
+	if strings.TrimSpace(instance.LogFile) == "" {
+		return fmt.Errorf("%s.log_file is required", prefix)
 	}
 	if pathKey(instance.EventsFile) == pathKey(instance.StateFile) {
 		return fmt.Errorf("%s.events_file and %s.state_file are both %q; every file an instance owns needs its own path", prefix, prefix, instance.EventsFile)

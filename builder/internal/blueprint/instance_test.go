@@ -102,7 +102,8 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 
 func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 	tests := map[string]func(*blueprint.Standby){
-		"lease": func(s *blueprint.Standby) { s.Lease = validLease("D:/opdl/sensor/lease") },
+		"lease":    func(s *blueprint.Standby) { s.Lease = validLease("D:/opdl/sensor/lease") },
+		"log_file": func(s *blueprint.Standby) { s.LogFile = "D:/opdl/sensor/standby/platform.log" },
 		"api": func(s *blueprint.Standby) {
 			s.API = &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"}
 		},
@@ -116,6 +117,86 @@ func TestStandbyEndpointsAreRejectedWhenNotDeployed(t *testing.T) {
 			require.ErrorContains(t, p.Validate(), "standby is disabled")
 		})
 	}
+}
+
+// TestInstanceFilesAreRequired checks every deployed instance states each of the
+// three local files it owns. None has a usable default: an omitted path would
+// resolve as the empty string, which is not a file the runtime could open.
+func TestInstanceFilesAreRequired(t *testing.T) {
+	tests := map[string]func(*blueprint.Machine){
+		"primary.eventlog_file": func(m *blueprint.Machine) { m.Primary.EventlogFile = "" },
+		"primary.state_file":    func(m *blueprint.Machine) { m.Primary.StateFile = "" },
+		"primary.log_file":      func(m *blueprint.Machine) { m.Primary.LogFile = "" },
+		"standby.eventlog_file": func(m *blueprint.Machine) { m.Standby.EventlogFile = "" },
+		"standby.state_file":    func(m *blueprint.Machine) { m.Standby.StateFile = "" },
+		"standby.log_file":      func(m *blueprint.Machine) { m.Standby.LogFile = "" },
+	}
+	for where, blank := range tests {
+		t.Run("missing "+where, func(t *testing.T) {
+			p := validProject()
+			blank(&p.Sites[0].Machines[0])
+			require.ErrorContains(t, p.Validate(), where+" is required")
+		})
+	}
+}
+
+// TestInstanceFilesMustNotCollide checks no two of a machine's local files name
+// one path.
+//
+// A repeat within one instance and a repeat across the two are the same failure.
+// Both instances run together on one host and each writes every file it owns, so
+// either way the machine has two writers on one file.
+func TestInstanceFilesMustNotCollide(t *testing.T) {
+	tests := map[string]struct {
+		collide func(*blueprint.Machine)
+		errText string
+	}{
+		"an instance logs into its own event record": {
+			func(m *blueprint.Machine) { m.Primary.LogFile = m.Primary.EventlogFile },
+			"primary.eventlog_file and primary.log_file are both",
+		},
+		"the two instances share a log": {
+			func(m *blueprint.Machine) { m.Standby.LogFile = m.Primary.LogFile },
+			"primary.log_file and standby.log_file are both",
+		},
+		"the two instances share a log spelled differently": {
+			func(m *blueprint.Machine) { m.Standby.LogFile = `D:\OPDL\SENSOR\primary\PLATFORM.LOG` },
+			"primary.log_file and standby.log_file are both",
+		},
+		"the machine's store is an instance's log": {
+			func(m *blueprint.Machine) { m.EventstoreFile = m.Standby.LogFile },
+			"eventstore_file and standby.log_file are both",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			p := validProject()
+			test.collide(&p.Sites[0].Machines[0])
+			require.ErrorContains(t, p.Validate(), test.errText)
+		})
+	}
+}
+
+// TestMachineFilesCarryTheAuthoredPaths checks each instance's files are read
+// off that instance's own block, and that an instance the machine does not
+// deploy has none.
+func TestMachineFilesCarryTheAuthoredPaths(t *testing.T) {
+	p := validProject()
+	machine := p.Sites[0].Machines[0]
+
+	require.Equal(t, blueprint.InstanceFiles{
+		EventlogFile: "D:/opdl/sensor/primary/events.jsonl",
+		StateFile:    "D:/opdl/sensor/primary/state.json",
+		LogFile:      "D:/opdl/sensor/primary/platform.log",
+	}, machine.Files(false))
+	require.Equal(t, blueprint.InstanceFiles{
+		EventlogFile: "D:/opdl/sensor/standby/events.jsonl",
+		StateFile:    "D:/opdl/sensor/standby/state.json",
+		LogFile:      "D:/opdl/sensor/standby/platform.log",
+	}, machine.Files(true))
+
+	disableStandby(p)
+	require.Equal(t, blueprint.InstanceFiles{}, p.Sites[0].Machines[0].Files(true))
 }
 
 func TestProjectValidateAPITimeoutFailures(t *testing.T) {

@@ -71,6 +71,7 @@ func (m Machine) Files(standby bool) InstanceFiles {
 		return InstanceFiles{
 			EventlogFile: strings.TrimSpace(m.Primary.EventlogFile),
 			StateFile:    strings.TrimSpace(m.Primary.StateFile),
+			LogFile:      strings.TrimSpace(m.Primary.LogFile),
 		}
 	}
 	if m.Standby == nil || m.Standby.Disabled {
@@ -79,6 +80,7 @@ func (m Machine) Files(standby bool) InstanceFiles {
 	return InstanceFiles{
 		EventlogFile: strings.TrimSpace(m.Standby.EventlogFile),
 		StateFile:    strings.TrimSpace(m.Standby.StateFile),
+		LogFile:      strings.TrimSpace(m.Standby.LogFile),
 	}
 }
 
@@ -202,18 +204,9 @@ func validateMachineFiles(machine Machine) error {
 		return fmt.Errorf("machine %q: eventstore_file %q must not have leading or trailing whitespace", machine.Name, machine.EventstoreFile)
 	}
 
-	others := []struct{ where, path string }{
-		{"primary.eventlog_file", machine.Primary.EventlogFile},
-		{"primary.state_file", machine.Primary.StateFile},
-	}
-	if standby := machine.Standby; standby != nil && !standby.Disabled {
-		others = append(others,
-			struct{ where, path string }{"standby.eventlog_file", standby.EventlogFile},
-			struct{ where, path string }{"standby.state_file", standby.StateFile},
-		)
-		if standby.Lease != nil {
-			others = append(others, struct{ where, path string }{"standby.lease.file", standby.Lease.File})
-		}
+	others := authoredFiles(machine)
+	if standby := machine.Standby; standby != nil && !standby.Disabled && standby.Lease != nil {
+		others = append(others, instanceFile{"standby.lease.file", standby.Lease.File})
 	}
 	for _, other := range others {
 		if samePath(other.path, store) {

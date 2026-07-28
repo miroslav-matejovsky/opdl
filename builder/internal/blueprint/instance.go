@@ -13,6 +13,11 @@ type Primary struct {
 	// StateFile is the Primary Instance's durable state record, which carries its
 	// epoch counter.
 	StateFile string `hcl:"state_file,optional"`
+	// LogFile is the Primary Instance's structured application log. It is a
+	// separate file from EventlogFile because the two answer different questions:
+	// the event log records the facts the instance stated, and the application log
+	// records what the process was doing while it stated them.
+	LogFile string `hcl:"log_file,optional"`
 	// API is the Primary Instance's local API endpoint policy.
 	API *API `hcl:"api,block"`
 	// WinService is the Primary Instance's Windows Service identity.
@@ -32,6 +37,9 @@ type Standby struct {
 	// epoch counter. It is required when the Standby Instance is deployed and
 	// rejected when it is not.
 	StateFile string `hcl:"state_file,optional"`
+	// LogFile is the Standby Instance's structured application log. It is required
+	// when the Standby Instance is deployed and rejected when it is not.
+	LogFile string `hcl:"log_file,optional"`
 	// Lease is the machine's local Primary Ownership lease policy. It is required
 	// when the Standby Instance is deployed and rejected when it is not.
 	Lease *Lease `hcl:"lease,block"`
@@ -49,6 +57,34 @@ type InstanceFiles struct {
 	// StateFile is the durable record the instance carries across restarts and
 	// crashes.
 	StateFile string
+	// LogFile is the append-only JSON Lines record the instance writes its
+	// structured application logs to.
+	LogFile string
+}
+
+// instanceFile is one authored path and the attribute it was authored on, so a
+// validation failure names the attribute an author has to change.
+type instanceFile struct{ where, path string }
+
+// instanceFilesOf lists the files one instance owns, qualified by the block they
+// were authored in. Every check that treats an instance's files as a set reads
+// them from here, so a file added to InstanceFiles is validated everywhere at
+// once rather than in whichever check remembered it.
+func instanceFilesOf(block string, files InstanceFiles) []instanceFile {
+	return []instanceFile{
+		{block + ".eventlog_file", files.EventlogFile},
+		{block + ".state_file", files.StateFile},
+		{block + ".log_file", files.LogFile},
+	}
+}
+
+// authoredFiles lists every local file the machine's deployed instances own.
+func authoredFiles(machine Machine) []instanceFile {
+	files := instanceFilesOf("primary", machine.Files(false))
+	if standby := machine.Standby; standby != nil && !standby.Disabled {
+		files = append(files, instanceFilesOf("standby", machine.Files(true))...)
+	}
+	return files
 }
 
 // Endpoints are one instance's authored listener port and the timeouts that
@@ -147,6 +183,9 @@ func validateStandbyEndpoints(machine Machine) error {
 	if strings.TrimSpace(standby.StateFile) != "" {
 		return fmt.Errorf("machine %q: standby.state_file is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
+	if strings.TrimSpace(standby.LogFile) != "" {
+		return fmt.Errorf("machine %q: standby.log_file is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	}
 	if standby.Lease != nil {
 		return fmt.Errorf("machine %q: standby.lease is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
@@ -156,40 +195,25 @@ func validateStandbyEndpoints(machine Machine) error {
 	return nil
 }
 
+// validateInstanceFiles checks every deployed instance states each file it owns,
+// and that no two of those files are the same path.
+//
+// The two instances of a machine run together, and each one writes all of its
+// own files, so a path authored twice is two writers on one file whether the
+// repeat is within an instance or across the pair.
 func validateInstanceFiles(machine Machine) error {
-	primary := machine.Primary
-	if strings.TrimSpace(primary.EventlogFile) == "" {
-		return fmt.Errorf("machine %q: primary.eventlog_file is required", machine.Name)
+	authored := authoredFiles(machine)
+	for _, f := range authored {
+		if f.path == "" {
+			return fmt.Errorf("machine %q: %s is required", machine.Name, f.where)
+		}
 	}
-	if strings.TrimSpace(primary.StateFile) == "" {
-		return fmt.Errorf("machine %q: primary.state_file is required", machine.Name)
-	}
-	if samePath(primary.EventlogFile, primary.StateFile) {
-		return fmt.Errorf("machine %q: primary.eventlog_file and primary.state_file are both %q; every file an instance owns needs its own path", machine.Name, primary.EventlogFile)
-	}
-	standby := machine.Standby
-	if standby == nil || standby.Disabled {
-		return nil
-	}
-	if strings.TrimSpace(standby.EventlogFile) == "" {
-		return fmt.Errorf("machine %q: standby.eventlog_file is required", machine.Name)
-	}
-	if strings.TrimSpace(standby.StateFile) == "" {
-		return fmt.Errorf("machine %q: standby.state_file is required", machine.Name)
-	}
-	if samePath(standby.EventlogFile, standby.StateFile) {
-		return fmt.Errorf("machine %q: standby.eventlog_file and standby.state_file are both %q; every file an instance owns needs its own path", machine.Name, standby.EventlogFile)
-	}
-	taken := map[string]string{}
-	for _, f := range []struct{ where, path string }{
-		{"primary.eventlog_file", primary.EventlogFile},
-		{"primary.state_file", primary.StateFile},
-		{"standby.eventlog_file", standby.EventlogFile},
-		{"standby.state_file", standby.StateFile},
-	} {
+	taken := make(map[string]string, len(authored))
+	for _, f := range authored {
 		key := pathKey(f.path)
 		if owner, used := taken[key]; used {
-			return fmt.Errorf("machine %q: %s and %s are both %q; the two instances run together and cannot share a file", machine.Name, owner, f.where, f.path)
+			return fmt.Errorf("machine %q: %s and %s are both %q; every file an instance owns needs its own path",
+				machine.Name, owner, f.where, f.path)
 		}
 		taken[key] = f.where
 	}

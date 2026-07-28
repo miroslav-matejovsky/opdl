@@ -40,19 +40,19 @@ only `-instance primary|standby`.
 | Descriptor part | Contents |
 | --- | --- |
 | Machine | platform, project, environment, site, machine, profile, IP, services, and `machine_events_file` |
-| `primary` | mandatory service identity, local event and state files, loopback API address, and listener timeouts |
+| `primary` | mandatory service identity, local event, state, and log files, loopback API address, and listener timeouts |
 | `standby` | the same instance fields, present only when deployed |
 | `lease` | shared Primary Ownership file and failover timings, present exactly when `standby` is present |
 
-The blueprint calls the machine file `eventstore_file` and each instance file
-`eventlog_file`. The resolved descriptor names them `machine_events_file` and
-`events_file`.
+The blueprint calls the machine file `eventstore_file` and the instance files
+`eventlog_file`, `state_file`, and `log_file`. The resolved descriptor names them
+`machine_events_file`, `events_file`, `state_file`, and `log_file`.
 
 The machine event store exists on every machine. The lease exists only on a
 machine with a standby. The builder rejects file collisions across instance
-event logs, state files, the machine event store, and the lease. It also rejects
-duplicate local API addresses and duplicate Windows Service names on one
-machine.
+event logs, state files, application logs, the machine event store, and the
+lease. It also rejects duplicate local API addresses and duplicate Windows
+Service names on one machine.
 
 `builder/deployment` and `platform/config` define independent copies of the
 descriptor contract. `conformance-tests` keeps them compatible.
@@ -63,7 +63,7 @@ Runtime packages are grouped by the owner of their state:
 
 | Level | Identity | Current responsibilities |
 | --- | --- | --- |
-| Instance | one process in a fixed role | local event log, durable epoch, and one loopback API |
+| Instance | one process in a fixed role | local event log, application log, durable epoch, and one loopback API |
 | Machine | one Windows host | Primary Ownership, active/passive sequencing, and the shared machine event store |
 | Site | all machines in one deployment site | site event contract and registration domain |
 
@@ -82,6 +82,7 @@ The detailed level documentation lives beside the code:
 | `internal/events` | Level-independent event contract, envelope, factory, and publisher interface. |
 | `internal/events/storage` | Synchronous fan-out to configured storage backends. |
 | `internal/instance/eventlog` | Mandatory process-local JSONL event record. |
+| `internal/instance/applog` | Structured application log written with `log/slog`. See [Logging](04-logging.md). |
 | `internal/instance/state` | Durable per-instance epoch. |
 | `internal/machine/redundancy` | Fixed roles, Primary Ownership, and active/passive sequencing. |
 | `internal/machine/eventstore` | Shared append-only JSONL store for machine-scoped events. |
@@ -111,11 +112,15 @@ At startup a process:
 
 1. Loads and validates the embedded descriptor.
 2. Validates the requested instance role.
-3. Creates one event factory for the process.
-4. Opens the instance event log and machine event store.
-5. Opens and advances the instance state epoch.
-6. Binds the instance's loopback HTTP listener.
-7. Enters machine ownership management.
+3. Opens the instance application log and installs it as the `slog` default.
+4. Creates one event factory for the process.
+5. Opens the instance event log and machine event store.
+6. Opens and advances the instance state epoch.
+7. Binds the instance's loopback HTTP listener.
+8. Enters machine ownership management.
+
+The application log is opened first so every later failure to open something has
+somewhere to be described, and closed last.
 
 The process event publisher currently has two ordered backends. The instance
 event log receives every envelope. The machine backend receives only
@@ -193,7 +198,9 @@ The current black-box coverage proves:
 - ownership returns to the preferred Primary after recovery;
 - the machine event store contains the machine-scoped ownership sequence across
   both processes;
-- instance event logs contain process-local facts; and
+- instance event logs contain process-local facts;
+- each instance writes its structured application log to its authored
+  `log_file`, with every record naming the instance that wrote it; and
 - instance epochs survive restart and activation.
 
 Registration persistence and multi-machine convergence are not part of the

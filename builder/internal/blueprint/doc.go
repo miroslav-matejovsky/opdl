@@ -19,6 +19,7 @@
 //	      primary {
 //	        eventlog_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
 //	        state_file    = "D:/opdl/customer-a/north/sensor/primary/state.json"
+//	        log_file      = "D:/opdl/customer-a/north/sensor/primary/platform.log"
 //
 //	        api {
 //	          local_port          = 8080
@@ -41,6 +42,10 @@
 // A Project names an environment and holds Sites; a Site holds Machines; a Machine
 // names a role, an IP address, services, eventstore_file, a mandatory primary block,
 // and a mandatory standby block (which can be disabled or configure the Standby Instance and lease).
+//
+// Every deployed instance states the three local files it owns: eventlog_file
+// for the events it states, state_file for its epoch, and log_file for its
+// structured application log. No two of them may name one path.
 //
 // Load reads and merges HCL files in a directory, decoding and validating the
 // project hierarchy.

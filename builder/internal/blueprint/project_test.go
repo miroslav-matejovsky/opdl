@@ -150,6 +150,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      primary {
 			        eventlog_file = "D:/opdl/node-1/primary/events.jsonl"
 			        state_file    = "D:/opdl/node-1/primary/state.json"
+			        log_file      = "D:/opdl/node-1/primary/platform.log"
 			        api {
 			          local_port          = 8080
 			          read_header_timeout = "5s"
@@ -163,6 +164,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        disabled      = false
 			        eventlog_file = "D:/opdl/node-1/standby/events.jsonl"
 			        state_file    = "D:/opdl/node-1/standby/state.json"
+			        log_file      = "D:/opdl/node-1/standby/platform.log"
 			        lease {
 			          file                   = "D:/opdl/node-1/lease"
 			          duration               = "15s"
@@ -191,6 +193,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      primary {
 			        eventlog_file = "D:/opdl/node-1/primary/events.jsonl"
 			        state_file    = "D:/opdl/node-1/primary/state.json"
+			        log_file      = "D:/opdl/node-1/primary/platform.log"
 			        api {
 			          local_port          = 8080
 			          read_header_timeout = "5s"
@@ -204,6 +207,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			        disabled      = false
 			        eventlog_file = "D:/opdl/node-1/standby/events.jsonl"
 			        state_file    = "D:/opdl/node-1/standby/state.json"
+			        log_file      = "D:/opdl/node-1/standby/platform.log"
 			        lease {
 			          file                   = "D:/opdl/node-1/lease"
 			          duration               = "15s"

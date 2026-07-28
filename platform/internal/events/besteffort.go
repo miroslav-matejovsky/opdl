@@ -2,15 +2,8 @@ package events
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"os"
+	"log/slog"
 )
-
-// diagnostics is where a publication failure is reported when there is nowhere
-// to return it. It is a variable so this package's own tests can read what an
-// operator would see; no caller outside this package can replace it.
-var diagnostics io.Writer = os.Stderr
 
 // Diagnostic is a Publisher used from a path that cannot return a publication
 // failure: a background loop, a transport callback, or a defer that is already
@@ -29,26 +22,26 @@ type Diagnostic struct{ publisher Publisher }
 // not a detail.
 func BestEffort(publisher Publisher) Diagnostic { return Diagnostic{publisher: publisher} }
 
-// State publishes event and reports a failure to the process error stream as
-// plain text.
+// State publishes event and reports a failure to the application log.
 //
 // The failure goes no further. It is deliberately not restated as an event: the
 // pipeline that could not carry the first one is the same pipeline a diagnostic
 // about it would use, so republishing it would either fail again or, worse,
-// succeed and hide that something was lost.
+// succeed and hide that something was lost. The application log is the one
+// destination that is not that pipeline.
+//
+// It logs through slog's default logger rather than one this package holds. A
+// fact this package could not carry is not this package's business to describe;
+// it goes wherever the process that composed the publisher decided its
+// diagnostics go, which for a running instance is that instance's log file.
 func (d Diagnostic) State(ctx context.Context, event Event) {
 	if d.publisher == nil {
-		report("platform: event %s was not published: no publisher was composed\n", event.EventType())
+		slog.ErrorContext(ctx, "event was not published: no publisher was composed",
+			"event_type", string(event.EventType()))
 		return
 	}
 	if err := d.publisher.Publish(ctx, event); err != nil {
-		report("platform: publishing event %s failed: %v\n", event.EventType(), err)
+		slog.ErrorContext(ctx, "publishing event failed",
+			"event_type", string(event.EventType()), "error", err.Error())
 	}
-}
-
-// report is the terminal reporting path for a publication nothing could carry.
-// There is nowhere left to return or state this, so the write is deliberately
-// best effort: a process whose error stream is also broken still has to run.
-func report(format string, args ...any) {
-	_, _ = fmt.Fprintf(diagnostics, format, args...)
 }

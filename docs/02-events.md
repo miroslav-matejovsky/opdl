@@ -22,8 +22,9 @@ unreachable.
 ## Event model
 
 Events are immutable facts stated by the package that owns a transition. They
-are not diagnostic log messages. Concrete payloads live in the owning package's
-`events.go`.
+are not diagnostic log messages. Diagnostics are the structured application log
+each instance writes; see [Logging](04-logging.md). Concrete payloads live in
+the owning package's `events.go`.
 
 An event type has the form `platform.<source>.<fact>`. The source is derived from
 the type. Payloads implement `events.Event`; optional interfaces override

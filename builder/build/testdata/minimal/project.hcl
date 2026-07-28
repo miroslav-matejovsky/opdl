@@ -18,6 +18,7 @@ project "buildtest" {
       primary {
         eventlog_file = "D:/opdl/buildtest/solo/node-a/primary/events.jsonl"
         state_file    = "D:/opdl/buildtest/solo/node-a/primary/state.json"
+        log_file      = "D:/opdl/buildtest/solo/node-a/primary/platform.log"
 
         api {
           local_port          = 8080
@@ -45,6 +46,7 @@ project "buildtest" {
       primary {
         eventlog_file = "D:/opdl/buildtest/solo/node-b/primary/events.jsonl"
         state_file    = "D:/opdl/buildtest/solo/node-b/primary/state.json"
+        log_file      = "D:/opdl/buildtest/solo/node-b/primary/platform.log"
 
         api {
           local_port          = 8080
@@ -62,6 +64,7 @@ project "buildtest" {
         disabled      = false
         eventlog_file = "D:/opdl/buildtest/solo/node-b/standby/events.jsonl"
         state_file    = "D:/opdl/buildtest/solo/node-b/standby/state.json"
+        log_file      = "D:/opdl/buildtest/solo/node-b/standby/platform.log"
 
         lease {
           file                   = "D:/opdl/buildtest/solo/node-b/lease"

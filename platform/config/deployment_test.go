@@ -22,8 +22,8 @@ const (
 	// The local files an instance owns. Each is stated on its own instance record,
 	// so a descriptor missing either is a startup failure rather than an instance
 	// that opens a path nothing authored.
-	primaryFilesJSON = `"events_file":".data/platform/primary/events.jsonl","state_file":".data/platform/primary/state.json"`
-	standbyFilesJSON = `"events_file":".data/platform/standby/events.jsonl","state_file":".data/platform/standby/state.json"`
+	primaryFilesJSON = `"events_file":".data/platform/primary/events.jsonl","state_file":".data/platform/primary/state.json","log_file":".data/platform/primary/platform.log"`
+	standbyFilesJSON = `"events_file":".data/platform/standby/events.jsonl","state_file":".data/platform/standby/state.json","log_file":".data/platform/standby/platform.log"`
 	leaseJSON        = `"lease":{"file":"D:/opdl/lease",` + leaseTimingsJSON + `}`
 	// leaseTimingsJSON are the timings a valid lease states, without the file.
 	leaseTimingsJSON = `"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s","lag_bound":"30s"`
@@ -50,8 +50,12 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			err:  "primary.events_file is required",
 		},
 		"missing primary state file": {
-			json: `{` + machineJSON + `,"primary":{"events_file":".data/events.jsonl","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
+			json: `{` + machineJSON + `,"primary":{"events_file":".data/events.jsonl","log_file":".data/platform.log","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
 			err:  "primary.state_file is required",
+		},
+		"missing primary log file": {
+			json: `{` + machineJSON + `,"primary":{"events_file":".data/events.jsonl","state_file":".data/state.json","api_address":"127.0.0.1:8080",` + timeoutsJSON + `}}`,
+			err:  "primary.log_file is required",
 		},
 		"missing primary read header timeout": {
 			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_shutdown_timeout":"10s"}}`,
@@ -62,12 +66,16 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			err:  "primary.api_shutdown_timeout",
 		},
 		"missing standby events file": {
-			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"state_file":".data/standby/state.json","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"state_file":".data/standby/state.json","log_file":".data/standby/platform.log","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
 			err:  "standby.events_file is required",
 		},
 		"missing standby state file": {
-			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"events_file":".data/standby/events.jsonl","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"events_file":".data/standby/events.jsonl","log_file":".data/standby/platform.log","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
 			err:  "standby.state_file is required",
+		},
+		"missing standby log file": {
+			json: `{` + machineJSON + `,` + primaryJSON + `,"standby":{"events_file":".data/standby/events.jsonl","state_file":".data/standby/state.json","api_address":"127.0.0.1:8081",` + timeoutsJSON + `},` + leaseJSON + `}`,
+			err:  "standby.log_file is required",
 		},
 		"lease without a standby": {
 			json: `{` + machineJSON + `,` + primaryJSON + `,` + leaseJSON + `}`,

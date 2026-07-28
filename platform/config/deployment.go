@@ -179,10 +179,10 @@ func validateInstanceFields(role PlatformInstanceRole, raw json.RawMessage) erro
 	if err := json.Unmarshal(raw, &instance); err != nil {
 		return fmt.Errorf("deployment descriptor: invalid %s: %w", role, err)
 	}
-	// The local files are required because the instance opens both at startup and
-	// neither has a usable default: an omitted path would decode as the empty
-	// string, which is not a file the runtime could fall back to.
-	for _, field := range []string{"events_file", "state_file"} {
+	// The local files are required because the instance opens every one of them at
+	// startup and none has a usable default: an omitted path would decode as the
+	// empty string, which is not a file the runtime could fall back to.
+	for _, field := range []string{"events_file", "state_file", "log_file"} {
 		if _, err := requiredField(instance, string(role)+"."+field); err != nil {
 			return err
 		}
@@ -311,6 +311,15 @@ type Instance struct {
 	// by exactly one every time the process starts and every time the instance
 	// becomes Active.
 	StateFile string `json:"state_file"`
+	// LogFile is the instance's own structured application log. The process opens
+	// it before anything else it writes and appends one JSON record per line to it
+	// for as long as it runs.
+	//
+	// It is a different record from EventsFile. An event is a fact the platform
+	// states and other levels consume; a log record is a diagnostic account of the
+	// process that stated it. Neither substitutes for the other, so they are
+	// separate files an operator can keep, ship, and delete on different terms.
+	LogFile string `json:"log_file"`
 	// APIAddress is where this instance serves its local API. Each instance has
 	// its own and binds it for its whole lifetime, not only while Active.
 	//

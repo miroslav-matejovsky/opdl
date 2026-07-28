@@ -19,6 +19,7 @@ project "{{ .Name }}" {
       primary {
         eventlog_file = "{{ .EventsFile }}"
         state_file    = "{{ .StateFile }}"
+        log_file      = "{{ .LogFile }}"
 
         api {
           local_port          = {{ .APIPort }}
@@ -37,6 +38,7 @@ project "{{ .Name }}" {
 {{- if not .StandbyDisabled }}
         eventlog_file = "{{ .StandbyEventsFile }}"
         state_file    = "{{ .StandbyStateFile }}"
+        log_file      = "{{ .StandbyLogFile }}"
 
         lease {
           file                   = "{{ .LeaseFile }}"

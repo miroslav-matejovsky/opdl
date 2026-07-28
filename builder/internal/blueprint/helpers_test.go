@@ -48,12 +48,14 @@ func validMachine() blueprint.Machine {
 		Primary: &blueprint.Primary{
 			EventlogFile: "D:/opdl/sensor/primary/events.jsonl",
 			StateFile:    "D:/opdl/sensor/primary/state.json",
+			LogFile:      "D:/opdl/sensor/primary/platform.log",
 			API:          &blueprint.API{LocalPort: 8080, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 			WinService:   &blueprint.WinService{Name: "primary"},
 		},
 		Standby: &blueprint.Standby{
 			EventlogFile: "D:/opdl/sensor/standby/events.jsonl",
 			StateFile:    "D:/opdl/sensor/standby/state.json",
+			LogFile:      "D:/opdl/sensor/standby/platform.log",
 			Lease:        validLease("D:/opdl/sensor/lease"),
 			API:          &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 			WinService:   &blueprint.WinService{Name: "standby"},
@@ -69,9 +71,11 @@ func namedMachine(name, ip string) blueprint.Machine {
 	m.EventstoreFile = "D:/opdl/" + name + "/machine-events.jsonl"
 	m.Primary.EventlogFile = "D:/opdl/" + name + "/primary/events.jsonl"
 	m.Primary.StateFile = "D:/opdl/" + name + "/primary/state.json"
+	m.Primary.LogFile = "D:/opdl/" + name + "/primary/platform.log"
 	m.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	m.Standby.EventlogFile = "D:/opdl/" + name + "/standby/events.jsonl"
 	m.Standby.StateFile = "D:/opdl/" + name + "/standby/state.json"
+	m.Standby.LogFile = "D:/opdl/" + name + "/standby/platform.log"
 	m.Standby.Lease = validLease("D:/opdl/" + name + "/lease")
 	return m
 }
@@ -92,6 +96,7 @@ func disableStandby(p *blueprint.Project) {
 	standby.Disabled = true
 	standby.EventlogFile = ""
 	standby.StateFile = ""
+	standby.LogFile = ""
 	standby.Lease = nil
 	standby.API = nil
 	standby.WinService = nil

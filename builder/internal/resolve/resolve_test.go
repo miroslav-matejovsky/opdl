@@ -34,6 +34,7 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 		}
 		standby.EventlogFile = eventsFile(name, "standby")
 		standby.StateFile = stateFile(name, "standby")
+		standby.LogFile = logFile(name, "standby")
 		standby.API = &blueprint.API{LocalPort: standbyAPIPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"}
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	}
@@ -43,6 +44,7 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 		Primary: &blueprint.Primary{
 			EventlogFile: eventsFile(name, "primary"),
 			StateFile:    stateFile(name, "primary"),
+			LogFile:      logFile(name, "primary"),
 			API:          &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
 			WinService:   &blueprint.WinService{Name: name + "-primary"},
 		},
@@ -63,6 +65,11 @@ func eventsFile(machine, role string) string {
 // stateFile is one instance's durable state record.
 func stateFile(machine, role string) string {
 	return fmt.Sprintf("D:/opdl-data/%s/%s/state.json", machine, role)
+}
+
+// logFile is one instance's structured application log.
+func logFile(machine, role string) string {
+	return fmt.Sprintf("D:/opdl-data/%s/%s/platform.log", machine, role)
 }
 
 // companion is a second machine carrying a Standby Instance, for fixtures whose
@@ -134,6 +141,7 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	// runtime that quietly wrote somewhere else.
 	require.Equal(t, eventsFile("sensor", "primary"), m.Primary.EventsFile)
 	require.Equal(t, stateFile("sensor", "primary"), m.Primary.StateFile)
+	require.Equal(t, logFile("sensor", "primary"), m.Primary.LogFile)
 }
 
 // TestBuildCarriesInstanceFiles checks each deployed instance's own files reach
@@ -148,9 +156,11 @@ func TestBuildCarriesInstanceFiles(t *testing.T) {
 	m := plan.Machines[0]
 	require.Equal(t, eventsFile("node-a", "primary"), m.Primary.EventsFile)
 	require.Equal(t, stateFile("node-a", "primary"), m.Primary.StateFile)
+	require.Equal(t, logFile("node-a", "primary"), m.Primary.LogFile)
 	require.NotNil(t, m.Standby)
 	require.Equal(t, eventsFile("node-a", "standby"), m.Standby.EventsFile)
 	require.Equal(t, stateFile("node-a", "standby"), m.Standby.StateFile)
+	require.Equal(t, logFile("node-a", "standby"), m.Standby.LogFile)
 }
 
 // TestBuildCopiesStandbyDecision checks the resolved descriptor carries a standby

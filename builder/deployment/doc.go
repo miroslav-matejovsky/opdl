@@ -9,8 +9,8 @@
 //
 //	{
 //	  "machine_events_file": "...",
-//	  "primary": {"events_file": "...", "state_file": "...", "api_address": "127.0.0.1:8080", ...},
-//	  "standby": {"events_file": "...", "state_file": "...", "api_address": "127.0.0.1:8081", ...},
+//	  "primary": {"events_file": "...", "state_file": "...", "log_file": "...", "api_address": "127.0.0.1:8080", ...},
+//	  "standby": {"events_file": "...", "state_file": "...", "log_file": "...", "api_address": "127.0.0.1:8081", ...},
 //	  "lease":   {"file": "...", "duration": "15s", ...}
 //	}
 //

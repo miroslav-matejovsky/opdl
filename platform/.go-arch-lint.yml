@@ -26,6 +26,7 @@ components:
   app: { in: internal/app }
   events: { in: internal/events }
   events-storage: { in: internal/events/storage }
+  applog: { in: internal/instance/applog }
   eventlog: { in: internal/instance/eventlog }
   httpapi: { in: internal/httpapi }
   state: { in: internal/instance/state }
@@ -51,7 +52,12 @@ deps:
     # state is here for the same reason: composition is what knows this
     # process is a new incarnation of the instance, so it opens the state file
     # and advances the epoch. Nothing below app reads or writes it.
-    mayDependOn: [api, config, events, events-storage, eventlog, eventstore, httpapi, redundancy, registration, state]
+    mayDependOn: [api, applog, config, events, events-storage, eventlog, eventstore, httpapi, redundancy, registration, state]
+  # applog has no entry here on purpose, for the same reason config has none: it
+  # is a leaf. It is one local file behind log/slog, holding no descriptor and
+  # stating no event. The composition root opens it, stamps the process identity
+  # on it, and hands the runtime a logger; everything below the root reaches its
+  # records through slog's default logger rather than by importing it.
   state:
     # A leaf over one local file. It states no event and reads no descriptor, so
     # the component that advances the epoch is the one that also reports it.

@@ -101,6 +101,7 @@ func instance(machine blueprint.Machine, role deployment.PlatformInstanceRole) *
 		Service:              winService(machine, standby),
 		EventsFile:           files.EventlogFile,
 		StateFile:            files.StateFile,
+		LogFile:              files.LogFile,
 		APIAddress:           loopbackAddress(endpoints.APILocalPort),
 		APIReadHeaderTimeout: endpoints.APIReadHeaderTimeout,
 		APIShutdownTimeout:   endpoints.APIShutdownTimeout,

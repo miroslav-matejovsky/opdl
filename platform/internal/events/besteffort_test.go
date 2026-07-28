@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -25,14 +26,15 @@ func (p *stubPublisher) Publish(_ context.Context, event Event) error {
 	return p.err
 }
 
-// captureDiagnostics redirects the process error stream this package writes
-// publication failures to, and restores it when the test ends.
+// captureDiagnostics redirects the default logger this package reports
+// publication failures through, and restores it when the test ends. It is what
+// a running instance's log file would have received.
 func captureDiagnostics(t *testing.T) *bytes.Buffer {
 	t.Helper()
-	previous := diagnostics
+	previous := slog.Default()
 	buffer := &bytes.Buffer{}
-	diagnostics = buffer
-	t.Cleanup(func() { diagnostics = previous })
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
 	return buffer
 }
 
