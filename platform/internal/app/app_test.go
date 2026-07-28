@@ -14,9 +14,9 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
@@ -113,7 +113,7 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 	t.Helper()
 	factory, err := events.NewFactory(descriptor, role.String())
 	require.NoError(t, err)
-	record, err := jsonl.New(instanceOf(descriptor, role).EventsFile)
+	record, err := eventlog.New(instanceOf(descriptor, role).EventsFile)
 	if err != nil {
 		return process{}, err
 	}

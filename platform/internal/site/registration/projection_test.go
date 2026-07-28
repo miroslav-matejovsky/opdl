@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 )
 
 // testEnvelope stamps the envelope a journal would have stored for event, as

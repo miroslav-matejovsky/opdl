@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
@@ -56,7 +56,7 @@ func Run(args []string) (runErr error) {
 	// does, and it is mandatory: every fact the process states has to reach it,
 	// including the ones about failing to start. It is opened here rather than
 	// with the site because it has to outlive every site the process composes.
-	record, err := jsonl.New(instanceOf(descriptor, role).EventsFile)
+	record, err := eventlog.New(instanceOf(descriptor, role).EventsFile)
 	if err != nil {
 		return err
 	}

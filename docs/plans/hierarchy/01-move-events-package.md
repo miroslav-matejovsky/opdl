@@ -69,6 +69,10 @@ renaming types.
 
 ## Risks / open questions
 
-- Naming of the JSONL home (`record` vs `eventlog` vs keeping `jsonl`) is a
+- ~~Naming of the JSONL home (`record` vs `eventlog` vs keeping `jsonl`) is a
   team taste call; the step is identical either way. Decide in review of
-  this plan, not during the move.
+  this plan, not during the move.~~ **Decided: `platform/internal/instance/eventlog`**
+  (package `eventlog`, files `eventlog.go` / `eventlog_test.go`). The error
+  strings keep their `jsonl:` prefix: they name the on-disk format, which the
+  move did not change, and `internal/app` asserts on that prefix to prove a
+  boot failure identifies the local-record backend.

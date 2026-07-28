@@ -71,9 +71,9 @@ setting has two sources needing a precedence rule to tell them apart.
 | --- | --- |
 | `internal/httpapi` | Decodes and encodes the public HTTP contract. It does not decide registration state. |
 | `internal/site/registration` | Owns proposals, per-node decisions, acceptance, and conflict views. It depends only on the Event Fabric contract. |
-| `internal/instance/events` | Owns the event contract, envelope, factory, and producer-facing publisher interface. |
-| `internal/instance/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
-| `internal/instance/events/storage/jsonl` | Writes the mandatory process-local JSONL record under the instance data root. |
+| `internal/events` | Owns the event contract, envelope, factory, and producer-facing publisher interface. Level-independent: every level publishes through it. |
+| `internal/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
+| `internal/instance/eventlog` | Writes the mandatory process-local JSONL record under the instance data root. |
 | `internal/machine/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
 
 ## Event Fabric contract
@@ -271,7 +271,7 @@ hold everywhere:
 | `internal/app` | `platform.app.<fact>`: process, status, API, standby, projection, and site transitions | JSONL |
 | `internal/machine/redundancy` | `platform.redundancy.<fact>`: ownership and activation transitions | JSONL |
 
-`internal/instance/events` owns the contract and the envelope and declares no events of
+`internal/events` owns the contract and the envelope and declares no events of
 its own. An event payload implements one method, `EventType`, and implements a
 small optional interface only where it differs from a default: a schema version
 other than `1`, a severity other than `info`, tags, or a domain-stable identity.

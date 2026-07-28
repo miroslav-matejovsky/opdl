@@ -24,9 +24,9 @@ components:
   cmd: { in: cmd }
   config: { in: config }
   app: { in: internal/app }
-  events: { in: internal/instance/events }
-  events-storage: { in: internal/instance/events/storage }
-  events-storage-jsonl: { in: internal/instance/events/storage/jsonl }
+  events: { in: internal/events }
+  events-storage: { in: internal/events/storage }
+  eventlog: { in: internal/instance/eventlog }
   httpapi: { in: internal/httpapi }
   state: { in: internal/instance/state }
   redundancy: { in: internal/machine/redundancy }
@@ -49,7 +49,7 @@ deps:
     # state is here for the same reason: composition is what knows this
     # process is a new incarnation of the instance, so it opens the state file
     # and advances the epoch. Nothing below app reads or writes it.
-    mayDependOn: [api, config, events, events-storage, events-storage-jsonl, httpapi, redundancy, registration, state]
+    mayDependOn: [api, config, events, events-storage, eventlog, httpapi, redundancy, registration, state]
   state:
     # A leaf over one local file. It states no event and reads no descriptor, so
     # the component that advances the epoch is the one that also reports it.
@@ -72,7 +72,7 @@ deps:
     mayDependOn: [config]
   events-storage:
     mayDependOn: [events]
-  events-storage-jsonl:
+  eventlog:
     mayDependOn: [events, events-storage]
   httpapi:
     canUse: [huma]

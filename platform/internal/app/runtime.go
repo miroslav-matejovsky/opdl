@@ -12,8 +12,8 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
 )
@@ -46,7 +46,7 @@ type process struct {
 	// first backend of its own fan-out publisher, so a journalled fact lands in
 	// the same local file in the same order as a local one. The process owns it
 	// and closes it; see storage.Borrowed.
-	record *jsonl.Backend
+	record *eventlog.Backend
 	// state is this instance's durable state file, carrying the epoch counter
 	// across restarts and crashes. Run advanced it once for this process; the
 	// active composition advances it again each time the instance takes ownership.

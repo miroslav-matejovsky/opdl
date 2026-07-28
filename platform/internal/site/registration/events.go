@@ -3,7 +3,7 @@ package registration
 import (
 	"slices"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
 // This file is the registration domain's event catalog: every fact this package

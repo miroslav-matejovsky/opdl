@@ -1,4 +1,4 @@
-package jsonl_test
+package eventlog_test
 
 import (
 	"bytes"
@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events/storage/jsonl"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
 )
 
 // testDir returns a directory under .tmp/<TestName> relative to the package
@@ -63,8 +63,8 @@ type sampleEvent struct {
 func (sampleEvent) EventType() events.Type { return "platform.test.happened" }
 
 func TestNewValidation(t *testing.T) {
-	_, err := jsonl.New("   ")
-	require.ErrorIs(t, err, jsonl.ErrInvalidPath)
+	_, err := eventlog.New("   ")
+	require.ErrorIs(t, err, eventlog.ErrInvalidPath)
 }
 
 // The backend opens the authored path and nothing else. It composes no
@@ -73,7 +73,7 @@ func TestOpeningCreatesOnlyTheAuthoredFile(t *testing.T) {
 	dir := testDir(t)
 	path := filepath.Join(dir, "events.jsonl")
 
-	backend, err := jsonl.New(path)
+	backend, err := eventlog.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -91,7 +91,7 @@ func TestOpeningCreatesOnlyTheAuthoredFile(t *testing.T) {
 func TestOpeningCreatesTheParentDirectory(t *testing.T) {
 	path := filepath.Join(testDir(t), "nested", "deeper", "events.jsonl")
 
-	backend, err := jsonl.New(path)
+	backend, err := eventlog.New(path)
 	require.NoError(t, err)
 	require.NoError(t, backend.Close(t.Context()))
 	require.FileExists(t, path)
@@ -99,7 +99,7 @@ func TestOpeningCreatesTheParentDirectory(t *testing.T) {
 
 func TestOneStoredEnvelopeDecodesWithEventsDecode(t *testing.T) {
 	path := testFile(t)
-	backend, err := jsonl.New(path)
+	backend, err := eventlog.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -121,7 +121,7 @@ func TestOneStoredEnvelopeDecodesWithEventsDecode(t *testing.T) {
 
 func TestSeveralEventsProduceLinesInCallOrder(t *testing.T) {
 	path := testFile(t)
-	backend, err := jsonl.New(path)
+	backend, err := eventlog.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -153,7 +153,7 @@ func TestSeveralEventsProduceLinesInCallOrder(t *testing.T) {
 
 func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
 	path := testFile(t)
-	backend, err := jsonl.New(path)
+	backend, err := eventlog.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -190,7 +190,7 @@ func TestConcurrentStoresProduceValidNonInterleavedLines(t *testing.T) {
 
 func TestInvalidEnvelopesAreRejectedBeforeLineIsWritten(t *testing.T) {
 	path := testFile(t)
-	backend, err := jsonl.New(path)
+	backend, err := eventlog.New(path)
 	require.NoError(t, err)
 	defer func() { _ = backend.Close(t.Context()) }()
 
@@ -207,7 +207,7 @@ func TestInvalidEnvelopesAreRejectedBeforeLineIsWritten(t *testing.T) {
 
 func TestCloseIsIdempotentAndStoreAfterCloseFails(t *testing.T) {
 	path := testFile(t)
-	backend, err := jsonl.New(path)
+	backend, err := eventlog.New(path)
 	require.NoError(t, err)
 
 	err = backend.Close(t.Context())
@@ -219,21 +219,21 @@ func TestCloseIsIdempotentAndStoreAfterCloseFails(t *testing.T) {
 
 	env := testEnvelope(t, "after-close")
 	err = backend.Store(t.Context(), env)
-	require.ErrorIs(t, err, jsonl.ErrClosed)
+	require.ErrorIs(t, err, eventlog.ErrClosed)
 }
 
 func TestReopeningAppendsRatherThanTruncates(t *testing.T) {
 	path := testFile(t)
 
 	// First run
-	b1, err := jsonl.New(path)
+	b1, err := eventlog.New(path)
 	require.NoError(t, err)
 	env1 := testEnvelope(t, "event-1")
 	require.NoError(t, b1.Store(t.Context(), env1))
 	require.NoError(t, b1.Close(t.Context()))
 
 	// Reopen
-	b2, err := jsonl.New(path)
+	b2, err := eventlog.New(path)
 	require.NoError(t, err)
 	env2 := testEnvelope(t, "event-2")
 	require.NoError(t, b2.Store(t.Context(), env2))
@@ -257,7 +257,7 @@ func TestReopeningAppendsRatherThanTruncates(t *testing.T) {
 func TestWindowsPathsWithSpacesWork(t *testing.T) {
 	path := filepath.Join(testDir(t), "sub dir with spaces", "data root", "events.jsonl")
 
-	backend, err := jsonl.New(path)
+	backend, err := eventlog.New(path)
 	require.NoError(t, err)
 
 	env := testEnvelope(t, "space-path")

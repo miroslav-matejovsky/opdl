@@ -7,7 +7,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
 var (

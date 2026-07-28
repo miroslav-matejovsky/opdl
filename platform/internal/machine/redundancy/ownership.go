@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/events"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
 // This file is ownership: what holding the lease means at runtime, the order the
