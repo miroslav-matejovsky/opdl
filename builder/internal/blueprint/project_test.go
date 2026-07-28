@@ -50,7 +50,10 @@ func TestProjectValidateEmptyServices(t *testing.T) {
 
 func TestProjectValidateDuplicateService(t *testing.T) {
 	p := validProject()
-	p.Sites[0].Machines[0].Services = []string{"sensor-services", "sensor-services"}
+	p.Sites[0].Machines[0].Services = []blueprint.Service{
+		validService("sensor-services", 9101),
+		validService("sensor-services", 9102),
+	}
 	require.ErrorContains(t, p.Validate(), "assigned more than once")
 }
 
@@ -101,9 +104,19 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  environment = "production"
 			  site "north" {
 			    machine "m1" {
-			      profile  = ""
-			      ip       = "10.0.1.10"
-			      services = ["core-services"]
+			      profile = ""
+			      ip      = "10.0.1.10"
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			    }
 			  }
 			}`,
@@ -115,9 +128,19 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  environment = "production"
 			  site "north" {
 			    machine "m1" {
-			      profile  = "node"
-			      ip       = ""
-			      services = ["core-services"]
+			      profile = "node"
+			      ip      = ""
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			    }
 			  }
 			}`,
@@ -129,9 +152,19 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			  environment = "production"
 			  site "north" {
 			    machine "m1" {
-			      profile  = "node"
-			      ip       = "not-an-ip"
-			      services = ["core-services"]
+			      profile = "node"
+			      ip      = "not-an-ip"
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			    }
 			  }
 			}`,
@@ -145,8 +178,18 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			    machine "node-1" {
 			      profile         = "node"
 			      ip              = "10.0.1.10"
-			      services        = ["core-services"]
 			      eventstore_file = "D:/opdl/node-1/machine-events.jsonl"
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			      primary {
 			        eventlog_file = "D:/opdl/node-1/primary/events.jsonl"
 			        state_file    = "D:/opdl/node-1/primary/state.json"
@@ -188,8 +231,18 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			    machine "node-1" {
 			      profile         = "node"
 			      ip              = "10.0.1.11"
-			      services        = ["core-services"]
 			      eventstore_file = "D:/opdl/node-1/machine-events.jsonl"
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			      primary {
 			        eventlog_file = "D:/opdl/node-1/primary/events.jsonl"
 			        state_file    = "D:/opdl/node-1/primary/state.json"

@@ -11,6 +11,21 @@ import (
 func TestMachineListenersMustNotSharePort(t *testing.T) {
 	tests := map[string]func(*blueprint.Machine){
 		"standby api copies primary api": func(m *blueprint.Machine) { m.Standby.API.LocalPort = m.Primary.API.LocalPort },
+		// A service's health check port is a listener on the machine like the
+		// instances' API ports. The platform's APIs are on loopback and a service's
+		// endpoint usually is not, but they are bound on one host either way.
+		"health check copies the primary api port": func(m *blueprint.Machine) {
+			m.Services[0].HealthCheck.Port = m.Primary.API.LocalPort
+		},
+		"health check copies the standby api port": func(m *blueprint.Machine) {
+			m.Services[0].HealthCheck.Port = m.Standby.API.LocalPort
+		},
+		"two services share a health check port": func(m *blueprint.Machine) {
+			m.Services = []blueprint.Service{
+				validService("core-services", 9101),
+				validService("alarm-service", 9101),
+			}
+		},
 	}
 	for label, collide := range tests {
 		t.Run(label, func(t *testing.T) {

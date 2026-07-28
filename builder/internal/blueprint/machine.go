@@ -15,8 +15,9 @@ type Machine struct {
 	MachineProfile string `hcl:"profile"`
 	// IP is the machine's network address, e.g. "10.0.1.10".
 	IP string `hcl:"ip"`
-	// Services lists the service groups assigned to this machine.
-	Services []string `hcl:"services"`
+	// Services are the services this machine hosts, each with the health check
+	// that says whether it is up.
+	Services []Service `hcl:"service,block"`
 	// EventstoreFile is the machine's own append-only event store: the shared file
 	// both instances append machine-scoped events to. Required on every machine.
 	EventstoreFile string `hcl:"eventstore_file,optional"`
@@ -25,6 +26,16 @@ type Machine struct {
 	// Standby is the machine's local redundancy policy, and where a deployed
 	// Standby Instance states its own files, lease, api, and winservice.
 	Standby *Standby `hcl:"standby,block"`
+}
+
+// ServiceNames lists the machine's services by name, in authored order, for
+// consumers that place a service rather than probe it.
+func (m Machine) ServiceNames() []string {
+	names := make([]string, 0, len(m.Services))
+	for _, service := range m.Services {
+		names = append(names, strings.TrimSpace(service.Name))
+	}
+	return names
 }
 
 // Lease returns the machine's authored ownership lease policy, or nil when the
@@ -128,19 +139,8 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 	if net.ParseIP(machine.IP) == nil {
 		return fmt.Errorf("machine %q: ip %q is not a valid IP address", machine.Name, machine.IP)
 	}
-	if len(machine.Services) == 0 {
-		return fmt.Errorf("machine %q: at least one service is required", machine.Name)
-	}
-
-	assigned := make(map[string]bool, len(machine.Services))
-	for _, name := range machine.Services {
-		if strings.TrimSpace(name) == "" {
-			return fmt.Errorf("machine %q: service with empty name", machine.Name)
-		}
-		if assigned[name] {
-			return fmt.Errorf("machine %q: service %q assigned more than once", machine.Name, name)
-		}
-		assigned[name] = true
+	if err := validateMachineServices(machine); err != nil {
+		return err
 	}
 
 	if machine.Primary == nil {
@@ -182,6 +182,16 @@ func validateMachinePorts(machine Machine) error {
 		listeners = append(listeners,
 			listener{"standby.api.local_port", machine.Standby.API.LocalPort},
 		)
+	}
+	// A service's health check port is a listener on this machine like any other.
+	// The platform's own APIs are on loopback and a service's endpoint usually is
+	// not, but both are bound on one host, so a port authored twice is still a
+	// machine where the second listener cannot come up.
+	for _, service := range machine.Services {
+		listeners = append(listeners, listener{
+			fmt.Sprintf("service %q health_check.port", service.Name),
+			service.HealthCheck.Port,
+		})
 	}
 	taken := make(map[int]string, len(listeners))
 	for _, l := range listeners {

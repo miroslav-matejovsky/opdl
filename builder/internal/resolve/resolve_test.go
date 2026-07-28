@@ -18,7 +18,30 @@ import (
 const (
 	apiPort        = 8080
 	standbyAPIPort = 8081
+	// healthCheckPort is the service endpoint the machine's one service is probed
+	// on. It is a listener on the same machine as the two API ports, so it is
+	// distinct from both.
+	healthCheckPort = 9101
 )
+
+// service builds a machine's hosted service with a role and a valid health
+// check. What resolution does with it is carry the name, so the rest is here to
+// keep the fixture authored the way a blueprint is rather than to be asserted
+// on.
+func service(name string) blueprint.Service {
+	return blueprint.Service{
+		Name: name,
+		Role: "master",
+		HealthCheck: blueprint.HealthCheck{
+			Type:     "http",
+			Port:     healthCheckPort,
+			Path:     "/health",
+			Interval: "10s",
+			Timeout:  "2s",
+			Retries:  3,
+		},
+	}
+}
 
 // machine builds a valid machine with the mandatory platform policy filled in.
 func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
@@ -39,7 +62,7 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 		standby.WinService = &blueprint.WinService{Name: name + "-standby"}
 	}
 	return blueprint.Machine{
-		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
+		Name: name, MachineProfile: "node", IP: ip, Services: []blueprint.Service{service("core-services")},
 		EventstoreFile: machineEventsFile(name),
 		Primary: &blueprint.Primary{
 			EventlogFile: eventsFile(name, "primary"),
@@ -104,7 +127,7 @@ func project() *blueprint.Project {
 func sensor() blueprint.Machine {
 	m := machine("sensor", "10.0.1.10", true)
 	m.MachineProfile = "sensor-node"
-	m.Services = []string{"sensor-services"}
+	m.Services = []blueprint.Service{service("sensor-services")}
 	return m
 }
 

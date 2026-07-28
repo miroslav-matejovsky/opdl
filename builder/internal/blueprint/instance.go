@@ -152,24 +152,28 @@ func validateInstanceEndpoints(machine Machine, block string, api *API) error {
 	if err := validatePort(machine.Name, block+".api.local_port", api.LocalPort); err != nil {
 		return err
 	}
-	if err := validateAPIDuration(machine.Name, block+".api.read_header_timeout", api.ReadHeaderTimeout); err != nil {
+	if _, err := validateDuration(machine.Name, block+".api.read_header_timeout", api.ReadHeaderTimeout); err != nil {
 		return err
 	}
-	return validateAPIDuration(machine.Name, block+".api.shutdown_timeout", api.ShutdownTimeout)
+	_, err := validateDuration(machine.Name, block+".api.shutdown_timeout", api.ShutdownTimeout)
+	return err
 }
 
-func validateAPIDuration(machineName, where, value string) error {
+// validateDuration parses one authored duration and requires it to be positive,
+// naming the attribute an author has to change. It returns the parsed value for
+// the checks that compare two of them.
+func validateDuration(machineName, where, value string) (time.Duration, error) {
 	if strings.TrimSpace(value) == "" {
-		return fmt.Errorf("machine %q: %s is required", machineName, where)
+		return 0, fmt.Errorf("machine %q: %s is required", machineName, where)
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil {
-		return fmt.Errorf("machine %q: %s %q is not a valid duration: %w", machineName, where, value, err)
+		return 0, fmt.Errorf("machine %q: %s %q is not a valid duration: %w", machineName, where, value, err)
 	}
 	if d <= 0 {
-		return fmt.Errorf("machine %q: %s %s must be positive", machineName, where, d)
+		return 0, fmt.Errorf("machine %q: %s %s must be positive", machineName, where, d)
 	}
-	return nil
+	return d, nil
 }
 
 func validateStandbyEndpoints(machine Machine) error {

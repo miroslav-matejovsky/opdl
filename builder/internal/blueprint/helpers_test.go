@@ -43,7 +43,7 @@ func validMachine() blueprint.Machine {
 		Name:           "sensor",
 		MachineProfile: "sensor-node",
 		IP:             "10.0.1.10",
-		Services:       []string{"sensor-services"},
+		Services:       []blueprint.Service{validService("sensor-services", 9101)},
 		EventstoreFile: "D:/opdl/sensor/machine-events.jsonl",
 		Primary: &blueprint.Primary{
 			EventlogFile: "D:/opdl/sensor/primary/events.jsonl",
@@ -78,6 +78,25 @@ func namedMachine(name, ip string) blueprint.Machine {
 	m.Standby.LogFile = "D:/opdl/" + name + "/standby/platform.log"
 	m.Standby.Lease = validLease("D:/opdl/" + name + "/lease")
 	return m
+}
+
+func validService(name string, port int) blueprint.Service {
+	return blueprint.Service{
+		Name:        name,
+		Role:        "master",
+		HealthCheck: validHealthCheck(port),
+	}
+}
+
+func validHealthCheck(port int) blueprint.HealthCheck {
+	return blueprint.HealthCheck{
+		Type:     "http",
+		Port:     port,
+		Path:     "/health",
+		Interval: "10s",
+		Timeout:  "2s",
+		Retries:  3,
+	}
 }
 
 func validLease(file string) *blueprint.Lease {

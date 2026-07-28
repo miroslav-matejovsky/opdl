@@ -53,7 +53,10 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		Machine:        machine.Name,
 		MachineProfile: machine.MachineProfile,
 		IP:             machine.IP,
-		Services:       append([]string(nil), machine.Services...),
+		// The descriptor carries the names only. A machine's health checks are
+		// deployment policy the platform does not yet run, so resolving them into
+		// the runtime's contract would state a capability that does not exist.
+		Services: machine.ServiceNames(),
 		// The machine's own store is resolved for every machine, standby or not:
 		// a machine's facts are the machine's whether or not a second instance
 		// exists to read them.

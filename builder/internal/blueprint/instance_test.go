@@ -18,9 +18,19 @@ func TestMachinePlatformStandby(t *testing.T) {
 		  environment = "production"
 		  site "north" {
 		    machine "m1" {
-		      profile  = "node"
-		      ip       = "10.0.1.10"
-		      services = ["core-services"]
+		      profile = "node"
+		      ip      = "10.0.1.10"
+		      service "core-services" {
+		        role = "master"
+		        health_check {
+		          type     = "http"
+		          port     = 9101
+		          path     = "/health"
+		          interval = "10s"
+		          timeout  = "2s"
+		          retries  = 3
+		        }
+		      }
 		      `+body+`
 		    }
 		  }
@@ -81,9 +91,19 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 			  environment = "production"
 			  site "north" {
 			    machine "m1" {
-			      profile  = "node"
-			      ip       = "10.0.1.10"
-			      services = ["core-services"]
+			      profile = "node"
+			      ip      = "10.0.1.10"
+			      service "core-services" {
+		        role = "master"
+		        health_check {
+		          type     = "http"
+		          port     = 9101
+		          path     = "/health"
+		          interval = "10s"
+		          timeout  = "2s"
+		          retries  = 3
+		        }
+		      }
 			      ` + tc.body + `
 			    }
 			  }

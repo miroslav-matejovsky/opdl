@@ -10,8 +10,23 @@ project "customer-a" {
     machine "sensor" {
       profile         = "sensor-node"
       ip              = "10.0.1.10"
-      services        = ["sensor-services"]
       eventstore_file = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
+
+      # Every service the machine hosts declares the part this copy of it plays
+      # — master or slave — and the probe that says whether it is up: what to
+      # ask, how often, and how many consecutive failures make it down.
+      service "sensor-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
@@ -39,8 +54,37 @@ project "customer-a" {
     machine "local-server" {
       profile         = "local-server"
       ip              = "10.0.1.11"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/north/local-server/machine-events.jsonl"
+
+      # The control room holds the master copy of the core services; this site
+      # follows it.
+      service "core-services" {
+        role = "slave"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
+
+      # A machine hosts as many services as it needs; each states its own role
+      # and its own probe, on its own port.
+      service "alarm-service" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9102
+          path     = "/health"
+          interval = "5s"
+          timeout  = "1s"
+          retries  = 2
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
@@ -92,8 +136,20 @@ project "customer-a" {
     machine "master" {
       profile         = "master-server"
       ip              = "10.0.2.10"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/master/machine-events.jsonl"
+
+      service "core-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
@@ -143,8 +199,20 @@ project "customer-a" {
     machine "slave" {
       profile         = "slave-server"
       ip              = "10.0.2.11"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/slave/machine-events.jsonl"
+
+      service "core-services" {
+        role = "slave"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
@@ -194,8 +262,23 @@ project "customer-a" {
     machine "integration" {
       profile         = "integration-server"
       ip              = "10.0.2.12"
-      services        = ["integration-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/integration/machine-events.jsonl"
+
+      # Every service states a probe. What differs is how hard it presses: these
+      # services reach outward, so they are given longer to answer and more
+      # attempts before they are called down.
+      service "integration-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health/ready"
+          interval = "30s"
+          timeout  = "5s"
+          retries  = 5
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
