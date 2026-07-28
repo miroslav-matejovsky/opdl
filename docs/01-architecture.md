@@ -44,7 +44,7 @@ The descriptor states the machine once and each instance separately:
 
 | Part | Contents |
 | --- | --- |
-| machine | platform, project, environment, site, machine, machine profile, ip, services |
+| machine | platform, project, environment, site, machine, machine profile, ip, services, `machine_events_file` |
 | `primary` | mandatory: Windows Service identity, data dir, loopback API address, listener timeouts |
 | `standby` | the same fields, present only when the machine deploys a standby |
 | `lease` | the shared Primary Ownership file, its failover timings, and the projection lag bound; present exactly when `standby` is |
@@ -54,6 +54,12 @@ endpoint in a descriptor is always one a process will bind, and the two absences
 say the same thing once rather than a disabled record saying it in three places.
 See `builder/deployment` for the field-level contract and `platform/config` for
 the runtime's copy of it; the two are kept in step by `conformance-tests`.
+
+Two files are the machine's rather than an instance's. `machine_events_file` is
+the machine's own event store and is present on every machine, because a machine
+with one instance has machine facts too; the lease exists only where ownership
+can move. Every other path in a descriptor belongs to exactly one instance, and
+the builder rejects a blueprint that points two of them at one file.
 
 The listener timeouts are per instance, authored in each `api` block, because the
 two instances bind their own listeners. The lag bound is on `standby.lease`,
@@ -75,7 +81,7 @@ setting has two sources needing a precedence rule to tell them apart.
 | `internal/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
 | `internal/instance/eventlog` | Writes the mandatory process-local JSONL record under the instance data root. |
 | `internal/machine/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
-| `internal/machine/eventstore` | The machine's shared event store: the Active instance appends machine-scoped envelopes, the Passive instance replays and follows them. |
+| `internal/machine/eventstore` | The machine's shared event store: an append-only file both instances append machine-scoped envelopes to, so the machine's account survives ownership moving. |
 | `internal/site/eventfabric` | The site's ordered event distribution contract: delivery, sequence, and durable named consumers. Contract only; the implementation follows the distribution ADR. |
 
 ### The level dependency rule
@@ -125,31 +131,52 @@ file-backed implementation with SQL is a swap nothing above it notices.
 | Level | Contract | Backed by now | Later |
 | --- | --- | --- | --- |
 | Instance | `events/storage.Backend`: store, close | JSONL local record | stays JSONL: it has no reader to serve |
-| Machine | `machine/eventstore`: `Appender` (append, close) and `Reader` (replay then follow) | shared JSONL file at a machine-wide path | SQLite; Primary Ownership already serializes the writer |
+| Machine | `machine/eventstore.Appender`: append, close | shared JSONL file at a machine-wide path, authored as `machine_events_file` | SQLite |
 | Site | `site/eventfabric`: `events.Publisher` to publish, `Consumer` to replay-then-follow and acknowledge | nothing yet | per the distribution ADR |
 
+**The two lower stores are append-only, and neither has a read contract.**
+Nothing in the platform reads an instance's record or a machine's store: no
+query is answered from either, and a passive instance needs neither to take
+over. A read contract with no consumer is a guess at what a future one wants,
+kept alive by tests written to exercise it — and on a file another process is
+appending to, replay-then-follow is the expensive half to build and to prove.
+Both files are written for the reader they do have, which is an operator and
+whatever tooling reads JSON Lines. Naming a real machine-level consumer costs an
+interface method and its implementation; it does not cost a redesign, because a
+store that keeps every machine-scoped envelope in order already holds what such
+a consumer would read.
+
 There is deliberately no single store interface over the three. Their audiences
-differ: the instance record is write-only, the machine store has one writer and
-one local reader, and the site stream has many of both and must define order. A
-shared abstraction would be the union of the three and would promise every
-holder something it cannot have.
+differ: two are write-only, and the site stream has many readers and must define
+order. A shared abstraction would be the union of the three and would promise
+every holder something it cannot have.
 
 Each level's contract lives with its consumers rather than in `internal/events`,
 which owns the envelope and nothing about where one goes.
 
-Ordinals are delivery, never fact. `eventstore.Position` and
-`eventfabric.Delivery.Sequence` are each their own store's numbering, and
-neither is on the envelope: an event says what happened, and a store says where
-it put it. This is the stance `internal/events` already takes on transport
-ordering.
+Ordinals are delivery, never fact. `eventfabric.Delivery.Sequence` is the site
+distribution's own numbering and is not on the envelope: an event says what
+happened, and a store says where it put it. This is the stance
+`internal/events` already takes on transport ordering.
 
-Scope is enforced where it would do damage. `eventstore.Appender.Append`
-refuses an envelope that is not machine-scoped: an instance-scoped fact would
-be replayed by the other instance as the machine's own, and a site-scoped one
-already reaches both instances through the site, so appending it would deliver
-it twice. This never contradicts the instance record, which holds every scope
-(see [Event scope](#event-scope)) — a wider scope adds destinations and takes
-nothing away from the local log.
+**A package's level is not its events' scope.** A package under
+`internal/site/...` may state site-, machine-, and instance-scoped facts, and
+`internal/machine/redundancy` already states two of the three. So the machine
+store does not hold "the machine packages' events"; it holds machine-scoped
+envelopes, whichever package stated them, and the sorting happens per envelope
+in two places with different jobs:
+
+- `eventstore.Backend` is a publisher backend. Every envelope a process stamps
+  reaches every backend, so most of what arrives is not the machine's; it keeps
+  the machine-scoped ones and lets the rest pass.
+- `eventstore.Appender.Append` is a deliberate call, and refuses anything not
+  machine-scoped. An instance-scoped fact appended here would read as the
+  machine's own, and a site-scoped one already reaches both instances through
+  the site.
+
+None of this contradicts the instance record, which holds every scope (see
+[Event scope](#event-scope)): a wider scope adds destinations and takes nothing
+away from the local log.
 
 ## Event Fabric contract
 
@@ -370,6 +397,14 @@ namely everything that happened on this instance. A machine-scoped ownership
 handover and a site-scoped registration decision are both things that happened
 here, so an operator reading one instance's file sees them. Nothing is routed
 away from that file, which is why the JSONL backend has no scope configuration.
+
+**Scope is a property of the fact, not of the package that states it.** A
+package sits at one level; its events do not have to.
+`internal/machine/redundancy` states machine-scoped ownership transitions and
+instance-scoped facts about what one process did around them, and a site package
+may state facts of any of the three levels. Nothing routes by package, and no
+store holds "a package's events": each store takes the scope it is for, out of
+the one flow every process publishes.
 
 The default is `instance`, because that is the safe direction to be wrong in: a
 forgotten declaration keeps a fact local, where an operator still finds it,

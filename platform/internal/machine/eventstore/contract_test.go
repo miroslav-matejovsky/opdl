@@ -1,10 +1,12 @@
 package eventstore_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -17,141 +19,101 @@ import (
 )
 
 // The tests in this file are the machine store contract. They are written
-// against Appender and Reader and never against a file, so the store the
-// machine's instances are expected to end up sharing — SQLite — proves itself
-// by being added to implementations and changing nothing else.
+// against Appender and never against a file, so the store the machine's
+// instances are expected to end up sharing — SQLite — proves itself by being
+// added to implementations and changing nothing else.
 
-// store is both halves of the contract. Production hands out one half at a
-// time; a test needs both to say anything about either.
-type store interface {
-	eventstore.Appender
-	eventstore.Reader
+// location is one implementation's store for the length of one test.
+type location struct {
+	// open opens the store. Calling it again reopens the same store, which is
+	// how a test continues one across a close.
+	open func(t *testing.T) eventstore.Appender
+	// stored is what the store holds, read the way an operator reads it rather
+	// than through the contract. Nothing in the platform reads a machine store
+	// back, so there is no Reader to assert through and each implementation says
+	// for itself what it kept.
+	stored func(t *testing.T) []events.Envelope
 }
 
-// openStore opens the store at one fixed location. Calling it again reopens the
-// same store, which is how a test continues one across a close.
-type openStore func(t *testing.T) store
-
 // implementations is every store the contract runs against, by name.
-var implementations = map[string]func(t *testing.T) openStore{
+var implementations = map[string]func(t *testing.T) location{
 	"file": fileLocation,
 }
 
-// fileLocation picks a store file for one test and returns the way to open it.
-func fileLocation(t *testing.T) openStore {
+// fileLocation picks a store file for one test and returns the way to open and
+// to read it.
+func fileLocation(t *testing.T) location {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "machine.jsonl")
-	return func(t *testing.T) store {
-		t.Helper()
-		opened, err := eventstore.Open(path)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = opened.Close(context.Background()) })
-		return opened
+	return location{
+		open: func(t *testing.T) eventstore.Appender {
+			t.Helper()
+			opened, err := eventstore.Open(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = opened.Close(context.Background()) })
+			return opened
+		},
+		stored: func(t *testing.T) []events.Envelope { return readLines(t, path) },
 	}
 }
 
 // runContract runs one contract case against every implementation.
-func runContract(t *testing.T, contract func(t *testing.T, open openStore)) {
+func runContract(t *testing.T, contract func(t *testing.T, at location)) {
 	t.Helper()
-	for name, location := range implementations {
+	for name, at := range implementations {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			contract(t, location(t))
+			contract(t, at(t))
 		})
 	}
 }
 
-func TestStoreReplaysWhatWasAppended(t *testing.T) {
+func TestStoreKeepsWhatWasAppended(t *testing.T) {
 	t.Parallel()
-	runContract(t, func(t *testing.T, open openStore) {
-		opened := open(t)
+	runContract(t, func(t *testing.T, at location) {
+		opened := at.open(t)
 		require.NoError(t, opened.Append(t.Context(), machineEnvelope("first")))
 
-		entries := replay(t, opened, eventstore.FromStart, 1)
-		require.Equal(t, "id-first", entries[0].Envelope.ID)
-		require.Equal(t, events.ScopeMachine, entries[0].Envelope.Scope)
-		require.JSONEq(t, `{"detail":"first"}`, string(entries[0].Envelope.Data))
+		held := at.stored(t)
+		require.Len(t, held, 1)
+		require.Equal(t, "id-first", held[0].ID)
+		require.Equal(t, events.ScopeMachine, held[0].Scope)
+		require.JSONEq(t, `{"detail":"first"}`, string(held[0].Data))
 	})
 }
 
-func TestStoreReplaysInAppendOrderWithoutGaps(t *testing.T) {
+func TestStoreKeepsAppendOrder(t *testing.T) {
 	t.Parallel()
-	runContract(t, func(t *testing.T, open openStore) {
-		opened := open(t)
+	runContract(t, func(t *testing.T, at location) {
+		opened := at.open(t)
 		for _, detail := range []string{"first", "second", "third"} {
 			require.NoError(t, opened.Append(t.Context(), machineEnvelope(detail)))
 		}
 
-		entries := replay(t, opened, eventstore.FromStart, 3)
-		require.Equal(t, []string{"id-first", "id-second", "id-third"}, identities(entries),
-			"entries replay in the order they were appended")
-		require.Equal(t, []eventstore.Position{1, 2, 3}, positions(entries),
-			"positions count from one with no gaps between consecutive entries")
-	})
-}
-
-func TestStoreResumesAfterAPosition(t *testing.T) {
-	t.Parallel()
-	runContract(t, func(t *testing.T, open openStore) {
-		opened := open(t)
-		for _, detail := range []string{"first", "second", "third"} {
-			require.NoError(t, opened.Append(t.Context(), machineEnvelope(detail)))
-		}
-
-		entries := replay(t, opened, 2, 1)
-		require.Equal(t, []string{"id-third"}, identities(entries),
-			"a reader resuming from a position gets what came after it and not the position itself")
-		require.Equal(t, []eventstore.Position{3}, positions(entries),
-			"positions keep their meaning across reads, so a resumed reader can resume again")
-	})
-}
-
-func TestStoreFollowsAppendsMadeAfterTheReplay(t *testing.T) {
-	t.Parallel()
-	runContract(t, func(t *testing.T, open openStore) {
-		opened := open(t)
-		require.NoError(t, opened.Append(t.Context(), machineEnvelope("before")))
-
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		results, err := opened.Read(ctx, eventstore.FromStart)
-		require.NoError(t, err)
-
-		require.Equal(t, []string{"id-before"}, identities(collect(t, results, 1)))
-
-		require.NoError(t, opened.Append(t.Context(), machineEnvelope("after")))
-
-		followed := collect(t, results, 1)
-		require.Equal(t, []string{"id-after"}, identities(followed),
-			"a caught-up reader is given what is appended next")
-		require.Equal(t, []eventstore.Position{2}, positions(followed),
-			"following continues the same numbering, so nothing is skipped or repeated at the seam")
-		requireNothingFurther(t, results)
+		require.Equal(t, []string{"id-first", "id-second", "id-third"}, identities(at.stored(t)),
+			"the machine's story is kept in the order it was stated")
 	})
 }
 
 func TestStoreContinuesTheSameStoreAfterReopen(t *testing.T) {
 	t.Parallel()
-	runContract(t, func(t *testing.T, open openStore) {
-		first := open(t)
+	runContract(t, func(t *testing.T, at location) {
+		first := at.open(t)
 		require.NoError(t, first.Append(t.Context(), machineEnvelope("before-restart")))
 		require.NoError(t, first.Close(t.Context()))
 
-		second := open(t)
+		second := at.open(t)
 		require.NoError(t, second.Append(t.Context(), machineEnvelope("after-restart")))
 
-		entries := replay(t, second, eventstore.FromStart, 2)
-		require.Equal(t, []string{"id-before-restart", "id-after-restart"}, identities(entries),
+		require.Equal(t, []string{"id-before-restart", "id-after-restart"}, identities(at.stored(t)),
 			"reopening continues the machine's store rather than starting a new one")
-		require.Equal(t, []eventstore.Position{1, 2}, positions(entries),
-			"positions continue across a restart, so a passive reader resumes where it stopped")
 	})
 }
 
 func TestStoreRefusesEnvelopesFromAnotherLevel(t *testing.T) {
 	t.Parallel()
-	runContract(t, func(t *testing.T, open openStore) {
-		opened := open(t)
+	runContract(t, func(t *testing.T, at location) {
+		opened := at.open(t)
 
 		for _, scope := range []events.Scope{events.ScopeInstance, events.ScopeSite} {
 			err := opened.Append(t.Context(), scopedEnvelope("wrong-level", scope))
@@ -159,16 +121,15 @@ func TestStoreRefusesEnvelopesFromAnotherLevel(t *testing.T) {
 		}
 
 		require.NoError(t, opened.Append(t.Context(), machineEnvelope("kept")))
-		entries := replay(t, opened, eventstore.FromStart, 1)
-		require.Equal(t, []string{"id-kept"}, identities(entries),
+		require.Equal(t, []string{"id-kept"}, identities(at.stored(t)),
 			"a refused envelope leaves nothing behind")
 	})
 }
 
 func TestStoreRefusesAppendsAfterClose(t *testing.T) {
 	t.Parallel()
-	runContract(t, func(t *testing.T, open openStore) {
-		opened := open(t)
+	runContract(t, func(t *testing.T, at location) {
+		opened := at.open(t)
 		require.NoError(t, opened.Close(t.Context()))
 		require.NoError(t, opened.Close(t.Context()), "closing twice is not an error")
 
@@ -178,8 +139,8 @@ func TestStoreRefusesAppendsAfterClose(t *testing.T) {
 
 func TestStoreKeepsConcurrentAppendsWholeAndSeparate(t *testing.T) {
 	t.Parallel()
-	runContract(t, func(t *testing.T, open openStore) {
-		opened := open(t)
+	runContract(t, func(t *testing.T, at location) {
+		opened := at.open(t)
 
 		const writers = 8
 		// The failures are collected rather than asserted in the goroutines: a
@@ -194,68 +155,44 @@ func TestStoreKeepsConcurrentAppendsWholeAndSeparate(t *testing.T) {
 		wg.Wait()
 		require.NoError(t, errors.Join(failures...))
 
-		entries := replay(t, opened, eventstore.FromStart, writers)
-		require.Len(t, identities(entries), writers)
-		require.ElementsMatch(t, expectedIdentities(writers), identities(entries),
+		held := at.stored(t)
+		require.Len(t, held, writers)
+		require.ElementsMatch(t, expectedIdentities(writers), identities(held),
 			"every concurrent append is stored once and readable on its own")
 	})
 }
 
-// replay reads want entries from the start of a stream and then ends it, which
-// is what a caller that is not following does.
-func replay(t *testing.T, s store, from eventstore.Position, want int) []eventstore.Entry {
+// readLines reads the JSON Lines store back the way an operator would: one
+// envelope per line, in the order they were appended. A line that will not
+// decode fails the test, because a store nobody can read is the failure this is
+// checking for.
+func readLines(t *testing.T, path string) []events.Envelope {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	results, err := s.Read(ctx, from)
+	file, err := os.Open(path)
 	require.NoError(t, err)
-	return collect(t, results, want)
-}
+	defer func() { require.NoError(t, file.Close()) }()
 
-// collect receives want entries, failing on a result that carries an error, on
-// a stream that ends early, and on a stream that goes quiet.
-func collect(t *testing.T, results <-chan eventstore.Result, want int) []eventstore.Entry {
-	t.Helper()
-	entries := make([]eventstore.Entry, 0, want)
-	for len(entries) < want {
-		select {
-		case result, ok := <-results:
-			require.Truef(t, ok, "stream closed after %d of %d entries", len(entries), want)
-			require.NoError(t, result.Err)
-			entries = append(entries, result.Entry)
-		case <-time.After(5 * time.Second):
-			require.FailNowf(t, "stream went quiet", "got %d of %d entries", len(entries), want)
+	var held []events.Envelope
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
 		}
+		envelope, err := events.Decode(line)
+		require.NoErrorf(t, err, "store line %d does not decode: %s", len(held)+1, line)
+		held = append(held, envelope)
 	}
-	return entries
+	require.NoError(t, scanner.Err())
+	return held
 }
 
-// requireNothingFurther fails if the stream delivers anything more. The wait is
-// long enough for a follower that polls to have looked again.
-func requireNothingFurther(t *testing.T, results <-chan eventstore.Result) {
-	t.Helper()
-	select {
-	case result := <-results:
-		require.FailNowf(t, "unexpected delivery", "stream delivered %+v", result)
-	case <-time.After(time.Second):
-	}
-}
-
-func identities(entries []eventstore.Entry) []string {
-	ids := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		ids = append(ids, entry.Envelope.ID)
+func identities(held []events.Envelope) []string {
+	ids := make([]string, 0, len(held))
+	for _, envelope := range held {
+		ids = append(ids, envelope.ID)
 	}
 	return ids
-}
-
-func positions(entries []eventstore.Entry) []eventstore.Position {
-	found := make([]eventstore.Position, 0, len(entries))
-	for _, entry := range entries {
-		found = append(found, entry.Position)
-	}
-	return found
 }
 
 func expectedIdentities(writers int) []string {

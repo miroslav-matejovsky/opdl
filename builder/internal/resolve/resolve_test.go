@@ -40,13 +40,19 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 	return blueprint.Machine{
 		Name: name, MachineProfile: "node", IP: ip, Services: []string{"core-services"},
 		Platform: &blueprint.Platform{
-			EventsFile: eventsFile(name, "primary"),
-			StateFile:  stateFile(name, "primary"),
-			API:        &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
-			WinService: &blueprint.WinService{Name: name + "-primary"},
-			Standby:    standby,
+			MachineEventsFile: machineEventsFile(name),
+			EventsFile:        eventsFile(name, "primary"),
+			StateFile:         stateFile(name, "primary"),
+			API:               &blueprint.API{LocalPort: apiPort, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
+			WinService:        &blueprint.WinService{Name: name + "-primary"},
+			Standby:           standby,
 		},
 	}
+}
+
+// machineEventsFile is the machine's own event store, shared by its instances.
+func machineEventsFile(machine string) string {
+	return fmt.Sprintf("D:/opdl-data/%s/machine-events.jsonl", machine)
 }
 
 // eventsFile is one instance's append-only event record.
@@ -205,6 +211,23 @@ func TestBuildValidatesDescriptors(t *testing.T) {
 func TestBuildRequiresPlatformName(t *testing.T) {
 	_, err := resolve.Build(project(), "")
 	require.ErrorContains(t, err, "platform is required")
+}
+
+// TestBuildCarriesTheMachineStore checks the machine's own event store reaches
+// the descriptor on every machine, with or without a standby: a machine's facts
+// are the machine's whether or not a second instance exists to read them.
+func TestBuildCarriesTheMachineStore(t *testing.T) {
+	for name, standbyDisabled := range map[string]bool{"standby deployed": false, "standby disabled": true} {
+		t.Run(name, func(t *testing.T) {
+			p := projectOf(blueprint.Site{
+				Name:     "north",
+				Machines: []blueprint.Machine{machine("sensor", "10.0.1.10", standbyDisabled), companion()},
+			})
+			plan, err := resolve.Build(p, "acme-opdl")
+			require.NoError(t, err)
+			require.Equal(t, machineEventsFile("sensor"), plan.Machines[0].MachineEventsFile)
+		})
+	}
 }
 
 // TestBuildCarriesAuthoredLock checks the lock policy is carried onto the descriptor when

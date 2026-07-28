@@ -88,6 +88,9 @@ var projectFixtures = map[string][]machineFixture{
 type renderedMachine struct {
 	Name string
 	IP   string
+	// MachineEventsFile is the machine's own event store, shared by both of its
+	// instances. Every machine authors one, standby or not.
+	MachineEventsFile string
 	// The Primary Instance's port and local files.
 	APIPort    int
 	EventsFile string
@@ -256,6 +259,13 @@ func stateFileFor(workDir, machine, role string) string {
 	return instanceDirFor(workDir, machine, role) + "/state.json"
 }
 
+// machineEventsFileFor is a machine's own event store: the file both of its
+// instances append machine-scoped events to. Every machine has one, standby or
+// not, so it sits beside the lease rather than with an instance's files.
+func machineEventsFileFor(workDir, machine string) string {
+	return filepath.ToSlash(filepath.Join(workDir, "data-"+machine, "machine-events.jsonl"))
+}
+
 // leaseFileFor is a machine's Primary Ownership lease file, shared by its two
 // instances and by nothing else.
 func leaseFileFor(workDir, machine string) string {
@@ -289,12 +299,13 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 
 	for _, fixture := range fixtures {
 		machine := renderedMachine{
-			Name:            fixture.name,
-			IP:              fixture.ip,
-			APIPort:         takeAPIPort(),
-			EventsFile:      eventsFileFor(workDir, fixture.name, RolePrimary),
-			StateFile:       stateFileFor(workDir, fixture.name, RolePrimary),
-			StandbyDisabled: fixture.standbyDisabled,
+			Name:              fixture.name,
+			IP:                fixture.ip,
+			MachineEventsFile: machineEventsFileFor(workDir, fixture.name),
+			APIPort:           takeAPIPort(),
+			EventsFile:        eventsFileFor(workDir, fixture.name, RolePrimary),
+			StateFile:         stateFileFor(workDir, fixture.name, RolePrimary),
+			StandbyDisabled:   fixture.standbyDisabled,
 		}
 		if !fixture.standbyDisabled {
 			machine.StandbyAPIPort = takeAPIPort()
@@ -399,6 +410,12 @@ func ReadManifest(t *testing.T, binaryPath string) PackageManifest {
 // There is no monitor address. Each instance's event record is the local
 // operational surface.
 type Sockets struct {
+	// MachineEventsFile is the machine's own event store, which both instances
+	// append machine-scoped events to. It is the machine's rather than an
+	// instance's, so a scenario reads the machine's account of a failover from
+	// one file instead of stitching two instances' records together.
+	MachineEventsFile string
+
 	EventsFile string
 	StateFile  string
 	// The Standby Instance's own, empty on a machine that deploys no standby.
@@ -442,6 +459,8 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 	for _, fixture := range fixtures {
 		reserved := endpoints[fixture.name]
 		sockets := Sockets{
+			// The machine's own store, matching the path authored in the blueprint.
+			MachineEventsFile: filepath.FromSlash(machineEventsFileFor(workDir, fixture.name)),
 			// The Primary Instance's own local files, matching the paths authored
 			// in the blueprint.
 			EventsFile: filepath.FromSlash(eventsFileFor(workDir, fixture.name, RolePrimary)),
@@ -599,7 +618,9 @@ func WaitFor(t *testing.T, what string, timeout, interval time.Duration, cond fu
 // operationEvents reads each deployed instance's canonical JSONL event record.
 // Restarts append to the same per-instance file.
 func operationEvents(m *Machine) string {
-	paths := []string{m.Sockets.EventsFile}
+	// The machine's own store comes first: on a failure that involves ownership
+	// it is the one file that holds both instances' side of it.
+	paths := []string{m.Sockets.MachineEventsFile, m.Sockets.EventsFile}
 	if m.Sockets.StandbyEventsFile != "" {
 		paths = append(paths, m.Sockets.StandbyEventsFile)
 	}
@@ -619,6 +640,43 @@ func operationEvents(m *Machine) string {
 		return "(none)\n"
 	}
 	return b.String()
+}
+
+// StoredEvent is the part of a stored envelope a scenario asserts on: what
+// happened, which level it belongs to, and which instance stated it.
+//
+// It is declared here rather than imported from the platform so a scenario reads
+// the shipped file as a black box, the same way an operator's tooling would.
+type StoredEvent struct {
+	Type   string `json:"type"`
+	Scope  string `json:"scope"`
+	Origin struct {
+		ProcessRole string `json:"process_role"`
+	} `json:"origin"`
+}
+
+// MachineEvents reads a machine's own event store: the file both of its
+// instances append machine-scoped events to, in the order they were appended.
+//
+// The store is append-only and nothing in the platform reads it back, so this
+// is the reader it is written for — an assertion, or an operator, opening a
+// JSON Lines file.
+func MachineEvents(t *testing.T, m *Machine) []StoredEvent {
+	t.Helper()
+	data, err := os.ReadFile(m.Sockets.MachineEventsFile)
+	require.NoError(t, err, "the machine's own event store is opened at startup, so it exists")
+
+	var stored []StoredEvent
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event StoredEvent
+		require.NoErrorf(t, json.Unmarshal([]byte(line), &event), "machine store line does not decode: %s", line)
+		stored = append(stored, event)
+	}
+	return stored
 }
 
 // InstanceEpochs is what an instance's state file says about its incarnations:

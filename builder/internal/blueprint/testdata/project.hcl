@@ -11,8 +11,9 @@ project "customer-a" {
       # the Primary Instance's; standby is the Standby Instance's. This machine
       # opts out of a standby, so it states that and authors nothing further.
       platform {
-        events_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/north/sensor/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/north/sensor/primary/state.json"
 
         api {
           local_port = 8080
@@ -39,8 +40,9 @@ project "customer-a" {
       # every port below is distinct: nothing is shared between them except the
       # ownership object, which is not a port.
       platform {
-        events_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/north/local-server/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/north/local-server/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/north/local-server/primary/state.json"
 
         api {
           local_port = 8080
@@ -86,8 +88,9 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
-        events_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/master/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/control-room/master/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/control-room/master/primary/state.json"
 
         api {
           local_port = 8080
@@ -131,8 +134,9 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
-        events_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/slave/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/control-room/slave/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/control-room/slave/primary/state.json"
 
         api {
           local_port = 8080
@@ -176,8 +180,9 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
-        events_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/integration/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/control-room/integration/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/control-room/integration/primary/state.json"
 
         api {
           local_port = 8080

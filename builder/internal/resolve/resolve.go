@@ -53,9 +53,13 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		MachineProfile: machine.MachineProfile,
 		IP:             machine.IP,
 		Services:       append([]string(nil), machine.Services...),
-		Primary:        primaryInstance(machine),
-		Standby:        instance(machine, deployment.RoleStandby),
-		Lease:          lease(machine),
+		// The machine's own store is resolved for every machine, standby or not:
+		// a machine's facts are the machine's whether or not a second instance
+		// exists to read them.
+		MachineEventsFile: machine.MachineEventsFile(),
+		Primary:           primaryInstance(machine),
+		Standby:           instance(machine, deployment.RoleStandby),
+		Lease:             lease(machine),
 	}
 }
 

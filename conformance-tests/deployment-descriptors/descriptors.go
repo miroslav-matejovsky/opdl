@@ -50,6 +50,9 @@ const (
 	// machine ip.
 	// Each instance names every local file it owns outright, so a round trip that
 	// dropped one, or resolved both instances onto the same path, would fail.
+	// The machine's own store is in the fixture for the same reason and is not an
+	// instance's: it is the file both instances append machine-scoped events to.
+	machineEventsFile = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
 	eventsFile        = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
 	stateFile         = "D:/opdl/customer-a/north/sensor/primary/state.json"
 	apiAddr           = "127.0.0.1:8080"
@@ -130,14 +133,15 @@ func checkRoundTripFor(hasStandby bool) error {
 	}
 
 	built := builderdeployment.Descriptor{
-		Platform:       "opdl",
-		Project:        "customer-a",
-		Environment:    "production",
-		Site:           site,
-		Machine:        machine,
-		MachineProfile: "sensor-node",
-		IP:             machineIP,
-		Services:       []string{"sensor-services", "core-services"},
+		Platform:          "opdl",
+		Project:           "customer-a",
+		Environment:       "production",
+		Site:              site,
+		Machine:           machine,
+		MachineProfile:    "sensor-node",
+		IP:                machineIP,
+		Services:          []string{"sensor-services", "core-services"},
+		MachineEventsFile: machineEventsFile,
 		Primary: builderdeployment.Instance{
 			EventsFile:           eventsFile,
 			StateFile:            stateFile,
@@ -163,14 +167,15 @@ func checkRoundTripFor(hasStandby bool) error {
 	}
 
 	want := platformconfig.Descriptor{
-		Platform:       "opdl",
-		Project:        "customer-a",
-		Environment:    "production",
-		Site:           site,
-		Machine:        machine,
-		MachineProfile: "sensor-node",
-		IP:             machineIP,
-		Services:       []string{"sensor-services", "core-services"},
+		Platform:          "opdl",
+		Project:           "customer-a",
+		Environment:       "production",
+		Site:              site,
+		Machine:           machine,
+		MachineProfile:    "sensor-node",
+		IP:                machineIP,
+		Services:          []string{"sensor-services", "core-services"},
+		MachineEventsFile: machineEventsFile,
 		Primary: platformconfig.Instance{
 			EventsFile:           eventsFile,
 			StateFile:            stateFile,
@@ -212,6 +217,12 @@ func checkWireShape(data []byte, hasStandby bool) error {
 		if _, ok := wire[field]; ok {
 			return fmt.Errorf("builder descriptor carries machine-level %q: endpoints and local files belong to an instance", field)
 		}
+	}
+	// The machine's own store is the other way round: it is machine-level on
+	// every machine, so a descriptor that omitted it, or put it on an instance,
+	// would leave the machine with nowhere to keep its own account.
+	if _, ok := wire["machine_events_file"]; !ok {
+		return fmt.Errorf("builder descriptor omitted machine_events_file: the machine's shared event store is not an instance's file")
 	}
 	return verifyWireLease(wire, hasStandby)
 }

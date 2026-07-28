@@ -37,11 +37,13 @@ distribution code is written.
 - **Instance** — one process. Owns its local JSONL record. Instance events
   are operator evidence only; **no platform consumer reads them** (this is
   already the documented contract of the local record).
-- **Machine** — one host, primary + optional standby. Machine events are
-  shared between the two instances through a machine-wide store (a file
-  first, later possibly SQLite). Only the Primary-Ownership holder writes;
-  the passive instance only reads. Consumers of machine events are
-  machine-level code.
+- **Machine** — one host, primary + optional standby. Machine events go to a
+  machine-wide store (a file first, later possibly SQLite) so the machine's
+  account survives ownership moving between two instances that each keep only
+  their own record. In practice only the Primary-Ownership holder has a
+  machine-scoped fact to state. As landed in step 05 the store is **append-only
+  and has no platform consumer**, the same standing the instance record has;
+  a machine-level consumer can be added when one is named.
 - **Site** — all machines of a deployment. Site events are distributed to
   every machine (transport decided in step 06); each machine folds them into
   a local projection/cache. Consumers of site events are site-level code
@@ -121,7 +123,12 @@ Collected from the step files; these need owners before step 07:
    machine-scoped, a passive instance's waiting and declining stay
    instance-scoped, and the passive instance therefore never has a
    machine-scoped fact to write. (steps 03, 05)
-3. Who is the first real machine-level consumer? Building the shared store
-   without one is speculative. (step 05)
+3. ~~Who is the first real machine-level consumer? Building the shared store
+   without one is speculative.~~ **Answered in step 05, by dropping the
+   question:** the machine store is append-only and has no read contract, so it
+   needs no consumer to be worth building. It is the machine's account of
+   itself for an operator, the same standing the instance record has had all
+   along. Naming a consumer later adds a method; it does not change the store.
+   (step 05)
 4. Descriptor and builder impact of a machine-wide events path (new blueprint
    field, conformance tests, examples). (step 05)

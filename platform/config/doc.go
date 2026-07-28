@@ -33,7 +33,8 @@
 // compatible. That is why this package is exported rather than internal.
 //
 // UnmarshalJSON decodes strictly: a deployed instance must state its data
-// directory and both listener timeouts, and the lease must be present exactly
+// directory and both listener timeouts, every machine must state the shared
+// event store its instances append to, and the lease must be present exactly
 // when a standby is. Each guarded field is a string with a usable zero value, so
 // an omission would otherwise decode into a running machine with a topology
 // nobody wrote down.

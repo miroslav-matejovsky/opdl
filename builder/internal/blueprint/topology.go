@@ -62,6 +62,17 @@ type Machine struct {
 // host, so every port either of them binds is its own. Nothing on a machine is
 // shared between them except the ownership lease, which is not a port.
 type Platform struct {
+	// MachineEventsFile is the machine's own append-only event store: the
+	// shared file both instances append machine-scoped events to. Required, on
+	// every machine.
+	//
+	// It is authored here rather than on the standby block, unlike the lease,
+	// because it is not about redundancy. A machine with one instance has
+	// machine facts too, and they belong in the machine's store whether or not
+	// there is a second instance that could have stated them. Its name says
+	// which level it is, because everything else directly under platform is the
+	// Primary Instance's.
+	MachineEventsFile string `hcl:"machine_events_file,optional"`
 	// EventsFile is the Primary Instance's append-only local event record.
 	// Required. See InstanceFiles.
 	EventsFile string `hcl:"events_file,optional"`
@@ -234,6 +245,17 @@ func (m Machine) Lease() *Lease {
 	return m.Platform.Standby.Lease
 }
 
+// MachineEventsFile returns the machine's own shared event store: the file both
+// of its instances append machine-scoped events to. Every machine authors one,
+// so this is empty only on a machine with no platform block, which does not
+// validate.
+func (m Machine) MachineEventsFile() string {
+	if m.Platform == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.Platform.MachineEventsFile)
+}
+
 // Standby is a machine's local redundancy policy, and the Standby Instance's own
 // policy when one is deployed.
 //
@@ -365,6 +387,9 @@ func validatePlatform(machine Machine) error {
 	if err := validateInstanceFiles(machine); err != nil {
 		return err
 	}
+	if err := validateMachineFiles(machine); err != nil {
+		return err
+	}
 	if err := validateMachinePorts(machine); err != nil {
 		return err
 	}
@@ -476,6 +501,45 @@ func validateInstanceFiles(machine Machine) error {
 			return fmt.Errorf("machine %q: %s and %s are both %q; the two instances run together and cannot share a file", machine.Name, owner, f.where, f.path)
 		}
 		taken[key] = f.where
+	}
+	return nil
+}
+
+// validateMachineFiles checks the machine states its own shared event store,
+// and that no instance was authored onto it.
+//
+// The store is the machine's, so it is required on every machine, including one
+// that deploys no standby. Sharing a path with an instance's record, or with the
+// lease, would put two accounts in one file: it is compared the same cleaned,
+// case-folded way the instance files are, because this repo is Windows-only.
+func validateMachineFiles(machine Machine) error {
+	platform := machine.Platform
+	store := strings.TrimSpace(platform.MachineEventsFile)
+	if store == "" {
+		return fmt.Errorf("machine %q: platform.machine_events_file is required", machine.Name)
+	}
+	if platform.MachineEventsFile != store {
+		return fmt.Errorf("machine %q: platform.machine_events_file %q must not have leading or trailing whitespace", machine.Name, platform.MachineEventsFile)
+	}
+
+	others := []struct{ where, path string }{
+		{"platform.events_file", platform.EventsFile},
+		{"platform.state_file", platform.StateFile},
+	}
+	if standby := platform.Standby; standby != nil && !standby.Disabled {
+		others = append(others,
+			struct{ where, path string }{"platform.standby.events_file", standby.EventsFile},
+			struct{ where, path string }{"platform.standby.state_file", standby.StateFile},
+		)
+		if standby.Lease != nil {
+			others = append(others, struct{ where, path string }{"platform.standby.lease.file", standby.Lease.File})
+		}
+	}
+	for _, other := range others {
+		if samePath(other.path, store) {
+			return fmt.Errorf("machine %q: platform.machine_events_file and %s are both %q; the machine's shared store is not one of its instances' files",
+				machine.Name, other.where, platform.MachineEventsFile)
+		}
 	}
 	return nil
 }

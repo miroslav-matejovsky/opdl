@@ -92,6 +92,14 @@ rule), not in `internal/events`:
 
 ## Implementation notes (done)
 
+> **Amended by step 05.** The machine store's `Reader` was removed rather than
+> kept unused: no consumer was named, and an unread contract is a guess kept
+> alive by its own tests. `Position`, `Entry`, and `eventstore.Result` went with
+> it. What survives is `Appender` (append, close), plus an `eventstore.Backend`
+> that puts it behind a publisher. The notes below describe the step as landed
+> at the time; the read-path ones no longer apply to the machine level, and the
+> `Result` reasoning still stands for `eventfabric`, which has real readers.
+
 Landed as written, with these decisions recorded because later steps depend
 on them:
 

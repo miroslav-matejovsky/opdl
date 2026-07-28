@@ -36,11 +36,16 @@ type process struct {
 	started time.Time
 	// factory stamps every envelope this process produces, local or journalled.
 	factory events.Factory
-	// local is the process-local publisher. Its only backend is record, so a fact
-	// stated through it reaches the local append-only file and nothing else. It is
-	// what composition, ownership, and the transport adapter state through: all
-	// three describe a process that may have no journal to write to, and the
+	// local is the process-local publisher: the instance's own record, and the
+	// machine's shared store for the machine-scoped facts in the same flow. It
+	// reaches no site, so a fact stated through it never leaves this machine. It
+	// is what composition, ownership, and the transport adapter state through:
+	// all three describe a process that may have no journal to write to, and the
 	// transport adapter must never describe itself through itself.
+	//
+	// Sorting by scope happens inside it, in eventstore.Backend, rather than by
+	// a caller choosing a publisher. A caller states what happened; where a fact
+	// belongs is the fact's own property.
 	local events.Publisher
 	// record is the process's mandatory JSONL backend. A site borrows it as the
 	// first backend of its own fan-out publisher, so a journalled fact lands in

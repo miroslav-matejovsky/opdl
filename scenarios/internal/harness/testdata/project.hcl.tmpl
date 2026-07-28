@@ -28,8 +28,12 @@ project "{{ .Name }}" {
         # carried into the manifest so the roles are named consistently. The
         # namespace token keeps concurrent scenario runs from naming the same
         # service twice.
-        events_file = "{{ .EventsFile }}"
-        state_file  = "{{ .StateFile }}"
+        # machine_events_file is the machine's own store, not an instance's: both
+        # instances append their machine-scoped events to it, and every machine
+        # authors one whether or not it deploys a standby.
+        machine_events_file = "{{ .MachineEventsFile }}"
+        events_file         = "{{ .EventsFile }}"
+        state_file          = "{{ .StateFile }}"
 
         # The listener timeouts are per instance, and every setting a machine
         # runs with is compiled into its binary: a scenario launches a built

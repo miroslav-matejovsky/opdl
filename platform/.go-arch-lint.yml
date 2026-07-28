@@ -51,7 +51,7 @@ deps:
     # state is here for the same reason: composition is what knows this
     # process is a new incarnation of the instance, so it opens the state file
     # and advances the epoch. Nothing below app reads or writes it.
-    mayDependOn: [api, config, events, events-storage, eventlog, httpapi, redundancy, registration, state]
+    mayDependOn: [api, config, events, events-storage, eventlog, eventstore, httpapi, redundancy, registration, state]
   state:
     # A leaf over one local file. It states no event and reads no descriptor, so
     # the component that advances the epoch is the one that also reports it.
@@ -81,9 +81,9 @@ deps:
     mayDependOn: [api, registration]
   eventstore:
     # The machine level's own store. It depends on the envelope it holds and on
-    # nothing else: it is a store, so it must not know which domain wrote what
-    # it stores.
-    mayDependOn: [events]
+    # the backend contract that puts it behind a publisher, and on nothing else:
+    # it is a store, so it must not know which domain wrote what it stores.
+    mayDependOn: [events, events-storage]
   eventfabric:
     # Contract only, and deliberately kept at the same one dependency as
     # eventstore: whatever the step 06 ADR chooses to distribute events with,

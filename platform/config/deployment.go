@@ -31,6 +31,14 @@ type Descriptor struct {
 	IP string `json:"ip"`
 	// Services are the service groups this machine hosts.
 	Services []string `json:"services"`
+	// MachineEventsFile is the machine's own append-only event store: the shared
+	// file both of its instances append machine-scoped events to.
+	//
+	// It is the machine's, like the lease, and unlike the lease it is present on
+	// every machine. A machine that deploys one instance still has machine facts
+	// — which instance owns it, how each activation ended — and they belong in
+	// the machine's file rather than in whichever instance stated them.
+	MachineEventsFile string `json:"machine_events_file"`
 	// Primary is the machine's Primary Instance, always deployed.
 	Primary Instance `json:"primary"`
 	// Standby is the machine's Standby Instance, present only when the machine
@@ -129,6 +137,13 @@ type Lease struct {
 func (d *Descriptor) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	// The machine's shared store is required on every machine, and it has no
+	// usable default for the same reason an instance's files have none: an
+	// omitted path would decode as the empty string, which is not a file the
+	// runtime could fall back to.
+	if _, err := requiredField(fields, "machine_events_file"); err != nil {
 		return err
 	}
 	primary, err := requiredField(fields, "primary")

@@ -26,8 +26,14 @@ project "customer-a" {
       # every time the instance takes Primary Ownership, so one incarnation of an
       # instance can be told from the next, along with each kind counted on its
       # own and the time each last moved. No two of these paths may be the
-      # same, on either instance. The lease file is the exception and is not one
-      # of these: it is the machine's, and the two instances share it on purpose.
+      # same, on either instance.
+      #
+      # machine_events_file is not one of these: it is the machine's, and both
+      # instances append to it on purpose. It holds the machine-scoped events —
+      # which instance owns the machine, how each activation ended — so the
+      # machine's account survives ownership moving between two instances that
+      # each keep only their own. Every machine authors one, standby or not; the
+      # lease file is the other shared file and exists only with a standby.
       #
       # api is the port this instance serves its local API on, and the timeouts
       # bounding that listener. It is called local_port because the builder joins
@@ -53,8 +59,9 @@ project "customer-a" {
       # site, so a second instance would add a process to operate without adding
       # site availability. Because it opts out, it states nothing further.
       platform {
-        events_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/north/sensor/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/north/sensor/primary/state.json"
 
         api {
           local_port = 8080
@@ -87,8 +94,9 @@ project "customer-a" {
       # ports is the mistake this shape invites. The builder rejects it and names
       # both listeners.
       platform {
-        events_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/north/local-server/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/north/local-server/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/north/local-server/primary/state.json"
 
         api {
           local_port = 8080
@@ -149,8 +157,9 @@ project "customer-a" {
       ip       = "10.0.2.10"
       services = ["core-services"]
       platform {
-        events_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/master/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/control-room/master/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/control-room/master/primary/state.json"
 
         api {
           local_port = 8080
@@ -196,8 +205,9 @@ project "customer-a" {
       ip       = "10.0.2.11"
       services = ["core-services"]
       platform {
-        events_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/slave/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/control-room/slave/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/control-room/slave/primary/state.json"
 
         api {
           local_port = 8080
@@ -243,8 +253,9 @@ project "customer-a" {
       ip       = "10.0.2.12"
       services = ["integration-services"]
       platform {
-        events_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
-        state_file  = "D:/opdl/customer-a/control-room/integration/primary/state.json"
+        machine_events_file = "D:/opdl/customer-a/control-room/integration/machine-events.jsonl"
+        events_file         = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
+        state_file          = "D:/opdl/customer-a/control-room/integration/primary/state.json"
 
         api {
           local_port = 8080

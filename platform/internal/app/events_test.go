@@ -135,14 +135,15 @@ func TestApplicationEventsAreStampedIntoValidEnvelopes(t *testing.T) {
 	require.Equal(t, "primary", waiting.Origin.ProcessRole)
 
 	started, err := factory.Wrap(t.Context(), ProcessStarted{
-		EventsFile: `D:\opdl\events\events.jsonl`,
-		StateFile:  `D:\opdl\state.json`,
-		Epoch:      3,
+		EventsFile:        `D:\opdl\events\events.jsonl`,
+		MachineEventsFile: `D:\opdl\events\machine-events.jsonl`,
+		StateFile:         `D:\opdl\state.json`,
+		Epoch:             3,
 	})
 	require.NoError(t, err)
 	require.NoError(t, started.Validate())
-	require.JSONEq(t, `{"events_file":"D:\\opdl\\events\\events.jsonl","state_file":"D:\\opdl\\state.json","epoch":3,"standby_enabled":false}`, string(started.Data),
-		"a started process names both local files and which incarnation of the instance it is")
+	require.JSONEq(t, `{"events_file":"D:\\opdl\\events\\events.jsonl","machine_events_file":"D:\\opdl\\events\\machine-events.jsonl","state_file":"D:\\opdl\\state.json","epoch":3,"standby_enabled":false}`, string(started.Data),
+		"a started process names every file it opened before it could state anything, and which incarnation of the instance it is")
 
 	// The epoch facts carry the counter and why it moved, so a reader of the
 	// record can order incarnations without holding the state file open.

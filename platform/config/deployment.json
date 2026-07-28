@@ -9,6 +9,7 @@
   "services": [
     "core-services"
   ],
+  "machine_events_file": ".data/platform/machine-events.jsonl",
   "primary": {
     "service": {
       "name": "opdl-mock-local-mock-primary",

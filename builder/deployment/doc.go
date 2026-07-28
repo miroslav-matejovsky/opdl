@@ -8,6 +8,7 @@
 // # Two instances, one mandatory
 //
 //	{
+//	  "machine_events_file": "...",
 //	  "primary": {"events_file": "...", "state_file": "...", "api_address": "127.0.0.1:8080", ...},
 //	  "standby": {"events_file": "...", "state_file": "...", "api_address": "127.0.0.1:8081", ...},
 //	  "lease":   {"file": "...", "duration": "15s", ...}
@@ -20,8 +21,13 @@
 // endpoints nothing will bind.
 //
 // Lease is present exactly when Standby is. It is the machine's, not an
-// instance's: the lease file is the one thing the two instances share, and it is
-// what makes exactly one of them Active.
+// instance's: it is what makes exactly one of the two Active.
+//
+// MachineEventsFile is the machine's too, and unlike the lease it is on every
+// machine. It is the file both instances append machine-scoped events to, so
+// the machine's account of itself outlives ownership moving between two
+// instances that each keep only their own record. A machine that deploys one
+// instance still has machine facts, which is why it is not on the standby.
 //
 // # Validation
 //
@@ -34,7 +40,8 @@
 // deployed.
 //
 // The file paths are compared cleaned and case-folded, because this repo is
-// Windows-only and two spellings of one path are one file. The lease file is
-// deliberately not in that comparison: it is the machine's, and the two
-// instances sharing it is the point.
+// Windows-only and two spellings of one path are one file. The machine's two
+// shared files, the lease and the machine event store, are in that comparison
+// as themselves: the instances sharing them is the point, but an instance's own
+// record resolved onto one of them is still two accounts in one file.
 package deployment

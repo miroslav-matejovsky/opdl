@@ -15,8 +15,9 @@ project "buildtest" {
       services = ["test-services"]
 
       platform {
-        events_file = "D:/opdl/buildtest/solo/node-a/primary/events.jsonl"
-        state_file  = "D:/opdl/buildtest/solo/node-a/primary/state.json"
+        machine_events_file = "D:/opdl/buildtest/solo/node-a/machine-events.jsonl"
+        events_file         = "D:/opdl/buildtest/solo/node-a/primary/events.jsonl"
+        state_file          = "D:/opdl/buildtest/solo/node-a/primary/state.json"
 
         api {
           local_port = 8080
@@ -41,8 +42,9 @@ project "buildtest" {
       services = ["test-services"]
 
       platform {
-        events_file = "D:/opdl/buildtest/solo/node-b/primary/events.jsonl"
-        state_file  = "D:/opdl/buildtest/solo/node-b/primary/state.json"
+        machine_events_file = "D:/opdl/buildtest/solo/node-b/machine-events.jsonl"
+        events_file         = "D:/opdl/buildtest/solo/node-b/primary/events.jsonl"
+        state_file          = "D:/opdl/buildtest/solo/node-b/primary/state.json"
 
         api {
           local_port = 8080

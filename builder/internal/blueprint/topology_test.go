@@ -37,10 +37,11 @@ func validMachine() blueprint.Machine {
 		IP:             "10.0.1.10",
 		Services:       []string{"sensor-services"},
 		Platform: &blueprint.Platform{
-			EventsFile: "D:/opdl/sensor/primary/events.jsonl",
-			StateFile:  "D:/opdl/sensor/primary/state.json",
-			API:        &blueprint.API{LocalPort: 8080, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
-			WinService: &blueprint.WinService{Name: "primary"},
+			MachineEventsFile: "D:/opdl/sensor/machine-events.jsonl",
+			EventsFile:        "D:/opdl/sensor/primary/events.jsonl",
+			StateFile:         "D:/opdl/sensor/primary/state.json",
+			API:               &blueprint.API{LocalPort: 8080, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
+			WinService:        &blueprint.WinService{Name: "primary"},
 			Standby: &blueprint.Standby{
 				EventsFile: "D:/opdl/sensor/standby/events.jsonl",
 				StateFile:  "D:/opdl/sensor/standby/state.json",
@@ -63,6 +64,7 @@ func namedMachine(name, ip string) blueprint.Machine {
 	// its own value here: the ownership object, and every per-instance file.
 	// Sharing a lock across machines is rejected, and sharing a file is only safe
 	// because two machines are two hosts, which a fixture on one host is not.
+	m.Platform.MachineEventsFile = "D:/opdl/" + name + "/machine-events.jsonl"
 	m.Platform.EventsFile = "D:/opdl/" + name + "/primary/events.jsonl"
 	m.Platform.StateFile = "D:/opdl/" + name + "/primary/state.json"
 	m.Platform.Standby.WinService = &blueprint.WinService{Name: name + "-standby"}
@@ -333,6 +335,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.10"
 			      services = ["core-services"]
 			      platform {
+			        machine_events_file = "D:/opdl/node-1/machine-events.jsonl"
 			        events_file = "D:/opdl/node-1/primary/events.jsonl"
 			        state_file  = "D:/opdl/node-1/primary/state.json"
 			        api {
@@ -373,6 +376,7 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			      ip       = "10.0.1.11"
 			      services = ["core-services"]
 			      platform {
+			        machine_events_file = "D:/opdl/node-1/machine-events.jsonl"
 			        events_file = "D:/opdl/node-1/primary/events.jsonl"
 			        state_file  = "D:/opdl/node-1/primary/state.json"
 			        api {
@@ -523,6 +527,56 @@ func TestMachineLease(t *testing.T) {
 
 	disableStandby(p)
 	require.Nil(t, p.Sites[0].Machines[0].Lease())
+}
+
+// TestMachineEventsFileIsTheMachines checks the machine's own store is read off
+// the machine whether or not it deploys a standby. It is not the lease: a
+// single-instance machine has machine facts too.
+func TestMachineEventsFileIsTheMachines(t *testing.T) {
+	p := validProject()
+	require.Equal(t, "D:/opdl/sensor/machine-events.jsonl", p.Sites[0].Machines[0].MachineEventsFile())
+
+	disableStandby(p)
+	require.NoError(t, p.Validate())
+	require.Equal(t, "D:/opdl/sensor/machine-events.jsonl", p.Sites[0].Machines[0].MachineEventsFile(),
+		"a machine with one instance still keeps the machine's own account")
+}
+
+// TestProjectValidateMachineEventsFileFailures checks a machine store that
+// cannot be used is refused at build time rather than at startup.
+func TestProjectValidateMachineEventsFileFailures(t *testing.T) {
+	tests := map[string]struct {
+		mutate  func(*blueprint.Platform)
+		errText string
+	}{
+		"blank": {
+			func(p *blueprint.Platform) { p.MachineEventsFile = "   " },
+			"platform.machine_events_file is required",
+		},
+		"padded": {
+			func(p *blueprint.Platform) { p.MachineEventsFile = " D:/opdl/sensor/machine-events.jsonl " },
+			"leading or trailing whitespace",
+		},
+		"the primary instance's record": {
+			func(p *blueprint.Platform) { p.MachineEventsFile = p.EventsFile },
+			"platform.machine_events_file and platform.events_file are both",
+		},
+		"the standby instance's record spelled differently": {
+			func(p *blueprint.Platform) { p.MachineEventsFile = `D:\OPDL\SENSOR\standby\EVENTS.JSONL` },
+			"platform.machine_events_file and platform.standby.events_file are both",
+		},
+		"the lease file": {
+			func(p *blueprint.Platform) { p.MachineEventsFile = p.Standby.Lease.File },
+			"platform.machine_events_file and platform.standby.lease.file are both",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			p := validProject()
+			test.mutate(p.Sites[0].Machines[0].Platform)
+			require.ErrorContains(t, p.Validate(), test.errText)
+		})
+	}
 }
 
 // TestProjectValidateLeaseFailures checks an authored lease that cannot be used

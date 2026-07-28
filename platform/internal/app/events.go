@@ -157,6 +157,12 @@ type ProcessStarted struct {
 	// EventsFile is the mandatory local JSONL record this instance appends every
 	// event to. It is what an operator opens next.
 	EventsFile string `json:"events_file"`
+	// MachineEventsFile is the machine's shared store, which this process also
+	// appends its machine-scoped events to. It is stated here because it is the
+	// other file this process opened before it could state anything, and because
+	// it is where an operator reads the machine's account rather than one
+	// instance's.
+	MachineEventsFile string `json:"machine_events_file"`
 	// StateFile is the instance's durable state record, which carries the epoch
 	// below across restarts and crashes.
 	StateFile string `json:"state_file"`

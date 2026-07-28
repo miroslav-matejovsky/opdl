@@ -65,6 +65,13 @@
 // either instance: the two instances run together on one host. See
 // InstanceFiles.
 //
+// machine_events_file, authored beside them under platform, is the exception
+// that proves the rule: it is the machine's file, not an instance's, and both
+// instances append their machine-scoped events to it. Every machine authors one,
+// standby or not, because a machine with a single instance has machine facts
+// too. Its name says which level it belongs to, since everything else directly
+// under platform is the Primary Instance's.
+//
 // # The blueprint is the only place a machine is configured
 //
 // The platform reads no runtime configuration file. Everything a machine runs

@@ -16,6 +16,9 @@ const (
 
 	// The api addresses are on loopback. The platform API is machine-local, and
 	// that is what the descriptor is checked against.
+	// The machine's own store is not an instance's file: both instances append
+	// their machine-scoped events to it.
+	machineEventsFile = "D:/opdl-data/sensor/machine-events.jsonl"
 	primaryAPI        = "127.0.0.1:8080"
 	primaryEventsFile = "D:/opdl-data/sensor/primary/events.jsonl"
 	primaryStateFile  = "D:/opdl-data/sensor/primary/state.json"
@@ -26,14 +29,15 @@ const (
 
 func validDescriptor() deployment.Descriptor {
 	return deployment.Descriptor{
-		Platform:       "opdl",
-		Project:        "customer-a",
-		Environment:    "production",
-		Site:           "north",
-		Machine:        "sensor",
-		MachineProfile: "sensor-node",
-		IP:             machineIP,
-		Services:       []string{"sensor-services"},
+		Platform:          "opdl",
+		Project:           "customer-a",
+		Environment:       "production",
+		Site:              "north",
+		Machine:           "sensor",
+		MachineProfile:    "sensor-node",
+		IP:                machineIP,
+		Services:          []string{"sensor-services"},
+		MachineEventsFile: machineEventsFile,
 		Primary: deployment.Instance{
 			Service:              &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
 			EventsFile:           primaryEventsFile,
@@ -79,6 +83,11 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing machine profile", func(d *deployment.Descriptor) { d.MachineProfile = "" }, "machine profile is required"},
 		{"invalid ip", func(d *deployment.Descriptor) { d.IP = "not-an-ip" }, "is not a valid IP address"},
 		{"no services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
+		{
+			"missing machine events file",
+			func(d *deployment.Descriptor) { d.MachineEventsFile = "" },
+			"machine_events_file is required",
+		},
 		{"lease set while no standby is deployed", func(d *deployment.Descriptor) { d.Standby = nil }, "omit lease when standby is absent"},
 		{"missing lease while a standby is deployed", func(d *deployment.Descriptor) { d.Lease = nil }, "lease is required when a standby is deployed"},
 
@@ -117,6 +126,19 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"instances share a state file spelled differently",
 			func(d *deployment.Descriptor) { d.Standby.StateFile = `D:\OPDL-DATA\sensor\primary\STATE.JSON` },
 			"primary.state_file and standby.state_file are both",
+		},
+		{
+			// The machine's store is the machine's account of itself. Pointed at an
+			// instance's record it would be lost the moment that instance stopped
+			// being the one that owns the machine.
+			"machine store points at an instance's events file",
+			func(d *deployment.Descriptor) { d.MachineEventsFile = d.Standby.EventsFile },
+			"machine_events_file and standby.events_file are both",
+		},
+		{
+			"machine store points at the lease file",
+			func(d *deployment.Descriptor) { d.MachineEventsFile = d.Lease.File },
+			"machine_events_file and lease.file are both",
 		},
 		{
 			"api address off loopback",

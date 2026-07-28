@@ -148,6 +148,10 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d, Role(standby)))
 	fmt.Fprintf(&b, "    events_file  %s\n", optionalPathSummary(inst.EventsFile))
 	fmt.Fprintf(&b, "    state_file   %s\n", optionalPathSummary(inst.StateFile))
+	// The machine's own store is printed after this instance's two files and
+	// before the lease, which is the order they belong to: two an instance owns,
+	// then two the machine's instances share.
+	fmt.Fprintf(&b, "    machine_events_file %s\n", optionalPathSummary(d.MachineEventsFile))
 	fmt.Fprintf(&b, "    lease        %s\n", leaseSummary(d.Lease))
 	fmt.Fprintf(&b, "  this instance's api:\n")
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", timeouts.readHeader)
