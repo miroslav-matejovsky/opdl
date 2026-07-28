@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/eventfabric"
 )
 
 // testEnvelope stamps the envelope a journal would have stored for event, as
@@ -57,7 +57,7 @@ func apply(t *testing.T, p *Projection, sequence uint64, event events.Event) {
 	case Accepted:
 		machine = value.OriginMachine
 	}
-	delivery := storage.Delivery{Envelope: testEnvelope(t, event, machine, "event-id"), Sequence: sequence}
+	delivery := eventfabric.Delivery{Envelope: testEnvelope(t, event, machine, "event-id"), Sequence: sequence}
 	require.NoError(t, p.Apply(t.Context(), delivery))
 }
 
@@ -193,7 +193,7 @@ func TestProjectionRejectsAcceptanceOfAConflictLoser(t *testing.T) {
 	apply(t, p, 2, loser)
 
 	accepted := testEnvelope(t, NewAccepted(loser), "node-b", "accept-loser")
-	err := p.Apply(t.Context(), storage.Delivery{Envelope: accepted, Sequence: 3})
+	err := p.Apply(t.Context(), eventfabric.Delivery{Envelope: accepted, Sequence: 3})
 	require.ErrorContains(t, err, "losing proposal")
 }
 
@@ -261,7 +261,7 @@ func TestProjectionTracksTheHighWaterSequence(t *testing.T) {
 
 func TestProjectionStopsOnAnUnsupportedEvent(t *testing.T) {
 	p := NewProjection()
-	delivery := storage.Delivery{
+	delivery := eventfabric.Delivery{
 		Envelope: events.Envelope{Type: "platform.registration.unknown", SchemaVersion: schemaVersion, Data: json.RawMessage(`{}`)},
 		Sequence: 1,
 	}
@@ -271,7 +271,7 @@ func TestProjectionStopsOnAnUnsupportedEvent(t *testing.T) {
 
 func TestProjectionReportsAnUndecodablePayload(t *testing.T) {
 	p := NewProjection()
-	delivery := storage.Delivery{
+	delivery := eventfabric.Delivery{
 		Envelope: events.Envelope{Type: TypeProposed, SchemaVersion: schemaVersion, Data: json.RawMessage(`{invalid`)},
 		Sequence: 1,
 	}
@@ -281,7 +281,7 @@ func TestProjectionReportsAnUndecodablePayload(t *testing.T) {
 
 func TestProjectionIgnoresOtherDomainsAndAdvances(t *testing.T) {
 	p := NewProjection()
-	delivery := storage.Delivery{
+	delivery := eventfabric.Delivery{
 		Envelope: events.Envelope{Type: "platform.other.happened"},
 		Sequence: 4,
 	}
@@ -295,7 +295,7 @@ func TestProjectionWaitAppliedStopsOnProjectionFailure(t *testing.T) {
 	waited := make(chan error, 1)
 	go func() { waited <- p.WaitApplied(t.Context(), 2) }()
 
-	err := p.Apply(t.Context(), storage.Delivery{
+	err := p.Apply(t.Context(), eventfabric.Delivery{
 		Envelope: events.Envelope{Type: TypeProposed, SchemaVersion: schemaVersion + 1},
 		Sequence: 1,
 	})

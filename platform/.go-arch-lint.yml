@@ -30,7 +30,9 @@ components:
   httpapi: { in: internal/httpapi }
   state: { in: internal/instance/state }
   redundancy: { in: internal/machine/redundancy }
+  eventstore: { in: internal/machine/eventstore }
   registration: { in: internal/site/registration }
+  eventfabric: { in: internal/site/eventfabric }
 
 deps:
   api:
@@ -77,6 +79,20 @@ deps:
   httpapi:
     canUse: [huma]
     mayDependOn: [api, registration]
+  eventstore:
+    # The machine level's own store. It depends on the envelope it holds and on
+    # nothing else: it is a store, so it must not know which domain wrote what
+    # it stores.
+    mayDependOn: [events]
+  eventfabric:
+    # Contract only, and deliberately kept at the same one dependency as
+    # eventstore: whatever the step 06 ADR chooses to distribute events with,
+    # the site level's readers depend on the shape of a delivery and not on a
+    # transport.
+    mayDependOn: [events]
   registration:
+    # eventfabric is here because the site journal's order is what registration
+    # folds. It is the contract, not an implementation: this package still
+    # constructs no subject, stream, or consumer.
     canUse: [stablehash]
-    mayDependOn: [api, events, events-storage]
+    mayDependOn: [api, events, eventfabric]

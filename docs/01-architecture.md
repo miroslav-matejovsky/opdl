@@ -75,6 +75,8 @@ setting has two sources needing a precedence rule to tell them apart.
 | `internal/events/storage` | Fans one stamped envelope out synchronously to configured storage backends. |
 | `internal/instance/eventlog` | Writes the mandatory process-local JSONL record under the instance data root. |
 | `internal/machine/redundancy` | Owns process roles, the active/passive state, Primary Ownership, and projection-lag state. It writes no files. |
+| `internal/machine/eventstore` | The machine's shared event store: the Active instance appends machine-scoped envelopes, the Passive instance replays and follows them. |
+| `internal/site/eventfabric` | The site's ordered event distribution contract: delivery, sequence, and durable named consumers. Contract only; the implementation follows the distribution ADR. |
 
 ### The level dependency rule
 
@@ -114,6 +116,40 @@ Do not express the level rule with overlapping `go-arch-lint` components. When
 two components' `in` globs match the same directory, which one claims it is not
 predictable from the spec, so a level catch-all alongside a per-package
 component can silently take that package's files and its rules with them.
+
+### Per-level event storage
+
+Each level stores events behind its own narrow Go interface, so replacing a
+file-backed implementation with SQL is a swap nothing above it notices.
+
+| Level | Contract | Backed by now | Later |
+| --- | --- | --- | --- |
+| Instance | `events/storage.Backend`: store, close | JSONL local record | stays JSONL: it has no reader to serve |
+| Machine | `machine/eventstore`: `Appender` (append, close) and `Reader` (replay then follow) | shared JSONL file at a machine-wide path | SQLite; Primary Ownership already serializes the writer |
+| Site | `site/eventfabric`: `events.Publisher` to publish, `Consumer` to replay-then-follow and acknowledge | nothing yet | per the distribution ADR |
+
+There is deliberately no single store interface over the three. Their audiences
+differ: the instance record is write-only, the machine store has one writer and
+one local reader, and the site stream has many of both and must define order. A
+shared abstraction would be the union of the three and would promise every
+holder something it cannot have.
+
+Each level's contract lives with its consumers rather than in `internal/events`,
+which owns the envelope and nothing about where one goes.
+
+Ordinals are delivery, never fact. `eventstore.Position` and
+`eventfabric.Delivery.Sequence` are each their own store's numbering, and
+neither is on the envelope: an event says what happened, and a store says where
+it put it. This is the stance `internal/events` already takes on transport
+ordering.
+
+Scope is enforced where it would do damage. `eventstore.Appender.Append`
+refuses an envelope that is not machine-scoped: an instance-scoped fact would
+be replayed by the other instance as the machine's own, and a site-scoped one
+already reaches both instances through the site, so appending it would deliver
+it twice. This never contradicts the instance record, which holds every scope
+(see [Event scope](#event-scope)) — a wider scope adds destinations and takes
+nothing away from the local log.
 
 ## Event Fabric contract
 

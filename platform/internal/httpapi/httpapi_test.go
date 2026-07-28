@@ -19,6 +19,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/eventfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 )
 
@@ -193,7 +194,7 @@ type journal struct {
 
 	mu       sync.Mutex
 	sequence uint64
-	records  []storage.Delivery
+	records  []eventfabric.Delivery
 	nodes    []*node
 	failure  error
 }
@@ -287,7 +288,7 @@ func (j *journal) Store(ctx context.Context, envelope events.Envelope) error {
 	}
 	require.NoError(j.t, envelope.Validate(), "the journal only stores complete envelopes")
 	j.sequence++
-	delivery := storage.Delivery{Envelope: envelope, Sequence: j.sequence}
+	delivery := eventfabric.Delivery{Envelope: envelope, Sequence: j.sequence}
 	j.records = append(j.records, delivery)
 	nodes := slices.Clone(j.nodes)
 	j.mu.Unlock()

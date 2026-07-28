@@ -73,8 +73,8 @@ rule), not in `internal/events`:
    implementation reusing `utils/atomicfile` conventions and the existing
    jsonl backend's concurrency discipline (it already proves non-interleaved
    appends under concurrency in its tests).
-2. Add the site journal interface package (`internal/site/journal` or
-   similar) with no implementation yet.
+2. Add the site journal interface package (`internal/site/eventfabric`) with
+   no implementation yet.
 3. Contract tests written against the interfaces (not the file
    implementation) so a future SQLite implementation runs the same suite:
    append/read round-trip, order preservation, reopen-appends semantics,
@@ -89,6 +89,44 @@ rule), not in `internal/events`:
   `internal/app` composes concrete stores (verified by the step 02 test).
 - The site journal interface compiles against registration's existing needs
   (a stub implementation in tests can drive `Projection.Apply`).
+
+## Implementation notes (done)
+
+Landed as written, with these decisions recorded because later steps depend
+on them:
+
+- **Names.** The machine store is `internal/machine/eventstore` (the plan left
+  the name open). The site contract is `internal/site/eventfabric`, not
+  `journal`: Event Fabric is what `docs/01-architecture.md` and
+  `registration/doc.go` already call the site's distribution, and the doc
+  comment referring to `eventfabric.Delivery.Sequence` predates the package.
+- **`Delivery` moved down to its consumers' level.** It was in
+  `internal/events/storage`, which owns no level and now holds only `Backend`
+  and the fan-out `Publisher`. Sequence is a site concept, so it is
+  `eventfabric.Delivery` and `registration.Projection.Apply` folds that.
+- **A read result is an entry *or* a failure.** Both `eventstore.Read` and
+  `eventfabric.Consumer.Follow` return `<-chan Result`, where `Result` carries
+  either the value or the error that ended the stream, rather than the plan's
+  `<-chan Entry`. A consumer that stops receiving otherwise cannot tell a
+  cancelled follow from a store it has lost, and those call for opposite
+  reactions.
+- **`Ack` is on the site contract.** At-least-once with a durable named
+  consumer is meaningless without a point at which progress is recorded, so
+  `Follow` and `Ack` are the two methods and there is nothing else.
+- **No `utils/atomicfile`.** The plan suggested reusing it; the machine store
+  is append-only and fsynced per line, so there is no rewrite to make atomic.
+  What it does reuse is the JSONL backend's concurrency discipline: one mutex,
+  one `Write` per envelope, sync before returning.
+- **The contract suite is in `eventstore`'s external test package**, driven by
+  an `implementations` map, rather than in an exported `eventstoretest`
+  package. It is written against `Appender`/`Reader` and never against a file,
+  so a SQLite implementation adds one map entry; promote it to its own package
+  when there is a second implementation to share it with, not before.
+- **A partial trailing line is held, not decoded.** The follower keeps what it
+  has read of a line without a newline until the rest arrives, so a reader
+  never sees a truncated envelope from a writer that is mid-append.
+- **Follow is polling**, at a 100ms interval that is an unexported constant of
+  the file implementation and named in its doc as not part of the contract.
 
 ## Risks / open questions
 
