@@ -87,6 +87,10 @@ func (f Factory) Wrap(ctx context.Context, event Event) (Envelope, error) {
 	if err != nil {
 		return Envelope{}, err
 	}
+	scope, err := scopeOf(event)
+	if err != nil {
+		return Envelope{}, err
+	}
 	stableID, err := stableIDOf(event)
 	if err != nil {
 		return Envelope{}, err
@@ -108,6 +112,7 @@ func (f Factory) Wrap(ctx context.Context, event Event) (Envelope, error) {
 		OccurredAt:    f.now().UTC(),
 		Source:        eventType.Source(),
 		Severity:      severity,
+		Scope:         scope,
 		Origin:        f.origin,
 		CausationID:   causationID,
 		CorrelationID: correlationID,

@@ -67,6 +67,7 @@
     "depguard",
     "eventfabric",
     "eventmodel",
+    "eventstore",
     "fabricolric",
     "fe3dback",
     "filelock",

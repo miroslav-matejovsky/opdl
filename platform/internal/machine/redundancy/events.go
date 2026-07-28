@@ -26,6 +26,35 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 // composition hands it the process-local one, whose only backend is the local
 // JSONL record: ownership is decided before a process has a journal to write to,
 // and an instance that never becomes active never gets one at all.
+//
+// # Scope
+//
+// This catalog is the one that straddles two levels, so each event says which
+// it belongs to:
+//
+//	| Event                | Scope    | Why                                     |
+//	| -------------------- | -------- | --------------------------------------- |
+//	| lease_opened         | instance | this process opened a file              |
+//	| ownership_waiting    | instance | a passive process is waiting            |
+//	| promotion_declined   | instance | a passive process decided not to act    |
+//	| lease_renewal_failed | instance | one failed attempt; ownership held      |
+//	| ownership_acquired   | machine  | which instance owns the machine changed |
+//	| stepped_down         | machine  | it changed back                         |
+//	| failback_initiated   | machine  | it is changing back                     |
+//	| activation_started   | machine  | which instance serves the machine       |
+//	| activation_failed    | machine  | the machine has no serving instance     |
+//	| activation_completed | machine  | it gave the machine back                |
+//
+// The line is who the fact is about, not who states it. An owner's transitions
+// outlive the process that made them and are what the machine's other instance
+// has to agree with, so they belong to the machine. A passive instance's waiting
+// and declining are that process's own story: they are stated by an instance
+// that must not write to the machine's shared store, and nothing outside it
+// needs them to decide anything.
+//
+// Every one of them reaches the stating instance's local record either way.
+// Machine scope adds the machine store, it does not take the fact out of the log
+// an operator reads to see what this instance did.
 
 const (
 	// TypeLeaseOpened is stated when this process opens the ownership lease file.
@@ -99,6 +128,10 @@ func (e OwnershipAcquired) Severity() events.Severity {
 	return events.SeverityInfo
 }
 
+// Scope reports that the machine owns the fact: which of its two instances
+// holds Primary Ownership is the machine's state, not this process's.
+func (OwnershipAcquired) Scope() events.Scope { return events.ScopeMachine }
+
 // PromotionDeclined states that a Passive instance evaluated promotion, found the
 // lease lapsed, but did not promote because the peer was still healthy.
 type PromotionDeclined struct {
@@ -138,12 +171,21 @@ func (SteppedDown) EventType() events.Type { return TypeSteppedDown }
 // worth an operator's attention but is the redundancy working, not breaking.
 func (SteppedDown) Severity() events.Severity { return events.SeverityWarn }
 
+// Scope reports that the machine owns the fact: it is the other half of an
+// ownership handover, and a reader of only one of the two would see a machine
+// with two owners or none.
+func (SteppedDown) Scope() events.Scope { return events.ScopeMachine }
+
 // FailbackInitiated states that an Active Standby has begun handing ownership
 // back to a returning healthy Primary under the Preferred Primary policy.
 type FailbackInitiated struct{}
 
 // EventType returns the event's stable dotted kind.
 func (FailbackInitiated) EventType() events.Type { return TypeFailbackInitiated }
+
+// Scope reports that the machine owns the fact: the owner has begun moving
+// ownership, which is the machine's business and not one process's.
+func (FailbackInitiated) Scope() events.Scope { return events.ScopeMachine }
 
 // ActivationStarted states that the active composition began.
 type ActivationStarted struct {
@@ -153,6 +195,10 @@ type ActivationStarted struct {
 
 // EventType returns the event's stable dotted kind.
 func (ActivationStarted) EventType() events.Type { return TypeActivationStarted }
+
+// Scope reports that the machine owns the fact: which instance is serving is
+// what the machine's other instance must not contradict.
+func (ActivationStarted) Scope() events.Scope { return events.ScopeMachine }
 
 // ActivationFailed states that the active composition did not complete.
 type ActivationFailed struct {
@@ -170,6 +216,10 @@ func (ActivationFailed) EventType() events.Type { return TypeActivationFailed }
 // Severity reports a machine whose active instance failed as an error.
 func (ActivationFailed) Severity() events.Severity { return events.SeverityError }
 
+// Scope reports that the machine owns the fact: an activation that failed
+// leaves the machine without a serving instance, which is the machine's state.
+func (ActivationFailed) Scope() events.Scope { return events.ScopeMachine }
+
 // ActivationCompleted states that the active composition returned and ownership
 // went back.
 type ActivationCompleted struct {
@@ -181,3 +231,7 @@ type ActivationCompleted struct {
 
 // EventType returns the event's stable dotted kind.
 func (ActivationCompleted) EventType() events.Type { return TypeActivationCompleted }
+
+// Scope reports that the machine owns the fact: the instance handed the machine
+// back, so the machine is free for the other one to take.
+func (ActivationCompleted) Scope() events.Scope { return events.ScopeMachine }

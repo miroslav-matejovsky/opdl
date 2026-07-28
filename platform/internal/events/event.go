@@ -62,6 +62,14 @@ type Severe interface {
 	Severity() Severity
 }
 
+// Scoped is the optional interface an Event implements when the fact is owned
+// by a level above the instance that states it. An event that does not
+// implement it records DefaultScope, which keeps the fact local.
+type Scoped interface {
+	// Scope returns the level of the hierarchy that owns the fact.
+	Scope() Scope
+}
+
 // Tagged is the optional interface an Event implements when it carries tags,
 // typically TagWarning. Stamping normalizes whatever it returns; an event that
 // does not implement Tagged records no tags.
@@ -111,6 +119,22 @@ func severityOf(event Event) (Severity, error) {
 		return "", fmt.Errorf("%w: %s declares unknown severity %q", ErrInvalidEvent, event.EventType(), severity)
 	}
 	return severity, nil
+}
+
+// scopeOf returns the scope event declares, or DefaultScope when it declares
+// none. An unknown scope is rejected: scope decides where the fact is
+// delivered, so a fourth level would be a fact nothing routes and nobody
+// outside this instance ever reads.
+func scopeOf(event Event) (Scope, error) {
+	scoped, ok := event.(Scoped)
+	if !ok {
+		return DefaultScope, nil
+	}
+	scope := scoped.Scope()
+	if !scope.Valid() {
+		return "", fmt.Errorf("%w: %s declares unknown scope %q", ErrInvalidEvent, event.EventType(), scope)
+	}
+	return scope, nil
 }
 
 // tagsOf returns the normalized tags event declares, or nil when it declares

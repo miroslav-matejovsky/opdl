@@ -91,6 +91,7 @@ func TestWrapDerivesEverythingAPlainEventDoesNotDeclare(t *testing.T) {
 		OccurredAt:    testOccurredAt,
 		Source:        "test",
 		Severity:      DefaultSeverity,
+		Scope:         DefaultScope,
 		Origin:        testOrigin,
 		Data:          json.RawMessage(`{"detail":"started"}`),
 	}, envelope)

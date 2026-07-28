@@ -313,7 +313,42 @@ hold everywhere:
 `internal/events` owns the contract and the envelope and declares no events of
 its own. An event payload implements one method, `EventType`, and implements a
 small optional interface only where it differs from a default: a schema version
-other than `1`, a severity other than `info`, tags, or a domain-stable identity.
+other than `1`, a severity other than `info`, a scope other than `instance`,
+tags, or a domain-stable identity.
+
+### Event scope
+
+Every envelope carries the level of the hierarchy that owns the fact, and scope
+is what decides how far the event travels beyond the instance that stated it.
+
+| Scope | Owns the fact | Reaches |
+| --- | --- | --- |
+| `instance` | one running process | that instance's event log |
+| `machine` | one machine, across both its instances | that log, plus the machine's shared store |
+| `site` | the whole deployment | that log, plus distribution to every machine |
+
+**Scope only ever adds destinations.** Every event a process states is appended
+to that instance's event log whatever its scope. The log is the instance's
+operational record: a logfile whose entries are an explicitly declared set,
+namely everything that happened on this instance. A machine-scoped ownership
+handover and a site-scoped registration decision are both things that happened
+here, so an operator reading one instance's file sees them. Nothing is routed
+away from that file, which is why the JSONL backend has no scope configuration.
+
+The default is `instance`, because that is the safe direction to be wrong in: a
+forgotten declaration keeps a fact local, where an operator still finds it,
+instead of publishing it site-wide. The cost is that a genuinely wider fact can
+go unnoticed, so each catalog's test asserts the scope of every event the
+package declares rather than trusting the silence. `internal/machine/redundancy`
+is the one catalog that straddles two levels, and the split is who the fact is
+about rather than who stated it: an owner's ownership and activation transitions
+belong to the machine, while a passive instance's waiting, declining, and failed
+renewals are that process's own story.
+
+Reading is more forgiving than writing. An unknown scope is corruption and is
+rejected, but a stored object with no scope at all is read as `instance`: those
+records predate the field, the local record is an operator's evidence rather
+than replayed state, and whatever delivery those lines got already happened.
 
 `events.Envelope` is the only serialized wrapper, and every envelope is validated
 before it leaves the process, so a stored event is always self-describing. It

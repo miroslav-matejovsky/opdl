@@ -28,6 +28,7 @@ func validEnvelope() Envelope {
 		OccurredAt:    testOccurredAt,
 		Source:        "test",
 		Severity:      DefaultSeverity,
+		Scope:         DefaultScope,
 		Origin:        testOrigin,
 		Data:          json.RawMessage(`{"detail":"started"}`),
 	}
@@ -38,6 +39,7 @@ func TestEnvelopeValidateAcceptsACompleteEnvelope(t *testing.T) {
 
 	full := validEnvelope()
 	full.Severity = SeverityWarn
+	full.Scope = ScopeSite
 	full.CausationID = "id-cause"
 	full.CorrelationID = "workflow-1"
 	full.Tags = []string{TagWarning}
@@ -69,6 +71,8 @@ func TestEnvelopeValidateRejectsIncompleteEnvelopes(t *testing.T) {
 		},
 		{name: "missing severity", mutate: func(e *Envelope) { e.Severity = "" }, wantErr: "unknown severity"},
 		{name: "unknown severity", mutate: func(e *Envelope) { e.Severity = "fatal" }, wantErr: "unknown severity"},
+		{name: "missing scope", mutate: func(e *Envelope) { e.Scope = "" }, wantErr: "unknown scope"},
+		{name: "unknown scope", mutate: func(e *Envelope) { e.Scope = "cluster" }, wantErr: "unknown scope"},
 		{name: "missing origin machine", mutate: func(e *Envelope) { e.Origin.Machine = "" }, wantErr: "origin machine is required"},
 		{
 			name:    "missing origin machine profile",
@@ -116,6 +120,7 @@ func TestEnvelopeEncodesMetadataAndPayloadOnOneLevel(t *testing.T) {
 		"occurred_at": "2026-07-22T10:30:00Z",
 		"source": "test",
 		"severity": "warn",
+		"scope": "instance",
 		"origin": {
 			"machine": "node",
 			"machine_profile": "all-in-one",
@@ -157,6 +162,36 @@ func TestEncodeAndDecodeRoundTripAStoredEnvelope(t *testing.T) {
 	require.True(t, envelope.OccurredAt.Equal(decoded.OccurredAt))
 	decoded.OccurredAt = envelope.OccurredAt
 	require.Equal(t, envelope, decoded)
+}
+
+// TestDecodeReadsAScopelessRecordAsInstanceScoped covers the records an
+// instance wrote before the field existed. The local record is an operator's
+// evidence of what happened on this instance, so a line that predates the field
+// is read rather than rejected: scope decides delivery, and whatever delivery
+// that line got already happened.
+func TestDecodeReadsAScopelessRecordAsInstanceScoped(t *testing.T) {
+	scopeless := validEnvelope()
+	scopeless.Scope = ""
+	data, err := json.Marshal(scopeless)
+	require.NoError(t, err)
+
+	decoded, err := Decode(data)
+	require.NoError(t, err)
+	require.Equal(t, ScopeInstance, decoded.Scope)
+}
+
+// TestDecodeRejectsAnUnknownScope checks the defaulting above is only for an
+// absent field. A line that names a level nothing routes is corruption, not
+// history.
+func TestDecodeRejectsAnUnknownScope(t *testing.T) {
+	unknown := validEnvelope()
+	unknown.Scope = "cluster"
+	data, err := json.Marshal(unknown)
+	require.NoError(t, err)
+
+	_, err = Decode(data)
+	require.ErrorIs(t, err, ErrInvalidEnvelope)
+	require.ErrorContains(t, err, "unknown scope")
 }
 
 func TestDecodeReportsCorruptStorage(t *testing.T) {

@@ -86,6 +86,12 @@ func TestApplicationEventsDeclareTheirContract(t *testing.T) {
 			want:     events.SeverityError,
 		},
 	}
+	// The scope assertion below goes through a real stamper rather than asking
+	// the event, because what this catalog claims is that it declares no scope at
+	// all: reading the default back off a stamped envelope is what proves the
+	// silence resolves the way the catalog header says it does.
+	factory, err := events.NewFactory(testDescriptor, "primary")
+	require.NoError(t, err)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.wantType, test.event.EventType())
@@ -98,6 +104,11 @@ func TestApplicationEventsDeclareTheirContract(t *testing.T) {
 				severity = severe.Severity()
 			}
 			require.Equal(t, test.want, severity)
+
+			envelope, err := factory.Wrap(t.Context(), test.event)
+			require.NoError(t, err)
+			require.Equal(t, events.ScopeInstance, envelope.Scope,
+				"every fact in this catalog is about one process, so none of them leaves it")
 		})
 	}
 }

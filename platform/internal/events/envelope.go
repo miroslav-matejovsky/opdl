@@ -40,6 +40,11 @@ type Envelope struct {
 	Source string `json:"source"`
 	// Severity is how much operational attention the fact deserves.
 	Severity Severity `json:"severity"`
+	// Scope is the level of the hierarchy that owns the fact, and so how far
+	// beyond the stating instance it travels. It is on every envelope because a
+	// reader of any store has to be able to tell a site decision from one
+	// process's story without knowing which store it is reading.
+	Scope Scope `json:"scope"`
 	// Origin is the deployment and process identity of the writer.
 	Origin Origin `json:"origin"`
 	// CausationID is the ID of the event whose handling produced this one, empty
@@ -64,8 +69,9 @@ type Envelope struct {
 // Validate reports whether e is complete and well formed. It checks what every
 // reader depends on: an occurrence identity, a well-formed type whose source
 // matches the one stamped, a positive schema version, a UTC occurrence time, a
-// known severity, a complete origin, and a decodable payload. Causal links,
-// tags, and stable identity are optional and unconstrained when absent.
+// known severity, a known scope, a complete origin, and a decodable payload.
+// Causal links, tags, and stable identity are optional and unconstrained when
+// absent.
 func (e Envelope) Validate() error {
 	if e.ID == "" {
 		return fmt.Errorf("%w: id is required", ErrInvalidEnvelope)
@@ -87,6 +93,9 @@ func (e Envelope) Validate() error {
 	}
 	if !e.Severity.Valid() {
 		return fmt.Errorf("%w: unknown severity %q", ErrInvalidEnvelope, e.Severity)
+	}
+	if !e.Scope.Valid() {
+		return fmt.Errorf("%w: unknown scope %q", ErrInvalidEnvelope, e.Scope)
 	}
 	if err := e.Origin.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidEnvelope, err)
@@ -118,10 +127,20 @@ func Encode(envelope Envelope) ([]byte, error) {
 // Decode reads a stored envelope. An envelope that does not decode is storage
 // corruption, not a bad request, so the error is reported for a reader to stop
 // on rather than repaired.
+//
+// An object with no scope at all is read as DefaultScope rather than rejected.
+// Those are records written before the field existed, and a local record is
+// operator evidence rather than replayed state: refusing to read a machine's
+// history back because its oldest lines predate a field would destroy the
+// evidence to enforce a rule that only matters for delivery, which already
+// happened.
 func Decode(data []byte) (Envelope, error) {
 	var envelope Envelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return Envelope{}, fmt.Errorf("events: decode envelope: %w", err)
+	}
+	if envelope.Scope == "" {
+		envelope.Scope = DefaultScope
 	}
 	if err := envelope.Validate(); err != nil {
 		return Envelope{}, fmt.Errorf("events: decode envelope: %w", err)

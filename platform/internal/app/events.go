@@ -51,6 +51,17 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //   - platform.app.site_stopped: a site finished releasing.
 //   - platform.app.background_loop_stopped: a projector or handler loop ended.
 //
+// Every event in this catalog is instance-scoped, without exception, and none
+// declares a Scope method: they are facts about one process, so the default is
+// the right answer for all of them, and restating it on every one would only
+// invite one of them to drift. The catalog test stamps each event through a
+// real factory and asserts the default resolved to instance, which is what
+// keeps that silence honest.
+//
+// The nearby facts that are not this process's own live elsewhere for exactly
+// that reason: which instance owns the machine is redundancy's to state and is
+// machine-scoped there, while what this process did about it is here.
+//
 // These are stated through the process-local publisher, whose only backend is
 // the mandatory local JSONL record, rather than through the site's fan-out
 // publisher. They describe one process, and a process that is failing to start

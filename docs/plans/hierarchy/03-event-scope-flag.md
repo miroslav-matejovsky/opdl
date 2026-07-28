@@ -14,6 +14,14 @@ Every envelope states which level owns the fact: `site`, `machine`, or
 distributed to every machine, a machine-scoped event reaches the machine
 store, an instance-scoped event stays in the local record.
 
+**Scope only ever adds destinations.** Every event a process states is also
+appended to that instance's event log, whatever its scope. The log is the
+instance's operational record — a logfile whose entries are an explicitly
+declared set, namely everything that happened on this instance — so a
+machine-scoped or site-scoped fact stays in it as well as travelling. Nothing
+is routed away from the local record, and the JSONL backend therefore has no
+scope configuration.
+
 ## Design
 
 Follow the contract's existing pattern: everything not stated is defaulted,
@@ -53,6 +61,10 @@ way).
    rejects it — recommended: default it, the local record is operator
    evidence, not replayed state).
 
+   **Decided: default it.** `Decode` reads a scopeless object as `instance`
+   and still rejects an unknown scope, which is corruption rather than
+   history.
+
 4. **Safety net at composition, not just convention.** The default-instance
    choice means a site event whose author forgot `Scope()` would silently
    never leave the machine. Counter this where publishers are composed
@@ -61,12 +73,24 @@ way).
    non-machine-scoped envelope. A misdeclared event then fails loudly on its
    first publication in tests.
 
+   **Deferred to step 05, and replaced for now by a catalog test.** There is
+   no publisher to hang the check on yet: site composition is a stub
+   (`app.open` returns `ErrNotImplemented`) and the machine store is step 05's
+   to build, so a scope-checking publisher written today would be unreachable
+   code that `task deadcode` fails on. The net that exists instead is per
+   catalog: `registration`'s test requires every event it declares to
+   implement `Scoped` and return `ScopeSite`, so a new registration event that
+   forgets the declaration fails before it is ever published. `redundancy`'s
+   table asserts a scope per event, and `app`'s stamps every event through a
+   real factory and asserts the default resolved to `instance`. Add the
+   composition guard in step 05, when there is a store for it to protect.
+
 5. Classify the three existing catalogs and declare scopes:
 
    | Catalog | Scope | Note |
    | --- | --- | --- |
    | `internal/site/registration` (`proposed`, `confirmed`, `rejected`, `accepted`) | `site` | the whole point of the domain |
-   | `internal/machine/redundancy` (ownership, activation) | `machine` — **candidate**, see open question | today they reach only the writer's local JSONL |
+   | `internal/machine/redundancy` (ownership, activation) | mixed, see open question — **decided: option (a)** | today they reach only the writer's local JSONL |
    | `internal/app` (`platform.app.*`: process, API, epoch, standby, projection) | `instance` | facts about one process |
 
 6. Update `internal/events/doc.go` ("Where an event goes" section) and the
@@ -91,6 +115,15 @@ way).
   (b) all redundancy events stay `instance` until a machine-level consumer
   exists. Recommendation: (a), decided per event during this step, recorded
   in the catalog header. This is open question 2 in the README.
+
+  **Decided: (a).** `ownership_acquired`, `stepped_down`, `failback_initiated`,
+  and the three `activation_*` events are `machine`; `lease_opened`,
+  `ownership_waiting`, `promotion_declined`, and `lease_renewal_failed` are
+  `instance`. The line is who the fact is about, not who stated it: an owner's
+  transitions outlive the process that made them and are what the machine's
+  other instance has to agree with, while a passive instance's waiting and
+  declining are stated by the very instance step 05 forbids from writing to the
+  machine store. The table is in `redundancy/events.go`'s header.
 - Scope vs source overlap: source (`registration`, `redundancy`, `app`) is
   derived from the type; scope could in principle be derived from a
   source→scope table. Rejected: it would make `internal/events` know every

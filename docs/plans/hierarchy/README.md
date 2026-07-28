@@ -114,9 +114,13 @@ Collected from the step files; these need owners before step 07:
 
 1. Total order vs merge: keep the journal-order conflict rule, or redesign it
    commutatively so full-state messaging becomes possible? (step 06)
-2. Which events are machine-scoped vs instance-scoped — in particular
+2. ~~Which events are machine-scoped vs instance-scoped — in particular
    redundancy facts stated by the *passive* instance, which the single-writer
-   rule says may not write to the machine store. (steps 03, 05)
+   rule says may not write to the machine store.~~ **Answered in step 03,
+   option (a):** an owner's ownership and activation transitions are
+   machine-scoped, a passive instance's waiting and declining stay
+   instance-scoped, and the passive instance therefore never has a
+   machine-scoped fact to write. (steps 03, 05)
 3. Who is the first real machine-level consumer? Building the shared store
    without one is speculative. (step 05)
 4. Descriptor and builder impact of a machine-wide events path (new blueprint

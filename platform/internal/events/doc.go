@@ -33,14 +33,31 @@
 // it. Which backends exist, in what order, and what they are is composition's
 // business, and a producer cannot see it or choose it.
 //
-// A domain fact goes to a publisher that reaches the site journal, and a failure
-// fails the operation that caused it: an event nobody retained is a fact that
-// did not happen as far as the site is concerned.
+// What a producer does declare is the fact's Scope: whether the site, one
+// machine, or one instance owns it. Scope is what decides how far the event
+// travels, and it only ever adds destinations:
 //
-// A fact about one process goes to a publisher that reaches only the local
-// record. It has to: connection loss, journal unavailability, and projection
-// failure are exactly the conditions an operator needs to see, so describing
-// them must not depend on the journal being reachable.
+//   - Every event reaches the local record of the instance that stated it,
+//     whatever its scope. That record is the instance's log of everything that
+//     happened on it, with an explicitly declared set of entries, and a
+//     machine-scoped or site-scoped fact is still something that happened here.
+//     Nothing is routed away from it.
+//   - A machine-scoped fact also reaches the machine's shared store, so the
+//     machine's other instance reads the same ownership history.
+//   - A site-scoped fact is also distributed to every machine.
+//
+// The default is ScopeInstance, and it is the safe direction to be wrong in: a
+// forgotten declaration keeps a fact local, where an operator still finds it,
+// rather than publishing it site-wide. Because that failure is quiet, each
+// catalog's test states the scope of every event the package declares.
+//
+// A site-scoped fact's failure fails the operation that caused it: an event
+// nobody retained is a fact that did not happen as far as the site is concerned.
+//
+// An instance-scoped fact goes only to the local record, and it has to:
+// connection loss, journal unavailability, and projection failure are exactly
+// the conditions an operator needs to see, so describing them must not depend
+// on the journal being reachable.
 //
 // Every publisher carries this package's Envelope to every backend, so an
 // operator decodes one shape wherever an event is read, and no backend has any
@@ -90,13 +107,16 @@
 //	func (Accepted) EventType() events.Type { return TypeAccepted }
 //
 // The defaults are: schema version DefaultSchemaVersion, severity
-// DefaultSeverity, no tags, and no stable identity. An event that differs from
-// one of them implements the matching optional interface, and nothing more:
+// DefaultSeverity, scope DefaultScope, no tags, and no stable identity. An
+// event that differs from one of them implements the matching optional
+// interface, and nothing more:
 //
 //   - Versioned declares a payload schema version other than the default,
 //     which an event does when its payload encoding evolves.
 //   - Severe declares a severity, which an event does when the fact deserves
 //     more than routine attention.
+//   - Scoped declares that a level above this instance owns the fact, which an
+//     event does when something outside the process has to see it.
 //   - Tagged declares markers such as TagWarning.
 //   - Identified declares the fact's domain-stable identity, meaning the value
 //     that makes a restatement of the same fact the same fact.
@@ -109,9 +129,9 @@
 // never has to work out which writer produced an object before decoding it.
 //
 // It carries the occurrence identity and time, the type, the derived source,
-// the schema version, the severity, the origin, the optional causal links,
-// tags, and stable identity, and the payload as raw JSON. Envelope.Validate
-// checks all of it before an event leaves the process.
+// the schema version, the severity, the scope, the origin, the optional causal
+// links, tags, and stable identity, and the payload as raw JSON.
+// Envelope.Validate checks all of it before an event leaves the process.
 //
 // The envelope deliberately carries no transport ordering. A shared journal
 // orders events when it accepts them; that sequence is a property of the

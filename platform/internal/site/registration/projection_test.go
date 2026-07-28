@@ -25,6 +25,10 @@ func testEnvelope(t *testing.T, event events.Event, machine, id string) events.E
 		OccurredAt:    time.Now().UTC(),
 		Source:        event.EventType().Source(),
 		Severity:      events.SeverityInfo,
+		// Every event this catalog declares is site-scoped, and a projection
+		// only ever reads what the site distributed, so the fixture states the
+		// scope the journal would have carried rather than a default.
+		Scope: events.ScopeSite,
 		Origin: events.Origin{
 			Machine:        machine,
 			MachineProfile: testDescriptor.MachineProfile,

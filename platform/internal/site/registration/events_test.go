@@ -59,6 +59,16 @@ func TestCatalogEventsDeclareTheirContract(t *testing.T) {
 	require.Equal(t, schemaVersion, Rejected{}.SchemaVersion())
 	require.Equal(t, schemaVersion, Accepted{}.SchemaVersion())
 
+	// Every event here is the site's: a registration is agreed between machines,
+	// so each of these four has to reach all of them. Nothing in this catalog is
+	// allowed to fall back to the instance-scoped default, which would leave a
+	// decision sitting in one machine's local record.
+	for _, event := range []events.Event{Proposed{}, Confirmed{}, Rejected{}, Accepted{}} {
+		scoped, ok := event.(events.Scoped)
+		require.True(t, ok, "%s must declare its scope", event.EventType())
+		require.Equal(t, events.ScopeSite, scoped.Scope())
+	}
+
 	// A rejection is an operational anomaly; the other three are routine facts
 	// that declare no severity at all.
 	require.Equal(t, events.SeverityWarn, Rejected{}.Severity())
