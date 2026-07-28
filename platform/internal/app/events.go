@@ -2,77 +2,12 @@ package app
 
 import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 
-// This file is the application runtime's event catalog: every fact composition
-// itself can state. They are the process's own story — what it started, bound,
-// opened, waited for, and stopped — as opposed to the domain facts the site
-// journal carries.
+// This file declares runtime lifecycle, API, standby, projection, and site
+// composition facts. Every event is instance-scoped and uses the default scope.
+// Catalog tests stamp the full list and verify that invariant.
 //
-// Process:
-//
-//   - platform.app.process_started: the process read its configuration, settled
-//     its role, and began running.
-//   - platform.app.process_stopped: the process finished, cleanly or not.
-//   - platform.app.epoch_advanced: the instance began a new incarnation.
-//   - platform.app.epoch_advance_failed: it could not record that it had.
-//
-// Local resources:
-//
-//   - platform.app.lease_open_failed: the Primary Ownership lease could not be
-//     opened, so this instance cannot take part in ownership.
-//
-// HTTP API:
-//
-//   - platform.app.api_listen_failed: the instance could not bind its address.
-//   - platform.app.api_listening: the instance is bound and answering about
-//     itself, whether or not it is active.
-//   - platform.app.api_active: the instance is serving domain operations.
-//   - platform.app.api_stopped: the instance stopped serving.
-//
-// Standby and projection:
-//
-//   - platform.app.standby_waiting: a standby is caught up and waiting for
-//     Primary Ownership.
-//   - platform.app.standby_open_retry: a standby could not open its projection
-//     and is retrying while it waits.
-//   - platform.app.standby_ready: a standby's projection caught up.
-//   - platform.app.projection_caught_up: a projection reached a captured journal
-//     high-water mark.
-//   - platform.app.projection_lag_exceeded: a projection fell further behind the
-//     journal than serving allows.
-//   - platform.app.failover_readiness_changed: an instance became, or stopped
-//     being, current enough to take over.
-//
-// Site:
-//
-//   - platform.app.site_opening: this node's Event Fabric composition started.
-//   - platform.app.site_open_failed: it did not reach the state it needed.
-//   - platform.app.site_ready: an active site is ready to serve.
-//   - platform.app.site_stopping: a site began releasing.
-//   - platform.app.site_stopped: a site finished releasing.
-//   - platform.app.background_loop_stopped: a projector or handler loop ended.
-//
-// Every event in this catalog is instance-scoped, without exception, and none
-// declares a Scope method: they are facts about one process, so the default is
-// the right answer for all of them, and restating it on every one would only
-// invite one of them to drift. The catalog test stamps each event through a
-// real factory and asserts the default resolved to instance, which is what
-// keeps that silence honest.
-//
-// The nearby facts that are not this process's own live elsewhere for exactly
-// that reason: which instance owns the machine is redundancy's to state and is
-// machine-scoped there, while what this process did about it is here.
-//
-// These are stated through the process-local publisher, whose only backend is
-// the mandatory local JSONL record, rather than through the site's fan-out
-// publisher. They describe one process, and a process that is failing to start
-// is exactly the one that cannot write to a journal.
-//
-// Where a failure to state one goes depends on what the stating code can do
-// about it. Startup and shutdown return or join it, because a process that could
-// not write its local record has not started or stopped cleanly. The background
-// loops and the status callbacks have no caller to return to, so theirs go
-// through an events.Diagnostic and reach the process error stream instead: a
-// diagnostic about a broken pipeline must not travel down that pipeline.
+// Startup and shutdown propagate publication failures. Background callbacks use
+// events.BestEffort because they have no caller to return an error to.
 
 const (
 	// TypeProcessStarted is stated once the process knows its role and identity.

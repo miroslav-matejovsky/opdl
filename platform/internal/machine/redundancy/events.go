@@ -2,35 +2,8 @@ package redundancy
 
 import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 
-// This file is the redundancy domain's event catalog: what an operator is told
-// about which instance of a machine may run, and how it came to be that one.
-//
-//   - platform.redundancy.lease_opened: this process opened the machine's
-//     ownership lease file.
-//   - platform.redundancy.ownership_waiting: the other instance holds a valid
-//     lease, so this one runs passive and waits.
-//   - platform.redundancy.ownership_acquired: this process took Primary
-//     Ownership, either from a lease handed over or one that lapsed.
-//   - platform.redundancy.promotion_declined: the lease had lapsed but the peer
-//     was still healthy, so this instance did not promote.
-//   - platform.redundancy.lease_renewal_failed: an Active instance could not
-//     renew its lease but has not yet had to step down.
-//   - platform.redundancy.stepped_down: an Active instance stopped being Active
-//     because it lost or could no longer keep its lease.
-//   - platform.redundancy.failback_initiated: an Active Standby began handing
-//     ownership back to a returning healthy Primary.
-//   - platform.redundancy.activation_started / _failed / _completed: the active
-//     composition began, did not complete, or ran and gave ownership back.
-//
-// They are stated through the events.Publisher ManageOwnership is given. Runtime
-// composition hands it the process-local one, whose only backend is the local
-// JSONL record: ownership is decided before a process has a journal to write to,
-// and an instance that never becomes active never gets one at all.
-//
-// # Scope
-//
-// This catalog is the one that straddles two levels, so each event says which
-// it belongs to:
+// This file declares ownership and activation facts. The catalog spans instance
+// and machine scopes:
 //
 //	| Event                | Scope    | Why                                     |
 //	| -------------------- | -------- | --------------------------------------- |
@@ -45,16 +18,9 @@ import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 //	| activation_failed    | machine  | the machine has no serving instance     |
 //	| activation_completed | machine  | it gave the machine back                |
 //
-// The line is who the fact is about, not who states it. An owner's transitions
-// outlive the process that made them and are what the machine's other instance
-// has to agree with, so they belong to the machine. A passive instance's waiting
-// and declining are that process's own story: they are stated by an instance
-// that must not write to the machine's shared store, and nothing outside it
-// needs them to decide anything.
-//
-// Every one of them reaches the stating instance's local record either way.
-// Machine scope adds the machine store, it does not take the fact out of the log
-// an operator reads to see what this instance did.
+// Scope follows who owns the fact. Process attempts remain instance-scoped;
+// ownership and activation transitions outlive a process and belong to the
+// machine. Every event also reaches the stating instance's event log.
 
 const (
 	// TypeLeaseOpened is stated when this process opens the ownership lease file.
@@ -91,8 +57,8 @@ type LeaseOpened struct {
 // EventType returns the event's stable dotted kind.
 func (LeaseOpened) EventType() events.Type { return TypeLeaseOpened }
 
-// OwnershipWaiting states that the machine's other instance holds a valid lease,
-// so this one follows the journal and waits for it.
+// OwnershipWaiting states that the other instance holds a valid lease, so this
+// one remains Passive and waits.
 type OwnershipWaiting struct {
 	// File is the ownership lease this instance is waiting on.
 	File string `json:"file"`

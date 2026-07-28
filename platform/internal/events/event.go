@@ -24,22 +24,9 @@ const TagWarning = "warning"
 // instead of guessing at its meaning.
 const DefaultSchemaVersion = 1
 
-// Event is one domain fact: a small immutable struct of payload fields that
-// knows its own kind. A package declares the events it owns in its own
-// events.go; this package declares none.
-//
-// A payload carries what a reader needs to understand the fact without querying
-// the platform, and nothing a reader must not see. Its JSON encoding is a
-// published contract.
-//
-// The interface is deliberately one method. Everything else on the envelope is
-// either derived from the type or defaulted, so a normal informational event is
-// declared in full by:
-//
-//	func (Accepted) EventType() events.Type { return TypeAccepted }
-//
-// An event that differs from a default says so by implementing one of the
-// optional interfaces below, and nothing more.
+// Event is an immutable fact payload that knows its stable type. Owning packages
+// declare concrete events in events.go. Optional interfaces override envelope
+// defaults.
 type Event interface {
 	// EventType returns the event's stable dotted kind.
 	EventType() Type

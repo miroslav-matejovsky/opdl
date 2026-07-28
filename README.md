@@ -10,7 +10,8 @@ not configured at the deployment site.
 Start with the [documentation index](docs/README.md).
 
 - [Architecture](docs/01-architecture.md)
-- [Registration](docs/02-registration.md)
+- [Events](docs/02-events.md)
+- [Registration](docs/03-registration.md)
 - [Backlog](docs/backlog/README.md)
 - [Bugs](docs/bugs/README.md)
 
@@ -19,7 +20,7 @@ Start with the [documentation index](docs/README.md).
 | Area | Purpose |
 | --- | --- |
 | `builder` | Build one platform package per blueprint machine. |
-| `platform` | Run the registration API and the site event journal it projects from. |
+| `platform` | Run the loopback API, local redundancy, and scoped event storage. Site distribution is planned. |
 | `conformance-tests` | Regenerate API artifacts and verify shared contracts. |
 | `scenarios` | Drive built binaries as external processes. A program (`go run ./cmd`), not a test binary. |
 | `sdk-dotnet` | Generated .NET client and end-to-end tests. |

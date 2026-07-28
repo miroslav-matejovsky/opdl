@@ -3,8 +3,10 @@
 Read the documentation in this order:
 
 1. [Architecture](01-architecture.md) describes the build pipeline, runtime
-   boundaries, fabric, startup, shutdown, and event model.
-2. [Registration](02-registration.md) describes the site-wide registration
+   boundaries, startup, shutdown, and local redundancy.
+2. [Events](02-events.md) describes the event contract, scope, storage, and the
+   current site-distribution gap.
+3. [Registration](03-registration.md) describes the site-wide registration
    protocol, conflict convergence, and HTTP behavior.
 
 The numbered prefixes are the recommended reading order. They do not indicate

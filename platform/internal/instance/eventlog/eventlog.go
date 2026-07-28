@@ -23,8 +23,7 @@ var (
 
 var _ storage.Backend = (*Backend)(nil)
 
-// Backend is a local file storage backend that appends stamped envelopes as JSON
-// Lines to the instance's authored events file.
+// Backend appends stamped envelopes to one instance's JSONL event log.
 type Backend struct {
 	mu     sync.Mutex
 	file   *os.File
@@ -32,14 +31,7 @@ type Backend struct {
 	path   string
 }
 
-// New creates a new JSONL storage backend at path, the events file the running
-// instance's deployment descriptor authored. It creates the file's parent
-// directory if missing and opens the file for appending, so a restart continues
-// the same record rather than starting a new one.
-//
-// The path is taken whole rather than composed under a data root: every file an
-// instance owns is named in its blueprint, so the runtime derives no path of its
-// own and an operator reading the blueprint sees exactly what will be written.
+// New opens path for append, creating its parent directory and file when needed.
 func New(path string) (*Backend, error) {
 	filePath := strings.TrimSpace(path)
 	if filePath == "" {
@@ -62,8 +54,7 @@ func New(path string) (*Backend, error) {
 	}, nil
 }
 
-// Path returns the events file this backend appends to. It is what an operator
-// opens to read what one process stated, so the runtime reports it at startup.
+// Path returns the instance event log path.
 func (b *Backend) Path() string { return b.path }
 
 // Store encodes envelope into a canonical JSON object, appends it as a single

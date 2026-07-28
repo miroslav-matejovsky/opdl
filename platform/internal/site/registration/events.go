@@ -6,10 +6,7 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 )
 
-// This file is the registration domain's event catalog: every fact this package
-// can state, and nothing else. Each event is a published contract,
-// self-contained enough that a reader reconstructs a registration from the
-// journal alone.
+// This file declares the registration event catalog:
 //
 //   - platform.registration.proposed: the origin proposes to register a unit.
 //   - platform.registration.confirmed: one expected node accepts the claiming
@@ -19,20 +16,8 @@ import (
 //   - platform.registration.accepted: the origin commits a fully confirmed
 //     proposal.
 //
-// Every event here is site-scoped, which is the whole point of the domain: a
-// registration is agreed between machines, so each of these facts is entitled
-// to reach every machine in the site. Each also lands in the local record of
-// the instance that stated it, like every other event a process states.
-//
-//	| Event     | Scope |
-//	| --------- | ----- |
-//	| proposed  | site  |
-//	| confirmed | site  |
-//	| rejected  | site  |
-//	| accepted  | site  |
-//
-// The deterministic identities these payloads carry are derived in
-// identifiers.go.
+// Every event is site-scoped and also reaches the stating instance's event log.
+// Deterministic identities are derived in identifiers.go.
 
 // eventSource is the subsystem every event in this catalog comes from. It is
 // the middle token of every type below, which is where a reader gets it: no

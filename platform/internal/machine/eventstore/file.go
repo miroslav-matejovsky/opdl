@@ -17,14 +17,7 @@ var ErrInvalidPath = errors.New("eventstore: invalid store file")
 
 var _ Appender = (*File)(nil)
 
-// File is a machine store backed by a JSON Lines file: one envelope per line,
-// in the order the store accepted them.
-//
-// The file is the machine's, not an instance's. Both instances of a machine name
-// the same path, and in practice only the one holding Primary Ownership has a
-// machine-scoped fact to state. Appends are whole lines written under a lock and
-// synced, so even the two instances appending at once leave a file of complete
-// lines rather than interleaved halves.
+// File stores one machine-scoped envelope per JSONL line.
 type File struct {
 	mu     sync.Mutex
 	file   *os.File
@@ -32,13 +25,8 @@ type File struct {
 	path   string
 }
 
-// Open opens the machine store at path, creating the parent directory and the
-// file if they are missing and appending to what is already there, so a restart
-// continues the machine's store rather than starting a new one.
-//
-// The path is taken whole. It is authored in the machine's blueprint and carried
-// in the deployment descriptor, so no path is composed here and an operator
-// reading the blueprint sees exactly which file the machine's instances share.
+// Open opens the machine store for append, creating its parent directory and
+// file when needed.
 func Open(path string) (*File, error) {
 	storePath := strings.TrimSpace(path)
 	if storePath == "" {
@@ -58,8 +46,7 @@ func Open(path string) (*File, error) {
 	return &File{file: file, path: storePath}, nil
 }
 
-// Path returns the file the machine's instances share. The runtime reports it at
-// startup, because it is what an operator opens to read what the machine did.
+// Path returns the shared machine event file.
 func (f *File) Path() string { return f.path }
 
 // Append encodes envelope as one line and appends it, syncing to disk before

@@ -1,15 +1,15 @@
 # Registration
 
-> **TODO — registration does not currently run.** Every mechanism on this page
-> rests on the site journal, and event storage and the Event Fabric were removed
-> during the ongoing refactor. No deployment has event storage today
+> **TODO: registration does not currently run.** Every mechanism on this page
+> rests on site distribution, which has no implementation. No deployment has
+> site event storage today
 > (`app.hasEventStorage` is hardcoded false), so an instance serves the
 > journal-less handler: health and `GET /instance` answer, and every operation
 > below is refused with a reason naming the deployment rather than the instance.
 > This page describes the target design and the contract the code in
-> `internal/site/registration` still implements against. Restoring it is blocked on
-> the replacement distribution mechanism; see the TODO in
-> [`01-architecture.md`](01-architecture.md).
+> `internal/site/registration` still implements against. Restoring it is blocked
+> on site distribution; see [Events](02-events.md) and the
+> [hierarchy plan](plans/hierarchy/README.md).
 
 Registration is a site-wide decision over the static deployment topology. A
 client submits a proposal to one machine and polls that proposal until the site
@@ -38,10 +38,9 @@ out-of-range integer, an unknown field, a wrong type) is refused by huma with
 `422` before it reaches the domain. Input that satisfies the schema but the
 domain refuses (a blank advertised name, an unknown role) returns `400`. Neither
 publishes anything. A durably published proposal returns `202` with its
-`proposal_id` and the journal sequence it was given. A journal that will not
-accept the write returns `503`: nothing was recorded, so the same request will
-succeed once the site can write again, which makes it the one failure a client
-can act on.
+`proposal_id`. A journal that will not accept the write returns `503`: nothing
+was accepted as a site fact, so the same request can be retried once the site can
+write again.
 
 Errors are served as RFC 9457 problem+json (`application/problem+json`). The
 platform's stable machine code (`invalid_request`, `registration_not_found`,
@@ -52,7 +51,7 @@ race-sensitive POST result: at the moment the journal accepts a proposal, nothin
 has decided anything yet.
 
 Status, list, and conflict answers come from the answering node's local
-projection and are authoritative once that node has caught up — which it has
+projection and are authoritative once that node has caught up, which it has
 before it serves at all.
 
 ## Identity and idempotency
@@ -66,7 +65,7 @@ request: the origin is part of what is being claimed.
 
 A decision is identified by a `decision_id` derived from the proposal ID, the
 decision kind, and the deciding machine, so a node that republishes its decision
-after a redelivery collapses onto the one decision it already made — even after
+after a redelivery collapses onto the one decision it already made, even after
 any transport deduplication window has expired. Correctness lives in these
 identities, not in transport deduplication.
 
@@ -75,9 +74,9 @@ fact always hashes the same way regardless of when or in what order it arrived.
 
 ## Acceptance boundary
 
-A proposal is accepted only after every expected platform instance, including the
-origin, confirms that exact proposal. Expected instances come from the static
-descriptor. They are not a quorum and are not the currently reachable machines.
+A proposal is accepted only after every expected machine, including the origin,
+confirms that exact proposal. Expected machines come from the static descriptor.
+They are not a quorum and are not the currently reachable machines.
 
 An expected machine that is offline keeps a proposal pending indefinitely. There
 is no timeout, expiry, forced acceptance, or automatic removal from the
@@ -164,13 +163,15 @@ resolution. Every node derives that resolution independently and identically.
 
 ## Current limits
 
-Registration state lives in the site journal and is replayed into memory at every
-start, so it survives a restart but not a journal that is lost. Different sites
-have separate journals, so cross-site uniqueness is not enforced. Per-instance
-IPs in a view come from the answering node's own descriptor rather than from the
-proposal, so a historical proposal naming a machine the deployment no longer has
-reports that instance with an empty IP. Authentication, authorization, removal,
-leases, heartbeats, and quorum are outside the current implementation.
+The implemented projection is memory-only and is designed to rebuild from the
+site journal. No journal implementation is currently wired, so registration does
+not yet survive or serve at all. The target keeps separate journals per site, so
+cross-site uniqueness is not enforced. Machine IPs in a view come from the
+answering node's current descriptor rather than from the proposal. A historical
+machine absent from that descriptor therefore has an empty IP.
+
+Authentication, authorization, removal, registration leases, heartbeats, and
+quorum are outside the current design.
 
 These limits are acceptable while the registration model remains a POC. New
 events should be added only when a concrete removal, lease, or quorum workflow is

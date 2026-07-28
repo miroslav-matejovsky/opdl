@@ -2,21 +2,9 @@ package events
 
 import "fmt"
 
-// Origin is the identity of the platform process that stated a fact: which
-// process, of which machine.
-//
-// It is constant for a whole process run and is stamped onto every envelope.
-// The shared site journal pools events from several machines and from more than
-// one process per machine, so identity travels with each fact rather than
-// living in a file name a reader may never see.
-//
-// Machine and MachineProfile are domain identity: they name the machine the
-// fact is about. ProcessRole and PID are operational identity: they name which
-// of that machine's processes wrote it. The distinction matters. A machine may
-// run a primary and a standby process, and domain behavior stays
-// machine-scoped, so registration counts one voter per machine no matter how
-// many processes it runs. Domain code reads Machine; only an operator
-// troubleshooting a specific process reads ProcessRole and PID.
+// Origin identifies the process that stated a fact. Machine and MachineProfile
+// are domain identity. ProcessRole and PID are operational identity and do not
+// turn primary and standby processes into separate domain voters.
 type Origin struct {
 	// Machine is the deployment machine identifier.
 	Machine string `json:"machine"`
@@ -30,10 +18,7 @@ type Origin struct {
 	PID int `json:"pid"`
 }
 
-// Validate reports whether o names a complete origin. Every field is required:
-// a journal that pools the events of a whole site cannot attribute a fact whose
-// origin is only partly stated, and a partly stated origin is always a
-// composition bug rather than something a reader can repair later.
+// Validate reports whether o names a complete origin.
 func (o Origin) Validate() error {
 	missing := ""
 	switch {
