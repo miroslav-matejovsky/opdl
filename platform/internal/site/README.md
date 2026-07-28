@@ -34,5 +34,5 @@ implemented. `app.topology` currently returns only the local machine. The public
 registration API therefore returns `503`.
 
 The target protocol is documented in
-[Registration](../../../docs/03-registration.md). Remaining work is in the
+[Registration](../../../docs/04-registration.md). Remaining work is in the
 [hierarchy plan](../../../docs/plans/hierarchy/README.md).

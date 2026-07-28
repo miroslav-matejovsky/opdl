@@ -82,7 +82,7 @@ The detailed level documentation lives beside the code:
 | `internal/events` | Level-independent event contract, envelope, factory, and publisher interface. |
 | `internal/events/storage` | Synchronous fan-out to configured storage backends. |
 | `internal/instance/eventlog` | Mandatory process-local JSONL event record. |
-| `internal/instance/applog` | Structured application log written with `log/slog`. See [Logging](04-logging.md). |
+| `internal/instance/applog` | Structured application log written with `log/slog`. See [Logging](03-logging.md). |
 | `internal/instance/state` | Durable per-instance epoch. |
 | `internal/machine/redundancy` | Fixed roles, Primary Ownership, and active/passive sequencing. |
 | `internal/machine/eventstore` | Shared append-only JSONL store for machine-scoped events. |

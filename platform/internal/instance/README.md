@@ -37,7 +37,7 @@ deletes on different terms.
 The composition root opens it before anything else the process writes, stamps
 the machine and instance role on it, installs it as `slog`'s default so packages
 below the root need no logger of their own, and closes it last. There is no
-rotation. See [Logging](../../../docs/04-logging.md).
+rotation. See [Logging](../../../docs/03-logging.md).
 
 ## State and epoch
 

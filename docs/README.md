@@ -6,10 +6,10 @@ Read the documentation in this order:
    boundaries, startup, shutdown, and local redundancy.
 2. [Events](02-events.md) describes the event contract, scope, storage, and the
    current site-distribution gap.
-3. [Registration](03-registration.md) describes the site-wide registration
-   protocol, conflict convergence, and HTTP behavior.
-4. [Logging](04-logging.md) describes the structured application log each
+3. [Logging](03-logging.md) describes the structured application log each
    instance writes, and how it differs from an event.
+4. [Registration](04-registration.md) describes the site-wide registration
+   protocol, conflict convergence, and HTTP behavior.
 
 The numbered prefixes are the recommended reading order. They do not indicate
 implementation stages.

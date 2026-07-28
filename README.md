@@ -11,7 +11,8 @@ Start with the [documentation index](docs/README.md).
 
 - [Architecture](docs/01-architecture.md)
 - [Events](docs/02-events.md)
-- [Registration](docs/03-registration.md)
+- [Logging](docs/03-logging.md)
+- [Registration](docs/04-registration.md)
 - [Backlog](docs/backlog/README.md)
 - [Bugs](docs/bugs/README.md)
 

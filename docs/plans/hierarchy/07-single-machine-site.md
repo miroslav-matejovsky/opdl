@@ -63,7 +63,7 @@ rebuilds the same answers.
 4. Add unit tests for scope refusal, replay, acknowledgement, handler
    determinism, and publication failure.
 5. Update `docs/01-architecture.md`, `docs/02-events.md`, and
-   `docs/03-registration.md`.
+   `docs/04-registration.md`.
 6. Add a Windows scenario for propose, poll, restart, failover, and replay.
 
 ## Acceptance criteria

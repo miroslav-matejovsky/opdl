@@ -12,5 +12,5 @@
 //
 // The projection and query behavior are implemented. CommandService.Create,
 // NewHandler, and site distribution are not implemented. See
-// internal/site/README.md and docs/03-registration.md.
+// internal/site/README.md and docs/04-registration.md.
 package registration

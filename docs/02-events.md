@@ -23,7 +23,7 @@ unreachable.
 
 Events are immutable facts stated by the package that owns a transition. They
 are not diagnostic log messages. Diagnostics are the structured application log
-each instance writes; see [Logging](04-logging.md). Concrete payloads live in
+each instance writes; see [Logging](03-logging.md). Concrete payloads live in
 the owning package's `events.go`.
 
 An event type has the form `platform.<source>.<fact>`. The source is derived from
@@ -126,4 +126,4 @@ Registration already declares site-scoped payloads and folds
 `eventfabric.Delivery` values into a deterministic projection. Its command,
 handler, and runtime composition are still stubs. Until site distribution lands,
 the public registration API remains unavailable. See
-[Registration](03-registration.md).
+[Registration](04-registration.md).
