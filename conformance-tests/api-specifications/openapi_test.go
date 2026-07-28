@@ -20,10 +20,11 @@ func TestOpenAPIReportsStableOperations(t *testing.T) {
 
 	require.Contains(t, yaml, "openapi: 3.0.3")
 	for _, id := range []string{
-		"registerUnit",
-		"listRegistrations",
-		"listRegistrationConflicts",
-		"getRegistrationStatus",
+		"getInstance",
+		"getHealth",
+		"getHealthLive",
+		"getHealthReady",
+		"getHealthHA",
 	} {
 		require.Contains(t, yaml, "operationId: "+id)
 	}
@@ -49,6 +50,6 @@ func TestOpenAPIMarkdownIsGenerated(t *testing.T) {
 
 	md := string(res.Markdown)
 	require.Contains(t, md, "# "+cfg.Info.Title)
-	require.Contains(t, md, "GET /registrations")
-	require.Contains(t, md, "List registration proposals")
+	require.Contains(t, md, "GET /instance")
+	require.Contains(t, md, "Report this instance's identity and state")
 }

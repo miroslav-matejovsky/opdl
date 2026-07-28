@@ -4,15 +4,11 @@ import (
 	"context"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 )
 
 type site struct {
-	fabric   progressFabric
-	commands *registration.CommandService
-	queries  *registration.QueryService
-	stopped  chan struct{}
+	fabric  progressFabric
+	stopped chan struct{}
 }
 
 func open(ctx context.Context, proc process, active bool) (*site, error) {
@@ -21,10 +17,4 @@ func open(ctx context.Context, proc process, active bool) (*site, error) {
 
 func (s *site) close(ctx context.Context) error {
 	return nil
-}
-
-func topology(descriptor config.Descriptor) (self registration.Location, expected []registration.Location) {
-	self = registration.Location{Machine: descriptor.Machine, IP: descriptor.IP}
-	expected = append(expected, self)
-	return self, expected
 }

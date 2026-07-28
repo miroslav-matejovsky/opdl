@@ -7,8 +7,8 @@ package events
 type Scope string
 
 const (
-	// ScopeSite states a fact the whole site owns, such as a registration
-	// decision. Every machine is entitled to see it.
+	// ScopeSite states a fact the whole site owns. Every machine is entitled to
+	// see it.
 	ScopeSite Scope = "site"
 	// ScopeMachine states a fact about one machine that outlives the process
 	// that stated it, such as which of its instances took Primary Ownership.

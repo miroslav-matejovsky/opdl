@@ -11,14 +11,13 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/site/eventfabric"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 )
 
 // There is no implementation to test here yet. What these tests establish is
-// that the contract is the one its consumer needs: a stub Consumer drives
-// registration.Projection through a full proposal, and a restart of that
-// consumer resumes from its own acknowledged position. If the step 06 ADR
-// amends Consumer, this is what has to keep working.
+// that the contract is the one its consumer needs: a stub Consumer drives a
+// minimal fold through a run of deliveries, and a restart of that consumer
+// resumes from its own acknowledged position. If the step 06 ADR amends
+// Consumer, this is what has to keep working.
 
 // stub is a Consumer over a fixed list of deliveries, keeping a durable
 // position per consumer name the way an implementation would.
@@ -62,52 +61,20 @@ func (s *stub) Ack(_ context.Context, name string, sequence uint64) error {
 
 var _ eventfabric.Consumer = (*stub)(nil)
 
-func TestConsumerFeedsARegistrationProjection(t *testing.T) {
-	t.Parallel()
+// typeFixtureNoted is a minimal site-scoped fact used only to drive these
+// contract tests; it carries nothing a real projection would need.
+const typeFixtureNoted events.Type = "platform.fixture.noted"
 
-	proposal := testProposal()
-	fabric := newStub(
-		delivery(t, 1, proposal, proposal.OriginMachine),
-		delivery(t, 2, registration.NewConfirmed(proposal.ProposalID, "node-a"), "node-a"),
-		delivery(t, 3, registration.NewConfirmed(proposal.ProposalID, "node-b"), "node-b"),
-	)
-
-	projection := registration.NewProjection()
-	fold(t, fabric, projection, "registration", 3)
-
-	require.Equal(t, uint64(3), projection.Sequence(),
-		"the projection's position is the site order the fabric delivered")
-	require.True(t, projection.AllExpectedConfirmed(proposal.ProposalID),
-		"a projection folded from the contract answers as it does from any journal")
+type fixtureNoted struct {
+	N int `json:"n"`
 }
 
-func TestConsumerResumesFromItsOwnAcknowledgedPosition(t *testing.T) {
-	t.Parallel()
+func (fixtureNoted) EventType() events.Type { return typeFixtureNoted }
 
-	proposal := testProposal()
-	fabric := newStub(
-		delivery(t, 1, proposal, proposal.OriginMachine),
-		delivery(t, 2, registration.NewConfirmed(proposal.ProposalID, "node-a"), "node-a"),
-		delivery(t, 3, registration.NewConfirmed(proposal.ProposalID, "node-b"), "node-b"),
-	)
-
-	// One consumer stops after the proposal, then follows again. The position
-	// is the named consumer's, so the second follow starts where the first
-	// stopped rather than at the head of the stream.
-	projection := registration.NewProjection()
-	fold(t, fabric, projection, "registration", 1)
-
-	require.Equal(t, []uint64{2, 3}, fold(t, fabric, projection, "registration", 2),
-		"a restarted consumer is given what it had not acknowledged, and not what it had")
-
-	other := registration.NewProjection()
-	require.Equal(t, []uint64{1, 2, 3}, fold(t, fabric, other, "projector", 3),
-		"a second consumer name starts from the beginning, unaffected by the first")
-}
-
-// fold reads want deliveries as the named consumer, applies each to projection,
-// and acknowledges it, which is the loop a durable reader runs.
-func fold(t *testing.T, fabric eventfabric.Consumer, projection *registration.Projection, name string, want int) []uint64 {
+// fold reads want deliveries as the named consumer, keeping the highest
+// sequence applied and the order deliveries arrived in, which is the loop a
+// durable reader runs.
+func fold(t *testing.T, fabric eventfabric.Consumer, name string, want int) []uint64 {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -121,7 +88,6 @@ func fold(t *testing.T, fabric eventfabric.Consumer, projection *registration.Pr
 		case result, ok := <-results:
 			require.Truef(t, ok, "stream closed after %d of %d deliveries", len(sequences), want)
 			require.NoError(t, result.Err)
-			require.NoError(t, projection.Apply(ctx, result.Delivery))
 			require.NoError(t, fabric.Ack(ctx, name, result.Delivery.Sequence))
 			sequences = append(sequences, result.Delivery.Sequence)
 		case <-time.After(5 * time.Second):
@@ -131,16 +97,39 @@ func fold(t *testing.T, fabric eventfabric.Consumer, projection *registration.Pr
 	return sequences
 }
 
-// testProposal is one proposal for a two-machine site.
-func testProposal() registration.Proposed {
-	return registration.NewProposed(registration.ProposalIdentity{
-		UnitType:               7,
-		UnitID:                 42,
-		UnitTypeNameAdvertised: "Worker",
-		OriginMachine:          "node-a",
-		OriginIP:               "10.0.1.10",
-		ExpectedMachines:       []string{"node-a", "node-b"},
-	})
+func TestConsumerFeedsAFold(t *testing.T) {
+	t.Parallel()
+
+	fabric := newStub(
+		delivery(t, 1, fixtureNoted{N: 1}, "node-a"),
+		delivery(t, 2, fixtureNoted{N: 2}, "node-a"),
+		delivery(t, 3, fixtureNoted{N: 3}, "node-b"),
+	)
+
+	sequences := fold(t, fabric, "consumer", 3)
+	require.Equal(t, []uint64{1, 2, 3}, sequences,
+		"a fold sees deliveries in the site order the fabric assigned")
+}
+
+func TestConsumerResumesFromItsOwnAcknowledgedPosition(t *testing.T) {
+	t.Parallel()
+
+	fabric := newStub(
+		delivery(t, 1, fixtureNoted{N: 1}, "node-a"),
+		delivery(t, 2, fixtureNoted{N: 2}, "node-a"),
+		delivery(t, 3, fixtureNoted{N: 3}, "node-b"),
+	)
+
+	// One consumer stops after the first delivery, then follows again. The
+	// position is the named consumer's, so the second follow starts where the
+	// first stopped rather than at the head of the stream.
+	fold(t, fabric, "consumer", 1)
+
+	require.Equal(t, []uint64{2, 3}, fold(t, fabric, "consumer", 2),
+		"a restarted consumer is given what it had not acknowledged, and not what it had")
+
+	require.Equal(t, []uint64{1, 2, 3}, fold(t, fabric, "projector", 3),
+		"a second consumer name starts from the beginning, unaffected by the first")
 }
 
 // delivery stamps the envelope the fabric would have carried for event, as

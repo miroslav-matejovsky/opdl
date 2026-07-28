@@ -1,7 +1,17 @@
 # Plan: finish site events and registration
 
-Status: draft for review. Updated 2026-07-28 from branch `mirmat-wip` at
-`4aa26aa`, compared with `main`.
+Status: superseded 2026-07-28. Registration (`platform/internal/site/registration`,
+the `/registrations` HTTP surface, and its event catalog) has been removed
+outright rather than finished. It is being replaced by a static Site → Machine →
+Instance approach instead of the dynamic, event-sourced proposal/conflict
+protocol this plan (particularly steps 07-09) was written to complete. The
+site-distribution question in step 06 — how site-scoped facts reach every
+machine and converge after an outage — is still open and may still be relevant
+context, but steps 07-09 assume the removed registration domain and need a
+rewrite before anyone follows them.
+
+Previous status: draft for review. Updated 2026-07-28 from branch `mirmat-wip`
+at `4aa26aa`, compared with `main`.
 
 ## Implemented baseline
 

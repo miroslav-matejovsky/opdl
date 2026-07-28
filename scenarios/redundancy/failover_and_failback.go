@@ -106,16 +106,11 @@ func FailoverAndFailback(t *testing.T) {
 	waitState("standby reporting itself passive", node.StandbyURL, harness.InstanceStatePassive, standby)
 
 	// The Passive surface, observed end to end: the Standby answers health at
-	// its own address and refuses a domain operation, naming the instance that
-	// owns.
+	// its own address while the Primary holds ownership.
 	health, code, err := harness.FetchHealthAt(ctx, node.StandbyURL)
 	require.NoError(t, err, "a passive instance answers its health endpoint")
 	require.Equal(t, http.StatusOK, code)
 	require.Equal(t, harness.InstanceStatePassive, health.RuntimeState)
-	refusal, code := harness.GetProblemAt(ctx, t, node, node.StandbyURL, "/registrations")
-	require.Equal(t, http.StatusServiceUnavailable, code,
-		"a passive instance serves health checks and nothing else")
-	require.Equal(t, "instance_passive", refusal.Title)
 
 	// Failover: the Primary dies without releasing anything. The Standby must
 	// wait out the lease and take over.

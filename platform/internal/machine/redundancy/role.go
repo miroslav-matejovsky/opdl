@@ -43,9 +43,9 @@ func (r InstanceRole) Valid() bool { return r == RolePrimary || r == RoleStandby
 
 // OperationalName returns "<machine>/<role>" for logs and diagnostics.
 //
-// It is never a domain identity. Registration proposal, decision, and
-// durable-handler identities stay machine-scoped, so a machine's two instances
-// never become two registration voters.
+// It is never a domain identity. Domain and durable-handler identities stay
+// machine-scoped, so a machine's two instances never become two independent
+// voters in whatever domain protocol runs above them.
 func OperationalName(machine string, role InstanceRole) string {
 	return machine + "/" + string(role)
 }

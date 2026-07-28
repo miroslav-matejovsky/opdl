@@ -65,7 +65,7 @@ Runtime packages are grouped by the owner of their state:
 | --- | --- | --- |
 | Instance | one process in a fixed role | local event log, application log, durable epoch, and one loopback API |
 | Machine | one Windows host | Primary Ownership, active/passive sequencing, and the shared machine event store |
-| Site | all machines in one deployment site | site event contract and registration domain |
+| Site | all machines in one deployment site | site event contract |
 
 The detailed level documentation lives beside the code:
 
@@ -87,7 +87,6 @@ The detailed level documentation lives beside the code:
 | `internal/machine/redundancy` | Fixed roles, Primary Ownership, and active/passive sequencing. |
 | `internal/machine/eventstore` | Shared append-only JSONL store for machine-scoped events. |
 | `internal/site/eventfabric` | Site delivery and durable-consumer contract. No implementation yet. |
-| `internal/site/registration` | Registration events, projection, commands, queries, and handler contract. |
 
 ### Dependency direction
 
@@ -134,8 +133,8 @@ address between processes.
 
 Site event distribution has not been implemented. `app.hasEventStorage` returns
 `false`, so no site projection or durable handler is opened. Health endpoints
-and `GET /instance` work. Registration operations use the journal-less handler
-and return `503`.
+and `GET /instance` work; the platform has no domain operation to serve beyond
+them.
 
 The projection lag bound remains in the descriptor but is not consulted on this
 path. The hierarchy plan tracks the remaining work in
@@ -193,7 +192,6 @@ Manager integration remains unfinished.
 The current black-box coverage proves:
 
 - a primary-only machine builds and runs without site event storage;
-- registration is refused because no site journal exists;
 - a standby-enabled machine fails over after a forced primary kill;
 - ownership returns to the preferred Primary after recovery;
 - the machine event store contains the machine-scoped ownership sequence across
@@ -203,5 +201,5 @@ The current black-box coverage proves:
   `log_file`, with every record naming the instance that wrote it; and
 - instance epochs survive restart and activation.
 
-Registration persistence and multi-machine convergence are not part of the
+Site event persistence and multi-machine convergence are not part of the
 current scenario baseline.

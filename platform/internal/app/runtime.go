@@ -395,7 +395,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 	}
 
 	address := instanceOf(descriptor, role).APIAddress
-	server.serveWith(httpapi.NewHandler(site.commands, site.queries, func() api.Instance {
+	server.serveWith(httpapi.NewHandler(func() api.Instance {
 		return instanceIdentity(descriptor, role, api.InstanceStateActive)
 	},
 		proc.started,

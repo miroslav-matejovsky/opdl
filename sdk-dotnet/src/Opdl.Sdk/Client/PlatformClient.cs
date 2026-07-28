@@ -8,7 +8,6 @@ using Microsoft.Kiota.Serialization.Multipart;
 using Microsoft.Kiota.Serialization.Text;
 using Opdl.Sdk.Client.Health;
 using Opdl.Sdk.Client.Instance;
-using Opdl.Sdk.Client.Registrations;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -30,11 +29,6 @@ namespace Opdl.Sdk.Client
         public global::Opdl.Sdk.Client.Instance.InstanceRequestBuilder Instance
         {
             get => new global::Opdl.Sdk.Client.Instance.InstanceRequestBuilder(PathParameters, RequestAdapter);
-        }
-        /// <summary>The registrations property</summary>
-        public global::Opdl.Sdk.Client.Registrations.RegistrationsRequestBuilder Registrations
-        {
-            get => new global::Opdl.Sdk.Client.Registrations.RegistrationsRequestBuilder(PathParameters, RequestAdapter);
         }
         /// <summary>
         /// Instantiates a new <see cref="global::Opdl.Sdk.Client.PlatformClient"/> and sets the default values.

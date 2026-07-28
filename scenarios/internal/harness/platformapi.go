@@ -130,48 +130,6 @@ func GetInstance(ctx context.Context, t *testing.T, m *Machine) (instance Instan
 	return instance, code
 }
 
-// Problem is the observable shape of an application/problem+json body: the
-// error shape every refusal and every failed operation parses as, whichever
-// instance produced it.
-type Problem struct {
-	// Title is the stable, machine-readable reason token.
-	Title string `json:"title"`
-	// Status is the HTTP status repeated in the body.
-	Status int `json:"status"`
-	// Detail is the human-readable explanation.
-	Detail string `json:"detail"`
-	// Instance is the instance that answered, carried on a refusal so a caller
-	// learns which one it reached without asking again.
-	Instance Instance `json:"instance"`
-}
-
-// GetProblem issues a GET the machine's Primary Instance is expected to refuse,
-// and decodes the problem body it answered with along with the status code.
-//
-// A refusal is part of the platform's contract rather than a transport failure,
-// so the body is decoded and returned. Only a request that got no answer at all
-// fails the scenario here.
-func GetProblem(ctx context.Context, t *testing.T, m *Machine, path string) (problem Problem, code int) {
-	t.Helper()
-	return GetProblemAt(ctx, t, m, m.URL, path)
-}
-
-// GetProblemAt is GetProblem against an explicit instance address, for asking a
-// machine's Standby Instance the question at its own endpoint.
-func GetProblemAt(ctx context.Context, t *testing.T, m *Machine, baseURL, path string) (problem Problem, code int) {
-	t.Helper()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, http.NoBody)
-	require.NoError(t, err)
-	response, err := http.DefaultClient.Do(request)
-	require.NoErrorf(t, err, "%s did not answer %s:%s", m.Name, path, Diagnostics(m))
-	defer func() { _ = response.Body.Close() }()
-
-	require.Equalf(t, "application/problem+json", response.Header.Get("Content-Type"),
-		"%s answered %s with %d but not as a problem document", m.Name, path, response.StatusCode)
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&problem))
-	return problem, response.StatusCode
-}
-
 // WaitForActiveInstance blocks until a machine's Primary Instance reports that
 // it is Active.
 //

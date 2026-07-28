@@ -8,6 +8,6 @@
 // sequences Passive and Active compositions, while app swaps the HTTP handler
 // for the current state.
 //
-// Site composition and registration remain unimplemented. Until site
-// distribution lands, the Active state serves the journal-less API surface.
+// Site composition remains unimplemented. Until site distribution lands, the
+// Active state serves the journal-less API surface.
 package app
