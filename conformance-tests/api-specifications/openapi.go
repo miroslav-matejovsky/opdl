@@ -62,10 +62,10 @@ func generateOpenAPIMarkdown(yamlBytes []byte) error {
 // prepareYAMLForMarkdown transforms the OpenAPI specification YAML to satisfy
 // openapi-markdown.go's constraint that all response schemas must be top-level
 // component references ($ref) rather than inline schemas. For endpoints that
-// return lists (such as []Registration), huma generates inline array schemas
-// (type: array with items: $ref). This function wraps those array schemas into
-// named component definitions in components/schemas so openapi-markdown.go can
-// successfully resolve and document them without failing.
+// return lists, huma generates inline array schemas (type: array with items:
+// $ref). This function wraps those array schemas into named component
+// definitions in components/schemas so openapi-markdown.go can successfully
+// resolve and document them without failing.
 func prepareYAMLForMarkdown(yamlBytes []byte) ([]byte, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(yamlBytes, &root); err != nil {

@@ -13,13 +13,13 @@ func TestPrintSummary(t *testing.T) {
 
 	results := []*result{
 		{
-			name:     "registration/BuildAndRunMinimumSite",
+			name:     "smoke/BuildAndRunMinimumSite",
 			ran:      true,
 			passed:   true,
 			duration: 1230 * time.Millisecond,
 		},
 		{
-			name:     "registration/TwoMachineRegistration",
+			name:     "redundancy/FailoverAndFailback",
 			ran:      true,
 			passed:   false,
 			duration: 56950 * time.Millisecond,
@@ -42,8 +42,8 @@ func TestPrintSummary(t *testing.T) {
 	printSummary(&buf, results)
 
 	expected := "--- scenarios summary ---\n" +
-		"PASS  registration/BuildAndRunMinimumSite (1s)\n" +
-		"FAIL  registration/TwoMachineRegistration (57s)\n" +
+		"PASS  smoke/BuildAndRunMinimumSite (1s)\n" +
+		"FAIL  redundancy/FailoverAndFailback (57s)\n" +
 		"SKIP  standby/WarmStandby (0s)\n"
 
 	require.Equal(t, expected, buf.String())
@@ -54,10 +54,10 @@ func TestPrintStartSummary(t *testing.T) {
 
 	allSets := []Set{
 		{
-			Package: "registration",
+			Package: "smoke",
 			Scenarios: []Scenario{
 				{Name: "BuildAndRunMinimumSite"},
-				{Name: "TwoMachineRegistration"},
+				{Name: "BuildAndRunSingleMachine"},
 			},
 		},
 		{
@@ -70,10 +70,10 @@ func TestPrintStartSummary(t *testing.T) {
 
 	selectedSets := []Set{
 		{
-			Package: "registration",
+			Package: "smoke",
 			Scenarios: []Scenario{
 				{Name: "BuildAndRunMinimumSite"},
-				{Name: "TwoMachineRegistration"},
+				{Name: "BuildAndRunSingleMachine"},
 			},
 		},
 	}
@@ -82,8 +82,8 @@ func TestPrintStartSummary(t *testing.T) {
 	printStartSummary(&buf, allSets, selectedSets)
 
 	expected := "--- scenarios to run ---\n" +
-		"RUN   registration/BuildAndRunMinimumSite\n" +
-		"RUN   registration/TwoMachineRegistration\n" +
+		"RUN   smoke/BuildAndRunMinimumSite\n" +
+		"RUN   smoke/BuildAndRunSingleMachine\n" +
 		"SKIP  resilience/TwoMachineEventFabric\n"
 
 	require.Equal(t, expected, buf.String())

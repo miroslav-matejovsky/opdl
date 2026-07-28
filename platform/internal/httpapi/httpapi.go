@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -9,7 +8,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 )
 
 // ServingMode states what surface this instance's handler serves.
@@ -23,21 +21,21 @@ const (
 	ModePassive ServingMode = "passive"
 )
 
-// NewHandler wires the registration services into the platform's huma API and
-// returns the http.Handler the runtime serves. The command service publishes
-// proposals; the query service answers from this node's projection. The caller
-// owns the server lifecycle.
+// NewHandler builds the platform's huma API and returns the http.Handler the
+// runtime serves for an Active instance with a site journal. The caller owns
+// the server lifecycle.
 //
-// The split is the asynchronous contract made structural. A POST reaches only
-// the journal and learns nothing about the outcome; a GET reaches only the local
-// projection and never waits on the journal. Nothing here can decide a
-// registration, which is why nothing here can answer a conflict immediately.
+// It carries no domain services: the platform has none since registration was
+// removed, so it serves health and identity only, exactly like
+// NewJournallessHandler. It stays a separate constructor because the journal's
+// presence is what site composition depends on, not on what the HTTP surface
+// currently does with it.
 //
 // When exposeSpec is true, huma's generated /openapi, /docs, and /schemas
 // endpoints are served alongside the operations; otherwise only the operations
 // are, and the authoritative specification is the checked-in
 // api-specifications/openapi.yaml.
-func NewHandler(commands *registration.CommandService, queries *registration.QueryService, instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, exposeSpec bool) http.Handler {
+func NewHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, exposeSpec bool) http.Handler {
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	if !exposeSpec {
@@ -47,16 +45,6 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 	}
 	handlers := api.NewHealth(instance, started, leaseView)
 	handlers.Instance = instance
-	handlers.Create = func(ctx context.Context, req api.RegistrationRequest) (api.ProposalAccepted, error) {
-		receipt, err := commands.Create(ctx, req)
-		if err != nil {
-			return api.ProposalAccepted{}, err
-		}
-		return api.ProposalAccepted{ProposalID: receipt.ProposalID}, nil
-	}
-	handlers.List = queries.List
-	handlers.Get = queries.Get
-	handlers.Conflicts = queries.Conflicts
 	api.Register(humago.New(mux, cfg), handlers)
 	return mux
 }
@@ -76,7 +64,7 @@ func NewHandler(commands *registration.CommandService, queries *registration.Que
 // answer 404, which says the operation does not exist rather than that it is not
 // served here.
 //
-// It takes no registration services because there are none to take. A Passive
+// It takes no domain services because there are none to take. A Passive
 // instance's projection is opened for catch-up so it can take over quickly, and
 // it is never wired to a listener.
 func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView) http.Handler {

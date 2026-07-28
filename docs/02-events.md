@@ -13,7 +13,6 @@ and lower-level storage are implemented. Site distribution is not.
 | Machine event store | Implemented as append-only JSONL |
 | Site delivery contract | Defined in `platform/internal/site/eventfabric` |
 | Site distribution and durable consumer positions | Not implemented |
-| Registration event publication and handling | Not implemented |
 
 The runtime opens the instance and machine files before ownership management.
 `app.hasEventStorage` is still hardcoded `false`, so the site path is
@@ -94,7 +93,6 @@ Operators, scenarios, and external tooling may read them.
 | `internal/app` | instance |
 | `internal/machine/redundancy` lease-open, waiting, declined-promotion, and renewal-attempt facts | instance |
 | `internal/machine/redundancy` ownership, failback, and activation transitions | machine |
-| `internal/site/registration` | site |
 
 Every fact still appears in the event log of the process that stated it.
 Machine-scoped facts also give the machine one continuous ownership account
@@ -102,8 +100,8 @@ across primary and standby processes.
 
 ## Site Event Fabric contract
 
-`internal/site/eventfabric` currently defines only the read-side contract needed
-by registration:
+`internal/site/eventfabric` currently defines only the read-side contract a
+site-scoped consumer needs:
 
 - `Delivery` pairs an envelope with the site's sequence;
 - `Consumer.Follow` replays unacknowledged deliveries and then follows live;
@@ -116,14 +114,6 @@ the scoped backend flow, accept only site-scoped envelopes, assign site order,
 and implement durable consumption.
 
 The remaining design decision is how multiple machines share one durable order.
-The implementation must preserve registration's conflict rule or deliberately
-replace that rule with a convergent one. See the
-[hierarchy plan](plans/hierarchy/README.md).
-
-## Registration dependency
-
-Registration already declares site-scoped payloads and folds
-`eventfabric.Delivery` values into a deterministic projection. Its command,
-handler, and runtime composition are still stubs. Until site distribution lands,
-the public registration API remains unavailable. See
-[Registration](04-registration.md).
+A dynamic, event-sourced unit-registration protocol previously lived at this
+level; it has been removed in favor of a static Site → Machine → Instance
+approach. See the [hierarchy plan](plans/hierarchy/README.md).

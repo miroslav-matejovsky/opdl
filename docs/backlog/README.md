@@ -6,6 +6,4 @@ Nothing here blocks the current POC.
 
 ## Index
 
-| Subsystem | Items |
-| --- | --- |
-| [API contract](api-contract.md) | Closed value sets (`status`, `role`) are described as free strings |
+Empty for now.

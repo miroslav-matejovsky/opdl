@@ -21,9 +21,8 @@ import (
 // binary under test is the one the builder produced a moment earlier.
 //
 // A deployment with no journal serves no domain operation, and the scenario
-// checks that too. It is the other half of the same contract: the instance is
-// Active and healthy, and it refuses registrations because there is nowhere to
-// journal them, not because anything is wrong with it.
+// checks that too: the instance is Active and healthy, and it says so in its own
+// log, not because anything is wrong with it.
 func BuildAndRunSingleMachine(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -52,16 +51,6 @@ func BuildAndRunSingleMachine(t *testing.T) {
 	require.Equal(t, node.Sockets.API, instance.Address,
 		"the instance answers at the address the builder resolved from its authored local_port")
 	require.Empty(t, instance.PeerAddress, "a machine with one instance has no peer to name")
-
-	// A deployment with no journal refuses every domain operation, and says which
-	// of the two reasons it is: this one is about the deployment, not about an
-	// instance that is passive and would point at the one holding ownership.
-	refusal, code := harness.GetProblem(ctx, t, node, "/registrations")
-	require.Equal(t, http.StatusServiceUnavailable, code,
-		"there is no journal to take a registration, and no projection to answer from")
-	require.Equal(t, "no_event_storage", refusal.Title)
-	require.Equal(t, harness.InstanceStateActive, refusal.Instance.State,
-		"the instance refusing is the one that owns the machine, and it is healthy")
 
 	// The machine reported the configuration it booted with, naming every local
 	// file it was authored with rather than a root it composes paths under.

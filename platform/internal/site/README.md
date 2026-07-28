@@ -8,7 +8,6 @@ across those machines.
 | Package | Responsibility | Current state |
 | --- | --- | --- |
 | `eventfabric` | Ordered site delivery and durable-consumer contract. | Contract and tests only |
-| `registration` | Registration events, projection, commands, queries, and handler. | Projection implemented; command and handler are stubs |
 
 ## Event Fabric
 
@@ -22,17 +21,6 @@ second event or publisher model. A concrete site adapter must accept only
 site-scoped envelopes, assign the site order, and implement durable consumption.
 No adapter exists yet.
 
-## Registration
-
-Registration declares four site-scoped facts: proposed, confirmed, rejected,
-and accepted. The projection folds ordered deliveries and uses deterministic
-proposal and decision identities. The first proposal for a unit key by site
-sequence owns that key.
-
-`CommandService.Create`, `NewHandler`, and runtime site composition are not
-implemented. `app.topology` currently returns only the local machine. The public
-registration API therefore returns `503`.
-
-The target protocol is documented in
-[Registration](../../../docs/04-registration.md). Remaining work is in the
-[hierarchy plan](../../../docs/plans/hierarchy/README.md).
+Dynamic unit registration previously lived at this level and has been removed;
+unit membership is moving to the static Site → Machine → Instance approach
+described in the [hierarchy plan](../../../docs/plans/hierarchy/README.md).

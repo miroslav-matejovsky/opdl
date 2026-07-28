@@ -18,43 +18,19 @@ sdk-dotnet/
     Opdl.Sdk.csproj                 library project (references Microsoft.Kiota.Bundle)
     Client/                         Kiota output (generated; do not edit by hand)
       PlatformClient.cs             API client entry point
-      Models/Registration*.cs      request and response models
-      Registrations/               registration request builders
+      Health/, Instance/            request builders for the current operations
       kiota-lock.json               generation manifest (contract hash, Kiota version)
   tests/Opdl.Sdk.E2E/
     Opdl.Sdk.E2E.csproj             end-to-end tests (references the SDK)
-    RegistrationTests.cs            drives registrations through the SDK
 ```
 
 ## End-to-end tests
 
-`tests/Opdl.Sdk.E2E` exercises the SDK against a real, running two-machine site.
-It is driven by the `scenarios` module (`scenarios/dotnet_sdk_e2e_test.go`), which
-builds both machines from a blueprint with the builder, starts them, and runs
-these tests against them: the full loop from build tool to running site to
-generated client. That scenario runs as part of `task all` (in the `task
-scenarios` pass).
-
-The tests read their environment from the scenario and skip when it is unset, so
-they are harmless to run standalone:
-
-| Variable | Meaning |
-| --- | --- |
-| `OPDL_PLATFORM_BASEURL_A` | node A's API, where the registration is requested |
-| `OPDL_PLATFORM_BASEURL_B` | node B's API, the machine the site waits for |
-| `OPDL_CONTROL_DIR` | directory for the handshake described below |
-
-What they prove is the acceptance barrier, from a consumer's seat. Node B is
-deliberately **not running** for the first half of the test: a request node A
-takes must stay `pending`, and must name node B as the machine it is waiting for.
-Only once the test has asserted that does it write a `pending-observed` file into
-the control directory; the Go harness is watching for that file and starts node B
-when it appears, and the test then polls node A until the site accepts.
-
-The handshake is a file rather than a delay because the fact being waited for is
-another process finishing an assertion, and no sleep expresses that. It is also
-what makes the pending half meaningful: if the marker is never written, node B
-never starts and the test fails rather than quietly passing.
+`tests/Opdl.Sdk.E2E` is meant to exercise the SDK against a real, running site, the
+way `scenarios/dotnet_sdk_e2e_test.go` would drive it once that harness exists. The
+platform has no domain operation right now beyond health and instance identity, so
+there is nothing here yet; it is where the tests for the static site/machine/instance
+approach land once that surface exists.
 
 ## Regenerating the client
 
@@ -88,18 +64,12 @@ or, from the repository root, `task sdk-dotnet`. This also runs the SDK tests.
 ## Usage
 
 The platform listens on a deployment-specific address, so the base URL is set on
-the request adapter rather than baked into the contract. Registration endpoints
-need no authentication.
-
-The API has four operations, and this is all of them.
-
-### Requesting a registration
+the request adapter rather than baked into the contract.
 
 ```csharp
 using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Http.HttpClientLibrary;
 using Opdl.Sdk.Client;
-using Opdl.Sdk.Client.Models;
 
 var adapter = new HttpClientRequestAdapter(new AnonymousAuthenticationProvider())
 {
@@ -108,82 +78,21 @@ var adapter = new HttpClientRequestAdapter(new AnonymousAuthenticationProvider()
 
 var client = new PlatformClient(adapter);
 
-// PostAsync returns nothing at all. The platform answered 202: it took the
-// request. That is not the same as registering the unit, and the contract gives
-// you nothing to mistake for a registration.
-await client.Registrations.PostAsync(new RegistrationRequest
-{
-    UnitType = 7,
-    UnitId = 42,
-    UnitTypeNameAdvertised = "Billing",
-    Role = "Master",   // optional; omit it and the platform advertises none
-});
+var instance = await client.Instance.GetAsync();
+// instance.Role, instance.State, instance.Address, instance.PeerAddress
+
+var health = await client.Health.GetAsync();
+// health.Status, health.RuntimeState, ...
 ```
 
-### Confirming it, by polling the machine you asked
-
-A request is accepted only once **every** platform instance in the site has
-accepted it, so it stays `pending` while any of them is unavailable, for as long
-as that takes. Polling the origin is the only confirmation mechanism; nothing is
-pushed.
-
-```csharp
-Registration? status;
-do
-{
-    status = await client.Registrations[7][42].Status.GetAsync();
-    // status.Status is "pending", "accepted", or "rejected".
-    // status.PlatformInstances says which machines have answered and how, so a
-    // pending request tells you which machine it is still waiting for.
-}
-while (status?.Status == "pending");
-```
-
-Ask the machine you posted to. Every machine of the site holds the registration,
-but only the origin answers its status; anywhere else this throws `Error` with
-`ResponseStatusCode` 404.
-
-### Listing what the site holds
-
-```csharp
-// Answers on any machine of the site, and lists pending, accepted, and rejected
-// requests alike.
-var registrations = await client.Registrations.GetAsync();
-```
-
-### Inspecting resolved conflicts
-
-```csharp
-var conflicts = await client.Registrations.Conflicts.GetAsync();
-foreach (var conflict in conflicts ?? [])
-{
-    // conflict.Winner survives. Each entry in conflict.Losers is rejected with
-    // reason "registration_key_conflict".
-    Console.WriteLine($"{conflict.UnitType}/{conflict.UnitId}: {conflict.Winner?.Machine}");
-}
-```
-
-This is a domain query, not a process-health signal. The result is empty when
-there are no duplicate proposals. It has no acknowledgement, filtering,
-pagination, or push delivery in this phase.
+The API has no domain operation yet: it reports instance identity and health
+only. A prior version of this contract had a dynamic unit-registration protocol
+(`Registrations`); it was removed in favor of a static site/machine/instance
+approach, which will bring its own client surface and its own SDK usage examples
+when it lands.
 
 ### Errors
 
-Failures arrive as the generated `Error`, which is an exception carrying the
-platform's machine-readable `Code` and the HTTP status:
-
-```csharp
-try
-{
-    await client.Registrations.PostAsync(request);
-}
-catch (Error e) when (e.ResponseStatusCode == 409)
-{
-    // e.Code is "registration_key_conflict": the key is held by a different
-    // claim. Registration is create-only, so this never overwrites anything.
-}
-```
-
-Status and list return the same generated `Registration` model. The platform
-supplies `machine`, `ip`, `status`, and `platform_instances`; clients only set the
-fields on `RegistrationRequest`. Pass a `CancellationToken` to every call.
+Failures arrive as the generated `ErrorModel`, which is an exception carrying the
+platform's machine-readable `Code` and the HTTP status. Pass a `CancellationToken`
+to every call.

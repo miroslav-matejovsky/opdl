@@ -20,7 +20,6 @@ import (
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/eventlog"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/state"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/redundancy"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
@@ -137,23 +136,6 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 		// have written rather than opening a file nothing reads.
 		log: slog.New(slog.DiscardHandler),
 	}, nil
-}
-
-// TestTopologyExpectsEverySiteMachineIncludingItself checks the trusted
-// registration topology is the descriptor's static membership. Acceptance needs
-// every expected machine, so the set must never be "who is reachable".
-func TestTopologyExpectsEverySiteMachineIncludingItself(t *testing.T) {
-	self, expected := topology(config.Descriptor{
-		Site: "north", Machine: "node-a", IP: "10.0.1.10",
-	})
-	require.Equal(t, registration.Location{Machine: "node-a", IP: "10.0.1.10"}, self)
-	require.Equal(t, []registration.Location{
-		{Machine: "node-a", IP: "10.0.1.10"},
-	}, expected)
-
-	self, expected = topology(testDescriptor)
-	require.Equal(t, []registration.Location{self}, expected,
-		"a one-machine site expects only itself")
 }
 
 // TestResolveRole checks role selection against the warm-standby policy.

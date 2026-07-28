@@ -2,25 +2,16 @@ package httpapi_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"slices"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/miroslav-matejovsky/opdl/platform/api"
-	"github.com/miroslav-matejovsky/opdl/platform/config"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/httpapi"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/site/eventfabric"
-	"github.com/miroslav-matejovsky/opdl/platform/internal/site/registration"
 )
 
 // problemDetails is the subset of huma's RFC 9457 error body these tests read.
@@ -56,31 +47,13 @@ func testPassiveInstance() api.Instance {
 	}
 }
 
-// TestHandlerRefusesRegistrationCreationWithNotImplemented checks that POST /registrations
-// returns 501 Not Implemented as eventfabric has been removed.
-func TestHandlerRefusesRegistrationCreationWithNotImplemented(t *testing.T) {
-	site := newSite(t, "node-a")
-	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
-	defer srv.Close()
-
-	response := do(t, http.MethodPost, srv.URL+"/registrations",
-		[]byte(`{"unit_type": 7, "unit_id": 42, "unit_type_name_advertised": "Billing"}`), "application/json")
-	defer func() { _ = response.Body.Close() }()
-
-	require.Equal(t, http.StatusNotImplemented, response.StatusCode)
-}
-
 // TestHandlerServesHealthEndpoints checks that both an Active and a Passive
 // instance answer every health endpoint, and that each answer reports the
 // instance's own live identity rather than a fabricated one: the Active instance
 // owns its lease, the Passive instance does not, and neither invents a lease
 // expiration the runtime has no lease subsystem to give.
 func TestHandlerServesHealthEndpoints(t *testing.T) {
-	site := newSite(t, "node-a")
-	nodeA := site.start("node-a")
-
-	activeSrv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
+	activeSrv := httptest.NewServer(httpapi.NewHandler(testInstance, time.Now(), nil, false))
 	defer activeSrv.Close()
 
 	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
@@ -131,176 +104,6 @@ func decodeGet(t *testing.T, url string, target any) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(target))
 }
 
-func TestHandlerReturnsMethodErrors(t *testing.T) {
-	site := newSite(t, "node-a")
-	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
-	defer srv.Close()
-
-	// Routing is Go 1.22 ServeMux under huma. It answers a wrong method with 405
-	// and an Allow header, and adds HEAD for any route that serves GET.
-	response := do(t, http.MethodDelete, srv.URL+"/registrations", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
-	require.Equal(t, "GET, HEAD, POST", response.Header.Get("Allow"))
-
-	response = do(t, http.MethodPost, srv.URL+"/registrations/some-proposal", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
-	require.Equal(t, "GET, HEAD", response.Header.Get("Allow"))
-
-	response = do(t, http.MethodPost, srv.URL+"/registrations/conflicts", nil, "")
-	defer func() { _ = response.Body.Close() }()
-	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
-	require.Equal(t, "GET, HEAD", response.Header.Get("Allow"))
-}
-
-func TestHandlerReturnsNotFoundForUnknownOrInvalidStatusPath(t *testing.T) {
-	site := newSite(t, "node-a")
-	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
-	defer srv.Close()
-
-	for _, path := range []string{
-		"/registrations/deadbeef",
-		"/registrations/",
-		"/registrations/7/42/status",
-		"/",
-	} {
-		response := do(t, http.MethodGet, srv.URL+path, nil, "")
-		require.Equal(t, http.StatusNotFound, response.StatusCode, path)
-		require.NoError(t, response.Body.Close())
-	}
-}
-
-// site is the handler tests' deployment: the machines of one site, publishing
-// into one in-process journal and folding it into their own projections.
-//
-// The journal is the Event Fabric's contract without a transport. That is all an
-// HTTP test needs: what this file checks is the boundary's own behavior, and the
-// domain's and the transport's are their own packages' to prove.
-type site struct {
-	t        *testing.T
-	journal  *journal
-	machines []registration.Location
-}
-
-// journal is an ordered, in-process site journal. It stamps each published event
-// with the node that stated it, gives it the next sequence, and folds it into
-// every node's projection, which is what the real fabric does once the journal
-// has accepted a write.
-type journal struct {
-	t *testing.T
-
-	mu       sync.Mutex
-	sequence uint64
-	records  []eventfabric.Delivery
-	nodes    []*node
-	failure  error
-}
-
-// node is one machine's registration composition: what it publishes through,
-// what it folds into, and what its HTTP boundary is handed.
-type node struct {
-	machine    string
-	projection *registration.Projection
-	handler    *registration.Handler
-	commands   *registration.CommandService
-	queries    *registration.QueryService
-}
-
-// publisherFor is one node's narrow publishing capability: its own envelope
-// factory, stamping its trusted identity onto everything it states, over the
-// shared journal.
-func publisherFor(t *testing.T, j *journal, machine string) events.Publisher {
-	t.Helper()
-	factory, err := events.NewFactory(config.Descriptor{
-		Platform: "opdl", Project: "test", Environment: "development", Site: "local",
-		Machine: machine, MachineProfile: "all-in-one",
-	}, "primary")
-	require.NoError(t, err)
-	pub, err := storage.NewPublisher(factory, j)
-	require.NoError(t, err)
-	return pub
-}
-
-// newSite declares a site of machines and starts none of them. Machine i is at
-// 127.0.0.(i+1).
-func newSite(t *testing.T, machines ...string) *site {
-	t.Helper()
-	s := &site{
-		t:       t,
-		journal: &journal{t: t},
-	}
-	for i, machine := range machines {
-		s.machines = append(s.machines, registration.Location{
-			Machine: machine,
-			IP:      fmt.Sprintf("127.0.0.%d", i+1),
-		})
-	}
-	return s
-}
-
-// start brings one expected machine up and returns its composition. It replays
-// the journal into the new node's projection first, as a node joining a running
-// site does before it serves.
-//
-//nolint:unparam // machine parameter kept for clarity when identifying site node
-func (s *site) start(machine string) *node {
-	s.t.Helper()
-	expected := s.machines
-	var self registration.Location
-	for _, loc := range s.machines {
-		if loc.Machine == machine {
-			self = loc
-		}
-	}
-	require.NotEmpty(s.t, self.Machine, "%s is not a machine of this site", machine)
-
-	n := &node{machine: self.Machine, projection: registration.NewProjection()}
-	pub := publisherFor(s.t, s.journal, self.Machine)
-
-	commands, queries, err := registration.Open(pub, n.projection, self, expected)
-	require.NoError(s.t, err)
-	handler, _ := registration.NewHandler(pub, n.projection, self, expected)
-	n.commands, n.queries, n.handler = commands, queries, handler
-
-	s.journal.attach(s.t.Context(), n)
-	return n
-}
-
-// attach registers a node and replays the journal into its projection.
-func (j *journal) attach(ctx context.Context, n *node) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	for _, delivery := range j.records {
-		require.NoError(j.t, n.projection.Apply(ctx, delivery))
-	}
-	j.nodes = append(j.nodes, n)
-}
-
-// Store orders one already stamped envelope and folds it into every node's projection.
-func (j *journal) Store(ctx context.Context, envelope events.Envelope) error {
-	j.mu.Lock()
-	if j.failure != nil {
-		defer j.mu.Unlock()
-		return j.failure
-	}
-	require.NoError(j.t, envelope.Validate(), "the journal only stores complete envelopes")
-	j.sequence++
-	delivery := eventfabric.Delivery{Envelope: envelope, Sequence: j.sequence}
-	j.records = append(j.records, delivery)
-	nodes := slices.Clone(j.nodes)
-	j.mu.Unlock()
-
-	for _, n := range nodes {
-		require.NoError(j.t, n.projection.Apply(ctx, delivery))
-	}
-	return nil
-}
-
-func (j *journal) Close(_ context.Context) error { return nil }
-
 func do(t *testing.T, method, url string, body []byte, contentType string) *http.Response {
 	t.Helper()
 	request, err := http.NewRequestWithContext(t.Context(), method, url, bytes.NewReader(body))
@@ -335,45 +138,6 @@ func TestPassiveHandlerAnswersForItself(t *testing.T) {
 	require.Equal(t, "127.0.0.1:8080", instance.PeerAddress, "and where to go instead")
 }
 
-// TestPassiveHandlerRefusesEveryDomainOperation is the ownership rule made
-// visible at the API.
-//
-// A Passive instance holds no ownership and its projection is not authoritative,
-// so answering a domain query from it would make the rule meaningless. It says so
-// with a 503 that names the instance holding ownership, which is a pointer the
-// caller can follow rather than a dead end.
-func TestPassiveHandlerRefusesEveryDomainOperation(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
-	defer srv.Close()
-
-	requests := []struct {
-		method string
-		path   string
-	}{
-		{http.MethodPost, "/registrations"},
-		{http.MethodGet, "/registrations"},
-		{http.MethodGet, "/registrations/conflicts"},
-		{http.MethodGet, "/registrations/some-proposal"},
-	}
-	for _, request := range requests {
-		t.Run(request.method+" "+request.path, func(t *testing.T) {
-			response := do(t, request.method, srv.URL+request.path, []byte(`{}`), "application/json")
-			defer func() { _ = response.Body.Close() }()
-
-			require.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
-			require.Equal(t, "application/problem+json", response.Header.Get("Content-Type"),
-				"a Passive refusal parses as the same error shape an Active instance produces")
-
-			var problem problemDetails
-			require.NoError(t, json.NewDecoder(response.Body).Decode(&problem))
-			require.Equal(t, "instance_passive", problem.Title)
-			require.Contains(t, problem.Detail, "127.0.0.1:8080", "the refusal names where to go instead")
-			require.NotNil(t, problem.Instance, "and which instance refused")
-			require.Equal(t, api.InstanceStatePassive, problem.Instance.State)
-		})
-	}
-}
-
 // TestPassiveHandlerStillReportsUnknownPathsAsNotFound checks the refusal is
 // scoped to the operations that exist.
 //
@@ -389,10 +153,12 @@ func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, response.StatusCode)
 }
 
-// TestPassiveHandlerServingModeMatrix tests every method × path combination for ModePassive.
-// It proves Passive serves exactly GET/HEAD on health and instance endpoints (200),
-// reports 404 for GET/HEAD on unknown paths, and refuses all domain operations and all
-// non-GET/HEAD write requests (including unregistered future-style paths) with 503.
+// TestPassiveHandlerServingModeMatrix tests every method × path combination for
+// ModePassive. It proves Passive serves exactly GET/HEAD on health and instance
+// endpoints (200), reports 404 for GET/HEAD on any other path since the platform
+// has no domain operation, and refuses every non-GET/HEAD write request with 503
+// regardless of path: the structural guard does not need a path to exist to
+// refuse writing to it.
 func TestPassiveHandlerServingModeMatrix(t *testing.T) {
 	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil))
 	defer srv.Close()
@@ -412,11 +178,7 @@ func TestPassiveHandlerServingModeMatrix(t *testing.T) {
 		"/health/ready",
 		"/health/ha",
 		"/instance",
-		"/registrations",
-		"/registrations/conflicts",
-		"/registrations/some-proposal",
 		"/no-such-operation",
-		"/registrations/v2/future-feature",
 	}
 
 	for _, method := range methods {
@@ -427,14 +189,13 @@ func TestPassiveHandlerServingModeMatrix(t *testing.T) {
 
 				isHealthOrInstance := path == "/instance" || path == "/health" ||
 					path == "/health/live" || path == "/health/ready" || path == "/health/ha"
-				isUnknownPath := path == "/no-such-operation" || path == "/registrations/v2/future-feature"
 
 				if (method == http.MethodGet || method == http.MethodHead) && isHealthOrInstance {
 					require.Equal(t, http.StatusOK, resp.StatusCode)
 					return
 				}
 
-				if (method == http.MethodGet || method == http.MethodHead) && isUnknownPath {
+				if (method == http.MethodGet || method == http.MethodHead) && !isHealthOrInstance {
 					require.Equal(t, http.StatusNotFound, resp.StatusCode)
 					return
 				}
@@ -465,16 +226,10 @@ func testJournallessInstance() api.Instance {
 	}
 }
 
-// TestJournallessHandlerIsActiveAndStillRefusesDomainOperations is the
-// no-event-storage deployment made visible at the API.
-//
-// The two halves are the whole contract. The instance reports itself active
-// because it is: it holds Primary Ownership and there is nothing wrong with it.
-// It still refuses every domain operation, because each one is a fact to be
-// journalled or a query answered from a projection of one, and this deployment
-// has no journal. The refusal names the deployment rather than an instance to go
-// to instead, since there is no such instance and retrying will not help.
-func TestJournallessHandlerIsActiveAndStillRefusesDomainOperations(t *testing.T) {
+// TestJournallessHandlerIsActive checks the no-event-storage deployment still
+// reports itself active and healthy: it holds Primary Ownership and there is
+// nothing wrong with it, even though it has no domain operation to serve.
+func TestJournallessHandlerIsActive(t *testing.T) {
 	srv := httptest.NewServer(httpapi.NewJournallessHandler(testJournallessInstance, time.Now(), nil))
 	defer srv.Close()
 
@@ -487,33 +242,6 @@ func TestJournallessHandlerIsActiveAndStillRefusesDomainOperations(t *testing.T)
 	require.Equal(t, api.InstanceStateActive, instance.State,
 		"an instance with no journal is not passive; it owns the machine and serves what it can")
 	require.Empty(t, instance.PeerAddress)
-
-	for _, request := range []struct {
-		method string
-		path   string
-	}{
-		{http.MethodPost, "/registrations"},
-		{http.MethodGet, "/registrations"},
-		{http.MethodGet, "/registrations/conflicts"},
-		{http.MethodGet, "/registrations/some-proposal"},
-	} {
-		t.Run(request.method+" "+request.path, func(t *testing.T) {
-			response := do(t, request.method, srv.URL+request.path, []byte(`{}`), "application/json")
-			defer func() { _ = response.Body.Close() }()
-
-			require.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
-			require.Equal(t, "application/problem+json", response.Header.Get("Content-Type"))
-
-			var problem problemDetails
-			require.NoError(t, json.NewDecoder(response.Body).Decode(&problem))
-			require.Equal(t, "no_event_storage", problem.Title,
-				"the reason is the deployment's, not this instance's state")
-			require.Contains(t, problem.Detail, "event_storage",
-				"and it names what to author to get a journal")
-			require.NotNil(t, problem.Instance)
-			require.Equal(t, api.InstanceStateActive, problem.Instance.State)
-		})
-	}
 }
 
 // TestJournallessHandlerStillReportsUnknownPathsAsNotFound checks the refusal is
@@ -531,9 +259,7 @@ func TestJournallessHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 // the identity operation on one path with one shape, so an operator asks the same
 // question of either and the specification describes one endpoint.
 func TestActiveHandlerAnswersTheSameInstanceOperation(t *testing.T) {
-	site := newSite(t, "node-a")
-	nodeA := site.start("node-a")
-	srv := httptest.NewServer(httpapi.NewHandler(nodeA.commands, nodeA.queries, testInstance, time.Now(), nil, false))
+	srv := httptest.NewServer(httpapi.NewHandler(testInstance, time.Now(), nil, false))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
