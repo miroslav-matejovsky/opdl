@@ -55,6 +55,15 @@
 // without the process exiting, so a Passive instance keeps answering its health
 // endpoints.
 //
+// A handover leaves a window worth naming. A released grant still records the
+// instance that gave it up, so until the peer claims it the lease file describes
+// a grant that is promotable to its own former owner, gated only by a health
+// probe against a peer that is at that moment activating. For one lease duration
+// after releasing, an instance leaves its own released grant alone rather than
+// weighing that probe, and states "handover in progress" if it is asked. See
+// reasonHandover in ownership.go for what the window costs and why it reuses the
+// lease duration rather than adding a timing of its own.
+//
 // # Per-instance endpoints and transfer ordering
 //
 // Each instance owns its own endpoints. Every address either of them binds is

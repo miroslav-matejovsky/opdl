@@ -18,6 +18,36 @@ import (
 // has returned, so an instance's active resources are opened only after its
 // passive ones have closed and only while it holds the lease.
 
+// The bounded reasons a Passive instance declines a promotion it could have
+// taken. They are what PromotionDeclined carries, so an operator reading one
+// instance's record can tell why the machine did not change hands.
+const (
+	// reasonPeerHealthy is a promotable grant left alone because the other
+	// instance still answers: a slow owner is not failed over.
+	reasonPeerHealthy = "peer is healthy"
+	// reasonHandover is this instance's own released grant, still inside the
+	// handover window.
+	//
+	// An instance that hands ownership over writes a released grant that still
+	// names itself, so until the peer notices and claims it, the lease file
+	// describes a grant that is promotable to its own former owner. The only
+	// thing between that instance and taking straight back what it just gave
+	// away is one health probe against a peer that is, right then, in the middle
+	// of activating — and a probe that misses because a connection was refused,
+	// a keep-alive was dropped, or a loopback GET outran its timeout on a loaded
+	// host is not evidence that the peer cannot serve.
+	//
+	// The window is the lease Duration, which is deliberately not a new timing
+	// knob. It costs nothing on every ordinary failback, where the peer claims
+	// the grant within a health check interval and this instance never reaches
+	// the window at all. It costs a bounded delay in the one case that matters,
+	// a peer that really did die between being handed ownership and taking it —
+	// and that delay is the same Duration the machine already waits before
+	// acting on any owner that stopped renewing, so its worst-case time without
+	// an Active instance is unchanged.
+	reasonHandover = "handover in progress"
+)
+
 // Acquisition is the outcome of one attempt to take Primary Ownership.
 type Acquisition struct {
 	// Held reports whether this process now holds Primary Ownership.
@@ -246,16 +276,22 @@ func waitWhilePassive(ctx context.Context, publisher events.Publisher, lease *Le
 //   - released by the other instance: an explicit handover — a graceful stop or
 //     an automatic failback — addressed to this instance. Promote at once; the
 //     peer's health is irrelevant because the owner said it was done.
-//   - released by this instance: this instance just handed ownership off and must
-//     not snatch it back; retake only if the peer cannot serve at all.
+//   - released by this instance, within the handover window: the peer has not
+//     had time to claim what it was just handed. Decline; see reasonHandover.
+//   - released by this instance, after it: the handover was not taken up.
+//     Retake only if the peer cannot serve at all.
 //   - lapsed, this instance's own grant: a step-down whose release did not land.
 //     Reclaim; nobody else's claim is being overridden.
 //   - lapsed, the other instance's grant: the owner stopped renewing. Promote
 //     only if the peer is also unhealthy, so a slow-but-serving owner is not
 //     failed over; a healthy owner reclaims its own lapsed grant by this same
 //     rule from its side.
+//
+// One now is read for the whole decision, so what is observed and what is
+// acquired are judged against the same instant.
 func evaluatePromotion(ctx context.Context, lease *Lease, deps Deps) (Acquisition, string, error) {
-	avail, owner, err := lease.observe(time.Now())
+	now := time.Now()
+	avail, owner, err := lease.observe(now)
 	if err != nil {
 		return Acquisition{}, "", err
 	}
@@ -264,26 +300,29 @@ func evaluatePromotion(ctx context.Context, lease *Lease, deps Deps) (Acquisitio
 	case leaseHeld:
 		return Acquisition{}, "", nil
 	case leaseAbsent:
-		acquired, err := lease.tryAcquire(time.Now())
+		acquired, err := lease.tryAcquire(now)
 		return acquired, "", err
 	case leaseReleased:
 		if owner != lease.Role() {
-			acquired, err := lease.tryAcquire(time.Now())
+			acquired, err := lease.tryAcquire(now)
 			return acquired, "", err
+		}
+		if now.Sub(lease.handedOverAt()) < lease.cfg.Duration {
+			return Acquisition{}, reasonHandover, nil
 		}
 	case leaseLapsed:
 		if owner == lease.Role() {
-			acquired, err := lease.tryAcquire(time.Now())
+			acquired, err := lease.tryAcquire(now)
 			return acquired, "", err
 		}
 	}
 
-	// A lease this instance released, or the other instance's lapsed grant: both
-	// promote only when the peer cannot serve.
+	// A lease this instance released and the peer never took, or the other
+	// instance's lapsed grant: both promote only when the peer cannot serve.
 	if deps.PeerHealthy != nil && deps.PeerHealthy(ctx) {
-		return Acquisition{}, "peer is healthy", nil
+		return Acquisition{}, reasonPeerHealthy, nil
 	}
-	acquired, err := lease.tryAcquire(time.Now())
+	acquired, err := lease.tryAcquire(now)
 	return acquired, "", err
 }
 
@@ -326,7 +365,7 @@ func activate(ctx context.Context, publisher events.Publisher, lease *Lease, dep
 	if failbackDone != nil {
 		<-failbackDone
 	}
-	releaseErr := lease.release()
+	releaseErr := lease.release(time.Now())
 
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {

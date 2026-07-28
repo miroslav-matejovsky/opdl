@@ -454,6 +454,18 @@ same compiled machine identity, so they remain one registration voter, and
 journal replication stays separate from service redundancy: replicas protect site
 history, the lease protects one machine's active capabilities.
 
+A released grant still names the instance that gave it up, so between the release
+and the peer's claim the lease file describes a grant that is promotable to its
+own former owner. For one lease duration after releasing, an instance therefore
+leaves its own released grant alone and states `handover in progress` rather than
+weighing the peer's health: a peer that has just been handed ownership is
+activating, and one missed loopback probe is not evidence that it cannot serve.
+Without that window a single dropped probe bounced ownership straight back, which
+cost two spurious transitions and an activation epoch on each instance. The
+window adds no timing knob and no delay to a handover that completes; when the
+peer really does die mid-handover, the reclaim waits the same lease duration the
+machine already waits on any owner that stopped renewing.
+
 The lease replaced a non-expiring Windows named mutex, which gave mutual
 exclusion by construction but could never fail over from an unresponsive-but-
 alive holder. Split-brain is kept out instead by three combined means: the two

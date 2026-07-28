@@ -37,6 +37,17 @@ type testMachine struct {
 
 	up     map[redundancy.InstanceRole]*atomic.Bool
 	active map[redundancy.InstanceRole]*atomic.Bool
+	// leftActiveAt is when an instance last stopped being Active, as Unix nanos,
+	// and zero until it has been. A test anchors a timed window to it so the
+	// window runs from the transition itself rather than from whenever something
+	// next happened to look.
+	leftActiveAt map[redundancy.InstanceRole]*atomic.Int64
+	// peerGate, when set for a role, filters what that role sees of its peer's
+	// health. It is how a test models a peer that is momentarily unreachable at a
+	// chosen instant, rather than one that is simply up or down for a stretch.
+	// Every entry is written before any instance starts, so the map is only read
+	// once instances are running.
+	peerGate map[redundancy.InstanceRole]func(healthy bool) bool
 }
 
 // newTestMachine returns a machine whose lease lives on a fresh temp file.
@@ -55,6 +66,10 @@ func newTestMachine(t *testing.T, stabilization time.Duration) *testMachine {
 		active: map[redundancy.InstanceRole]*atomic.Bool{
 			redundancy.RolePrimary: {}, redundancy.RoleStandby: {},
 		},
+		leftActiveAt: map[redundancy.InstanceRole]*atomic.Int64{
+			redundancy.RolePrimary: {}, redundancy.RoleStandby: {},
+		},
+		peerGate: map[redundancy.InstanceRole]func(bool) bool{},
 	}
 }
 
@@ -69,7 +84,14 @@ func otherRole(role redundancy.InstanceRole) redundancy.InstanceRole {
 // while the peer instance is running (or scripted to look so).
 func (m *testMachine) deps(role redundancy.InstanceRole) redundancy.Deps {
 	peer := m.up[otherRole(role)]
-	return redundancy.Deps{PeerHealthy: func(context.Context) bool { return peer.Load() }}
+	gate := m.peerGate[role]
+	return redundancy.Deps{PeerHealthy: func(context.Context) bool {
+		healthy := peer.Load()
+		if gate != nil {
+			healthy = gate(healthy)
+		}
+		return healthy
+	}}
 }
 
 // crashedPrimaryHoldsTheLease writes the aftermath of a crashed Active Primary:
@@ -136,10 +158,13 @@ func (m *testMachine) start(role redundancy.InstanceRole) *testInstance {
 
 	run := rt.runtime()
 	innerActive := run.Active
-	activeFlag := m.active[role]
+	activeFlag, leftActiveAt := m.active[role], m.leftActiveAt[role]
 	run.Active = func(ctx context.Context, kind redundancy.ActivationKind) error {
 		activeFlag.Store(true)
-		defer activeFlag.Store(false)
+		defer func() {
+			activeFlag.Store(false)
+			leftActiveAt.Store(time.Now().UnixNano())
+		}()
 		return innerActive(ctx, kind)
 	}
 
@@ -334,6 +359,77 @@ func TestMachineFailsBackOnceThePrimaryReturns(t *testing.T) {
 	for _, acquisition := range acquisitionsOf(t, primary) {
 		require.False(t, acquisition.Abandoned, "a failback is a handover, not a takeover from the dead")
 	}
+
+	assertClean()
+	standby.stop()
+	primary.stop()
+}
+
+// TestMachineDoesNotReclaimAHandoverWhenThePeerBlinks pins the handover window.
+//
+// Between the moment a failing-back Standby releases the grant and the moment
+// the returning Primary claims it, the lease file names the Standby and says
+// the Standby gave it up. That grant is promotable to its own former owner, and
+// the only thing standing between the Standby and taking straight back what it
+// just handed over is one health probe against a Primary that is, right then,
+// in the middle of activating.
+//
+// A probe that misses — a refused connection, a dropped keep-alive, a loopback
+// GET that outruns its timeout on a loaded host — must not be enough to bounce
+// ownership back. Losing that bet costs an activation epoch and a pair of
+// pointless transitions on both instances, which is exactly what the
+// FailoverAndFailback scenario catches intermittently when the machine is busy.
+func TestMachineDoesNotReclaimAHandoverWhenThePeerBlinks(t *testing.T) {
+	t.Parallel()
+
+	m := newTestMachine(t, 100*time.Millisecond)
+	m.crashedPrimaryHoldsTheLease()
+	assertClean := m.watchForSplitBrain()
+
+	// The Primary drops out for one blip beginning the instant the Standby stops
+	// being Active, which is the window the Standby decides the handover in. The
+	// blip is far shorter than the lease duration, so a handover window measured
+	// in lease durations rides it out.
+	// Several promotion ticks long, so the Standby certainly evaluates the grant
+	// while the peer looks gone, and still far short of the lease duration the
+	// handover window is measured in.
+	blipFor := 6 * m.cfg.HealthCheckInterval
+	m.peerGate[redundancy.RoleStandby] = func(healthy bool) bool {
+		leftActive := m.leftActiveAt[redundancy.RoleStandby].Load()
+		if leftActive == 0 || time.Since(time.Unix(0, leftActive)) >= blipFor {
+			return healthy
+		}
+		return false
+	}
+
+	standby := m.start(redundancy.RoleStandby)
+	require.Equal(t, redundancy.ActivationFailover, awaitActivation(t, standby))
+
+	// The Primary is back and steadily healthy, so the Standby hands ownership
+	// over and re-enters the passive state.
+	m.up[redundancy.RolePrimary].Store(true)
+	require.Eventually(t, func() bool {
+		steps := standby.runtime.recorded()
+		return len(steps) >= 5 && steps[4] == "passive start"
+	}, 5*time.Second, 5*time.Millisecond, "the standby never handed ownership back")
+
+	// Well past both the blip and the handover window: the Standby saw an
+	// unreachable peer holding a grant it had itself released and left it alone,
+	// and once the window closed the peer was answering again, so it still had no
+	// reason to take it.
+	time.Sleep(2 * m.cfg.Duration)
+	require.Len(t, acquisitionsOf(t, standby), 1,
+		"the standby took ownership once, for the failover; a missed probe is not a second one")
+	require.Equal(t, []string{"passive start", "passive stop", "active start", "active stop", "passive start"},
+		standby.runtime.recorded(), "the handover left the standby passive and kept it there")
+
+	// The grant was still there to be taken, so the handover the Standby started
+	// is the one that completes.
+	primary := m.start(redundancy.RolePrimary)
+	awaitActivation(t, primary)
+	acquisitions := acquisitionsOf(t, primary)
+	require.Len(t, acquisitions, 1)
+	require.False(t, acquisitions[0].Abandoned, "the standby handed this over; nothing was abandoned")
 
 	assertClean()
 	standby.stop()
