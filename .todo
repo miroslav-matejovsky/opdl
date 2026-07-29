@@ -6,7 +6,3 @@ Keep this file short; the structured backlog of lower-priority follow-ups lives 
 `docs/backlog/README.md`, confirmed bugs in `docs/bugs/README.md`, and the documentation overview in `docs/README.md`.
 
 - different approach might be "organization -> site -> group -> unit"
-- fence hardening not yet covered by scenarios: kill at every lifecycle state
-  including mid-activation and mid-release, a foreign process squatting the
-  ownership object name, and Global\ unavailable through missing privilege.
-- refactor app package and move lock under redundancy
