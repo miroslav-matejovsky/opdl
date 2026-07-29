@@ -1,5 +1,8 @@
 # Configuration and API
 
+Status: blueprint, descriptor, validation, and runtime construction are
+implemented. The public API and generated clients are the next delivery slice.
+
 ## Blueprint
 
 The existing service block is sufficient for the first HTTP implementation:
@@ -23,35 +26,32 @@ Do not add duplicate site inventory or observer lists to HCL. The builder can
 derive them from site machines, service blocks, Primary presence, and Standby
 presence.
 
-## Blueprint validation improvements
+## Blueprint validation
 
-Before resolution, tighten the HTTP path contract:
+Resolution now:
 
 - parse it as an HTTP request path;
 - require one leading slash;
 - reject schemes, hosts, fragments, control characters, and invalid escapes;
-- decide explicitly whether query strings are supported; and
+- allows an optional query string; and
 - keep authored casing and path bytes unchanged after validation.
 
-Recommendation: allow a path and optional query in the existing `path` field,
-but reject fragments and absolute URLs. Construct the request with `net/url`
-rather than string concatenation.
+Validation uses `net/url` and preserves the authored bytes.
 
-Revisit the blanket port-collision rule. A health endpoint is a target, not a
-listener owned by the platform. Two service identities may intentionally share
-one HTTP listener and use different paths. Keep collision checks against known
-platform listeners when the target binds the same machine IP, but make
-service-to-service duplicate port rejection an explicit product decision.
+Two service identities may share one HTTP listener when their paths differ.
+An exact duplicate port and path is rejected because it would make one
+endpoint answer for two identities. Collisions with platform listeners remain
+invalid.
 
 ## Deployment descriptor
 
-Replace the lossy `Services []string` contract with structured local service
-definitions in both:
+The lossy `Services []string` contract has been replaced by structured local
+service definitions in both:
 
 - `builder/deployment`
 - `platform/config`
 
-Recommended local structure:
+Implemented local structure:
 
 ```text
 Service {
@@ -68,7 +68,7 @@ Service {
 }
 ```
 
-Add a separate static site health inventory:
+The descriptor also contains a separate static site health inventory:
 
 ```text
 SiteService {
@@ -89,7 +89,7 @@ Do not copy remote health-check ports and paths into every machine descriptor.
 Only local instances need local probe details. Every instance needs remote
 identity, expected observers, and freshness policy to build a complete view.
 
-Descriptor validation must prove:
+Descriptor validation proves:
 
 - local service names are unique and nonempty;
 - roles and probe types are known;
@@ -101,14 +101,14 @@ Descriptor validation must prove:
 - `fresh_for` matches or safely bounds the derived policy; and
 - all required structured fields are present, not silently zero-valued.
 
-Update resolver tests, deployment tests, platform config tests, embedded
-descriptor fixtures, and descriptor conformance signatures together. This
-repository intentionally keeps independent builder and runtime contract types.
+Builder, platform, embedded descriptor, and descriptor conformance tests cover
+the contract. The package manifest intentionally retains service names only
+because installation does not consume probe policy.
 
 ## Runtime target construction
 
-`internal/app` should translate each local descriptor service into a machine
-package target:
+`internal/app` translates each local descriptor service into a machine package
+target:
 
 ```text
 http://<descriptor machine IP>:<service port><service path>
@@ -117,18 +117,25 @@ http://<descriptor machine IP>:<service port><service path>
 The machine package receives typed durations and a prevalidated URL. It does not
 parse deployment strings or import `platform/config`.
 
-The app adapter also supplies immutable observer identity:
+The app adapter supplies immutable observation identity:
 
 - project;
 - environment;
 - site;
-- machine and profile;
-- service and service role;
+- machine;
+- service;
 - fixed platform instance role;
-- process-start epoch; and
-- derived freshness duration.
+- durable instance epoch captured at process startup; and
+- a publisher-assigned sequence.
+
+Machine profile, service role, expected observers, and derived freshness stay
+in the static view inventory instead of being repeated on the wire.
 
 ## Public API
+
+The composed health subsystem deliberately has no otherwise-unused public view
+accessor yet. Add the accessor with this endpoint so dead-code validation keeps
+the API boundary honest.
 
 Add a non-domain endpoint:
 

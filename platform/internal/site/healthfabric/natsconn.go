@@ -44,7 +44,11 @@ func Connect(broker InProcessConnProvider, name string) (*NATSConn, error) {
 	}
 	// The empty URL is deliberate: InProcessServer takes the transport from the
 	// broker, so there is no address to dial.
-	conn, err := nats.Connect("", nats.InProcessServer(broker), nats.Name(name))
+	// This process applies its own stamped observation directly to its view.
+	// NoEcho prevents the same connection's subscription racing that local apply
+	// and turning normal self-delivery into a duplicate or a false local warning.
+	// Other connections, including the process beside this one, still receive it.
+	conn, err := nats.Connect("", nats.InProcessServer(broker), nats.Name(name), nats.NoEcho())
 	if err != nil {
 		return nil, fmt.Errorf("health fabric: connect %q to the embedded broker: %w", name, err)
 	}

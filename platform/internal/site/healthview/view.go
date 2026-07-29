@@ -78,6 +78,10 @@ func New(deployment Deployment, inventory []Unit, clock Clock) (*View, error) {
 		if _, listed := view.units[unit.UnitKey]; listed {
 			return nil, fmt.Errorf("health view: %s is in the inventory more than once", unit.UnitKey)
 		}
+		// The view owns the policy it reduces against. Keeping the caller's slice
+		// would let a later descriptor adapter mutation change expected observers
+		// underneath an already-running view.
+		unit.ObserverRoles = slices.Clone(unit.ObserverRoles)
 		view.order = append(view.order, unit.UnitKey)
 		view.units[unit.UnitKey] = &unitState{
 			unit:     unit,

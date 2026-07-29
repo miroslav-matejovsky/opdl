@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -12,8 +13,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/miroslav-matejovsky/opdl/platform/internal/instance/natsserver"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/site/healthfabric"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/site/healthview"
+	"github.com/miroslav-matejovsky/opdl/utils/testnet"
 )
 
 // These run against a fake connection rather than a broker. What this package
@@ -30,12 +33,14 @@ func discardLog() *slog.Logger { return slog.New(slog.DiscardHandler) }
 // fakeConn is a Conn a test drives: it records what was published, delivers
 // what the test injects, and can be made to fail.
 type fakeConn struct {
-	mu        sync.Mutex
-	published [][]byte
-	publishFn func(data []byte) error
-	handler   func(data []byte)
-	subErr    error
-	flushErr  error
+	mu           sync.Mutex
+	published    [][]byte
+	publishFn    func(data []byte) error
+	handler      func(data []byte)
+	subErr       error
+	flushErr     error
+	unsubErr     error
+	unsubscribed int
 	// sent is signaled after every accepted publication, so a test waits for the
 	// sender goroutine rather than polling it.
 	sent chan struct{}
@@ -69,7 +74,7 @@ func (c *fakeConn) Subscribe(_ string, handler func(data []byte)) (healthfabric.
 	c.mu.Lock()
 	c.handler = handler
 	c.mu.Unlock()
-	return fakeSubscription{}, nil
+	return &fakeSubscription{conn: c}, nil
 }
 
 func (c *fakeConn) Flush(context.Context) error { return c.flushErr }
@@ -106,9 +111,14 @@ func (c *fakeConn) failPublishes(err error) {
 	c.publishFn = func([]byte) error { return err }
 }
 
-type fakeSubscription struct{}
+type fakeSubscription struct{ conn *fakeConn }
 
-func (fakeSubscription) Unsubscribe() error { return nil }
+func (s *fakeSubscription) Unsubscribe() error {
+	s.conn.mu.Lock()
+	defer s.conn.mu.Unlock()
+	s.conn.unsubscribed++
+	return s.conn.unsubErr
+}
 
 func testIdentity() healthfabric.Identity {
 	return healthfabric.Identity{
@@ -162,7 +172,7 @@ func TestPublisherStampsIdentityAndOrdersWhatItSends(t *testing.T) {
 	require.Equal(t, "sensor", message["machine"], "a publisher reports only about its own machine")
 	require.Equal(t, "alarm-service", message["service"])
 	require.Equal(t, "primary", message["observer_role"])
-	require.Equal(t, float64(7), message["epoch"], "the process-start epoch, not an ownership epoch")
+	require.Equal(t, float64(7), message["epoch"], "the durable epoch captured at process startup")
 	require.Equal(t, float64(1), message["sequence"])
 	require.Equal(t, "healthy", message["status"])
 	require.Equal(t, float64(4), message["latency_ms"])
@@ -395,8 +405,11 @@ func TestSubscriberRejectsWhatItCannotRead(t *testing.T) {
 		"no observer role":    {data: mutate(map[string]any{"observer_role": " "}), want: healthfabric.RejectIncomplete},
 		"no status":           {data: mutate(map[string]any{"status": ""}), want: healthfabric.RejectIncomplete},
 		"no epoch":            {data: mutate(map[string]any{"epoch": 0}), want: healthfabric.RejectImpossible},
+		"no sequence":         {data: mutate(map[string]any{"sequence": 0}), want: healthfabric.RejectImpossible},
+		"no checked time":     {data: mutate(map[string]any{"checked_at_utc": time.Time{}}), want: healthfabric.RejectImpossible},
 		"negative latency":    {data: mutate(map[string]any{"latency_ms": -1}), want: healthfabric.RejectImpossible},
 		"absurd latency":      {data: mutate(map[string]any{"latency_ms": 1 << 40}), want: healthfabric.RejectImpossible},
+		"overflowing latency": {data: mutate(map[string]any{"latency_ms": int64(math.MaxInt64)}), want: healthfabric.RejectImpossible},
 		"negative failures":   {data: mutate(map[string]any{"consecutive_failures": -3}), want: healthfabric.RejectImpossible},
 		"oversize": {
 			data: mutate(map[string]any{"error": strings.Repeat("x", healthfabric.MaxMessageBytes)}),
@@ -462,6 +475,23 @@ func TestSubscribeEstablishesBeforeItReturns(t *testing.T) {
 	subscriber, err := healthfabric.Subscribe(t.Context(), conn, newTestView(t), discardLog())
 	require.ErrorContains(t, err, "establish the subscription")
 	require.Nil(t, subscriber, "a subscription that was not established is not returned as one that was")
+	require.Equal(t, 1, conn.unsubscribed,
+		"the caller receives nothing it could close after a failed flush")
+}
+
+func TestSubscribePreservesFlushAndCleanupFailures(t *testing.T) {
+	flushErr := errors.New("flush failed")
+	unsubErr := errors.New("unsubscribe failed")
+	conn := newFakeConn()
+	conn.flushErr = flushErr
+	conn.unsubErr = unsubErr
+
+	subscriber, err := healthfabric.Subscribe(t.Context(), conn, newTestView(t), discardLog())
+
+	require.Nil(t, subscriber)
+	require.ErrorIs(t, err, flushErr)
+	require.ErrorIs(t, err, unsubErr)
+	require.Equal(t, 1, conn.unsubscribed)
 }
 
 // TestSubscribeRejectsAnUnusableComposition checks the guards on the seams.
@@ -496,4 +526,63 @@ func TestErrorTextIsTruncatedOnTheWire(t *testing.T) {
 
 	require.Less(t, len(conn.messages()[0]), healthfabric.MaxMessageBytes,
 		"a sender keeps its own messages inside the bound receivers enforce")
+}
+
+// TestNATSConnectionDeliversToPeersWithoutEchoingToItself exercises the real
+// connection behavior composition depends on.
+//
+// The sender applies its stamped report directly. Its NATS subscription must
+// not race that apply with an echo of the same report, while a second connection
+// to the broker must still receive it.
+func TestNATSConnectionDeliversToPeersWithoutEchoingToItself(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts an embedded NATS server")
+	}
+
+	reservation, err := testnet.Reserve(t.Context(), 1)
+	require.NoError(t, err)
+	address := reservation.Addresses()[0]
+	require.NoError(t, reservation.Release())
+
+	broker, err := natsserver.Start(natsserver.Config{
+		Name:           "health-test",
+		ClusterName:    "health-test-site",
+		ClusterAddress: address,
+	})
+	require.NoError(t, err)
+	t.Cleanup(broker.Close)
+
+	senderConn, err := healthfabric.Connect(broker, "health-sender")
+	require.NoError(t, err)
+	t.Cleanup(senderConn.Close)
+	receiverConn, err := healthfabric.Connect(broker, "health-receiver")
+	require.NoError(t, err)
+	t.Cleanup(receiverConn.Close)
+
+	senderView := newTestView(t)
+	senderSubscriber, err := healthfabric.Subscribe(t.Context(), senderConn, senderView, discardLog())
+	require.NoError(t, err)
+	t.Cleanup(senderSubscriber.Close)
+	receiverView := newTestView(t)
+	receiverSubscriber, err := healthfabric.Subscribe(t.Context(), receiverConn, receiverView, discardLog())
+	require.NoError(t, err)
+	t.Cleanup(receiverSubscriber.Close)
+
+	publisher, err := healthfabric.NewPublisher(senderConn, testIdentity(), discardLog())
+	require.NoError(t, err)
+	t.Cleanup(publisher.Close)
+	stamped := publisher.Publish(localObservation("alarm-service", healthview.StatusHealthy))
+	require.Equal(t, healthview.DropNone, senderView.Apply(stamped))
+
+	require.Eventually(t, func() bool {
+		return publisher.Counters().Published == 1
+	}, settle, 5*time.Millisecond)
+	require.NoError(t, senderConn.Flush(t.Context()))
+	require.Eventually(t, func() bool {
+		return receiverView.Snapshot().Units[0].Status == healthview.StatusHealthy
+	}, settle, 5*time.Millisecond)
+
+	require.Zero(t, senderSubscriber.Counters().Delivered,
+		"the sender already applied its own stamped observation")
+	require.Equal(t, uint64(1), receiverSubscriber.Counters().Delivered)
 }

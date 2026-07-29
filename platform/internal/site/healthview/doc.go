@@ -34,15 +34,17 @@
 //
 // # Fencing
 //
-// Reports carry their sender's process-start epoch and a sequence within it. A
-// report is applied only when it is newer than what that observer's slot
+// Reports carry the durable instance epoch captured at sender startup and a
+// sequence within that process. A report is applied only when it is newer than
+// what that observer's slot
 // already holds, so a message that arrives late or twice cannot undo a newer
 // one, and a restarted observer's first report supersedes everything its
 // previous incarnation said.
 //
-// The epoch is the process-start count, not the activation count. Ownership
-// moving does not make an observer's reports newer or older, because probing
-// has nothing to do with which instance is Active.
+// The epoch is the durable instance epoch captured after the process-start
+// advance. Later activation advances do not change the captured value.
+// Ownership moving does not make an observer's reports newer or older, because
+// probing has nothing to do with which instance is Active.
 //
 // # What this package does not do
 //

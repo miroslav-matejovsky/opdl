@@ -36,12 +36,14 @@
 //
 // # Fencing without agreement about time
 //
-// Every message carries the sender's process-start epoch and a sequence within
-// it. A receiver applies one only when it is newer than what that observer's
+// Every message carries the durable instance epoch captured at sender startup
+// and a sequence within that process. A receiver applies one only when it is
+// newer than what that observer's
 // slot holds, so duplicates and late arrivals cannot undo newer state, and a
 // restarted sender's first message supersedes everything its previous
-// incarnation said. The epoch is the process-start count and not the activation
-// count: ownership moving does not make an observation newer.
+// incarnation said. The epoch is the durable instance epoch captured after the
+// process-start advance. Later activation advances do not change the captured
+// value, so ownership moving does not make an observation newer.
 //
 // Timestamps travel as diagnostic detail and decide nothing. Freshness is the
 // receiver's, measured from arrival, because the machines of a site do not

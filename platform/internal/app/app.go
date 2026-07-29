@@ -261,10 +261,11 @@ func Run(args []string) (runErr error) {
 	// before ownership management, so a Passive instance is probing and hearing
 	// from the site from its first moment rather than from its first activation.
 	//
-	// The epoch it publishes under is this incarnation's process-start count,
-	// taken above before the runtime opened anything. It is what makes a
-	// restarted observer's first report supersede everything its previous
-	// incarnation said, and it is deliberately not the activation count.
+	// The epoch it publishes under is the durable instance epoch captured after
+	// this process advanced it, before the runtime opened anything. It is what
+	// makes a restarted observer's first report supersede everything its
+	// previous incarnation said. Later activation advances do not change this
+	// publisher's captured value.
 	health, err := startServiceHealth(ctx, proc, broker, incarnation.Epoch)
 	if err != nil {
 		return errors.Join(err, local.Publish(ctx, ServiceHealthStartFailed{Error: err.Error()}))

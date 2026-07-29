@@ -236,10 +236,10 @@ func startServiceHealth(ctx context.Context, proc process, broker healthfabric.I
 		Deployment:   deployment,
 		Machine:      descriptor.Machine,
 		ObserverRole: proc.role.String(),
-		// The process-start epoch, taken before the runtime does anything, so a
-		// restarted observer's first report supersedes everything its previous
-		// incarnation said. It is deliberately not the activation count: ownership
-		// moving does not make an observation newer.
+		// The durable instance epoch captured after the process-start advance, so
+		// a restarted observer's first report supersedes everything its previous
+		// incarnation said. Later activation advances do not change this captured
+		// value: ownership moves without changing the observer process.
 		Epoch: epoch,
 	}, proc.log)
 	if err != nil {

@@ -2,6 +2,7 @@ package healthfabric
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -68,6 +69,14 @@ func Subscribe(ctx context.Context, conn Conn, view *healthview.View, log *slog.
 	}
 	subscriber.sub = sub
 	if err := conn.Flush(ctx); err != nil {
+		// The caller receives no Subscriber on failure, so it has nothing it can
+		// close. Release the subscription here before returning the startup
+		// error. The dedicated connection is also closed by composition, but the
+		// package contract must not depend on that ownership detail.
+		if unsubscribeErr := sub.Unsubscribe(); unsubscribeErr != nil {
+			return nil, fmt.Errorf("health fabric: establish the subscription to %s: %w",
+				Subject, errors.Join(err, fmt.Errorf("unsubscribe: %w", unsubscribeErr)))
+		}
 		return nil, fmt.Errorf("health fabric: establish the subscription to %s: %w",
 			Subject, err)
 	}

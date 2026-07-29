@@ -118,10 +118,17 @@ func (u Unit) validate() error {
 	case u.FreshFor <= 0:
 		return fmt.Errorf("%s: fresh_for %s must be positive", where, u.FreshFor)
 	}
+	seenRoles := make(map[string]bool, len(u.ObserverRoles))
 	for _, role := range u.ObserverRoles {
-		if strings.TrimSpace(role) == "" {
+		switch {
+		case strings.TrimSpace(role) == "":
 			return fmt.Errorf("%s: an observer role is blank", where)
+		case role != strings.TrimSpace(role):
+			return fmt.Errorf("%s: observer role %q must not have leading or trailing whitespace", where, role)
+		case seenRoles[role]:
+			return fmt.Errorf("%s: observer role %q is listed more than once", where, role)
 		}
+		seenRoles[role] = true
 	}
 	return nil
 }
@@ -138,9 +145,9 @@ type Observation struct {
 	// ObserverRole is which of the hosting machine's platform instances reported:
 	// "primary" or "standby".
 	ObserverRole string
-	// Epoch is the observer's process-start count, and Sequence orders reports
-	// within one incarnation of it. Together they say whether this report is
-	// newer than what that observer's slot already holds.
+	// Epoch is the durable instance epoch captured at observer process startup,
+	// and Sequence orders reports within that process. Together they say whether
+	// this report is newer than what that observer's slot already holds.
 	Epoch    uint64
 	Sequence uint64
 	// Status is what the observer found. Degraded is not accepted here.

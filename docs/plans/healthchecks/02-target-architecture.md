@@ -2,17 +2,18 @@
 
 ## Ownership by level
 
-The design should follow the repository rule that packages are grouped by the
-owner of their state.
+The implementation follows the repository rule that packages are grouped by
+the owner of their state.
 
 | Package area | Responsibility |
 | --- | --- |
 | `internal/machine/servicehealth` | HTTP probing, retry state, local service observations, and probe scheduling |
-| `internal/site/healthview` | Observation wire contract, NATS adapter, freshness, deterministic site reduction, and query snapshot |
+| `internal/site/healthview` | Static inventory, per-observer slots, freshness, deterministic site reduction, and immutable query snapshots |
+| `internal/site/healthfabric` | Versioned wire contract, bounded latest-value publication, NATS subscription, validation, and counters |
 | `internal/app` | Descriptor adaptation, process identity, startup and shutdown ordering, and API composition |
 | `api` and `internal/httpapi` | Public response types and `GET /health/services` registration |
 
-The exact package names are a decision, but the boundaries are not:
+The package names and boundaries are now implemented:
 
 - machine logic does not import NATS, API, or deployment configuration;
 - site logic does not start an embedded broker;
@@ -25,7 +26,7 @@ components in the same step that introduces each package.
 
 ## Process lifecycle
 
-Recommended startup order:
+Implemented startup order:
 
 1. Load and validate the embedded descriptor.
 2. Resolve the fixed platform instance role.
@@ -33,19 +34,20 @@ Recommended startup order:
 4. Advance the process epoch.
 5. Start this instance's embedded NATS server.
 6. Connect the existing event-fabric health client.
-7. Open the health distribution connection.
-8. Subscribe to the health subject and flush the subscription barrier.
-9. Construct the static site health view with every expected service Unknown.
-10. Start local probe workers with cancellation rooted in the process context.
+7. Construct the static site health view with every expected service Unknown.
+8. Open the health distribution connection.
+9. Subscribe to the health subject and flush the subscription barrier.
+10. Open the publisher and start local probe workers with cancellation rooted
+    in the process context.
 11. Bind the platform HTTP listener and enter ownership management.
 
-Recommended shutdown order:
+Implemented shutdown order:
 
 1. Cancel probe scheduling so no new request starts.
 2. Cancel in-flight probes through their request contexts.
 3. Wait for probe workers to finish within a bounded shutdown context.
 4. Stop accepting new distribution updates.
-5. Flush or abandon the bounded latest-value publication queue.
+5. Abandon pending latest values and stop the publisher.
 6. Unsubscribe and close the health distribution connection.
 7. Close the existing event-fabric client.
 8. Stop the embedded broker.
@@ -65,16 +67,16 @@ counts justify a scheduler.
 
 Worker behavior:
 
-1. Wait for a bounded deterministic startup jitter based on machine, service,
-   and observer role. This avoids Primary and Standby probing every service at
-   exactly the same instant.
-2. Execute an immediate first probe after that jitter.
-3. Execute later probes on the configured interval.
-4. Never overlap two probes for the same target.
-5. Bound every request by the configured timeout and parent cancellation.
-6. Publish one current observation after every completed attempt, even when
+1. Execute an immediate first probe.
+2. Wait one configured interval after each completed attempt.
+3. Never overlap two probes for the same target.
+4. Bound every request by the configured timeout and parent cancellation.
+5. Publish one current observation after every completed attempt, even when
    stable health did not change.
-7. Stop promptly when the process context is canceled.
+6. Stop promptly when the process context is canceled.
+
+Primary and Standby can currently issue their immediate probes together.
+Deterministic observer-specific startup jitter remains Step 06 hardening work.
 
 One successful attempt sets stable observer status to Healthy and resets the
 failure counter. A failed attempt increments the counter. Stable status changes
@@ -109,7 +111,7 @@ or TLS targets are required, they should be explicit future probe options.
 
 ## Distribution path
 
-Use a dedicated fixed Core NATS subject such as:
+The dedicated fixed Core NATS subject is:
 
 ```text
 opdl.service_health.v1
@@ -125,16 +127,19 @@ Each instance:
 - applies its local observation to its in-memory view;
 - enqueues the newest observation for NATS publication;
 - validates and applies received remote observations;
-- accepts self-delivery idempotently; and
-- periodically expires observations that are no longer fresh.
+- disables NATS echo because the stamped local observation is applied directly;
+  and
+- evaluates freshness whenever a snapshot is read.
 
 The publication path must not block probe scheduling indefinitely. Use a
 bounded, per-observer latest-value queue. Replacing an older pending snapshot
 with a newer one is safe because snapshots are not deltas. Queue saturation and
 publish failure must be observable.
 
-The health NATS adapter should hold its own in-process `nats.Conn` behind narrow
-interfaces declared near the site health consumer. Do not expand
+The health NATS adapter holds its own in-process `nats.Conn` behind narrow
+interfaces declared near the site health consumer. It applies a five-second
+deadline to subscription flushes because the process context has no deadline.
+Do not expand
 `eventfabric.Client` into a general message bus and do not implement the broad
 pluggable distribution draft as part of this feature. A fake in-memory adapter
 is sufficient for deterministic unit tests.
@@ -154,8 +159,9 @@ deployed unit. A service with the same name on two machines is two units.
 Each unit retains the newest fresh observation from every expected observer
 role. The view derives one service status with the reducer in
 [Contract and convergence](03-contract-and-convergence.md). Updates use one
-mutex or a single owner goroutine. Query snapshots are immutable copies sorted
-by machine and service.
+mutex or a single owner goroutine. Query snapshots are immutable copies in the
+descriptor inventory order, with observer roles sorted. The common inventory
+keeps ordering deterministic across site instances.
 
 No result is written to disk. A restarted process begins with every remote unit
 Unknown and learns current state from repeated reports.

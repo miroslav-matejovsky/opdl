@@ -1,10 +1,13 @@
 # Implementation roadmap
 
-Effort ranges are planning estimates for one engineer familiar with the
-repository. Re-estimate after the decisions and descriptor contract are
-accepted.
+Steps 00 through 03 are complete except for production security and startup
+jitter, which are tracked in Step 06. Step 04 lifecycle composition is complete.
+The next implementation slice is the Step 04 public API.
 
 ## Step 00: accept semantics and security boundary
+
+Status: complete for feature semantics. D13 route security remains an open
+production gate in Step 06.
 
 | | |
 | --- | --- |
@@ -30,6 +33,8 @@ Acceptance:
 - The rollout environment's security assumption is explicit.
 
 ## Step 01: carry health policy and site inventory
+
+Status: complete.
 
 | | |
 | --- | --- |
@@ -61,6 +66,9 @@ Acceptance:
 
 ## Step 02: implement the local probe engine
 
+Status: complete for functional behavior. Deterministic startup jitter is
+deferred to Step 06 hardening.
+
 | | |
 | --- | --- |
 | Complexity | Medium |
@@ -76,7 +84,7 @@ Actions:
    redirects, bounded body handling, and request cancellation.
 4. Implement startup Unknown, consecutive failure threshold, immediate success
    recovery, per-attempt publication, and non-overlapping schedules.
-5. Add deterministic bounded startup jitter.
+5. Add deterministic bounded startup jitter in Step 06.
 6. Add table-driven unit tests with `httptest` and injected time. Use
    `t.Context()` and no sleeps.
 7. Add race-focused shutdown and concurrent target tests.
@@ -91,6 +99,11 @@ Acceptance:
 - `task all` passes.
 
 ## Step 03: implement ephemeral NATS distribution and site reduction
+
+Status: complete for the transport, wire contract, buffering, reducer, and
+composition dependency. Tests include fake connections and two real health
+connections on one embedded NATS broker. Routed multi-broker behavior belongs
+to Step 05.
 
 | | |
 | --- | --- |
@@ -108,10 +121,11 @@ Actions:
 6. Build the complete in-memory view from static inventory.
 7. Apply epoch and sequence ordering, duplicate rejection, freshness expiry,
    and deterministic reduction.
-8. Expose immutable, deterministically sorted query snapshots.
+8. Produce immutable, deterministic query snapshots.
 9. Add fake-transport contract tests.
-10. Add embedded NATS tests for one server, two clustered instances, message
-    loss repair, restart warm-up, invalid messages, and shutdown.
+10. Add embedded NATS coverage. One-server peer delivery and no-echo are
+    complete; routed instances, loss repair, restart warm-up, and route recovery
+    remain Step 05 work.
 11. Update architecture dependency rules.
 
 Acceptance:
@@ -125,6 +139,9 @@ Acceptance:
 
 ## Step 04: compose both instances and add the API
 
+Status: lifecycle composition is complete. API, platform subsystem status,
+OpenAPI, generated SDK, and .NET test discovery remain.
+
 | | |
 | --- | --- |
 | Complexity | High |
@@ -133,12 +150,12 @@ Acceptance:
 
 Actions:
 
-1. Preserve the process-start epoch in `app.process`.
+1. Capture the advanced durable instance epoch in `app.process` and keep it
+   fixed for the health publisher lifetime.
 2. Adapt local descriptor services into typed targets.
-3. Start the distribution subscriber and site view in `app.Run`.
-4. Start monitors before `runProcess` and keep them alive through ownership
-   transitions.
-5. Implement bounded shutdown in reverse order.
+3. Build the site view, subscribe and flush, then start monitoring in `app.Run`.
+4. Keep monitors alive through ownership transitions.
+5. Stop monitoring before distribution and close the view in reverse order.
 6. Add `GET /health/services` to all Active, Passive, and journal-less handlers.
 7. Add API response types, deterministic sorting, status summaries, observer
    details, freshness, and distribution state.
@@ -159,6 +176,8 @@ Acceptance:
 - `task all` passes.
 
 ## Step 05: add black-box convergence and failure scenarios
+
+Status: pending the public API.
 
 | | |
 | --- | --- |
@@ -192,6 +211,8 @@ Acceptance:
 
 ## Step 06: production hardening and rollout
 
+Status: pending.
+
 | | |
 | --- | --- |
 | Complexity | Medium to high |
@@ -205,10 +226,11 @@ Actions:
 2. Load-test the accepted maximum service count at minimum intervals with two
    platform instances per machine.
 3. Verify queue bounds, memory bounds, connection recovery, and shutdown times.
-4. Add operational runbooks for Unknown, Degraded, stale observers, route
+4. Add deterministic observer-specific startup jitter and verify its bound.
+5. Add operational runbooks for Unknown, Degraded, stale observers, route
    partitions, and invalid messages.
-5. Update root architecture, event, platform, machine, site, and instance docs.
-6. Add upgrade notes for the incompatible structured descriptor change.
+6. Update root architecture, event, platform, machine, site, and instance docs.
+7. Add upgrade notes for the incompatible structured descriptor change.
 
 Acceptance:
 
@@ -219,8 +241,12 @@ Acceptance:
 - All repository documentation describes the implemented behavior.
 - `task all` passes.
 
-## Overall estimate
+## Remaining delivery order
 
-The core feature through Step 05 is approximately 15-27 person-days. Route
-security can add separate infrastructure work. The largest uncertainty is
-realistic multi-machine route partition testing on one Windows scenario host.
+1. Complete Step 04 API, subsystem health, generated artifacts, and .NET test
+   discovery.
+2. Complete Step 05 convergence, restart, partition, and recovery scenarios.
+3. Complete Step 06 security, jitter, load validation, and operations work.
+
+The largest uncertainty remains realistic multi-machine route partition testing
+on one Windows scenario host.

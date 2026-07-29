@@ -1,6 +1,6 @@
 # Plan: distributed service health checks
 
-Status: draft for review, 2026-07-28.
+Status: active implementation plan, reviewed against `2696172` on 2026-07-29.
 
 This plan introduces platform-managed health checks for every service authored
 on a machine. The Primary and Standby platform instances both probe every local
@@ -8,8 +8,22 @@ service. Each instance publishes its observations through the site's existing
 NATS cluster. Every running instance keeps an in-memory view of service health
 for the whole site.
 
-This directory contains analysis and planning only. It does not authorize or
-include production code changes.
+Steps 00 through 03 are implemented. The process-lifecycle part of Step 04 is
+also implemented. The next slice is the public API. These documents record both
+the implemented contract and the remaining work so there is one health-check
+source of truth.
+
+## Implementation status
+
+| Step | Status |
+| --- | --- |
+| 00 - decisions | Core decisions accepted; D13 route security remains a production gate |
+| 01 - descriptor | Complete |
+| 02 - local probe engine | Complete; startup jitter remains hardening work |
+| 03 - NATS distribution and site reduction | Complete |
+| 04 - lifecycle and API | Lifecycle complete; `GET /health/services`, platform subsystem health, OpenAPI, SDK, and .NET E2E discovery remain |
+| 05 - black-box convergence | Pending on the API |
+| 06 - production hardening | Pending |
 
 ## Goals
 
@@ -85,26 +99,39 @@ design and the current Core NATS transport.
 ## Plan dependencies
 
 ```text
-decisions
+decisions [done]
     |
     v
-descriptor contract
+descriptor contract [done]
     |
-    +----------> local probe engine
+    +----------> local probe engine [done]
     |                    |
     v                    v
-NATS health transport -> site reducer
+NATS health transport -> site reducer [done]
                          |
                          v
-                 runtime lifecycle and API
+                 runtime lifecycle [done]
+                          |
+                          v
+                 public API [next]
                          |
                          v
               scenarios, security, rollout
 ```
 
-The descriptor contract comes first. The runtime currently receives only
-service names, so no later step can run a probe or construct a complete site
-view until that loss of information is fixed.
+## Relation to the hierarchy plan
+
+The older [hierarchy plan](../hierarchy/README.md) remains untouched and remains
+superseded for the reason stated in its own README: it assumes the removed
+registration domain and a dynamic event-sourced topology.
+
+Health distribution does not make that plan current and does not implement its
+open Step 06. `healthfabric` carries repeated, expiring, at-most-once snapshots
+with no persistence or replay. Hierarchy Step 06 asks how durable site-scoped
+facts receive ordering, replay, acknowledgement, and outage recovery. The two
+features share the embedded NATS cluster but have intentionally different data
+and correctness contracts. Health is useful evidence for a future hierarchy
+rewrite, not a durable site-event solution.
 
 ## Completion criteria
 

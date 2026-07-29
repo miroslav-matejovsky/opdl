@@ -61,8 +61,8 @@ type message struct {
 	Service     string `json:"service"`
 	// ObserverRole is which of the hosting machine's instances reported.
 	ObserverRole string `json:"observer_role"`
-	// Epoch is the sender's process-start count and Sequence orders messages
-	// within it.
+	// Epoch is the durable instance epoch captured at sender process startup and
+	// Sequence orders messages within that process.
 	Epoch    uint64 `json:"epoch"`
 	Sequence uint64 `json:"sequence"`
 	Status   string `json:"status"`
@@ -97,7 +97,7 @@ func (i Identity) validate() error {
 	case strings.TrimSpace(i.ObserverRole) == "":
 		return fmt.Errorf("observer role is required")
 	case i.Epoch == 0:
-		return fmt.Errorf("epoch is required; it is the process-start count that fences a restart")
+		return fmt.Errorf("epoch is required; it is the durable process incarnation fence")
 	}
 	return nil
 }
@@ -199,17 +199,24 @@ func decode(deployment healthview.Deployment, data []byte) (healthview.Observati
 	case strings.TrimSpace(decoded.Status) == "":
 		return healthview.Observation{}, RejectIncomplete, fmt.Errorf("message states no status")
 	}
-	latency := time.Duration(decoded.LatencyMS) * time.Millisecond
 	switch {
 	case decoded.Epoch == 0:
 		return healthview.Observation{}, RejectImpossible, fmt.Errorf("message carries no epoch")
-	case latency < 0 || latency > maxLatency:
+	case decoded.Sequence == 0:
+		return healthview.Observation{}, RejectImpossible, fmt.Errorf("message carries no sequence")
+	case decoded.CheckedAtUTC.IsZero():
+		return healthview.Observation{}, RejectImpossible, fmt.Errorf("message carries no checked_at_utc")
+	case decoded.LatencyMS < 0 || decoded.LatencyMS > maxLatency.Milliseconds():
 		return healthview.Observation{}, RejectImpossible,
 			fmt.Errorf("latency %dms could not have been an attempt", decoded.LatencyMS)
 	case decoded.ConsecutiveFailures < 0:
 		return healthview.Observation{}, RejectImpossible,
 			fmt.Errorf("consecutive failures %d is negative", decoded.ConsecutiveFailures)
 	}
+	// Convert only after the millisecond value is bounded. Multiplying an
+	// arbitrary int64 by time.Millisecond first can overflow into a small
+	// positive duration and bypass the upper bound.
+	latency := time.Duration(decoded.LatencyMS) * time.Millisecond
 	return healthview.Observation{
 		Unit:                healthview.UnitKey{Machine: decoded.Machine, Service: decoded.Service},
 		ObserverRole:        decoded.ObserverRole,

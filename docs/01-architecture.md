@@ -107,9 +107,9 @@ Runtime packages are grouped by the owner of their state:
 
 | Level | Identity | Current responsibilities |
 | --- | --- | --- |
-| Instance | one process in a fixed role | local event log, application log, durable epoch, one loopback API, and its own embedded NATS server |
-| Machine | one Windows host | Primary Ownership, active/passive sequencing, and the shared machine event store |
-| Site | all machines in one deployment site | one NATS cluster spanning every instance, the site event contract, and the client onto this instance's server |
+| Instance | one process in a fixed role | local event log, application log, durable epoch, one loopback API, one embedded NATS server, and one current service-health view |
+| Machine | one Windows host | Primary Ownership, active/passive sequencing, shared machine event store, and local service probes from each instance |
+| Site | all machines in one deployment site | one NATS cluster spanning every instance, ephemeral health distribution and reduction, the durable site event contract, and the client onto this instance's server |
 
 The detailed level documentation lives beside the code:
 
@@ -130,7 +130,10 @@ The detailed level documentation lives beside the code:
 | `internal/instance/state` | Durable per-instance epoch. |
 | `internal/machine/redundancy` | Fixed roles, Primary Ownership, and active/passive sequencing. |
 | `internal/machine/eventstore` | Shared append-only JSONL store for machine-scoped events. |
+| `internal/machine/servicehealth` | Local HTTP probes, retry state, and per-target scheduling. |
 | `internal/site/eventfabric` | Site delivery and durable-consumer contract. No implementation yet. |
+| `internal/site/healthfabric` | Bounded ephemeral Core NATS health publication and subscription. |
+| `internal/site/healthview` | Static inventory, observer fencing and freshness, and deterministic service reduction. |
 
 ### Dependency direction
 
@@ -159,8 +162,11 @@ At startup a process:
 4. Creates one event factory for the process.
 5. Opens the instance event log and machine event store.
 6. Opens and advances the instance state epoch.
-7. Binds the instance's loopback HTTP listener.
-8. Enters machine ownership management.
+7. Starts the instance's embedded NATS server and event-fabric client.
+8. Builds the site health view, subscribes and flushes its health connection,
+   then starts local service probes.
+9. Binds the instance's loopback HTTP listener and enters machine ownership
+   management.
 
 The application log is opened first so every later failure to open something has
 somewhere to be described, and closed last.
@@ -173,12 +179,15 @@ The listener stays bound for the process lifetime. Passive and Active states
 swap the handler behind that listener, so ownership transfer never moves an
 address between processes.
 
-### Current site limitation
+### Current durable site-event limitation
 
-Site event distribution has not been implemented, and the runtime carries no
-placeholder for it: there is no site composition, no projection, and no durable
-handler. Health endpoints and `GET /instance` work; the platform has no domain
-operation to serve beyond them.
+Durable site event distribution has not been implemented: there is no ordered
+site journal, projection, replay, acknowledgement, or durable handler.
+
+Service health is a separate implemented site composition. It distributes
+repeated, expiring current-state snapshots over Core NATS and reconstructs an
+in-memory view from static inventory. It intentionally provides no persistence
+or replay. The public `GET /health/services` query is still planned.
 
 Because nothing trails a journal, there is no projection lag to bound and the
 descriptor carries no lag bound. The hierarchy plan tracks the remaining work in

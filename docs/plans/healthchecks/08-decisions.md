@@ -1,8 +1,9 @@
 # Required decisions
 
-Every decision below is proposed, not accepted. Accept or amend them before
-implementation. Decisions D01 through D12 block the core design. D13 blocks
-production rollout. D14 and D15 bound the scope.
+D01 through D12, D14, and D15 are accepted and reflected in the implementation.
+D13 remains open and blocks production rollout. D08's multiplier, future HTTPS
+certificate sourcing, and a future service-instance identifier remain explicit
+follow-up decisions rather than blockers for the current HTTP slice.
 
 ## Decision summary
 
@@ -20,7 +21,7 @@ production rollout. D14 and D15 bound the scope.
 | D10 | HTTP semantics | GET to machine IP, 2xx success, no redirect or proxy | Simple, deterministic, and works with simulated Windows machines |
 | D11 | Public query | `GET /health/services` on every instance | Every process owns a complete in-memory view |
 | D12 | Redundancy coupling | No effect on platform ownership or readiness | Ownership movement cannot repair the same machine service |
-| D13 | Route security | Mutual route security before production | Cluster name alone does not protect health integrity |
+| D13 | Route security | Open: mutual route security before production | Cluster name alone does not protect health integrity |
 | D14 | Distribution abstraction | Narrow health interfaces only | Avoids blocking a concrete feature on an unaccepted general refactor |
 | D15 | Persistence | No health result, last-value, or JetStream storage | Periodic snapshots and expiry meet the stated requirement |
 
@@ -54,9 +55,9 @@ existing event system is append-only, fsyncs accepted facts, and plans durable
 ordered consumption. Routing each attempt through it would add unwanted
 persistence and couple this feature to the unimplemented site journal.
 
-Open point: whether stable local transitions may appear in the diagnostic
-application log. Recommendation: allow rate-limited transition logs, but never
-persist the distributed result stream.
+Diagnostic application logs may record bounded infrastructure information.
+Health observations remain outside the durable event journal and are never a
+replayable result stream.
 
 ## D03: transport
 
@@ -94,13 +95,16 @@ not invent one in this feature.
 
 ## D06: observer identity and ordering
 
-Recommendation: retain independent Primary and Standby observations. Order each
-with process-start epoch and a process-local sequence.
+Decision: retain independent Primary and Standby observations. Order each with
+the durable instance epoch captured after its process-start advance and a
+process-local sequence.
 
 Rationale: selecting whichever message arrived last is nondeterministic across
 receivers. Combining independent observer slots is deterministic and preserves
-disagreement. The existing durable process-start count fences messages from an
-older process without persisting health results.
+disagreement. The captured epoch remains fixed for the publisher lifetime even
+if later ownership activation advances the state file. A later process advances
+the durable epoch before publishing, which fences the older process without
+persisting health results.
 
 Do not use Active or Passive state as authority. It changes during the process
 and both observers are required.
@@ -131,16 +135,18 @@ changed, keep it derived and identical in every descriptor.
 
 ## D09: aggregation
 
-Recommendation:
+Decision:
 
-- no fresh observers: Unknown;
-- all fresh observers Healthy: Healthy;
-- all fresh observers Unhealthy: Unhealthy;
-- fresh disagreement: Degraded.
+- no fresh Healthy or Unhealthy verdicts: Unknown;
+- all fresh verdicts Healthy: Healthy;
+- all fresh verdicts Unhealthy: Unhealthy;
+- fresh Healthy and Unhealthy disagreement: Degraded;
+- a fresh Unknown observation is visible but contributes no verdict.
 
 Rationale: one stopped platform instance should not erase a live observation
 from its redundant peer. Disagreement should remain visible instead of choosing
-the Active observer or masking failure.
+the Active observer or masking failure. Healthy plus Unknown is Healthy.
+Unknown plus Unknown is Unknown.
 
 Alternative: "any unhealthy means Unhealthy" is safer for automated blocking
 but conflates target failure with observer disagreement. Revisit before health
@@ -163,12 +169,15 @@ Rationale: the existing blueprint provides only type, port, path, and timings.
 These rules make that contract complete without adding speculative options.
 Machine IP supports multiple logical machines on one Windows scenario host.
 
-Open points:
+Decisions:
 
-- whether query strings in `path` are supported;
-- whether shared health ports are valid; and
-- whether a future HTTPS type uses Windows certificate stores or authored file
-  paths.
+- an optional query string in `path` is supported;
+- fragments, absolute URLs, hosts, control characters, and invalid escapes are
+  rejected;
+- authored path bytes are not rewritten;
+- services may share a port when paths differ;
+- an exact duplicate port and path is rejected; and
+- a future HTTPS type still needs a certificate-source decision.
 
 ## D11: public query
 

@@ -317,8 +317,8 @@ func TestFencingAppliesOnlyNewerReports(t *testing.T) {
 	_ = view
 }
 
-// TestRestartedObserverSupersedesItsPreviousIncarnation is the reason the epoch
-// is the process-start count.
+// TestRestartedObserverSupersedesItsPreviousIncarnation is the reason each
+// process captures a durable epoch after its process-start advance.
 //
 // A restarted observer begins its sequence again. Without the epoch its first
 // report would look older than what its previous incarnation last said, and the
@@ -418,6 +418,15 @@ func TestNewRejectsAnUnusableInventory(t *testing.T) {
 			inventory: []healthview.Unit{func() healthview.Unit { u := unit; u.ObserverRoles = nil; return u }()},
 			errText:   "at least one observer role is required",
 		},
+		"a unit lists one observer twice": {
+			deployment: deployment, clock: newTestClock(),
+			inventory: []healthview.Unit{func() healthview.Unit {
+				u := unit
+				u.ObserverRoles = []string{"primary", "primary"}
+				return u
+			}()},
+			errText: "listed more than once",
+		},
 		"a unit whose reports never expire": {
 			deployment: deployment, clock: newTestClock(),
 			inventory: []healthview.Unit{func() healthview.Unit { u := unit; u.FreshFor = 0; return u }()},
@@ -436,6 +445,18 @@ func TestNewRejectsAnUnusableInventory(t *testing.T) {
 			require.Nil(t, view)
 		})
 	}
+}
+
+func TestViewOwnsItsObserverPolicy(t *testing.T) {
+	clock := newTestClock()
+	unit := redundantUnit("sensor", "alarm-service")
+	view := newView(t, clock, unit)
+
+	unit.ObserverRoles[0] = "tampered"
+
+	snapshot := view.Snapshot().Units[0]
+	require.Equal(t, []string{"primary", "standby"}, snapshot.ExpectedObservers)
+	require.Equal(t, []string{"primary", "standby"}, snapshot.MissingObservers)
 }
 
 // TestViewIsSafeForConcurrentUse checks the lock holds under the shape a running

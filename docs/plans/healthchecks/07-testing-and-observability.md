@@ -1,5 +1,21 @@
 # Testing and observability
 
+## Current coverage
+
+| Area | Status |
+| --- | --- |
+| Blueprint, resolver, descriptor, and conformance | Implemented |
+| HTTP prober, retry state, cancellation, monitor lifecycle, and concurrency | Implemented |
+| Wire validation, bounds, publisher coalescing, and subscriber cleanup | Implemented |
+| Reducer ordering, Unknown handling, freshness, inventory, and concurrency | Implemented |
+| App startup, startup failure, ownership transitions, and reverse shutdown | Implemented |
+| Real NATS peer delivery and sender no-echo on one embedded broker | Implemented |
+| Public API, OpenAPI, and generated SDK | Pending |
+| Routed multi-broker partition and recovery | Pending |
+| Windows black-box health convergence | Pending |
+| .NET E2E nonzero test discovery gate | Pending |
+| Startup jitter and supported-load validation | Pending |
+
 ## Test layers
 
 ### Blueprint and descriptor
@@ -69,7 +85,8 @@ Required cases:
 
 - subscription is active before first publication;
 - all subscribers receive a live report;
-- self-delivery is harmless;
+- the publisher connection does not receive its own message;
+- a second connection receives the same live report;
 - a disconnected route loses messages as documented;
 - the next full snapshot repairs the view after reconnect;
 - bounded pending storage retains the newest snapshot per key;
@@ -86,6 +103,8 @@ Required cases:
 
 - Primary-only process starts a monitor;
 - Primary and Standby both start monitors;
+- subscriber setup and flush complete before the first probe;
+- monitor shutdown precedes publisher, subscriber, and connection shutdown;
 - Passive endpoint serves `/health/services`;
 - Active and Passive status changes do not restart workers;
 - response service and observer ordering is stable;
@@ -101,6 +120,9 @@ but still exits successfully. Fix discovery and make zero discovered tests fail
 before treating this layer as service-health coverage.
 
 ### Windows black-box scenarios
+
+These scenarios are pending the public query endpoint. Existing scenarios prove
+process startup and lifecycle, but cannot yet inspect the site view.
 
 Required scenarios:
 
@@ -145,14 +167,15 @@ Recommended logs:
 Do not log every successful attempt. Do not log response bodies. Avoid logging
 full NATS payloads or repeated connection failures without rate limiting.
 
-The no-persistence requirement applies to the health view. Existing application
-logs remain diagnostic files. If even transition logs are considered unwanted
-health persistence, disable those logs and retain only monitor infrastructure
-errors. This is a decision to confirm.
+The no-persistence requirement applies to health results and the health view.
+Existing application logs remain diagnostic files, not a replayable health
+record. Health observations are not appended to the event journal.
 
 ## Counters
 
-Keep bounded process-local counters for:
+Implemented counters cover publication, supersession, rejection, and apply
+outcomes. The public API still needs to expose the useful subset. Keep bounded
+process-local counters for:
 
 - attempts by outcome;
 - stable state transitions;

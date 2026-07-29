@@ -8,10 +8,17 @@ across those machines.
 | Package | Responsibility | Current state |
 | --- | --- | --- |
 | `eventfabric` | Ordered site delivery contract, and the client onto this instance's server. | Contract, plus a NATS client with a health check |
+| `healthfabric` | Ephemeral service-health publication and subscription on Core NATS. | Implemented |
+| `healthview` | Static service inventory, observer slots, freshness, and deterministic reduction. | Implemented |
 
 The site's transport exists: every deployed instance at a site runs an embedded
 NATS server and all of them form one cluster. What does not exist yet is the
 ordered, durable delivery the contract below describes.
+
+Service health uses the same cluster through a separate connection. It is not
+part of the durable event contract: observations are bounded current-state
+snapshots with no replay or result persistence. Every receiver rebuilds its
+view from static inventory and fresh traffic.
 
 ## Event Fabric
 
@@ -48,6 +55,7 @@ broken fabric, because the other instance runs its own server.
 JetStream, so there is no durable order to replay or acknowledge. That is what
 `Consumer` will need.
 
-Dynamic unit registration previously lived at this level and has been removed;
-unit membership is moving to the static Site → Machine → Instance approach
-described in the [hierarchy plan](../../../docs/plans/hierarchy/README.md).
+Dynamic unit registration previously lived at this level and has been removed.
+Current unit membership is static. The older
+[hierarchy plan](../../../docs/plans/hierarchy/README.md) is superseded except
+for its still-open durable site-distribution problem.

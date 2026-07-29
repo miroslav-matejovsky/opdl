@@ -1,34 +1,36 @@
 # Contract and convergence
 
+Status: implemented in `healthview` and `healthfabric`. The public query surface
+and black-box convergence assertions are still pending.
+
 ## Observation model
 
 The health message is a versioned state snapshot, not an event envelope. A
-recommended logical shape is:
+message on `opdl.service_health.v1` has this implemented JSON shape:
 
 | Field | Purpose |
 | --- | --- |
-| `schema_version` | Reject or route incompatible payloads |
+| `v` | Reject incompatible payloads |
 | `project`, `environment`, `site` | Prevent cross-deployment contamination |
-| `machine`, `machine_profile` | Identify the target machine |
-| `service`, `service_role` | Identify and describe the target service |
+| `machine`, `service` | Identify the target service unit |
 | `observer_role` | Fixed platform role: primary or standby |
-| `observer_process_epoch` | Fence an older process incarnation |
+| `epoch` | Fence an older platform process |
 | `sequence` | Order snapshots from one observer process |
 | `status` | Unknown, Healthy, or Unhealthy |
 | `checked_at_utc` | Diagnostic wall-clock time, not ordering authority |
 | `latency_ms` | Last attempt duration |
 | `consecutive_failures` | Retry state |
-| `attempt_outcome` | Success, HTTP status failure, timeout, connection, protocol, or internal |
-| `http_status` | Optional response status |
-| `fresh_for_ms` | Receiver-relative observation lifetime |
+| `error` | Optional bounded diagnostic detail |
 
-Do not distribute raw response bodies. Avoid raw error strings in the stable
-contract. A bounded diagnostic detail can be logged locally, while the message
-uses a controlled failure category.
+Machine profile, service role, expected observers, and freshness are deliberately
+absent from the wire message. Every receiver gets them from its validated static
+inventory. Probe endpoints are also never distributed.
 
-All fields must be size-bounded and validated before application. A malformed,
-wrong-site, unknown-service, unknown-observer, impossible-duration, or
-unsupported-version message is dropped and counted.
+Messages are limited to 8 KiB. Diagnostic errors are truncated to 512 bytes.
+Raw response bodies are never distributed. A malformed, wrong-site,
+unknown-service, unknown-observer, zero-versioned, impossible-duration, or
+unsupported-version message is rejected and counted before it reaches the
+view.
 
 ## Reporter identity and ordering
 
@@ -38,9 +40,10 @@ The view stores observations by:
 target machine + target service + observer role
 ```
 
-`observer_process_epoch` comes from the existing per-instance state file's
-process-start count. It increases before the process starts monitoring.
-`sequence` is a process-local monotonically increasing counter.
+`epoch` is the durable instance epoch captured after it is advanced during
+process startup. It remains fixed for the health publisher's lifetime.
+`sequence` is a process-local monotonically increasing counter that starts at
+one.
 
 Comparison rules:
 
@@ -52,10 +55,10 @@ Comparison rules:
 `checked_at_utc` must not order messages. Machine clocks can differ. It is for
 operators only.
 
-The implementation must preserve the process-start count in `app.process`.
-Using the general instance epoch is weaker because activation advances that
-value while the monitor continues running. Observer ordering should not reset
-when Primary Ownership moves.
+Later ownership activation may advance the state file again, but it does not
+change the publisher's captured epoch. A later process advances the durable
+epoch before publishing, so its observations fence the previous process.
+Primary Ownership movement does not reset observer ordering.
 
 ## Freshness
 
@@ -70,10 +73,12 @@ This tolerates one missed periodic publication and one full request timeout. It
 does not multiply by `retries`, because a snapshot is sent after every attempt,
 including attempts below the unhealthy threshold.
 
-The receiver records:
+The receiver records the arrival time on its own monotonic clock. At snapshot
+time it computes:
 
 ```text
-expires_at = local_receive_time + fresh_for
+age = snapshot_time - local_receive_time
+fresh = age <= fresh_for
 ```
 
 It uses a monotonic local clock for expiration. The sender's wall clock does not
@@ -81,15 +86,19 @@ control freshness. The receiver validates `fresh_for` against the static
 inventory or a safe derived bound so a malformed sender cannot remain fresh
 forever.
 
-Expiration removes the observation from reduction but may retain its last value
-as explicitly stale diagnostic data. Expiration means the observer is silent.
-It does not by itself prove that the target service is Unhealthy.
+The freshness boundary is inclusive. An observation becomes stale only when
+its age is greater than `fresh_for`. No background expiry worker is needed.
+Expiration removes the observation from reduction but retains its last value
+as stale diagnostic data. It means the observer is silent, not that the target
+service is Unhealthy.
 
 ## Deterministic service reduction
 
-For one service unit, consider only fresh observations:
+For one service unit, consider verdicts from fresh observations. A fresh
+Unknown observation is present and visible in diagnostics but contributes no
+verdict:
 
-| Fresh observations | Derived service status |
+| Fresh verdicts | Derived service status |
 | --- | --- |
 | None | Unknown |
 | One or more, all Healthy | Healthy |
@@ -109,7 +118,8 @@ The view should expose:
 - the derived service status.
 
 This reducer is commutative and independent of message arrival order after the
-newest snapshot for each observer is selected.
+newest snapshot for each observer is selected. A fresh Unknown cannot create or
+remove disagreement. For example, Healthy plus Unknown is Healthy.
 
 ## Delivery semantics
 
@@ -128,6 +138,9 @@ It does not promise that every instance receives every observation.
 Correctness comes from snapshots:
 
 - every attempt republishes the complete current observer state;
+- the publisher returns the stamped observation for immediate local apply;
+- the health NATS connection uses no-echo, so that local apply has one ordering
+  path while peers still receive the publication;
 - loss of one message is repaired by a later message;
 - duplicates are harmless;
 - out-of-order older messages are ignored;
