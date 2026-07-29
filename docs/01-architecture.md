@@ -78,6 +78,11 @@ path, interval, timeout, and retry count the platform probes each with. A probe
 connects to the machine's own ip, so those endpoints belong to the descriptor of
 the machine hosting them and to no other.
 
+A service name is unique within its machine. Service role is metadata, not a
+second identity dimension. Descriptor validation rejects the same name in two
+roles because the probe engine, publisher, wire contract, and site view all key
+the unit by machine and service name.
+
 `site_services` is the same list for the whole site, and deliberately carries no
 endpoint. An instance needs to know which units exist, which platform instance
 roles are expected to report on each, and how long a report stays fresh, so that

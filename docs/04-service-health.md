@@ -5,9 +5,9 @@ across the site, and answers what every instance currently knows. It does not
 start, stop, or repair a service. Nothing it observes moves Primary Ownership.
 
 This document is for whoever is reading `GET /health/services` at three in the
-morning. The contract behind it is in
-[the health-check plan](plans/healthchecks/README.md); the shape of the
-descriptor it is built from is in [Architecture](01-architecture.md).
+morning. The descriptor it is built from is described in
+[Architecture](01-architecture.md). Deferred work is listed in the
+[backlog](backlog/README.md).
 
 ## What the platform actually does
 
@@ -172,12 +172,14 @@ observed limit: exceeding it is untested rather than known to break.
 | Maximum observation on the wire | 8 KiB |
 | Pending publications per instance | one per local service — 16, never more |
 
-At that size the site produces 256 observations per second, each fanned to all
-16 instances. Measured:
+At that size the site produces 256 observations per second. Sender echo is
+disabled, so each observation is delivered over NATS to the other 15
+connections and applied directly at its sender. Measured:
 
 - one observation at the largest identity the envelope produces is about 700
-  bytes, well inside the 8 KiB bound — roughly 180 KB/s of site-wide health
-  traffic;
+  bytes, well inside the 8 KiB bound. That is roughly 180 KB/s published into
+  the cluster and 2.7 MB/s of aggregate peer-delivery payload before NATS and
+  network framing;
 - the whole site in one process converges with no publication failures, no
   supersessions, and no rejections;
 - a 128-unit snapshot — what the API renders on every request — costs
@@ -208,6 +210,8 @@ What changed:
 - `services` was a list of names. It is now a list of structured service
   definitions, each carrying `role` and a full `health_check` block: `type`,
   `port`, `path`, `interval`, `timeout`, `retries`.
+- A service name remains unique within its machine. `role` is metadata and does
+  not let two local services share one name.
 - `site_services` is new. It is the whole site's service inventory, carrying
   identity, expected observer roles, and derived freshness, and deliberately no
   endpoint.

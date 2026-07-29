@@ -198,6 +198,13 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
 			err: "must not have leading or trailing whitespace",
 		},
+		"same service name in different roles": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[` +
+				`{"name":"core-services","role":"master","health_check":{"type":"http","port":9101,"path":"/health","interval":"10s","timeout":"2s","retries":3}},` +
+				`{"name":"core-services","role":"slave","health_check":{"type":"http","port":9102,"path":"/slave-health","interval":"10s","timeout":"2s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: `service "core-services" is hosted more than once`,
+		},
 		"absolute probe url": {
 			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":"core-services","role":"master",` +
 				`"health_check":{"type":"http","port":9101,"path":"http://127.0.0.1:9101/health","interval":"10s","timeout":"2s","retries":3}}],` +
