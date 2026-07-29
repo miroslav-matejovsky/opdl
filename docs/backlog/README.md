@@ -7,8 +7,13 @@ Nothing here blocks the current POC.
 ## Index
 
 - [NATS route security](route-security.md)
+- [Windows Service (SCM) integration](windows-service-integration.md)
 
 ## Transport / Security
 
 - [NATS route security](route-security.md) (Effort: Medium, Value: High)
+
+## Platform / Lifecycle
+
+- [Windows Service (SCM) integration](windows-service-integration.md) (Effort: Medium, Value: High)
 
