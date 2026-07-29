@@ -1,13 +1,12 @@
 # Implementation roadmap
 
-Steps 00 through 03 are complete except for production security and startup
-jitter, which are tracked in Step 06. Step 04 lifecycle composition is complete.
-The next implementation slice is the Step 04 public API.
+Steps 00 through 03 are complete except for startup jitter, which is tracked
+in Step 06. Step 04 lifecycle composition is complete. The next implementation
+slice is the Step 04 public API.
 
-## Step 00: accept semantics and security boundary
+## Step 00: accept semantics
 
-Status: complete for feature semantics. D13 route security remains an open
-production gate in Step 06.
+Status: complete for feature semantics.
 
 | | |
 | --- | --- |
@@ -20,10 +19,8 @@ Actions:
 1. Accept or amend every decision in
    [Required decisions](08-decisions.md).
 2. Write the final observation schema and reducer examples before package APIs.
-3. Decide whether NATS route security is part of the first production milestone
-   or an explicit trusted-network prerequisite.
-4. Define the bounded eventual consistency statement as a public contract.
-5. Define service counts and minimum intervals used for load bounds.
+3. Define the bounded eventual consistency statement as a public contract.
+4. Define service counts and minimum intervals used for load bounds.
 
 Acceptance:
 
@@ -221,16 +218,14 @@ Status: pending.
 
 Actions:
 
-1. Complete the accepted NATS route security work or enforce the documented
-   trusted-network restriction.
-2. Load-test the accepted maximum service count at minimum intervals with two
+1. Load-test the accepted maximum service count at minimum intervals with two
    platform instances per machine.
-3. Verify queue bounds, memory bounds, connection recovery, and shutdown times.
-4. Add deterministic observer-specific startup jitter and verify its bound.
-5. Add operational runbooks for Unknown, Degraded, stale observers, route
+2. Verify queue bounds, memory bounds, connection recovery, and shutdown times.
+3. Add deterministic observer-specific startup jitter and verify its bound.
+4. Add operational runbooks for Unknown, Degraded, stale observers, route
    partitions, and invalid messages.
-6. Update root architecture, event, platform, machine, site, and instance docs.
-7. Add upgrade notes for the incompatible structured descriptor change.
+5. Update root architecture, event, platform, machine, site, and instance docs.
+6. Add upgrade notes for the incompatible structured descriptor change.
 
 Acceptance:
 
@@ -246,7 +241,7 @@ Acceptance:
 1. Complete Step 04 API, subsystem health, generated artifacts, and .NET test
    discovery.
 2. Complete Step 05 convergence, restart, partition, and recovery scenarios.
-3. Complete Step 06 security, jitter, load validation, and operations work.
+3. Complete Step 06 jitter, load validation, and operations work.
 
 The largest uncertainty remains realistic multi-machine route partition testing
 on one Windows scenario host.

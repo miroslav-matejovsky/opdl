@@ -6,4 +6,9 @@ Nothing here blocks the current POC.
 
 ## Index
 
-Empty for now.
+- [NATS route security](route-security.md)
+
+## Transport / Security
+
+- [NATS route security](route-security.md) (Effort: Medium, Value: High)
+

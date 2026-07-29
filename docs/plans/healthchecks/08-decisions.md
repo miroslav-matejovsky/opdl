@@ -1,9 +1,10 @@
 # Required decisions
 
 D01 through D12, D14, and D15 are accepted and reflected in the implementation.
-D13 remains open and blocks production rollout. D08's multiplier, future HTTPS
-certificate sourcing, and a future service-instance identifier remain explicit
-follow-up decisions rather than blockers for the current HTTP slice.
+D08's multiplier, future HTTPS certificate sourcing, and a future service-instance
+identifier remain explicit follow-up decisions rather than blockers for the current
+HTTP slice. NATS route security (formerly D13) has been moved to the standing
+backlog ([docs/backlog/route-security.md](../../backlog/route-security.md)).
 
 ## Decision summary
 
@@ -21,7 +22,6 @@ follow-up decisions rather than blockers for the current HTTP slice.
 | D10 | HTTP semantics | GET to machine IP, 2xx success, no redirect or proxy | Simple, deterministic, and works with simulated Windows machines |
 | D11 | Public query | `GET /health/services` on every instance | Every process owns a complete in-memory view |
 | D12 | Redundancy coupling | No effect on platform ownership or readiness | Ownership movement cannot repair the same machine service |
-| D13 | Route security | Open: mutual route security before production | Cluster name alone does not protect health integrity |
 | D14 | Distribution abstraction | Narrow health interfaces only | Avoids blocking a concrete feature on an unaccepted general refactor |
 | D15 | Persistence | No health result, last-value, or JetStream storage | Periodic snapshots and expiry meet the stated requirement |
 
@@ -201,19 +201,6 @@ ownership churn.
 
 Future service activation may consume the site health view through a narrow
 query contract. It must make its own election and fencing decisions.
-
-## D13: NATS route security
-
-Recommendation: require mutually authenticated and encrypted routes for
-production. Provision private material outside the compiled descriptor. Keep
-the client listener in-process or loopback-only.
-
-Rationale: false health data can mislead operators and future automation. The
-current cluster name check is routing configuration, not authentication.
-
-If certificate infrastructure is not ready, explicitly classify the first
-release as trusted-network-only and prohibit automated service actions based on
-the view.
 
 ## D14: distribution abstraction
 

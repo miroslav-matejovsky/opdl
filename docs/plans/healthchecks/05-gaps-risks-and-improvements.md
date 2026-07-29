@@ -14,7 +14,6 @@ Priorities:
 | Type | Gap or risk | Impact | Required action |
 | --- | --- | --- | --- |
 | Delivery gap | No `GET /health/services` endpoint, response types, OpenAPI contract, or generated .NET client | The converged in-memory view cannot be consumed or asserted outside the process | Implement the Step 04 API slice on Active, Passive, and journal-less handlers |
-| Security gate | NATS routes have no authentication or TLS | A route peer can inject false health and read site traffic | Complete D13 before production, or formally constrain deployment to a trusted network |
 
 ## P1
 

@@ -17,7 +17,7 @@ source of truth.
 
 | Step | Status |
 | --- | --- |
-| 00 - decisions | Core decisions accepted; D13 route security remains a production gate |
+| 00 - decisions | Core decisions accepted |
 | 01 - descriptor | Complete |
 | 02 - local probe engine | Complete; startup jitter remains hardening work |
 | 03 - NATS distribution and site reduction | Complete |
@@ -116,7 +116,7 @@ NATS health transport -> site reducer [done]
                  public API [next]
                          |
                          v
-              scenarios, security, rollout
+               scenarios, rollout
 ```
 
 ## Relation to the hierarchy plan

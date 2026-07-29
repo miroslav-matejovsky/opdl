@@ -37,7 +37,6 @@ machine/servicehealth workers
 | Service-health HTTP API | Missing |
 | Generated SDK service-health API | Missing |
 | Multi-instance and multi-machine convergence scenarios | Missing |
-| Production route security | Missing |
 
 ## Descriptor boundary
 
