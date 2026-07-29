@@ -9,6 +9,7 @@ func Scenarios() runner.Set {
 		Package: "redundancy",
 		Scenarios: []runner.Scenario{
 			{Name: "FailoverAndFailback", Func: FailoverAndFailback},
+			{Name: "SimultaneousStartup", Func: SimultaneousStartup},
 		},
 	}
 }
