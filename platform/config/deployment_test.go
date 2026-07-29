@@ -32,7 +32,7 @@ const (
 	standbyFilesJSON = `"events_file":".data/platform/standby/events.jsonl","state_file":".data/platform/standby/state.json","log_file":".data/platform/standby/platform.log"`
 	leaseJSON        = `"lease":{"file":"D:/opdl/lease",` + leaseTimingsJSON + `}`
 	// leaseTimingsJSON are the timings a valid lease states, without the file.
-	leaseTimingsJSON = `"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s","lag_bound":"30s"`
+	leaseTimingsJSON = `"duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"`
 
 	// standbyless is a machine that deploys only a Primary Instance: no standby
 	// record, and therefore no lease.
@@ -127,12 +127,12 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			err:  "lease.file is required",
 		},
 		"bad lease duration": {
-			json: `{` + machineJSON + `,` + primaryJSON + `,` + standbyJSON + `,"lease":{"file":"D:/opdl/lease","duration":"soon","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s","lag_bound":"30s"}}`,
+			json: `{` + machineJSON + `,` + primaryJSON + `,` + standbyJSON + `,"lease":{"file":"D:/opdl/lease","duration":"soon","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
 			err:  "lease.duration",
 		},
-		"missing lease lag bound": {
-			json: `{` + machineJSON + `,` + primaryJSON + `,` + standbyJSON + `,"lease":{"file":"D:/opdl/lease","duration":"15s","renewal_interval":"5s","health_check_interval":"2s","failback_stabilization":"30s"}}`,
-			err:  "lease.lag_bound is required",
+		"missing lease failback stabilization": {
+			json: `{` + machineJSON + `,` + primaryJSON + `,` + standbyJSON + `,"lease":{"file":"D:/opdl/lease","duration":"15s","renewal_interval":"5s","health_check_interval":"2s"}}`,
+			err:  "lease.failback_stabilization is required",
 		},
 		"missing machine events file": {
 			json: `{` + primaryJSON + `}`,
@@ -181,7 +181,7 @@ func TestDescriptorDecodesARedundantMachine(t *testing.T) {
 	require.True(t, descriptor.HasStandby())
 	require.Equal(t, "127.0.0.1:8081", descriptor.Standby.APIAddress)
 	require.NotNil(t, descriptor.Lease)
-	require.Equal(t, "30s", descriptor.Lease.LagBound)
+	require.Equal(t, "30s", descriptor.Lease.FailbackStabilization)
 }
 
 // TestDescriptorDecodesTheEventFabricRoutes checks the peers an instance's

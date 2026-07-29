@@ -15,8 +15,9 @@ and lower-level storage are implemented. Site distribution is not.
 | Site distribution and durable consumer positions | Not implemented |
 
 The runtime opens the instance and machine files before ownership management.
-`app.hasEventStorage` is still hardcoded `false`, so the site path is
-unreachable.
+There is no site path in the runtime at all: the unimplemented site composition
+has been removed rather than left behind a disabled flag, so site distribution
+is work to be added rather than work to be enabled.
 
 ## Event model
 

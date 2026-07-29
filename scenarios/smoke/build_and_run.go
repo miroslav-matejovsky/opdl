@@ -14,15 +14,14 @@ import (
 // BuildAndRunSingleMachine builds the simplest deployment there is and asks the
 // running platform who it is.
 //
-// One machine, one Primary Instance, no standby, and no event storage: nothing
-// to coordinate with, nothing to fail over to, and no journal. The whole
-// deployment is one process binding one listener, which makes this the floor the
-// rest of the suite would build up from. Nothing here imports platform code; the
-// binary under test is the one the builder produced a moment earlier.
+// One machine, one Primary Instance, no standby: nothing to coordinate with and
+// nothing to fail over to. The whole deployment is one process binding one
+// listener, which makes this the floor the rest of the suite would build up
+// from. Nothing here imports platform code; the binary under test is the one the
+// builder produced a moment earlier.
 //
-// A deployment with no journal serves no domain operation, and the scenario
-// checks that too: the instance is Active and healthy, and it says so in its own
-// log, not because anything is wrong with it.
+// The platform has no domain surface yet, so the scenario checks what a running
+// instance does have: it is Active and healthy, and it says so in its own log.
 func BuildAndRunSingleMachine(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -38,8 +37,8 @@ func BuildAndRunSingleMachine(t *testing.T) {
 	require.Equal(t, []string{"-instance", "primary"}, manifest.Primary.Args)
 
 	// StartSite waits for the instance to report itself active, which is the
-	// runtime's own statement that it bound its API, brought its Event Fabric up,
-	// and replayed the journal.
+	// runtime's own statement that it bound its API and brought its Event Fabric
+	// up.
 	deployment.StartSite(ctx, t)
 
 	instance, code := harness.GetInstance(ctx, t, node)
@@ -58,8 +57,6 @@ func BuildAndRunSingleMachine(t *testing.T) {
 	require.Contains(t, logs, "platform configuration")
 	require.Contains(t, logs, "events_file  "+filepath.ToSlash(node.Sockets.EventsFile))
 	require.Contains(t, logs, "state_file   "+filepath.ToSlash(node.Sockets.StateFile))
-	require.NotContains(t, logs, "event fabric configuration",
-		"a deployment with no event storage starts no Event Fabric to report one")
 
 	// The application log is the other local file the blueprint authored, and it
 	// is a separate record from the events: the instance says what it was doing
@@ -75,8 +72,8 @@ func BuildAndRunSingleMachine(t *testing.T) {
 		return r.Message == "platform starting"
 	}), "the log opens with the startup record: %+v", records)
 	require.True(t, slices.ContainsFunc(records, func(r harness.LogRecord) bool {
-		return r.Message == "active; domain operations are refused"
-	}), "a deployment with no journal says so in its log as well as in its refusals: %+v", records)
+		return r.Message == "active"
+	}), "the instance records taking Primary Ownership in its own log: %+v", records)
 
 	// The instance recorded its incarnation durably. This one has had two: the
 	// process started, and then it took Primary Ownership. A machine with no

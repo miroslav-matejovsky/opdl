@@ -60,22 +60,3 @@ func TestTimeoutsOfSkipsAnInstanceThatIsNotDeployed(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, timeouts)
 }
-
-func TestLagBoundOfReadsTheLease(t *testing.T) {
-	bound, err := lagBoundOf(&Lease{LagBound: "3s"})
-	require.NoError(t, err)
-	require.Equal(t, 3*time.Second, bound)
-
-	for _, stated := range []string{"", "0s", "-1s"} {
-		_, err := lagBoundOf(&Lease{LagBound: stated})
-		require.ErrorContains(t, err, "lease.lag_bound")
-	}
-}
-
-// TestLagBoundOfWithoutALease checks a standby-less machine has no failover
-// bound rather than a zero one it has to defend.
-func TestLagBoundOfWithoutALease(t *testing.T) {
-	bound, err := lagBoundOf(nil)
-	require.NoError(t, err)
-	require.Zero(t, bound)
-}

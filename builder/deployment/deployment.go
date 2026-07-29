@@ -103,12 +103,6 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `json:"failback_stabilization"`
-	// LagBound is how far a process's projection may fall behind the journal
-	// before it stops being promotable, and before an Active process stops
-	// serving rather than answering from a stale view. It is carried on the lease
-	// because it bounds a failover, which is a question only a machine that
-	// deploys a standby asks.
-	LagBound string `json:"lag_bound"`
 }
 
 // validate checks a resolved lease is complete and its timings are usable. It is
@@ -133,9 +127,6 @@ func (l *Lease) validate() error {
 		return err
 	}
 	if _, err := validatePositiveDuration("lease.failback_stabilization", l.FailbackStabilization); err != nil {
-		return err
-	}
-	if _, err := validatePositiveDuration("lease.lag_bound", l.LagBound); err != nil {
 		return err
 	}
 	if renewal >= duration {

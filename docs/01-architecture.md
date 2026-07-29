@@ -146,13 +146,13 @@ address between processes.
 
 ### Current site limitation
 
-Site event distribution has not been implemented. `app.hasEventStorage` returns
-`false`, so no site projection or durable handler is opened. Health endpoints
-and `GET /instance` work; the platform has no domain operation to serve beyond
-them.
+Site event distribution has not been implemented, and the runtime carries no
+placeholder for it: there is no site composition, no projection, and no durable
+handler. Health endpoints and `GET /instance` work; the platform has no domain
+operation to serve beyond them.
 
-The projection lag bound remains in the descriptor but is not consulted on this
-path. The hierarchy plan tracks the remaining work in
+Because nothing trails a journal, there is no projection lag to bound and the
+descriptor carries no lag bound. The hierarchy plan tracks the remaining work in
 [`docs/plans/hierarchy`](plans/hierarchy/README.md).
 
 ## Local redundancy

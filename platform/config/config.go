@@ -18,7 +18,6 @@ type Config struct {
 	descriptor Descriptor
 	primary    instanceTimeouts
 	standby    instanceTimeouts
-	lagBound   time.Duration
 }
 
 // instanceTimeouts are one instance's parsed listener timeouts. They are per
@@ -47,10 +46,6 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	cfg.lagBound, err = lagBoundOf(d.Lease)
-	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
 	return cfg, nil
 }
 
@@ -70,16 +65,6 @@ func timeoutsOf(role PlatformInstanceRole, instance *Instance) (instanceTimeouts
 		return instanceTimeouts{}, err
 	}
 	return instanceTimeouts{readHeader: readHeader, shutdown: shutdown}, nil
-}
-
-// lagBoundOf parses the lease's projection lag bound. A machine that deploys no
-// Standby Instance carries no lease: it trades ownership with nobody, so there
-// is no failover for a lag bound to gate and the bound is zero.
-func lagBoundOf(lease *Lease) (time.Duration, error) {
-	if lease == nil {
-		return 0, nil
-	}
-	return validateDuration("lease.lag_bound", lease.LagBound)
 }
 
 func validateDuration(name, s string) (time.Duration, error) {
@@ -117,11 +102,6 @@ func (c *Config) ReadHeaderTimeout(standby bool) time.Duration {
 func (c *Config) ShutdownTimeout(standby bool) time.Duration {
 	return c.timeouts(standby).shutdown
 }
-
-// LagBound returns the lease's projection lag bound. A process lagging beyond it
-// is not ready to take over, and an active process beyond it stops serving. It
-// is zero on a machine that deploys no Standby Instance and therefore no lease.
-func (c *Config) LagBound() time.Duration { return c.lagBound }
 
 // Summary renders the effective configuration as a human-readable block for
 // logging at startup.
@@ -205,14 +185,13 @@ func instancesSummary(d Descriptor, self PlatformInstanceRole) string {
 }
 
 // leaseSummary renders the Primary Ownership lease file and its timings when a
-// standby is deployed. The lag bound is here because it is a lease timing: it
-// bounds whether ownership may move at all.
+// standby is deployed.
 func leaseSummary(lease *Lease) string {
 	if lease == nil {
 		return "(not deployed)"
 	}
-	return fmt.Sprintf("%s duration=%s renewal=%s health_check=%s failback=%s lag_bound=%s",
-		lease.File, lease.Duration, lease.RenewalInterval, lease.HealthCheckInterval, lease.FailbackStabilization, lease.LagBound)
+	return fmt.Sprintf("%s duration=%s renewal=%s health_check=%s failback=%s",
+		lease.File, lease.Duration, lease.RenewalInterval, lease.HealthCheckInterval, lease.FailbackStabilization)
 }
 
 func optionalPathSummary(path string) string {

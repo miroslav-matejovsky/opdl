@@ -81,15 +81,13 @@ platform instances observe the same service process on the same machine.
 ## Runtime lifecycle constraint
 
 The NATS server and client exist for the whole process lifetime, in both Passive
-and Active states. Service monitoring needs the same lifetime. It must not be
-opened by `app.open`, which is an unimplemented active/passive site-journal
-composition behind `hasEventStorage == false`.
+and Active states. Service monitoring needs the same lifetime.
 
-Tying service health to `app.open` would create two bugs:
-
-1. no checks would run in the current journal-less runtime; and
-2. a Passive instance would not continuously perform the checks required by
-   this feature.
+The runtime has no site-journal composition to attach it to: the unimplemented
+`app.open` and `hasEventStorage` were removed, so there is no activation-scoped
+composition to be tempted by. Tying service health to a future one would still
+be wrong, because a Passive instance must continuously perform the checks this
+feature requires.
 
 The monitoring subsystem belongs in `app.Run`, after the embedded broker and
 health distribution client are ready and before `runProcess` enters ownership

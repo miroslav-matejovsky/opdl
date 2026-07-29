@@ -91,15 +91,13 @@ const (
 	// peers onto the other would fail.
 	peerNATSRoute = "nats://10.0.1.11:6222"
 
-	// The Primary Ownership lease a standby machine carries: a shared file, the
-	// failover timings, and the projection lag bound that gates a failover, all
-	// round-tripped through the platform's type intact.
+	// The Primary Ownership lease a standby machine carries: a shared file and the
+	// failover timings, round-tripped through the platform's type intact.
 	leaseFile                  = "D:/opdl/customer-a/north/sensor/lease"
 	leaseDuration              = "15s"
 	leaseRenewalInterval       = "5s"
 	leaseHealthCheckInterval   = "2s"
 	leaseFailbackStabilization = "30s"
-	leaseLagBound              = "30s"
 )
 
 // standbyNATSRoutes are the peers the Standby Instance's server dials: the other
@@ -171,7 +169,6 @@ func checkRoundTripFor(hasStandby bool) error {
 			RenewalInterval:       leaseRenewalInterval,
 			HealthCheckInterval:   leaseHealthCheckInterval,
 			FailbackStabilization: leaseFailbackStabilization,
-			LagBound:              leaseLagBound,
 		}
 		wantLease = &platformconfig.Lease{
 			File:                  leaseFile,
@@ -179,7 +176,6 @@ func checkRoundTripFor(hasStandby bool) error {
 			RenewalInterval:       leaseRenewalInterval,
 			HealthCheckInterval:   leaseHealthCheckInterval,
 			FailbackStabilization: leaseFailbackStabilization,
-			LagBound:              leaseLagBound,
 		}
 	}
 
@@ -361,7 +357,7 @@ func verifyWireLease(wire map[string]json.RawMessage, hasStandby bool) error {
 	if err := json.Unmarshal(leaseRaw, &leaseFields); err != nil {
 		return err
 	}
-	for _, field := range []string{"file", "duration", "renewal_interval", "health_check_interval", "failback_stabilization", "lag_bound"} {
+	for _, field := range []string{"file", "duration", "renewal_interval", "health_check_interval", "failback_stabilization"} {
 		if _, ok := leaseFields[field]; !ok {
 			return fmt.Errorf("builder descriptor omitted lease.%s", field)
 		}

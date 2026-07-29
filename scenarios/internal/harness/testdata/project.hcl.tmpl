@@ -76,7 +76,6 @@ project "{{ .Name }}" {
           renewal_interval       = "500ms"
           health_check_interval  = "250ms"
           failback_stabilization = "2s"
-          lag_bound              = "2m"
         }
 
         api {

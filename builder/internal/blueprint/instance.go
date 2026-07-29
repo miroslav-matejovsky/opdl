@@ -168,9 +168,6 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `hcl:"failback_stabilization"`
-	// LagBound is how far a process's projection may fall behind the journal
-	// before it stops being promotable.
-	LagBound string `hcl:"lag_bound"`
 }
 
 func validatePrimaryEndpoints(machine Machine) error {
@@ -341,9 +338,6 @@ func validateLease(machine Machine) error {
 		return err
 	}
 	if _, err := validateLeaseDuration(machine.Name, "failback_stabilization", lease.FailbackStabilization); err != nil {
-		return err
-	}
-	if _, err := validateLeaseDuration(machine.Name, "lag_bound", lease.LagBound); err != nil {
 		return err
 	}
 	if renewal >= duration {

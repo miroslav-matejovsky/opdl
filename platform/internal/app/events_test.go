@@ -48,55 +48,6 @@ func TestApplicationEventsDeclareTheirContract(t *testing.T) {
 			want:     events.SeverityError,
 		},
 		{name: "standby waiting", event: StandbyWaiting{}, wantType: TypeStandbyWaiting, want: events.SeverityInfo},
-		{name: "standby open retry", event: StandbyOpenRetry{}, wantType: TypeStandbyOpenRetry, want: events.SeverityWarn},
-		{name: "standby ready", event: StandbyReady{}, wantType: TypeStandbyReady, want: events.SeverityInfo},
-		{
-			name:     "projection caught up",
-			event:    ProjectionCaughtUp{},
-			wantType: TypeProjectionCaughtUp,
-			want:     events.SeverityInfo,
-		},
-		{
-			name:     "projection lag exceeded",
-			event:    ProjectionLagExceeded{},
-			wantType: TypeProjectionLagExceeded,
-			want:     events.SeverityError,
-		},
-		{
-			name:     "failover readiness gained",
-			event:    FailoverReadinessChanged{Ready: true},
-			wantType: TypeFailoverReadinessChanged,
-			want:     events.SeverityInfo,
-		},
-		{
-			name:     "failover readiness lost",
-			event:    FailoverReadinessChanged{},
-			wantType: TypeFailoverReadinessChanged,
-			want:     events.SeverityWarn,
-		},
-		{name: "site opening", event: SiteOpening{}, wantType: TypeSiteOpening, want: events.SeverityInfo},
-		{name: "site open failed", event: SiteOpenFailed{}, wantType: TypeSiteOpenFailed, want: events.SeverityError},
-		{name: "site ready", event: SiteReady{}, wantType: TypeSiteReady, want: events.SeverityInfo},
-		{name: "site stopping", event: SiteStopping{}, wantType: TypeSiteStopping, want: events.SeverityInfo},
-		{name: "site stopped cleanly", event: SiteStopped{}, wantType: TypeSiteStopped, want: events.SeverityInfo},
-		{
-			name:     "site stopped failing",
-			event:    SiteStopped{Error: "boom"},
-			wantType: TypeSiteStopped,
-			want:     events.SeverityError,
-		},
-		{
-			name:     "background loop canceled",
-			event:    BackgroundLoopStopped{Loop: "projector"},
-			wantType: TypeBackgroundLoopStopped,
-			want:     events.SeverityInfo,
-		},
-		{
-			name:     "background loop failed",
-			event:    BackgroundLoopStopped{Loop: "projector", Error: "boom"},
-			wantType: TypeBackgroundLoopStopped,
-			want:     events.SeverityError,
-		},
 	}
 	// The scope assertion below goes through a real stamper rather than asking
 	// the event, because what this catalog claims is that it declares no scope at
@@ -132,12 +83,12 @@ func TestApplicationEventsAreStampedIntoValidEnvelopes(t *testing.T) {
 	factory, err := events.NewFactory(testDescriptor, "primary")
 	require.NoError(t, err)
 
-	failure, err := factory.Wrap(t.Context(), SiteOpenFailed{Phase: PhaseEventFabric, Error: "journal unreachable"})
+	failure, err := factory.Wrap(t.Context(), APIStopped{Error: "listener closed"})
 	require.NoError(t, err)
 	require.NoError(t, failure.Validate())
 	require.Equal(t, events.SeverityError, failure.Severity)
-	require.JSONEq(t, `{"phase":"event_fabric","error":"journal unreachable"}`, string(failure.Data),
-		"a failure keeps its phase and its error, and repeats no envelope metadata")
+	require.JSONEq(t, `{"error":"listener closed"}`, string(failure.Data),
+		"a failure keeps its error, and repeats no envelope metadata")
 
 	waiting, err := factory.Wrap(t.Context(), StandbyWaiting{})
 	require.NoError(t, err)

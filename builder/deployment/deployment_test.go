@@ -91,7 +91,6 @@ func validDescriptor() deployment.Descriptor {
 			RenewalInterval:       "5s",
 			HealthCheckInterval:   "2s",
 			FailbackStabilization: "30s",
-			LagBound:              "30s",
 		},
 	}
 }
@@ -204,9 +203,9 @@ func TestDescriptorValidateFailures(t *testing.T) {
 			"standby.api_shutdown_timeout is required",
 		},
 		{
-			"missing lease lag bound",
-			func(d *deployment.Descriptor) { d.Lease.LagBound = "" },
-			"lease.lag_bound is required",
+			"missing lease failback stabilization",
+			func(d *deployment.Descriptor) { d.Lease.FailbackStabilization = "" },
+			"lease.failback_stabilization is required",
 		},
 		{
 			"instances share an api address",

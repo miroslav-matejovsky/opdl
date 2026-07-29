@@ -5,8 +5,8 @@ package redundancy
 // StateActive is a machine that has failed over.
 //
 // Only StateActive owns the machine's externally visible, decision-producing
-// capabilities. The Passive instance follows the journal, answers for itself,
-// and produces no domain decision.
+// capabilities. The Passive instance answers for itself and produces no domain
+// decision.
 //
 // There are two states because there are two things an instance can be doing.
 // The type used to carry four more — starting, activating, stopping, failed — so
@@ -18,10 +18,10 @@ package redundancy
 type State string
 
 const (
-	// StatePassive is a process connected to the journal with caught-up local
-	// projections but no durable domain handlers or domain-serving API. It may
-	// host its instance's authored Event Fabric server. A passive instance waits
-	// for Primary Ownership and produces no domain decision.
+	// StatePassive is a process with no durable domain handlers and no
+	// domain-serving API. It hosts its instance's authored Event Fabric server
+	// and answers about itself. A passive instance waits for Primary Ownership
+	// and produces no domain decision.
 	StatePassive State = "passive"
 	// StateActive is the process holding Primary Ownership. It owns domain API
 	// serving, durable domain handlers, and readiness publication.

@@ -109,15 +109,6 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `json:"failback_stabilization"`
-	// LagBound is how far a process's projection may fall behind the journal
-	// before it stops being promotable, and before an Active process stops
-	// serving rather than answering from a stale view.
-	//
-	// It is on the lease because it bounds a failover: a machine that deploys no
-	// standby has no lease, trades ownership with nobody, and therefore has no
-	// lag bound either. It is an operational safety bound, not a failover-time
-	// SLO.
-	LagBound string `json:"lag_bound"`
 }
 
 // UnmarshalJSON decodes a descriptor and requires every instance record it
@@ -266,7 +257,7 @@ func validateLeaseField(fields map[string]json.RawMessage, hasStandby bool) erro
 	if _, err := requiredField(leaseFields, "lease.file"); err != nil {
 		return err
 	}
-	for _, field := range []string{"duration", "renewal_interval", "health_check_interval", "failback_stabilization", "lag_bound"} {
+	for _, field := range []string{"duration", "renewal_interval", "health_check_interval", "failback_stabilization"} {
 		raw, err := requiredField(leaseFields, "lease."+field)
 		if err != nil {
 			return err

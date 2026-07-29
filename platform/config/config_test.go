@@ -38,15 +38,13 @@ func TestLoadParsesTheInstanceTimeouts(t *testing.T) {
 	require.Equal(t, 10*time.Second, cfg.ShutdownTimeout(false))
 }
 
-// TestLoadHasNoLagBoundWithoutALease checks a machine that deploys no Standby
-// Instance carries no lease, and therefore no failover bound: it trades
-// ownership with nobody.
-func TestLoadHasNoLagBoundWithoutALease(t *testing.T) {
+// TestLoadHasNoLeaseWithoutAStandby checks a machine that deploys no Standby
+// Instance carries no lease: it trades ownership with nobody.
+func TestLoadHasNoLeaseWithoutAStandby(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)
 
 	require.Nil(t, cfg.Descriptor().Lease)
-	require.Zero(t, cfg.LagBound())
 }
 
 func TestSummaryShowsConfiguration(t *testing.T) {

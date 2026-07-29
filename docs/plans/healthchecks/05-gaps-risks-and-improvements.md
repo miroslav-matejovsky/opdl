@@ -16,7 +16,7 @@ Priorities:
 | Gap | NATS client has no health publish/subscribe path | Results cannot leave the process | Add a dedicated ephemeral health adapter |
 | Gap | No observation identity, ordering, freshness, or reducer contract | Duplicate observers and message loss produce undefined views | Accept and test the contract in this plan before coding |
 | Risk | Current NATS routes have no authentication or TLS | A route peer can inject false health and read site traffic | Secure routes before production or explicitly accept a trusted-network deployment |
-| Design trap | `hasEventStorage` is hardcoded false and `app.open` is unimplemented | Health work tied to the site journal would never run | Compose monitoring at process lifetime in `app.Run` |
+| Design trap | The runtime has no site-journal composition (`app.open` and `hasEventStorage` were removed) | Health work scoped to an activation would not run while Passive | Compose monitoring at process lifetime in `app.Run` |
 | Design trap | Platform peer failover consumes `/health` | Folding target failure into platform health can cause useless ownership churn | Keep target status out of the platform Unhealthy decision |
 
 ## P1

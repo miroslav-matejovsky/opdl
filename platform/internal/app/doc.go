@@ -8,6 +8,7 @@
 // sequences Passive and Active compositions, while app swaps the HTTP handler
 // for the current state.
 //
-// Site composition remains unimplemented. Until site distribution lands, the
-// Active state serves the journal-less API surface.
+// The platform distributes no site state. An Active instance serves health and
+// identity for its machine, and a Passive one waits for ownership with nothing
+// to catch up on.
 package app

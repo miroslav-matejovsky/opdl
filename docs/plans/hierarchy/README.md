@@ -33,8 +33,10 @@ platform behavior consumes them.
 
 ## Remaining gap
 
-Site distribution has no implementation. `app.hasEventStorage` returns `false`,
-`app.open`, `registration.CommandService.Create`, and
+Site distribution has no implementation and no placeholder for one. The
+unimplemented `app.open` composition, `app.hasEventStorage`, and the projection
+lag machinery have been removed from the runtime, so this is work to be added
+rather than work to be enabled. `registration.CommandService.Create` and
 `registration.NewHandler` are stubs, and `app.topology` knows only the local
 machine. Registration therefore returns `503` on every deployment.
 

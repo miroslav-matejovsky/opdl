@@ -282,11 +282,6 @@ func TestProjectValidateLeaseFailures(t *testing.T) {
 		"renewal not shorter":   {func(l *blueprint.Lease) { l.RenewalInterval = "15s" }, "must be shorter than duration"},
 		"blank health interval": {func(l *blueprint.Lease) { l.HealthCheckInterval = "" }, "lease.health_check_interval is required"},
 		"blank failback":        {func(l *blueprint.Lease) { l.FailbackStabilization = "" }, "lease.failback_stabilization is required"},
-		"blank lag bound":       {func(l *blueprint.Lease) { l.LagBound = "" }, "lease.lag_bound is required"},
-		"bad lag bound":         {func(l *blueprint.Lease) { l.LagBound = "soon" }, "is not a valid duration"},
-		"non-positive lag bound": {
-			func(l *blueprint.Lease) { l.LagBound = "0s" }, "must be positive",
-		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

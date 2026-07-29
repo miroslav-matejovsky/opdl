@@ -81,7 +81,6 @@ func lease(machine blueprint.Machine) *deployment.Lease {
 		RenewalInterval:       authored.RenewalInterval,
 		HealthCheckInterval:   authored.HealthCheckInterval,
 		FailbackStabilization: authored.FailbackStabilization,
-		LagBound:              authored.LagBound,
 	}
 }
 

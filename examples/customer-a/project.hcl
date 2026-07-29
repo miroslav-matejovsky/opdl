@@ -136,7 +136,6 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
@@ -220,7 +219,6 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
@@ -295,7 +293,6 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
@@ -373,7 +370,6 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {

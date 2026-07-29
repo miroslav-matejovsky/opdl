@@ -109,7 +109,6 @@ func validLease(file string) *blueprint.Lease {
 		RenewalInterval:       "5s",
 		HealthCheckInterval:   "2s",
 		FailbackStabilization: "30s",
-		LagBound:              "30s",
 	}
 }
 

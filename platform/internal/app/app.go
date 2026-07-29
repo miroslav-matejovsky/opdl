@@ -85,9 +85,8 @@ func Run(args []string) (runErr error) {
 	// a logger through every one of them to carry it would say it was.
 	slog.SetDefault(logger.Logger)
 
-	// One factory per process stamps everything this process states, locally and
-	// into the site journal, so origin and occurrence identity are decided once
-	// and never by a caller.
+	// One factory per process stamps everything this process states, so origin
+	// and occurrence identity are decided once and never by a caller.
 	factory, err := events.NewFactory(descriptor, role.String())
 	if err != nil {
 		return err
@@ -246,9 +245,7 @@ func Run(args []string) (runErr error) {
 		cfg:          cfg,
 		role:         role,
 		started:      started,
-		factory:      factory,
 		local:        local,
-		record:       record,
 		state:        stateStore,
 		fabricHealth: fabric.Check,
 		log:          logger.Logger,

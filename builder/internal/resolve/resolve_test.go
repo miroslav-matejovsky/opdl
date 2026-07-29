@@ -57,7 +57,6 @@ func machine(name, ip string, standbyDisabled bool) blueprint.Machine {
 			RenewalInterval:       "5s",
 			HealthCheckInterval:   "2s",
 			FailbackStabilization: "30s",
-			LagBound:              "30s",
 		}
 		standby.EventlogFile = eventsFile(name, "standby")
 		standby.StateFile = stateFile(name, "standby")
@@ -340,7 +339,6 @@ func TestBuildCarriesAuthoredLease(t *testing.T) {
 			RenewalInterval:       "5s",
 			HealthCheckInterval:   "2s",
 			FailbackStabilization: "30s",
-			LagBound:              "30s",
 		}, plan.Machines[0].Lease)
 	})
 
