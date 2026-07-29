@@ -8,6 +8,10 @@ Read the documentation in this order:
    current site-distribution gap.
 3. [Logging](03-logging.md) describes the structured application log each
    instance writes, and how it differs from an event.
+4. [Service health](04-service-health.md) describes what the platform observes
+   about the services a deployment declares, how to read
+   `GET /health/services`, the supported load, and what upgrading to the
+   structured descriptor requires.
 
 The numbered prefixes are the recommended reading order. They do not indicate
 implementation stages.

@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Deps are the seams a monitor runs on: what performs an attempt, what receives
@@ -23,6 +26,15 @@ type Deps struct {
 	// Clock stamps observations and times the wait between attempts. A running
 	// process passes SystemClock{}.
 	Clock Clock
+	// Observer is who is doing the probing: the fixed platform instance role,
+	// "primary" or "standby". It is what makes a machine's two instances start
+	// their workers at different points in the interval instead of together; see
+	// jitterFor.
+	//
+	// It is required rather than defaulted for the same reason the seams above
+	// are. A monitor that invented an observer identity would decide, inside a
+	// package that knows nothing about the deployment, which observers collide.
+	Observer string
 }
 
 func (d Deps) validate() error {
@@ -33,6 +45,8 @@ func (d Deps) validate() error {
 		return errors.New("sink is required")
 	case d.Clock == nil:
 		return errors.New("clock is required")
+	case strings.TrimSpace(d.Observer) == "":
+		return errors.New("observer is required")
 	}
 	return nil
 }
@@ -82,11 +96,46 @@ func Start(ctx context.Context, deps Deps, targets []Target) (*Monitor, error) {
 	workerCtx, stop := context.WithCancel(ctx)
 	monitor := &Monitor{stop: stop}
 	for _, target := range targets {
-		worker := &worker{target: target, deps: deps, track: newTracker(target.Retries)}
+		worker := &worker{
+			target: target,
+			deps:   deps,
+			track:  newTracker(target.Retries),
+			jitter: jitterFor(deps.Observer, target.Service, target.Interval),
+		}
 		monitor.workers.Go(func() { worker.run(workerCtx) })
 	}
-	slog.Info("service health monitoring started", "targets", len(targets))
+	slog.Info("service health monitoring started", "targets", len(targets), "observer", deps.Observer)
 	return monitor, nil
+}
+
+// jitterFor is how long this observer's worker for this service waits before
+// its first attempt, somewhere in [0, interval).
+//
+// It exists because both of a machine's instances probe every service on it, and
+// both start their workers the moment their process does. Without this they
+// probe together: a machine rebooting starts its two instances within the same
+// second, every service on it is asked twice at once, and because each worker
+// then waits a fixed interval the pair stays in step for as long as both run. A
+// service authored with sixteen siblings receives all thirty-two of those
+// requests in the same instant, forever.
+//
+// It is derived rather than random, and that is the part worth keeping. A
+// restarted instance resumes the phase it had before, so a restart cannot move
+// it onto its peer; two processes with the same observer identity and the same
+// service agree without coordinating; and a failing deployment can be reasoned
+// about from the descriptor rather than from what a seed happened to produce.
+//
+// The observer and the service are separated by a byte that can appear in
+// neither, so ("primary", "ab") and ("primar", "yab") do not hash alike.
+func jitterFor(observer, service string, interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	digest := fnv.New64a()
+	_, _ = digest.Write([]byte(observer))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write([]byte(service))
+	return time.Duration(digest.Sum64() % uint64(interval))
 }
 
 // Stop ends every worker and waits for the attempt each is in to finish.
@@ -108,16 +157,31 @@ type worker struct {
 	target Target
 	deps   Deps
 	track  *tracker
+	// jitter is how long this worker waits before its first attempt. It is fixed
+	// for the process's life and derived from who is observing what; see
+	// jitterFor.
+	jitter time.Duration
 }
 
-// run probes, reports, waits one interval, and repeats.
+// run waits out its startup jitter, then probes, reports, waits one interval,
+// and repeats.
 //
-// The wait comes after the attempt rather than on a fixed schedule, so two
-// attempts against one target never overlap: a probe that took most of its
-// timeout delays the next one instead of running beside it. That is also why
-// the first attempt happens immediately — a service is worth asking about from
-// the moment the process starts, not one interval later.
+// The interval wait comes after the attempt rather than on a fixed schedule, so
+// two attempts against one target never overlap: a probe that took most of its
+// timeout delays the next one instead of running beside it.
+//
+// The jitter is what the first attempt waits instead of happening at once. It
+// costs a service its first status for less than one interval — the view calls
+// it Unknown until then, which is what it is — and buys a machine's two
+// instances, and a machine's several services, phases that do not coincide.
 func (w *worker) run(ctx context.Context) {
+	if w.jitter > 0 {
+		select {
+		case <-w.deps.Clock.After(w.jitter):
+		case <-ctx.Done():
+			return
+		}
+	}
 	for {
 		w.attempt(ctx)
 		select {

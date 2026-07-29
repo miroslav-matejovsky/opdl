@@ -1,6 +1,9 @@
 # Plan: distributed service health checks
 
-Status: active implementation plan, reviewed against `2696172` on 2026-07-29.
+Status: implemented. Every step is complete except route partition testing,
+which stays open because no mechanism for it exists on a developer host. The
+operator-facing result is [Service health](../../04-service-health.md); these
+documents remain the record of how it was decided and what was measured.
 
 This plan introduces platform-managed health checks for every service authored
 on a machine. The Primary and Standby platform instances both probe every local
@@ -8,22 +11,25 @@ service. Each instance publishes its observations through the site's existing
 NATS cluster. Every running instance keeps an in-memory view of service health
 for the whole site.
 
-Steps 00 through 03 are implemented. The process-lifecycle part of Step 04 is
-also implemented. The next slice is the public API. These documents record both
-the implemented contract and the remaining work so there is one health-check
-source of truth.
+These documents record the implemented contract, the decisions behind it, and
+the little that remains, so there is one health-check source of truth.
 
 ## Implementation status
 
 | Step | Status |
 | --- | --- |
-| 00 - decisions | Core decisions accepted |
+| 00 - decisions | Complete; the load envelope is accepted and published |
 | 01 - descriptor | Complete |
-| 02 - local probe engine | Complete; startup jitter remains hardening work |
+| 02 - local probe engine | Complete, including deterministic startup jitter |
 | 03 - NATS distribution and site reduction | Complete |
-| 04 - lifecycle and API | Lifecycle complete; `GET /health/services`, platform subsystem health, OpenAPI, SDK, and .NET E2E discovery remain |
-| 05 - black-box convergence | Pending on the API |
-| 06 - production hardening | Pending |
+| 04 - lifecycle and API | Complete; `GET /health/services`, `serviceMonitor`, OpenAPI, SDK, and a non-vacuous .NET E2E gate |
+| 05 - black-box convergence | Complete except route partition |
+| 06 - production hardening | Complete except the environment's security posture |
+
+The two open items are tracked as P1 in
+[gaps](05-gaps-risks-and-improvements.md) and in
+[route security](../../backlog/route-security.md). Neither blocks the feature;
+both are about the environment it runs in rather than about what it does.
 
 ## Goals
 
@@ -113,10 +119,13 @@ NATS health transport -> site reducer [done]
                  runtime lifecycle [done]
                           |
                           v
-                 public API [next]
+                 public API [done]
                          |
                          v
-               scenarios, rollout
+          scenarios [done], hardening [done]
+                         |
+                         v
+            route partition testing [open]
 ```
 
 ## Relation to the hierarchy plan

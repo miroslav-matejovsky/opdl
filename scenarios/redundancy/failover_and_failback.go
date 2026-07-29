@@ -49,12 +49,15 @@ func FailoverAndFailback(t *testing.T) {
 	// Both instances are started as explicitly managed processes so the scenario
 	// can kill and restart the Primary without touching the Standby.
 	primary := node.StartManaged(ctx, t, harness.RolePrimary, manifest.Primary.Args)
-	standby := node.StartManaged(ctx, t, harness.RoleStandby, manifest.Standby.Args)
-	standbyPID := standby.PID()
+	var standby *harness.ManagedProcess
 
 	diag := harness.DiagStringer(func() string {
+		standbyLogs := "(not started)\n"
+		if standby != nil {
+			standbyLogs = standby.Logs()
+		}
 		return fmt.Sprintf("--- primary process ---\n%s\n--- standby process ---\n%s\n%s",
-			primary.Logs(), standby.Logs(), harness.Diagnose([]*harness.Machine{node}))
+			primary.Logs(), standbyLogs, harness.Diagnose([]*harness.Machine{node}))
 	})
 
 	// waitState polls one instance's own address until it reports the wanted
@@ -100,9 +103,18 @@ func FailoverAndFailback(t *testing.T) {
 		}
 	}()
 
-	// Normal life converges on the Preferred Primary shape, whichever instance
-	// won the empty lease first: the Primary serves, the Standby waits.
+	// The Primary takes the empty lease before the Standby exists to contest it.
+	//
+	// Started together they race for it, and the Standby wins often enough on a
+	// loaded host to matter: it takes ownership, hands it straight back, and the
+	// machine's record then holds an extra acquisition and an extra activation
+	// epoch before the story this scenario is about begins. That race is real —
+	// a rebooting machine starts both at once — but it is not what is being
+	// tested here, and every assertion below counts activations exactly.
 	waitState("primary reporting itself active", node.URL, harness.InstanceStateActive, primary)
+
+	standby = node.StartManaged(ctx, t, harness.RoleStandby, manifest.Standby.Args)
+	standbyPID := standby.PID()
 	waitState("standby reporting itself passive", node.StandbyURL, harness.InstanceStatePassive, standby)
 
 	// The Passive surface, observed end to end: the Standby answers health at

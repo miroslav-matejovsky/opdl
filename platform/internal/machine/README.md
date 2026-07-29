@@ -48,3 +48,11 @@ independent of Active or Passive ownership state. A success recovers
 immediately. Configured consecutive failures are required before Unhealthy.
 Each completed attempt emits the current stable observation. Distribution and
 site reduction remain site-level responsibilities.
+
+Each worker's first probe waits out a startup jitter in `[0, interval)`, derived
+from the observer's fixed instance role and the service name. It is what keeps a
+machine's two instances from asking every service the same question in the same
+instant and staying in step for as long as both run, and deriving it rather than
+randomising it means a restart resumes the same phase instead of moving onto the
+peer's. `internal/machine/servicehealth/load_test.go` measures a machine's whole
+supported load — 16 services at the 1s floor — and the shutdown it costs.

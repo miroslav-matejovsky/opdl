@@ -10,11 +10,11 @@
 | Reducer ordering, Unknown handling, freshness, inventory, and concurrency | Implemented |
 | App startup, startup failure, ownership transitions, and reverse shutdown | Implemented |
 | Real NATS peer delivery and sender no-echo on one embedded broker | Implemented |
-| Public API, OpenAPI, and generated SDK | Pending |
-| Routed multi-broker partition and recovery | Pending |
-| Windows black-box health convergence | Pending |
-| .NET E2E nonzero test discovery gate | Pending |
-| Startup jitter and supported-load validation | Pending |
+| Public API, OpenAPI, and generated SDK | Implemented |
+| Windows black-box health convergence, target transitions, observer loss, restart, and failover | Implemented |
+| .NET E2E nonzero test discovery gate | Implemented |
+| Startup jitter and supported-load validation | Implemented |
+| Routed multi-broker partition and recovery | Pending; no partition mechanism exists on a developer host |
 
 ## Test layers
 
@@ -115,28 +115,37 @@ Required cases:
 - API shutdown precedes health view teardown; and
 - OpenAPI and .NET SDK match the source types.
 
-The current `task sdk-dotnet` output reports that no E2E tests are available,
-but still exits successfully. Fix discovery and make zero discovered tests fail
-before treating this layer as service-health coverage.
+`sdk-dotnet/tests/Opdl.Sdk.E2E/test.runsettings` sets `TreatNoTestsAsError`, so
+a run that discovers nothing fails. The `scenarios/sdk` category runs those
+tests against a live instance and asserts each named test reported `Passed`
+rather than trusting the exit code, because a skipped test is a passing run.
 
 ### Windows black-box scenarios
 
-These scenarios are pending the public query endpoint. Existing scenarios prove
-process startup and lifecycle, but cannot yet inspect the site view.
+The `scenarios/health` category deploys two machines on separate loopback
+addresses — node-a with a Standby Instance, node-b without — each with a
+controllable service bound at the probe address its own blueprint authored.
+Every assertion runs against all three instances at once, because convergence is
+the claim being tested.
 
-Required scenarios:
+| Scenario | Covers |
+| --- | --- |
+| One machine, one observer | node-b, which deploys no Standby |
+| One machine, two observers | node-a, whose service both instances report on |
+| Two machines, every instance converges | The whole site, compared across the three views rather than trusting one |
+| A target answers 503 and then 200 again | Transition and immediate recovery, with the probe's error and failure count carried to observers that never probed it |
+| One platform instance is killed and restarted | Expiry by name, and reconstruction of the whole site — including the machine it is not on — from traffic that arrived after the restart |
+| Ownership fails over while checks continue | The instance that takes over was already probing, so the machine's services are never unwatched |
+| No health-result file is written | Every file each machine's blueprint authored is named, and anything else under the work directory fails |
 
-1. One machine, Primary only, one service.
-2. One machine, Primary and Standby, multiple services with different policies.
-3. Two machines, all platform instances converge.
-4. Target refuses connections, starts, returns 500, returns 200, then stops.
-5. One platform instance restarts and reconstructs the site view.
-6. A route outage makes remote observers stale while local probes continue.
-7. Route recovery converges on the next report.
-8. Platform ownership fails over and fails back without monitor interruption.
+A route outage and its recovery remain uncovered. Cutting a NATS route while
+both brokers stay up needs privileged network control, and killing a process is
+a machine outage rather than a partition. What is covered instead is the
+observable half of the same behavior: an observer that stops reporting expires,
+is named on every surviving instance, and does not change a target's status
+while another observer is current.
 
-Use the existing `waitfor` polling utilities and bounded deadlines. Fake service
-control should be explicit and deterministic.
+All waits are bounded polls. The category contains no sleep.
 
 ## Observability model
 
@@ -148,9 +157,20 @@ Three failures must remain distinct:
 | Monitor failure | The platform could not schedule, execute, or reduce checks |
 | Distribution failure | Local observations could not reach or be refreshed at remote instances |
 
-The service API exposes target state and view completeness. Platform `/health`
-exposes monitor and local broker subsystem state. Application logs explain
-actionable failures.
+Each has its own field, and none of them can be read from another's:
+
+| Where | Field |
+| --- | --- |
+| Target failure | `services[].status` on `/health/services` |
+| Monitor failure | `checks.serviceMonitor` on `/health`, which reports this instance's own observations about its own machine having expired |
+| Distribution failure | `distribution.state` and its counters on `/health/services` |
+
+`checks.eventFabric` on `/health` is a fourth thing and is not distribution: it
+round-trips a message through this instance's own embedded broker, so it passes
+while every route to every peer is down.
+
+[Service health](../../04-service-health.md) is the operator's reading of these,
+including which of them to look at for a given symptom.
 
 ## Logs
 
@@ -174,7 +194,9 @@ record. Health observations are not appended to the event journal.
 ## Counters
 
 Implemented counters cover publication, supersession, rejection, and apply
-outcomes. The public API still needs to expose the useful subset. Keep bounded
+outcomes, and `distribution` on `/health/services` exposes them. Every reason is
+rendered including the ones at zero, so an operator can see that something is
+not happening without first proving the reason exists. Keep bounded
 process-local counters for:
 
 - attempts by outcome;
@@ -201,21 +223,33 @@ The service-health response should report:
 - per-service observer details.
 
 It must not claim cluster-wide completeness merely because the local NATS
-round-trip passes. "Connected" means the local adapter is connected to its
-embedded broker. View completeness is inferred from fresh expected observers.
+round-trip passes. The implemented `distribution.state` therefore asks only
+about expected observers on *other* machines: an instance's own observations
+reach its view directly, so counting them would report a working site through a
+broker that had stopped carrying anything. `Connected`, `Partial`, `Isolated`,
+and `Local` are the four answers, and view completeness is inferred from fresh
+expected observers exactly as this section requires.
+
+Warm-up completeness and last-accepted-remote-observation time are not separate
+fields. Both are readable from what is there: a warming view has entries in
+`missingObservers`, and the most recent remote report is the smallest `ageMs`
+among observations from another machine.
 
 ## Performance bounds
 
-Before production rollout, define:
+Accepted and measured. The envelope is published in
+[Service health](../../04-service-health.md); this is where it comes from.
 
-- maximum machines per site;
-- maximum services per machine;
-- minimum probe interval;
-- maximum timeout;
-- maximum observation payload size;
-- maximum pending publication keys;
-- maximum API response size; and
-- maximum shutdown duration.
+| Bound | Value | Where it is enforced or measured |
+| --- | --- | --- |
+| Machines per site | 8 | `healthfabric/load_test.go` |
+| Services per machine | 16 | `servicehealth/load_test.go` |
+| Minimum probe interval | 1s | Both |
+| Maximum timeout | shorter than the interval, by descriptor validation | `blueprint.validateHealthCheck` |
+| Maximum observation payload | 8 KiB | `healthfabric.MaxMessageBytes`, enforced on decode |
+| Maximum pending publication keys | one per local service | The publisher's map is keyed by service; proven by conservation |
+| API response size | 128 services, each with up to 2 observations | Snapshot render measured at the full inventory |
+| Shutdown duration | one probe timeout | Asserted on a fully loaded monitor |
 
 Expected steady-state attempt rate is:
 
@@ -223,9 +257,20 @@ Expected steady-state attempt rate is:
 sum over services (deployed platform instances on machine / interval)
 ```
 
-A Standby doubles local probe traffic by requirement. Every resulting snapshot
-is fanned to every site instance. Load tests must cover the largest accepted
-site, not only one service.
+A Standby doubles local probe traffic by requirement, and every resulting
+snapshot is fanned to every site instance. At the accepted envelope that is 256
+observations per second, each delivered to 16 instances — about 180 KB/s of
+site-wide health traffic at roughly 700 bytes per observation.
+
+Both load tests run in the integration gate rather than on request, so the
+envelope is re-measured on every full run rather than remembered from one.
+
+Two things the measurements do not cover. The load test runs the whole site in
+one process, which is harder on memory and delivery scheduling than eight
+machines but easier on the network, so the network side of the envelope is
+inferred. And connection recovery after a route outage is untested for the same
+reason partition testing is: there is no way to cut a route between two live
+brokers on a developer host.
 
 ## Implementation validation gate
 

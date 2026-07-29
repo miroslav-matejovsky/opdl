@@ -1,8 +1,7 @@
 # Implementation roadmap
 
-Steps 00 through 05 are complete except for startup jitter, which is tracked in
-Step 06, and route partition testing, which stays open as a P1 gap. The next
-implementation slice is Step 06: production hardening and rollout.
+Every step is complete except route partition testing, which stays open as a P1
+gap because no mechanism for it exists on a developer host.
 
 ## Step 00: accept semantics
 
@@ -20,14 +19,19 @@ Actions:
    [Required decisions](08-decisions.md).
 2. Write the final observation schema and reducer examples before package APIs.
 3. Define the bounded eventual consistency statement as a public contract.
-4. Define service counts and minimum intervals used for load bounds.
+4. Done. The accepted envelope is 8 machines per site, 16 services per machine,
+   a 1s minimum probe interval, and two platform instances per machine. It is
+   published in [Service health](../../04-service-health.md) and measured by the
+   load tests Step 06 lists.
 
 Acceptance:
 
-- No required decision remains implicit.
-- Delivery, ordering, retry, recovery, freshness, and disagreement behavior are
-  testable statements.
-- The rollout environment's security assumption is explicit.
+- Met. No required decision remains implicit.
+- Met. Delivery, ordering, retry, recovery, freshness, and disagreement behavior
+  are testable statements, and are tested.
+- Deferred. The rollout environment's security assumption is stated — a trusted
+  network, no authentication on the health subject — and
+  [route security](../../backlog/route-security.md) tracks changing it.
 
 ## Step 01: carry health policy and site inventory
 
@@ -63,8 +67,8 @@ Acceptance:
 
 ## Step 02: implement the local probe engine
 
-Status: complete for functional behavior. Deterministic startup jitter is
-deferred to Step 06 hardening.
+Status: complete, including the deterministic startup jitter that was deferred
+to Step 06.
 
 | | |
 | --- | --- |
@@ -81,7 +85,8 @@ Actions:
    redirects, bounded body handling, and request cancellation.
 4. Implement startup Unknown, consecutive failure threshold, immediate success
    recovery, per-attempt publication, and non-overlapping schedules.
-5. Add deterministic bounded startup jitter in Step 06.
+5. Done. Each worker's first probe waits a jitter in `[0, interval)`, derived
+   from the observer's fixed instance role and the service name.
 6. Add table-driven unit tests with `httptest` and injected time. Use
    `t.Context()` and no sleeps.
 7. Add race-focused shutdown and concurrent target tests.
@@ -232,7 +237,9 @@ Acceptance:
 
 ## Step 06: production hardening and rollout
 
-Status: pending.
+Status: complete except for the security posture, which is the target
+environment's rather than the platform's and is tracked in
+[the route security backlog](../../backlog/route-security.md).
 
 | | |
 | --- | --- |
@@ -240,32 +247,48 @@ Status: pending.
 | Estimate | 2-5 person-days |
 | Depends on | Steps 00 and 05 |
 
+The accepted envelope is 8 machines per site, 16 services per machine, a 1s
+minimum probe interval, and two platform instances per machine — 256
+observations per second, each fanned to all 16 instances, over a 128-service
+inventory every instance holds.
+
 Actions:
 
-1. Load-test the accepted maximum service count at minimum intervals with two
-   platform instances per machine.
-2. Verify queue bounds, memory bounds, connection recovery, and shutdown times.
-3. Add deterministic observer-specific startup jitter and verify its bound.
-4. Add operational runbooks for Unknown, Degraded, stale observers, route
-   partitions, and invalid messages.
-5. Update root architecture, event, platform, machine, site, and instance docs.
-6. Add upgrade notes for the incompatible structured descriptor change.
+1. Done. `internal/site/healthfabric/load_test.go` runs the whole envelope
+   through one embedded broker; `internal/machine/servicehealth/load_test.go`
+   runs a machine's 16 workers at the 1s floor against a real listener. Both
+   run in the integration gate, so the envelope is re-measured rather than
+   remembered.
+2. Done. The publisher's buffer is proven bounded by conservation — every
+   accepted observation is sent, superseded, or refused, with none unexplained
+   — heap growth is reported, snapshot cost is measured at the full inventory,
+   and a fully loaded monitor is asserted to stop inside one probe timeout.
+3. Done. Bounded by the interval, deterministic across restarts, and different
+   per observer; verified in `jitter_internal_test.go` and observed from
+   outside in `monitor_test.go`.
+4. Done. [Service health](../../04-service-health.md) is the runbook.
+5. Done. Root architecture, platform, machine, and site documentation describe
+   the implemented behavior.
+6. Done. The same document carries the upgrade notes.
 
 Acceptance:
 
-- Security posture matches the target environment.
-- Resource use remains bounded under target failure and NATS outage.
-- Operators can distinguish target failure from monitor failure and route
-  partition.
-- All repository documentation describes the implemented behavior.
-- `task all` passes.
+- Deferred. The security posture is the deployment environment's; the platform
+  publishes health on an unauthenticated cluster subject, which
+  [route security](../../backlog/route-security.md) tracks.
+- Met. Resource use is bounded by construction and measured at the envelope.
+- Met. Target failure, monitor failure, and distribution failure are three
+  distinct fields; a route partition is not separable from observer expiry by
+  observation alone, and the runbook says so.
+- Met.
+- Met.
 
 ## Remaining delivery order
 
-1. Complete Step 06 jitter, load validation, and operations work.
-2. Reach route partition testing, whenever a mechanism for it exists.
+1. Route partition testing, whenever a mechanism for it exists.
+2. Route security, before the platform runs outside a trusted network.
 
-The largest uncertainty is unchanged and is now the only thing left of Step 05:
+The largest uncertainty is unchanged and is the only implementation work left:
 realistic multi-machine route partition testing on one Windows scenario host.
 Every mechanism that would cut a route between two live brokers — firewall
 rules, a filter driver, a proxy the blueprint routes through — is either

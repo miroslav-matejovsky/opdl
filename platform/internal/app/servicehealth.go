@@ -264,6 +264,11 @@ func startServiceHealth(ctx context.Context, proc process, broker healthfabric.I
 			log:       proc.log,
 		},
 		Clock: servicehealth.SystemClock{},
+		// The same fixed instance role the publisher stamps observations with. It
+		// decides this process's probe phase, so a machine's two instances do not
+		// ask every service on it the same question at the same instant for as
+		// long as they both run.
+		Observer: proc.role.String(),
 	}, targets)
 	if err != nil {
 		publisher.Close()

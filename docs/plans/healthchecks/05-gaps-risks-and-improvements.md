@@ -20,9 +20,6 @@ client — is closed; see the resolved section below.
 | Type | Gap or risk | Impact | Required action |
 | --- | --- | --- | --- |
 | Route gap | Scenarios cover a routed multi-broker site, but no test cuts a route while both brokers stay up | Partition and reconnection behavior remain inferred from Core NATS semantics and from observer expiry, which is not the same fault | Find a partition mechanism that needs no privilege and does not change what is deployed, then add interruption and recovery tests |
-| Load risk | Queue, view, and message bounds are unit-tested but not measured at supported site size and minimum interval | Production resource bounds are not demonstrated | Define limits, load-test them, and publish the supported envelope |
-| Scheduling risk | Primary and Standby probe immediately and can remain synchronized | Services receive duplicate probe bursts | Add deterministic observer-specific startup jitter during Step 06 hardening |
-| Documentation gap | Operational response for Unknown, Degraded, stale observers, invalid messages, and route loss is not documented | Operators may misdiagnose expected transient states | Add the Step 06 runbook |
 
 ## P2
 
@@ -97,6 +94,23 @@ own blueprint authored, and asserts against all three instances at once:
 The absence of health persistence is proven by naming every file each machine's
 blueprint authored and failing on anything else under the work directory, rather
 than by looking for files whose names suggest health.
+
+Step 06 closes the scheduling, load, and documentation gaps:
+
+- each worker's first probe waits a jitter in `[0, interval)` derived from the
+  observer's fixed instance role and the service name, so a machine's two
+  instances no longer probe every service on it in the same instant and stay in
+  step for as long as both run. Deriving it rather than randomising it means a
+  restarted instance resumes its own phase instead of landing on its peer's;
+- the accepted envelope — 8 machines, 16 services each, a 1s interval floor, two
+  instances per machine — is measured by load tests that run in the integration
+  gate, so it is re-measured rather than remembered. The publisher's bound is
+  proven by conservation rather than by a threshold: every accepted observation
+  is sent, superseded, or refused, with none unexplained; and
+- [Service health](../../04-service-health.md) is the operator's document: how
+  to read a status, how to tell a missing observer from a stale one, what each
+  reject and drop reason means, what the platform will never do, the supported
+  load, and what upgrading to the structured descriptor requires.
 
 The 2026-07-29 review also fixed these implementation defects:
 

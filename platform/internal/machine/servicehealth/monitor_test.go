@@ -73,6 +73,11 @@ func (c *testClock) releaseInterval(t *testing.T) {
 	}
 }
 
+// waited reports how many waits have been registered and not yet released. It
+// is what a jitter test reads: a worker that is holding before its first attempt
+// is indistinguishable from one that is slow, except by the wait it registered.
+func (c *testClock) waited() int { return len(c.waits) }
+
 // scriptedProber answers whatever the test last told it to, and advances the
 // clock by what the attempt is meant to have cost.
 type scriptedProber struct {
@@ -175,13 +180,39 @@ func testTarget(service string, retries int) servicehealth.Target {
 	}
 }
 
-// start composes a monitor on the test's seams and stops it when the test ends.
+// start composes a monitor on the test's seams, lets every worker out of its
+// startup jitter, and stops the monitor when the test ends.
+//
+// The jitter is released here rather than in each test because every worker
+// waits it out and no test below is about it — the one that is releases nothing
+// and reads the waits instead. Releasing it is what makes "the worker probed"
+// the next event in every other test.
+//
+// Every worker's jitter wait is registered before any of them is released. The
+// clock hands out waits in the order they were asked for, so releasing eagerly
+// would let a worker that had already probed queue its interval wait ahead of a
+// slower worker's jitter wait, and that slower worker would still be holding
+// when the test expected it to have probed.
 func start(ctx context.Context, t *testing.T, prober *scriptedProber, clock *testClock, sink *recordingSink, targets ...servicehealth.Target) *servicehealth.Monitor {
 	t.Helper()
+	monitor := startWithoutJitter(ctx, t, prober, clock, sink, targets...)
+	require.Eventuallyf(t, func() bool { return clock.waited() == len(targets) }, settle, time.Millisecond,
+		"all %d workers registered their startup jitter", len(targets))
+	for range targets {
+		clock.releaseInterval(t)
+	}
+	return monitor
+}
+
+// startWithoutJitter composes a monitor and leaves its workers holding before
+// their first attempt.
+func startWithoutJitter(ctx context.Context, t *testing.T, prober *scriptedProber, clock *testClock, sink *recordingSink, targets ...servicehealth.Target) *servicehealth.Monitor {
+	t.Helper()
 	monitor, err := servicehealth.Start(ctx, servicehealth.Deps{
-		Prober: prober,
-		Sink:   sink,
-		Clock:  clock,
+		Prober:   prober,
+		Sink:     sink,
+		Clock:    clock,
+		Observer: "primary",
 	}, targets)
 	require.NoError(t, err)
 	t.Cleanup(monitor.Stop)
@@ -284,12 +315,8 @@ func TestMonitorDoesNotRecordAnAttemptCutShortByShutdown(t *testing.T) {
 	// shutdown looks like.
 	prober := &scriptedProber{clock: clock, started: make(chan struct{}, 1)}
 	sink := newRecordingSink()
-	monitor, err := servicehealth.Start(t.Context(), servicehealth.Deps{
-		Prober: prober,
-		Sink:   sink,
-		Clock:  clock,
-	}, []servicehealth.Target{testTarget("alarm-service", 3)})
-	require.NoError(t, err)
+	monitor := startWithoutJitter(t.Context(), t, prober, clock, sink, testTarget("alarm-service", 3))
+	clock.releaseInterval(t)
 
 	// Wait until the worker is inside a probe, then stop it there.
 	select {
@@ -365,12 +392,7 @@ func TestStopWaitsForWorkersAndIsIdempotent(t *testing.T) {
 	clock := newTestClock()
 	prober := &scriptedProber{clock: clock}
 	sink := newRecordingSink()
-	monitor, err := servicehealth.Start(t.Context(), servicehealth.Deps{
-		Prober: prober,
-		Sink:   sink,
-		Clock:  clock,
-	}, []servicehealth.Target{testTarget("alarm-service", 3)})
-	require.NoError(t, err)
+	monitor := start(t.Context(), t, prober, clock, sink, testTarget("alarm-service", 3))
 
 	sink.next(t)
 	monitor.Stop()
@@ -422,7 +444,10 @@ func TestMonitorStopsWhenItsContextEnds(t *testing.T) {
 // than refusing to start.
 func TestStartRejectsAnUnusableComposition(t *testing.T) {
 	valid := testTarget("alarm-service", 3)
-	deps := servicehealth.Deps{Prober: &scriptedProber{clock: newTestClock()}, Sink: newRecordingSink(), Clock: newTestClock()}
+	deps := servicehealth.Deps{
+		Prober: &scriptedProber{clock: newTestClock()}, Sink: newRecordingSink(),
+		Clock: newTestClock(), Observer: "primary",
+	}
 
 	tests := map[string]struct {
 		deps    servicehealth.Deps
@@ -430,19 +455,24 @@ func TestStartRejectsAnUnusableComposition(t *testing.T) {
 		errText string
 	}{
 		"no prober": {
-			deps:    servicehealth.Deps{Sink: deps.Sink, Clock: deps.Clock},
+			deps:    servicehealth.Deps{Sink: deps.Sink, Clock: deps.Clock, Observer: deps.Observer},
 			targets: []servicehealth.Target{valid},
 			errText: "prober is required",
 		},
 		"no sink": {
-			deps:    servicehealth.Deps{Prober: deps.Prober, Clock: deps.Clock},
+			deps:    servicehealth.Deps{Prober: deps.Prober, Clock: deps.Clock, Observer: deps.Observer},
 			targets: []servicehealth.Target{valid},
 			errText: "sink is required",
 		},
 		"no clock": {
-			deps:    servicehealth.Deps{Prober: deps.Prober, Sink: deps.Sink},
+			deps:    servicehealth.Deps{Prober: deps.Prober, Sink: deps.Sink, Observer: deps.Observer},
 			targets: []servicehealth.Target{valid},
 			errText: "clock is required",
+		},
+		"no observer": {
+			deps:    servicehealth.Deps{Prober: deps.Prober, Sink: deps.Sink, Clock: deps.Clock},
+			targets: []servicehealth.Target{valid},
+			errText: "observer is required",
 		},
 		"target with no service": {
 			deps:    deps,
@@ -501,10 +531,38 @@ func TestStartRejectsAnUnusableComposition(t *testing.T) {
 func TestStartWithNoTargetsRuns(t *testing.T) {
 	clock := newTestClock()
 	monitor, err := servicehealth.Start(t.Context(), servicehealth.Deps{
-		Prober: &scriptedProber{clock: clock},
-		Sink:   newRecordingSink(),
-		Clock:  clock,
+		Prober:   &scriptedProber{clock: clock},
+		Sink:     newRecordingSink(),
+		Clock:    clock,
+		Observer: "primary",
 	}, nil)
 	require.NoError(t, err)
 	monitor.Stop()
+}
+
+// TestWorkersWaitOutStartupJitterBeforeTheFirstAttempt checks the wait exists
+// and that it is what holds the first probe.
+//
+// It is the one test here that releases nothing. Every other one goes through
+// start, which lets the workers out; this one asks what they were doing before
+// that, because a worker that probed at once and a worker that waited are
+// otherwise indistinguishable from the sink.
+func TestWorkersWaitOutStartupJitterBeforeTheFirstAttempt(t *testing.T) {
+	clock := newTestClock()
+	prober := &scriptedProber{clock: clock}
+	sink := newRecordingSink()
+	startWithoutJitter(t.Context(), t, prober, clock, sink,
+		testTarget("alarm-service", 3), testTarget("reporting-service", 3))
+
+	// Both workers registered a wait and neither has probed. Without the jitter
+	// they would have gone straight at the service, together.
+	require.Eventually(t, func() bool { return clock.waited() == 2 }, settle, time.Millisecond,
+		"both workers hold before their first attempt")
+	require.Zero(t, prober.attempts(), "and neither has asked the service anything yet")
+
+	clock.releaseInterval(t)
+	clock.releaseInterval(t)
+	observed := sink.nextByService(t, 2)
+	require.Equal(t, servicehealth.StatusHealthy, observed["alarm-service"].Status)
+	require.Equal(t, servicehealth.StatusHealthy, observed["reporting-service"].Status)
 }

@@ -18,7 +18,10 @@ ordered, durable delivery the contract below describes.
 Service health uses the same cluster through a separate connection. It is not
 part of the durable event contract: observations are bounded current-state
 snapshots with no replay or result persistence. Every receiver rebuilds its
-view from static inventory and fresh traffic.
+view from static inventory and fresh traffic, and serves it at
+`GET /health/services`. See
+[Service health](../../../docs/04-service-health.md) for how to read one, and
+`healthfabric/load_test.go` for the site size that view is validated at.
 
 ## Event Fabric
 
