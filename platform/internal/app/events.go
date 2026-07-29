@@ -42,6 +42,10 @@ const (
 
 	// TypeStandbyWaiting is stated when a standby is waiting for ownership.
 	TypeStandbyWaiting events.Type = "platform.app.standby_waiting"
+
+	// TypeServiceHealthStartFailed is stated when this process could not begin
+	// watching its machine's services.
+	TypeServiceHealthStartFailed events.Type = "platform.app.service_health_start_failed"
 )
 
 // failureSeverity ranks a fact that carries an optional error: an operation that
@@ -260,3 +264,26 @@ type StandbyWaiting struct{}
 
 // EventType returns the event's stable dotted kind.
 func (StandbyWaiting) EventType() events.Type { return TypeStandbyWaiting }
+
+// ServiceHealthStartFailed states that this process could not begin watching its
+// machine's services.
+//
+// It is an error rather than a degradation, and the process stops on it. A
+// deployment whose machine cannot probe its own services reports every one of
+// them Unknown for as long as it runs, with nothing in the record saying why,
+// and that is worse than a process that refused to start.
+//
+// What service health finds never reaches this record. Health is recalculated
+// current state that expires, so only the failure to start watching is a fact
+// worth keeping; the observations themselves are not.
+type ServiceHealthStartFailed struct {
+	// Error is what went wrong.
+	Error string `json:"error"`
+}
+
+// EventType returns the event's stable dotted kind.
+func (ServiceHealthStartFailed) EventType() events.Type { return TypeServiceHealthStartFailed }
+
+// Severity reports a process that cannot watch its machine's services as an
+// error.
+func (ServiceHealthStartFailed) Severity() events.Severity { return events.SeverityError }

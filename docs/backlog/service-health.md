@@ -7,11 +7,15 @@ The deployment descriptor contains local service probe policy and a site-wide
 service inventory. Builder, platform, and conformance validation enforce the
 same contract.
 
-Both platform instances now probe every service on their machine for the whole
-process lifetime, in `platform/internal/machine/servicehealth`. Observations
-reach an injected sink after every attempt. NATS distribution, site reduction,
-and the public API are not implemented yet, so the sink is currently the
-application log and an observation does not leave its process.
+Both platform instances probe every service on their machine for the whole
+process lifetime, in `platform/internal/machine/servicehealth`. Every attempt is
+applied to the process's own site view and published on
+`opdl.service_health.v1`, and every instance keeps a converged in-memory picture
+of the whole site in `platform/internal/site/healthview`.
+
+What is missing is the way out: nothing reads the view yet. `GET
+/health/services` is the next item, and until it exists the site's health is
+maintained correctly and cannot be asked about.
 
 ## Accepted design
 
@@ -92,16 +96,40 @@ independent targets, and worker joining. A leaked worker hangs `Stop` rather
 than failing an assertion, which is the strongest form that check can take. The
 tests use a controlled clock and a channel sink, so none of them sleeps.
 
-## P0: NATS distribution and site reducer
+## Done: NATS distribution and site reducer
 
-Effort: Large
+Implemented as two packages, split the way `events` and `eventfabric` are:
+`platform/internal/site/healthview` is the picture, and
+`platform/internal/site/healthfabric` is what carries reports into it.
 
-Value: High
+`healthview` holds no transport and no wire format. It is built from the static
+inventory, keeps a slot per expected observer rather than collapsing to
+last-writer-wins, fences on `(epoch, sequence)`, expires by arrival on its own
+clock, and reduces at snapshot time. Nothing expires in the background: a report
+nobody looked at while it aged out did not need sweeping.
 
-Add the versioned observation DTO, Core NATS publisher/subscriber, bounded
-publication queue, and concurrency-safe in-memory site view.
+`healthfabric` opens a second connection to the same broker, beside the event
+fabric's — durable facts and expiring current state are not the same traffic.
+Its publisher never blocks its caller: it holds the latest observation per
+service rather than a queue, so the buffer is bounded by the machine's service
+count instead of by the length of an outage, and supersessions are counted.
 
-Required behavior:
+Three things settled while implementing it:
+
+- **An observer reporting Unknown contributes no verdict.** D09 does not cover
+  it, and it is a real state — an instance whose first probes have failed below
+  its retry threshold reports Unknown. Counting it as agreement or disagreement
+  would let a starting instance drag a service's answer around. It is fresh and
+  present, and silent on the question.
+- **`Publish` returns the stamped observation**, which the caller applies to its
+  own view. That way there is one place a sequence is assigned, and this
+  instance's own slot is ordered by the same numbers its peers receive.
+- **The health connection flushes with its own deadline.** The NATS client
+  refuses a context without one and the caller's is the process context. The
+  scenarios caught this: without it, every instance failed at startup with
+  `nats: context requires a deadline`.
+
+Required behavior, all implemented:
 
 - Subscribe and flush the subscription barrier before starting local workers.
 - Apply a local observation to the local view before enqueueing publication.
@@ -119,11 +147,15 @@ Required behavior:
 - Preserve the process-start count as the observer epoch. Do not use an
   ownership epoch.
 
-Dependencies: local probe engine.
+Acceptance, met by unit tests that use a controlled clock and a fake connection:
+ordering and fencing, duplicate suppression, restart reconstruction (a new
+epoch's first report supersedes the previous incarnation's last), expiry by
+arrival, the disagreement table, bounded backpressure under a stalled
+connection, and every reject and drop counted by reason.
 
-Acceptance: deterministic unit and integration tests prove ordering, fencing,
-expiry, disagreement reduction, duplicate suppression, restart reconstruction,
-bounded backpressure, and route recovery.
+Not yet covered, and deliberately: route partition and recovery across real
+machines. That is a black-box property and it needs an endpoint to observe, so
+it belongs to the convergence scenarios below.
 
 ## P0: process lifecycle and public API
 
@@ -131,27 +163,31 @@ Effort: Large
 
 Value: High
 
-Compose distribution, reduction, and the HTTP endpoint into both platform roles.
+What remains of this item is the public API. Composition is done: `app.Run`
+validates the descriptor, opens the broker, advances the process-start epoch,
+builds the view, subscribes, opens the publisher, starts the monitor, and stops
+all of it in reverse. `app.startServiceHealth` unwinds what it opened on any
+failure, and a process that cannot watch its machine's services states
+`platform.app.service_health_start_failed` and stops.
 
-Monitoring itself is already composed: `app.Run` validates the descriptor, opens
-the broker, advances the process-start epoch, starts the monitor, and stops it
-before the fabric closes. What this item adds is what the observations reach.
-
-Replacing `app.healthLog` with the distribution sink is part of the work, not a
-second consumer to keep beside it. It exists so the engine has somewhere to
-report while distribution does not.
+The view is built and converged and has no reader. That is the gap: adding the
+endpoint is a matter of rendering `healthview.Snapshot`, which is already
+deterministic and already carries everything the response shape needs.
 
 Required behavior:
 
 - Validate the descriptor before opening runtime resources. (done)
 - Advance the process-start epoch before monitoring begins. (done)
 - Start the embedded NATS server, distribution connection, subscription, view,
-  workers, and HTTP listener in dependency order. Broker, workers, and listener
-  are ordered already; the connection, subscription, and view are not there yet.
+  workers, and HTTP listener in dependency order. (done)
 - On shutdown, stop workers, drain publication, unsubscribe, close the health
-  connection, and then close dependent resources without losing errors.
+  connection, and then close dependent resources without losing errors. (done,
+  except that pending publications are dropped rather than drained: an
+  observation from a process that is stopping is about to be superseded by
+  nothing at all, and the site should see its silence.)
 - Add `GET /health/services` to public Go API types, OpenAPI generation, the
-  generated .NET client, and HTTP routing.
+  generated .NET client, and HTTP routing. Re-add `serviceHealth.View`, removed
+  because nothing read it and `task deadcode` fails an unreachable function.
 - Return deterministic ordering and include target identity, aggregate status,
   observer status, freshness, missing observers, last check time, latency, and
   pending failures.

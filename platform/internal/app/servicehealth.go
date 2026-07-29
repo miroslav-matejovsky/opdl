@@ -6,13 +6,15 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/servicehealth"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/healthfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/healthview"
 )
 
 // healthTargets resolves this machine's services into probeable targets.
@@ -100,80 +102,188 @@ func healthURL(ip string, check config.HealthCheck) (string, error) {
 // second list of kinds.
 const probeTypeHTTP = "http"
 
-// healthLog reports stable service transitions to the application log.
+// healthInventory resolves the site's static health inventory into what a view
+// is built from.
 //
-// It is the sink the monitor writes to until distribution lands. Every attempt
-// reaches it and only a change is written: a probe every few seconds per
-// service would otherwise fill the log with a service that has not moved, and
-// what a person reading it wants is when something changed.
+// Every machine of the site carries the same list in the same order, so a view
+// built from it renders the same way on every instance. The freshness is the
+// descriptor's exact value rather than one derived here: a receiver that
+// computed its own would expire reports at a different age from its peers, and
+// the two would disagree about a service neither had a problem with.
+func healthInventory(descriptor config.Descriptor) ([]healthview.Unit, error) {
+	units := make([]healthview.Unit, 0, len(descriptor.SiteServices))
+	for _, unit := range descriptor.SiteServices {
+		freshFor, err := time.ParseDuration(strings.TrimSpace(unit.FreshFor))
+		if err != nil {
+			return nil, fmt.Errorf("site service %s/%s fresh_for %q: %w", unit.Machine, unit.Service, unit.FreshFor, err)
+		}
+		units = append(units, healthview.Unit{
+			UnitKey:        healthview.UnitKey{Machine: unit.Machine, Service: unit.Service},
+			MachineProfile: unit.MachineProfile,
+			ServiceRole:    unit.ServiceRole,
+			ObserverRoles:  slices.Clone(unit.ObserverRoles),
+			FreshFor:       freshFor,
+		})
+	}
+	return units, nil
+}
+
+// localSink applies this instance's own observations to its view and hands them
+// to the publisher.
 //
-// Nothing here is a fact in the event sense. Service health is recalculated
-// current state that expires, so it never reaches the event record, the machine
-// store, or a site journal — see the accepted design in
-// docs/backlog/service-health.md.
-type healthLog struct {
-	log *slog.Logger
-	// mu guards last, which every worker writes to. One monitor runs a worker per
-	// service and they report concurrently.
-	mu   sync.Mutex
-	last map[string]servicehealth.Status
+// The local view is written before the observation is queued, so this instance
+// knows what it found whether or not the site ever hears about it. A machine
+// whose broker is unreachable still answers correctly about its own services,
+// which is the answer an operator standing in front of it most needs.
+type localSink struct {
+	machine   string
+	role      string
+	view      *healthview.View
+	publisher *healthfabric.Publisher
+	log       *slog.Logger
 }
 
-func newHealthLog(log *slog.Logger) *healthLog {
-	return &healthLog{log: log, last: map[string]servicehealth.Status{}}
+// Observed folds one attempt into the local view and sends it on.
+func (s *localSink) Observed(_ context.Context, observation servicehealth.Observation) {
+	report := healthview.Observation{
+		Unit:                healthview.UnitKey{Machine: s.machine, Service: observation.Service},
+		ObserverRole:        s.role,
+		Status:              healthview.Status(observation.Status),
+		CheckedAtUTC:        observation.CheckedAt.UTC(),
+		Latency:             observation.Latency,
+		ConsecutiveFailures: observation.PendingFailures,
+		Error:               observation.Error,
+	}
+	// The publisher stamps the epoch and the sequence and hands the stamped value
+	// back, so this instance's own slot is ordered by the same numbers its peers
+	// receive. It also means the local view is written whether or not the
+	// publication ever reaches the broker.
+	if dropped := s.view.Apply(s.publisher.Publish(report)); dropped != healthview.DropNone {
+		// This is its own machine's observation about its own service, so a drop
+		// means the descriptor's two halves disagree in a way validation missed.
+		s.log.Warn("this instance's own observation was not applied to its view",
+			"service", observation.Service, "reason", string(dropped))
+	}
 }
 
-// Observed writes the transitions and drops the repeats.
-func (h *healthLog) Observed(_ context.Context, observation servicehealth.Observation) {
-	h.mu.Lock()
-	previous, seen := h.last[observation.Service]
-	changed := !seen || previous != observation.Status
-	h.last[observation.Service] = observation.Status
-	h.mu.Unlock()
-
-	if !changed {
-		return
-	}
-	attrs := []any{
-		"service", observation.Service,
-		"service_role", observation.Role,
-		"status", string(observation.Status),
-		"latency_ms", observation.Latency.Milliseconds(),
-	}
-	if observation.PendingFailures > 0 {
-		attrs = append(attrs, "consecutive_failures", observation.PendingFailures)
-	}
-	if observation.Error != "" {
-		attrs = append(attrs, "error", observation.Error)
-	}
-	if observation.Status == servicehealth.StatusUnhealthy {
-		h.log.Error("service is unhealthy", attrs...)
-		return
-	}
-	h.log.Info("service health changed", attrs...)
-}
-
-// startServiceHealth begins probing this machine's services.
+// serviceHealth is everything one process runs to watch its machine's services
+// and to know what the rest of the site found.
 //
 // It is composed at process lifetime rather than inside an activation, and that
-// is the decision this function exists to make. Both of a machine's instances
-// probe every service on it, in every ownership state: a service does not stop
-// needing to be watched because the process watching it stepped down, and an
-// observation from a Passive instance is what keeps a machine's health visible
-// while ownership is moving.
+// is the decision this type exists to make. Both of a machine's instances probe
+// every service on it, in every ownership state: a service does not stop needing
+// to be watched because the process watching it stepped down, and an observation
+// from a Passive instance is what keeps a machine's health visible while
+// ownership is moving.
 //
-// Nothing it produces reaches platform health, readiness, or ownership. A
-// failed service is a fact about the service, and both instances of the machine
-// can see it, so moving the platform's listener would repair nothing and could
-// hand a machine back and forth over a target neither instance controls.
-func startServiceHealth(ctx context.Context, proc process) (*servicehealth.Monitor, error) {
-	targets, err := healthTargets(proc.descriptor)
+// Nothing it produces reaches platform health, readiness, or ownership. A failed
+// service is a fact about the service, and both instances of the machine can see
+// it, so moving the platform's listener would repair nothing and could hand a
+// machine back and forth over a target neither instance controls.
+type serviceHealth struct {
+	view       *healthview.View
+	monitor    *servicehealth.Monitor
+	subscriber *healthfabric.Subscriber
+	publisher  *healthfabric.Publisher
+	conn       *healthfabric.NATSConn
+}
+
+// startServiceHealth brings up this process's service monitoring and its half of
+// the site's health traffic.
+//
+// The order is the point. The view exists before anything can write to it; the
+// subscription is established before the first local probe, so nothing another
+// instance says in between is missed — there is no replay to recover it with;
+// and probing starts last, once there is somewhere for its results to go.
+//
+// A failure at any step unwinds what came before it. A process that cannot watch
+// its services stops rather than running blind, because the alternative is a
+// deployment reporting every service Unknown with nothing to say why.
+func startServiceHealth(ctx context.Context, proc process, broker healthfabric.InProcessConnProvider, epoch uint64) (*serviceHealth, error) {
+	descriptor := proc.descriptor
+	targets, err := healthTargets(descriptor)
 	if err != nil {
 		return nil, err
 	}
-	return servicehealth.Start(ctx, servicehealth.Deps{
+	inventory, err := healthInventory(descriptor)
+	if err != nil {
+		return nil, err
+	}
+	deployment := healthview.Deployment{
+		Project:     descriptor.Project,
+		Environment: descriptor.Environment,
+		Site:        descriptor.Site,
+	}
+	view, err := healthview.New(deployment, inventory, healthview.SystemClock{})
+	if err != nil {
+		return nil, err
+	}
+
+	// A second connection to the same broker, beside the event fabric's. The two
+	// carry different traffic under different rules — durable facts against
+	// expiring current state — and a health subscription being torn down must not
+	// disturb the connection the health endpoint round-trips on.
+	conn, err := healthfabric.Connect(broker, fabricClientName(descriptor, proc.role)+"-health")
+	if err != nil {
+		return nil, err
+	}
+	subscriber, err := healthfabric.Subscribe(ctx, conn, view, proc.log)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	publisher, err := healthfabric.NewPublisher(conn, healthfabric.Identity{
+		Deployment:   deployment,
+		Machine:      descriptor.Machine,
+		ObserverRole: proc.role.String(),
+		// The process-start epoch, taken before the runtime does anything, so a
+		// restarted observer's first report supersedes everything its previous
+		// incarnation said. It is deliberately not the activation count: ownership
+		// moving does not make an observation newer.
+		Epoch: epoch,
+	}, proc.log)
+	if err != nil {
+		subscriber.Close()
+		conn.Close()
+		return nil, err
+	}
+	monitor, err := servicehealth.Start(ctx, servicehealth.Deps{
 		Prober: servicehealth.NewHTTPProber(),
-		Sink:   newHealthLog(proc.log),
-		Clock:  servicehealth.SystemClock{},
+		Sink: &localSink{
+			machine:   descriptor.Machine,
+			role:      proc.role.String(),
+			view:      view,
+			publisher: publisher,
+			log:       proc.log,
+		},
+		Clock: servicehealth.SystemClock{},
 	}, targets)
+	if err != nil {
+		publisher.Close()
+		subscriber.Close()
+		conn.Close()
+		return nil, err
+	}
+	proc.log.Info("service health started",
+		"targets", len(targets), "site_units", len(inventory), "subject", healthfabric.Subject)
+	return &serviceHealth{view: view, monitor: monitor, subscriber: subscriber, publisher: publisher, conn: conn}, nil
 }
+
+// Stop shuts monitoring down in the reverse of the order it came up.
+//
+// Probing stops first, so nothing new is produced; then the publisher, which
+// drops whatever it was still holding rather than flushing it — an observation
+// from a process that is stopping is about to be superseded by nothing at all,
+// and the site should see its silence. The subscription and the connection go
+// last, once nothing is writing to either.
+func (s *serviceHealth) Stop() {
+	s.monitor.Stop()
+	s.publisher.Close()
+	s.subscriber.Close()
+	s.conn.Close()
+}
+
+// The view has no reader yet. GET /health/services is the next piece of this
+// feature and is what will expose it; until then the view is built, converged,
+// and expired exactly as it will be then, which is what makes adding the
+// endpoint a matter of rendering a snapshot rather than of building one.

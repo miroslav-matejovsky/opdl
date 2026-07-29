@@ -257,16 +257,21 @@ func Run(args []string) (runErr error) {
 	// because the process watching it stepped down, and ownership can move many
 	// times over one process's life without a target being affected either way.
 	//
-	// It starts after the broker so the two failures stay separate, and before
-	// ownership management so a Passive instance is probing from its first
-	// moment rather than from its first activation.
-	monitor, err := startServiceHealth(ctx, proc)
+	// It starts after the broker, because it opens its own connection to it, and
+	// before ownership management, so a Passive instance is probing and hearing
+	// from the site from its first moment rather than from its first activation.
+	//
+	// The epoch it publishes under is this incarnation's process-start count,
+	// taken above before the runtime opened anything. It is what makes a
+	// restarted observer's first report supersede everything its previous
+	// incarnation said, and it is deliberately not the activation count.
+	health, err := startServiceHealth(ctx, proc, broker, incarnation.Epoch)
 	if err != nil {
-		return err
+		return errors.Join(err, local.Publish(ctx, ServiceHealthStartFailed{Error: err.Error()}))
 	}
-	// Registered after the fabric's close so it runs before it: probing stops
-	// before what will carry the observations is torn down.
-	defer monitor.Stop()
+	// Registered after the fabric's close so it runs before it: probing and the
+	// health connection stop before the broker they run on is shut down.
+	defer health.Stop()
 
 	runErr = runProcess(ctx, proc)
 	stopped := ProcessStopped{}

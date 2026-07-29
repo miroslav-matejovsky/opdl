@@ -48,6 +48,12 @@ func TestApplicationEventsDeclareTheirContract(t *testing.T) {
 			want:     events.SeverityError,
 		},
 		{name: "standby waiting", event: StandbyWaiting{}, wantType: TypeStandbyWaiting, want: events.SeverityInfo},
+		{
+			name:     "service health start failed",
+			event:    ServiceHealthStartFailed{Error: "boom"},
+			wantType: TypeServiceHealthStartFailed,
+			want:     events.SeverityError,
+		},
 	}
 	// The scope assertion below goes through a real stamper rather than asking
 	// the event, because what this catalog claims is that it declares no scope at

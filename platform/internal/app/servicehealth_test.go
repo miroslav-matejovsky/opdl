@@ -1,8 +1,8 @@
 package app
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
+	"errors"
 	"log/slog"
 	"net/url"
 	"testing"
@@ -12,6 +12,8 @@ import (
 
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/servicehealth"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/healthfabric"
+	"github.com/miroslav-matejovsky/opdl/platform/internal/site/healthview"
 )
 
 // The adapter between the descriptor and the monitor is the only place the
@@ -181,80 +183,142 @@ func TestHealthTargetsRejectAnUnusableDescriptor(t *testing.T) {
 	}
 }
 
-// logLines decodes what a JSON handler wrote, one record per line.
-func logLines(t *testing.T, buffer *bytes.Buffer) []map[string]any {
-	t.Helper()
-	var records []map[string]any
-	for line := range bytes.Lines(buffer.Bytes()) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var record map[string]any
-		require.NoError(t, json.Unmarshal(line, &record))
-		records = append(records, record)
-	}
-	return records
-}
-
-// TestHealthLogWritesTransitionsAndDropsRepeats checks the sink the monitor
-// writes to until distribution lands.
+// TestHealthInventoryResolvesTheSiteAsBuilt checks the remote half of the
+// descriptor becomes what a view is built from.
 //
-// Every attempt reaches it, including the ones that changed nothing, because
-// that is what the monitor promises its sink. What a person reading a log wants
-// is when something changed, and a probe every few seconds per service would
-// otherwise bury that under repeats.
-func TestHealthLogWritesTransitionsAndDropsRepeats(t *testing.T) {
-	var buffer bytes.Buffer
-	sink := newHealthLog(slog.New(slog.NewJSONHandler(&buffer, nil)))
+// The freshness is the descriptor's exact value rather than one recomputed
+// here. Every machine of the site was built with the same number, and a receiver
+// that derived its own would expire reports at a different age from its peers.
+func TestHealthInventoryResolvesTheSiteAsBuilt(t *testing.T) {
+	units, err := healthInventory(config.Descriptor{
+		SiteServices: []config.SiteService{
+			{
+				Machine: "sensor", MachineProfile: "sensor-node",
+				Service: "alarm-service", ServiceRole: "master",
+				ObserverRoles: []string{"primary", "standby"}, FreshFor: "22s",
+			},
+			{
+				Machine: "gateway", MachineProfile: "gateway-node",
+				Service: "gateway-services", ServiceRole: "slave",
+				ObserverRoles: []string{"primary"}, FreshFor: "32s",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []healthview.Unit{
+		{
+			UnitKey:        healthview.UnitKey{Machine: "sensor", Service: "alarm-service"},
+			MachineProfile: "sensor-node", ServiceRole: "master",
+			ObserverRoles: []string{"primary", "standby"}, FreshFor: 22 * time.Second,
+		},
+		{
+			UnitKey:        healthview.UnitKey{Machine: "gateway", Service: "gateway-services"},
+			MachineProfile: "gateway-node", ServiceRole: "slave",
+			ObserverRoles: []string{"primary"}, FreshFor: 32 * time.Second,
+		},
+	}, units)
+}
 
-	observe := func(status servicehealth.Status, pending int, failure string) {
-		sink.Observed(t.Context(), servicehealth.Observation{
-			Service:         "alarm-service",
-			Role:            "master",
-			Status:          status,
-			Latency:         3 * time.Millisecond,
-			PendingFailures: pending,
-			Error:           failure,
-		})
+// TestHealthInventoryRejectsAnUnusableFreshness checks a process whose site
+// inventory cannot be read stops rather than running with a view it cannot
+// expire anything in.
+func TestHealthInventoryRejectsAnUnusableFreshness(t *testing.T) {
+	_, err := healthInventory(config.Descriptor{
+		SiteServices: []config.SiteService{{
+			Machine: "sensor", MachineProfile: "sensor-node",
+			Service: "alarm-service", ServiceRole: "master",
+			ObserverRoles: []string{"primary"}, FreshFor: "soon",
+		}},
+	})
+	require.ErrorContains(t, err, "sensor/alarm-service fresh_for")
+}
+
+// TestHealthInventoryDoesNotAliasTheDescriptor checks the observer roles a view
+// holds are its own.
+//
+// The descriptor is shared by everything in the process, and a view that kept a
+// slice from it would let a later reader mutate what the reduction depends on.
+func TestHealthInventoryDoesNotAliasTheDescriptor(t *testing.T) {
+	descriptor := config.Descriptor{
+		SiteServices: []config.SiteService{{
+			Machine: "sensor", MachineProfile: "sensor-node",
+			Service: "alarm-service", ServiceRole: "master",
+			ObserverRoles: []string{"primary", "standby"}, FreshFor: "22s",
+		}},
 	}
+	units, err := healthInventory(descriptor)
+	require.NoError(t, err)
 
-	observe(servicehealth.StatusHealthy, 0, "")
-	observe(servicehealth.StatusHealthy, 0, "")
-	observe(servicehealth.StatusHealthy, 1, "connection refused")
-	observe(servicehealth.StatusUnhealthy, 2, "connection refused")
-	observe(servicehealth.StatusUnhealthy, 2, "connection refused")
-	observe(servicehealth.StatusHealthy, 0, "")
-
-	records := logLines(t, &buffer)
-	require.Len(t, records, 3, "only the three transitions were written: %+v", records)
-
-	require.Equal(t, "service health changed", records[0]["msg"])
-	require.Equal(t, "healthy", records[0]["status"])
-	require.Equal(t, "master", records[0]["service_role"])
-	require.NotContains(t, records[0], "error")
-
-	require.Equal(t, "service is unhealthy", records[1]["msg"],
-		"a service that is down is an error record, not an informational one")
-	require.Equal(t, "unhealthy", records[1]["status"])
-	require.Equal(t, float64(2), records[1]["consecutive_failures"])
-	require.Equal(t, "connection refused", records[1]["error"])
-
-	require.Equal(t, "healthy", records[2]["status"])
+	descriptor.SiteServices[0].ObserverRoles[0] = "tampered"
+	require.Equal(t, []string{"primary", "standby"}, units[0].ObserverRoles)
 }
 
-// TestHealthLogTracksEachServiceOnItsOwn checks one service's transitions do not
-// suppress another's. The sink is shared by every worker on the machine, so the
-// state it keeps has to be per service.
-func TestHealthLogTracksEachServiceOnItsOwn(t *testing.T) {
-	var buffer bytes.Buffer
-	sink := newHealthLog(slog.New(slog.NewJSONHandler(&buffer, nil)))
+// TestLocalSinkAppliesToItsOwnViewAndPublishes checks what this machine found
+// reaches both places it has to.
+//
+// The local view is written whether or not the site ever hears about it, so a
+// machine whose broker is unreachable still answers correctly about its own
+// services. The stamped sequence is the publisher's, so this instance's own slot
+// is ordered by the same numbers its peers receive.
+func TestLocalSinkAppliesToItsOwnViewAndPublishes(t *testing.T) {
+	view, err := healthview.New(
+		healthview.Deployment{Project: "customer-a", Environment: "production", Site: "north"},
+		[]healthview.Unit{{
+			UnitKey:        healthview.UnitKey{Machine: "sensor", Service: "alarm-service"},
+			MachineProfile: "sensor-node", ServiceRole: "master",
+			ObserverRoles: []string{"primary", "standby"}, FreshFor: 22 * time.Second,
+		}},
+		healthview.SystemClock{},
+	)
+	require.NoError(t, err)
 
-	sink.Observed(t.Context(), servicehealth.Observation{Service: "alarm-service", Status: servicehealth.StatusHealthy})
-	sink.Observed(t.Context(), servicehealth.Observation{Service: "reporting-service", Status: servicehealth.StatusHealthy})
-	sink.Observed(t.Context(), servicehealth.Observation{Service: "alarm-service", Status: servicehealth.StatusHealthy})
+	conn := &countingConn{}
+	publisher, err := healthfabric.NewPublisher(conn, healthfabric.Identity{
+		Deployment:   view.Deployment(),
+		Machine:      "sensor",
+		ObserverRole: "standby",
+		Epoch:        3,
+	}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	defer publisher.Close()
 
-	records := logLines(t, &buffer)
-	require.Len(t, records, 2)
-	require.Equal(t, "alarm-service", records[0]["service"])
-	require.Equal(t, "reporting-service", records[1]["service"])
+	sink := &localSink{
+		machine:   "sensor",
+		role:      "standby",
+		view:      view,
+		publisher: publisher,
+		log:       slog.New(slog.DiscardHandler),
+	}
+	sink.Observed(t.Context(), servicehealth.Observation{
+		Service:         "alarm-service",
+		Role:            "master",
+		Status:          servicehealth.StatusUnhealthy,
+		CheckedAt:       time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+		Latency:         3 * time.Millisecond,
+		PendingFailures: 2,
+		Error:           "connection refused",
+	})
+
+	unit := view.Snapshot().Units[0]
+	require.Equal(t, healthview.StatusUnhealthy, unit.Status)
+	require.Equal(t, []string{"primary"}, unit.MissingObservers,
+		"this instance reported; its peer has not")
+	require.Len(t, unit.Observations, 1)
+	require.Equal(t, "standby", unit.Observations[0].ObserverRole)
+	require.Equal(t, 2, unit.Observations[0].ConsecutiveFailures)
+	require.Equal(t, "connection refused", unit.Observations[0].Error)
+
+	require.Eventually(t, func() bool {
+		return publisher.Counters().Published == 1
+	}, 5*time.Second, 5*time.Millisecond, "the same observation went to the site")
 }
+
+// countingConn accepts everything and remembers nothing. The wire contract is
+// tested in healthfabric; what matters here is that the sink publishes at all.
+type countingConn struct{}
+
+func (*countingConn) Publish(string, []byte) error { return nil }
+func (*countingConn) Subscribe(string, func([]byte)) (healthfabric.Subscription, error) {
+	return nil, errors.New("this connection does not subscribe")
+}
+func (*countingConn) Flush(context.Context) error { return nil }
