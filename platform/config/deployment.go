@@ -271,6 +271,8 @@ var serviceRoles = []string{"master", "slave"}
 // on a unit, in the order a descriptor lists them.
 var observerRoles = []string{string(RolePrimary), string(RoleStandby)}
 
+type unitKey struct{ machine, service, role string }
+
 // validateHealth checks both halves of the health contract are complete and
 // agree about this machine.
 //
@@ -285,7 +287,8 @@ func (d Descriptor) validateHealth() error {
 	if len(d.SiteServices) == 0 {
 		return fmt.Errorf("deployment descriptor: site_services is required; it carries this machine's own services too")
 	}
-	named := make(map[string]bool, len(d.Services))
+	seenRoles := make(map[string]map[string]bool, len(d.Services))
+	hosted := make(map[unitKey]bool, len(d.Services))
 	for _, service := range d.Services {
 		name := strings.TrimSpace(service.Name)
 		if name == "" {
@@ -294,14 +297,20 @@ func (d Descriptor) validateHealth() error {
 		if service.Name != name {
 			return fmt.Errorf("deployment descriptor: services[%s].name %q must not have leading or trailing whitespace", name, service.Name)
 		}
-		if named[name] {
-			return fmt.Errorf("deployment descriptor: service %q is hosted more than once", name)
-		}
-		named[name] = true
 		if !slices.Contains(serviceRoles, service.Role) {
 			return fmt.Errorf("deployment descriptor: services[%s].role %q is not a known role; the known roles are %s",
 				name, service.Role, strings.Join(serviceRoles, ", "))
 		}
+		roles, ok := seenRoles[name]
+		if !ok {
+			roles = make(map[string]bool, 2)
+			seenRoles[name] = roles
+		}
+		if roles[service.Role] {
+			return fmt.Errorf("deployment descriptor: service %q with role %q is hosted more than once", name, service.Role)
+		}
+		roles[service.Role] = true
+		hosted[unitKey{strings.TrimSpace(d.Machine), name, service.Role}] = true
 		if err := service.HealthCheck.validate(fmt.Sprintf("services[%s].health_check", name)); err != nil {
 			return err
 		}
@@ -309,7 +318,7 @@ func (d Descriptor) validateHealth() error {
 	if err := d.validateServiceProbeEndpoints(); err != nil {
 		return err
 	}
-	return d.validateSiteServices(named)
+	return d.validateSiteServices(hosted)
 }
 
 // validate checks one probe policy is complete and runnable.
@@ -454,8 +463,7 @@ func (h HealthCheck) FreshFor() (time.Duration, error) {
 
 // validateSiteServices checks the static inventory is complete and uniquely
 // keyed, and that its entries for this machine match what this machine hosts.
-func (d Descriptor) validateSiteServices(hosted map[string]bool) error {
-	type unitKey struct{ machine, service string }
+func (d Descriptor) validateSiteServices(hosted map[unitKey]bool) error {
 	type machinePolicy struct {
 		profile       string
 		observerRoles []string
@@ -463,7 +471,7 @@ func (d Descriptor) validateSiteServices(hosted map[string]bool) error {
 	seen := make(map[unitKey]bool, len(d.SiteServices))
 	machines := make(map[string]machinePolicy, len(d.SiteServices))
 	machine := strings.TrimSpace(d.Machine)
-	local := make(map[string]SiteService, len(hosted))
+	local := make(map[unitKey]SiteService, len(hosted))
 	for _, unit := range d.SiteServices {
 		unitMachine, unitService := strings.TrimSpace(unit.Machine), strings.TrimSpace(unit.Service)
 		where := fmt.Sprintf("site_services[%s/%s]", unit.Machine, unit.Service)
@@ -476,20 +484,21 @@ func (d Descriptor) validateSiteServices(hosted map[string]bool) error {
 		if unit.Service != unitService {
 			return fmt.Errorf("deployment descriptor: %s.service %q must not have leading or trailing whitespace", where, unit.Service)
 		}
-		if seen[unitKey{unitMachine, unitService}] {
-			return fmt.Errorf("deployment descriptor: %s is listed more than once; a site names each unit once", where)
+		if !slices.Contains(serviceRoles, unit.ServiceRole) {
+			return fmt.Errorf("deployment descriptor: %s.service_role %q is not a known role; the known roles are %s",
+				where, unit.ServiceRole, strings.Join(serviceRoles, ", "))
 		}
-		seen[unitKey{unitMachine, unitService}] = true
+		key := unitKey{unitMachine, unitService, unit.ServiceRole}
+		if seen[key] {
+			return fmt.Errorf("deployment descriptor: %s with role %q is listed more than once; a site names each unit once", where, unit.ServiceRole)
+		}
+		seen[key] = true
 		profile := strings.TrimSpace(unit.MachineProfile)
 		if profile == "" {
 			return fmt.Errorf("deployment descriptor: %s.machine_profile is required", where)
 		}
 		if unit.MachineProfile != profile {
 			return fmt.Errorf("deployment descriptor: %s.machine_profile %q must not have leading or trailing whitespace", where, unit.MachineProfile)
-		}
-		if !slices.Contains(serviceRoles, unit.ServiceRole) {
-			return fmt.Errorf("deployment descriptor: %s.service_role %q is not a known role; the known roles are %s",
-				where, unit.ServiceRole, strings.Join(serviceRoles, ", "))
 		}
 		if err := validateObserverRoles(where, unit.ObserverRoles); err != nil {
 			return err
@@ -507,10 +516,17 @@ func (d Descriptor) validateSiteServices(hosted map[string]bool) error {
 			machines[unitMachine] = policy
 		}
 		if unitMachine == machine {
-			if !hosted[unitService] {
+			if !hosted[key] {
+				// Check if this service is hosted on the machine with a different role.
+				for _, service := range d.Services {
+					if strings.TrimSpace(service.Name) == unitService {
+						return fmt.Errorf("deployment descriptor: %s.service_role %q is not services[%s].role %q; one service plays one part",
+							where, unit.ServiceRole, unitService, service.Role)
+					}
+				}
 				return fmt.Errorf("deployment descriptor: %s names a service this machine does not host", where)
 			}
-			local[unitService] = unit
+			local[key] = unit
 		}
 	}
 	return d.validateHostedServicesAreListed(local)
@@ -545,14 +561,14 @@ func validateObserverRoles(where string, roles []string) error {
 // it is the only place the derived values in the inventory can be checked at
 // all. A build that got this machine's entry wrong got every other machine's
 // wrong the same way, which is what makes checking one of them worth doing.
-func (d Descriptor) validateHostedServicesAreListed(local map[string]SiteService) error {
+func (d Descriptor) validateHostedServicesAreListed(local map[unitKey]SiteService) error {
 	wantRoles := observerRoles[:1]
 	if d.HasStandby() {
 		wantRoles = observerRoles
 	}
 	for _, service := range d.Services {
 		name := strings.TrimSpace(service.Name)
-		unit, ok := local[name]
+		unit, ok := local[unitKey{strings.TrimSpace(d.Machine), name, service.Role}]
 		if !ok {
 			return fmt.Errorf("deployment descriptor: services[%s] has no site_services entry for machine %q; every hosted service is a unit of its site",
 				name, d.Machine)

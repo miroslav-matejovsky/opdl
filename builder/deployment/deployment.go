@@ -445,7 +445,7 @@ func (d Descriptor) validateHostedServices() error {
 	if len(d.Services) == 0 {
 		return fmt.Errorf("at least one service is required")
 	}
-	named := make(map[string]bool, len(d.Services))
+	seenRoles := make(map[string]map[string]bool, len(d.Services))
 	for _, service := range d.Services {
 		name := strings.TrimSpace(service.Name)
 		if name == "" {
@@ -454,14 +454,19 @@ func (d Descriptor) validateHostedServices() error {
 		if service.Name != name {
 			return fmt.Errorf("services[%s].name %q must not have leading or trailing whitespace", name, service.Name)
 		}
-		if named[name] {
-			return fmt.Errorf("services: %q is hosted more than once", name)
-		}
-		named[name] = true
 		if !slices.Contains(serviceRoles, service.Role) {
 			return fmt.Errorf("services[%s].role %q is not a known role; the known roles are %s",
 				name, service.Role, strings.Join(serviceRoles, ", "))
 		}
+		roles, ok := seenRoles[name]
+		if !ok {
+			roles = make(map[string]bool, 2)
+			seenRoles[name] = roles
+		}
+		if roles[service.Role] {
+			return fmt.Errorf("services: %q with role %q is hosted more than once", name, service.Role)
+		}
+		roles[service.Role] = true
 		if err := service.HealthCheck.validate(fmt.Sprintf("services[%s].health_check", name)); err != nil {
 			return err
 		}
@@ -577,20 +582,21 @@ func (d Descriptor) validateSiteServices() error {
 		if unit.Service != service {
 			return fmt.Errorf("%s.service %q must not have leading or trailing whitespace", where, unit.Service)
 		}
-		if _, listed := seen[unitKey{machine, service}]; listed {
-			return fmt.Errorf("%s is listed more than once; a site names each unit once", where)
+		if !slices.Contains(serviceRoles, unit.ServiceRole) {
+			return fmt.Errorf("%s.service_role %q is not a known role; the known roles are %s",
+				where, unit.ServiceRole, strings.Join(serviceRoles, ", "))
 		}
-		seen[unitKey{machine, service}] = unit
+		key := unitKey{machine, service, unit.ServiceRole}
+		if _, listed := seen[key]; listed {
+			return fmt.Errorf("%s with role %q is listed more than once; a site names each unit once", where, unit.ServiceRole)
+		}
+		seen[key] = unit
 		profile := strings.TrimSpace(unit.MachineProfile)
 		if profile == "" {
 			return fmt.Errorf("%s.machine_profile is required", where)
 		}
 		if unit.MachineProfile != profile {
 			return fmt.Errorf("%s.machine_profile %q must not have leading or trailing whitespace", where, unit.MachineProfile)
-		}
-		if !slices.Contains(serviceRoles, unit.ServiceRole) {
-			return fmt.Errorf("%s.service_role %q is not a known role; the known roles are %s",
-				where, unit.ServiceRole, strings.Join(serviceRoles, ", "))
 		}
 		if err := validateObserverRoles(where, unit.ObserverRoles); err != nil {
 			return err
@@ -633,7 +639,7 @@ func validateObserverRoles(where string, roles []string) error {
 
 // unitKey identifies one deployed service unit within a site. A service name is
 // unique only within its machine, so the machine is half the key.
-type unitKey struct{ machine, service string }
+type unitKey struct{ machine, service, role string }
 
 // siteMachine is the machine-level policy repeated on each inventory unit.
 // Every service on one machine must repeat the same values.
@@ -652,18 +658,28 @@ type siteMachine struct {
 // doing.
 func (d Descriptor) validateHostedServicesAreListed(listed map[unitKey]SiteService) error {
 	machine := strings.TrimSpace(d.Machine)
-	hosted := make(map[string]bool, len(d.Services))
+	hosted := make(map[unitKey]bool, len(d.Services))
+	hostedByName := make(map[string]Service, len(d.Services))
 	for _, service := range d.Services {
-		hosted[strings.TrimSpace(service.Name)] = true
+		name := strings.TrimSpace(service.Name)
+		hosted[unitKey{machine, name, service.Role}] = true
+		hostedByName[name] = service
 	}
-	for key := range listed {
-		if key.machine == machine && !hosted[key.service] {
-			return fmt.Errorf("site_services[%s/%s] names a service this machine does not host", key.machine, key.service)
+	for key, unit := range listed {
+		if key.machine == machine {
+			if !hosted[key] {
+				if svc, ok := hostedByName[key.service]; ok {
+					where := fmt.Sprintf("site_services[%s/%s]", key.machine, key.service)
+					return fmt.Errorf("%s.service_role %q is not services[%s].role %q; one service plays one part",
+						where, unit.ServiceRole, key.service, svc.Role)
+				}
+				return fmt.Errorf("site_services[%s/%s] names a service this machine does not host", key.machine, key.service)
+			}
 		}
 	}
 	for _, service := range d.Services {
 		name := strings.TrimSpace(service.Name)
-		unit, ok := listed[unitKey{machine, name}]
+		unit, ok := listed[unitKey{machine, name, service.Role}]
 		if !ok {
 			return fmt.Errorf("services[%s] has no site_services entry for machine %q; every hosted service is a unit of its site", name, d.Machine)
 		}
