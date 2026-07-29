@@ -1,8 +1,7 @@
 # Required decisions
 
 D01 through D12, D14, and D15 are accepted and reflected in the implementation.
-D08's multiplier and a future service-instance identifier remain explicit
-follow-up decisions rather than blockers for the current HTTP slice.
+D08's multiplier remains an explicit follow-up decision rather than a blocker for the current HTTP slice.
 
 ## Decision summary
 
@@ -12,7 +11,7 @@ follow-up decisions rather than blockers for the current HTTP slice.
 | D02 | Health data category | Ephemeral state snapshot, not event | Results need replacement and expiry, not replay or audit |
 | D03 | Transport | Dedicated Core NATS subject | Existing cluster supports live fan-out without JetStream |
 | D04 | Monitor lifetime | Whole process, both instance roles | Required observers must run in Active and Passive states |
-| D05 | Target identity | Site, machine, service | Service names are only unique within a machine |
+| D05 | Target identity | Site, machine, service, role | Service names on a machine are unique per role (master/slave) |
 | D06 | Observer identity | Target plus fixed platform role and process epoch | Prevents Primary and Standby from overwriting each other and fences restart |
 | D07 | Publication cadence | Publish after every attempt | Repairs at-most-once loss and restart without persistence |
 | D08 | Freshness | `2 * interval + timeout`, receiver-relative | Tolerates one missed report without trusting wall clocks |
@@ -80,16 +79,15 @@ lifetime.
 
 ## D05: target identity
 
-Recommendation: key a deployed service unit by project, environment, site,
-machine, and service. Use service role as metadata.
+Decision: key a deployed service unit by project, environment, site, machine,
+service, and service role.
 
 Rationale: a master and slave copy commonly share the same service name on
-different machines. Machine names are unique in the project today. Including
-scope protects against accidental cross-deployment traffic.
-
-Open point: if one machine must later host multiple instances of the same
-service name, the blueprint needs an explicit service instance identifier. Do
-not invent one in this feature.
+different machines or on the same machine in redundant setups. Including service
+role in the identity key allows a single machine to host copies of the same
+service name only when assigned distinct roles (`master` vs `slave`). Descriptor
+validation in both the builder and platform modules enforces `(name, role)`
+uniqueness per machine and rejects duplicate `(name, role)` pairs.
 
 ## D06: observer identity and ordering
 
