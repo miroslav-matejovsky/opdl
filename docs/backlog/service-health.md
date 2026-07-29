@@ -1,12 +1,17 @@
 # Distributed service health
 
-Status: Steps 00 and 01 completed on 2026-07-29. The remaining work is
-backlogged below.
+Status: Steps 00 and 01, and the local probe engine, completed on 2026-07-29.
+The remaining work is backlogged below.
 
-The deployment descriptor now contains local service probe policy and a
-site-wide service inventory. Builder, platform, and conformance validation
-enforce the same contract. Health observations, NATS distribution, reduction,
-and the public API are not implemented yet.
+The deployment descriptor contains local service probe policy and a site-wide
+service inventory. Builder, platform, and conformance validation enforce the
+same contract.
+
+Both platform instances now probe every service on their machine for the whole
+process lifetime, in `platform/internal/machine/servicehealth`. Observations
+reach an injected sink after every attempt. NATS distribution, site reduction,
+and the public API are not implemented yet, so the sink is currently the
+application log and an observation does not leave its process.
 
 ## Accepted design
 
@@ -39,16 +44,34 @@ Keep these decisions unless a later backlog item explicitly changes them:
 - Keep health package interfaces narrow. Do not introduce a general messaging
   abstraction for this feature.
 
-## P0: local probe engine
+## Done: local probe engine
 
-Effort: Medium
+Implemented in `platform/internal/machine/servicehealth`, composed by
+`platform/internal/app`.
 
-Value: High
+`servicehealth.Monitor` runs one worker per target. A worker probes, folds the
+outcome into that target's stable status, hands an `Observation` to the sink,
+and waits one interval before probing again — waiting after the attempt rather
+than on a fixed schedule, so attempts against one target never overlap. The
+retry policy lives in an unexported `tracker` with no clock and no transport, so
+the state table is tested directly.
 
-Implement typed local targets, an HTTP prober, and one cancellation-aware worker
-per target.
+The clock, prober, and sink are injected. `app.startServiceHealth` supplies the
+real three and is where monitoring's lifetime is decided: it starts after the
+broker and before ownership management, and stops before the fabric closes, so
+both roles probe across every ownership change.
 
-Required behavior:
+Two things were settled while implementing it. The probe URL is composed by
+appending the authored path to the machine ip and port rather than through
+`url.URL`, because `url.URL` re-encodes what it renders and the authored bytes
+are the contract; the composed URL is parsed back to confirm the host is this
+machine. And `SinkFunc` was dropped as a speculative adapter with no caller.
+
+Carried into the next item: the sink is `app.healthLog`, which writes stable
+transitions to the application log and drops repeats. It is a placeholder for
+the distribution sink, not a second consumer to keep.
+
+Required behavior, all implemented:
 
 - Start with Unknown.
 - One successful attempt changes the stable status to Healthy and resets the
@@ -63,10 +86,11 @@ Required behavior:
 - Use injected clock, prober, and observation sink seams. Keep tests
   deterministic and free of sleeps.
 
-Dependencies: completed descriptor contract.
-
-Acceptance: state-table tests cover initial failure, threshold crossing,
-recovery, timeout, shutdown, independent targets, and no worker leaks.
+Acceptance, met: the state table is covered directly, and the worker is covered
+for initial failure, threshold crossing, recovery, timeout, shutdown mid-probe,
+independent targets, and worker joining. A leaked worker hangs `Stop` rather
+than failing an assertion, which is the strongest form that check can take. The
+tests use a controlled clock and a channel sink, so none of them sleeps.
 
 ## P0: NATS distribution and site reducer
 
@@ -107,15 +131,23 @@ Effort: Large
 
 Value: High
 
-Compose monitoring, distribution, reduction, and the HTTP endpoint into both
-platform roles.
+Compose distribution, reduction, and the HTTP endpoint into both platform roles.
+
+Monitoring itself is already composed: `app.Run` validates the descriptor, opens
+the broker, advances the process-start epoch, starts the monitor, and stops it
+before the fabric closes. What this item adds is what the observations reach.
+
+Replacing `app.healthLog` with the distribution sink is part of the work, not a
+second consumer to keep beside it. It exists so the engine has somewhere to
+report while distribution does not.
 
 Required behavior:
 
-- Validate the descriptor before opening runtime resources.
-- Advance the process-start epoch before monitoring begins.
+- Validate the descriptor before opening runtime resources. (done)
+- Advance the process-start epoch before monitoring begins. (done)
 - Start the embedded NATS server, distribution connection, subscription, view,
-  workers, and HTTP listener in dependency order.
+  workers, and HTTP listener in dependency order. Broker, workers, and listener
+  are ordered already; the connection, subscription, and view are not there yet.
 - On shutdown, stop workers, drain publication, unsubscribe, close the health
   connection, and then close dependent resources without losing errors.
 - Add `GET /health/services` to public Go API types, OpenAPI generation, the

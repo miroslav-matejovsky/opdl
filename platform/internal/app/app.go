@@ -251,6 +251,23 @@ func Run(args []string) (runErr error) {
 		log:          logger.Logger,
 	}
 
+	// Service monitoring is composed here, at process lifetime, rather than
+	// inside an activation. Both of a machine's instances probe every service on
+	// it in every ownership state: a service does not stop needing to be watched
+	// because the process watching it stepped down, and ownership can move many
+	// times over one process's life without a target being affected either way.
+	//
+	// It starts after the broker so the two failures stay separate, and before
+	// ownership management so a Passive instance is probing from its first
+	// moment rather than from its first activation.
+	monitor, err := startServiceHealth(ctx, proc)
+	if err != nil {
+		return err
+	}
+	// Registered after the fabric's close so it runs before it: probing stops
+	// before what will carry the observations is torn down.
+	defer monitor.Stop()
+
 	runErr = runProcess(ctx, proc)
 	stopped := ProcessStopped{}
 	if runErr != nil {

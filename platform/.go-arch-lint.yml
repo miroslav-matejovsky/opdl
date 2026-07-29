@@ -37,6 +37,7 @@ components:
   state: { in: internal/instance/state }
   redundancy: { in: internal/machine/redundancy }
   eventstore: { in: internal/machine/eventstore }
+  servicehealth: { in: internal/machine/servicehealth }
   eventfabric: { in: internal/site/eventfabric }
 
 deps:
@@ -61,7 +62,12 @@ deps:
     # fabric belong to different levels and only composition knows both: the
     # instance's broker is started here and the site's client is opened onto it
     # here, and nothing below is given either of them whole.
-    mayDependOn: [api, applog, config, events, events-storage, eventfabric, eventlog, eventstore, httpapi, natsserver, redundancy, state]
+    #
+    # servicehealth is here because the adapter between the descriptor and a
+    # probe belongs to composition: it is what knows the machine's ip, and what
+    # decides that monitoring runs for the whole process rather than for an
+    # activation. The monitor itself reads no descriptor.
+    mayDependOn: [api, applog, config, events, events-storage, eventfabric, eventlog, eventstore, httpapi, natsserver, redundancy, servicehealth, state]
   # applog has no entry here on purpose, for the same reason config has none: it
   # is a leaf. It is one local file behind log/slog, holding no descriptor and
   # stating no event. The composition root opens it, stamps the process identity
@@ -105,6 +111,12 @@ deps:
     # and knows nothing about what is published through it. The composition root
     # reads the descriptor and hands it a configuration.
     canUse: [natsbroker]
+  # servicehealth has no entry here on purpose. It probes the machine's services
+  # and hands the results to an injected sink, so it depends on nothing of ours:
+  # it reads no descriptor, holds no transport, and states no event. The
+  # composition root reads the descriptor, resolves each service onto a request
+  # URL, and decides where the observations go. That is what keeps target
+  # service health out of the platform's own health and out of ownership.
   eventfabric:
     # The site level holds the client and never the broker. natsbroker is
     # deliberately absent: a site package that could start a server would put
