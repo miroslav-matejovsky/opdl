@@ -129,7 +129,7 @@ func SiteConvergesAndTracksTargets(t *testing.T) {
 		health, code, err := harness.FetchHealthAt(ctx, observer.URL)
 		require.NoErrorf(t, err, "%s answers for its own health", observer.Name)
 		require.Equal(t, http.StatusOK, code)
-		require.NotEqualf(t, "Unhealthy", health.Status,
+		require.NotEqualf(t, harness.HealthUnhealthy, health.Status,
 			"%s reports itself %s over a target it does not control", observer.Name, health.Status)
 	}
 	instance, code := harness.GetInstance(ctx, t, nodeA)

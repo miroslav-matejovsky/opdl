@@ -265,6 +265,11 @@ The current black-box coverage proves:
 - a primary-only machine builds and runs without site event storage;
 - a standby-enabled machine fails over after a forced primary kill;
 - ownership returns to the preferred Primary after recovery;
+- a machine whose two instances are started together resolves the contested
+  lease to one owner, from an empty lease file and from one a killed owner left
+  behind, and never has two Active instances at any sampled instant;
+- both instances keep probing the machine's services across a contested start,
+  whichever of them wins;
 - the machine event store contains the machine-scoped ownership sequence across
   both processes;
 - instance event logs contain process-local facts;

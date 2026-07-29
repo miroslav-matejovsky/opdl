@@ -19,7 +19,8 @@
 //
 //   - smoke builds and runs the smallest deployment the platform will start.
 //   - redundancy drives one machine's two instances through failover and
-//     failback.
+//     failback, and through a start that begins with both of them contesting
+//     the same lease.
 //   - health deploys two machines with services it controls and checks that
 //     every instance converges on the same picture of them.
 //   - sdk drives a running instance through the generated .NET client.

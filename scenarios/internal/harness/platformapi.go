@@ -101,6 +101,18 @@ func FetchInstanceAt(ctx context.Context, baseURL string) (Instance, int, error)
 	return getJSON[Instance](ctx, baseURL+"/instance")
 }
 
+// The health assessments an instance publishes about itself. Only the two a
+// scenario asserts on are named: Degraded sits between them and is deliberately
+// not a state any scenario requires, because what is allowed to degrade an
+// instance is the platform's business and not a black-box claim.
+const (
+	// HealthHealthy is an instance with nothing wrong with it.
+	HealthHealthy = "Healthy"
+	// HealthUnhealthy is an instance that cannot serve. It is the peer promotion
+	// gate: a machine's other instance may take ownership from one that says this.
+	HealthUnhealthy = "Unhealthy"
+)
+
 // Health is the observable shape of GET /health: the primary operational health
 // assessment every instance serves in every state.
 type Health struct {

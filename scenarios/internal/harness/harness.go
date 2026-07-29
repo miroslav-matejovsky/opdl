@@ -130,6 +130,17 @@ var projectFixtures = map[string][]machineFixture{
 	"redundancy": {
 		{name: machineA, ip: loopbackHost},
 	},
+	// The same pair, for the scenario that starts both of its instances at once
+	// rather than in a fixed order.
+	//
+	// It is a fixture of its own only because of the probe policy. That scenario
+	// asks whether both instances kept watching the machine's service across a
+	// contested start, so the service is bound and the probes have to be fast
+	// enough to answer inside the scenario; the redundancy fixture is authored
+	// the other way round, watching a service nothing binds.
+	"startup": {
+		{name: machineA, ip: loopbackHost, probe: fastProbe},
+	},
 	// The site the health scenarios observe: two machines on different addresses,
 	// one with a Standby Instance and one without.
 	//
@@ -713,6 +724,57 @@ func (m *Machine) StartManaged(ctx context.Context, t *testing.T, role string, a
 		_ = p.Kill()
 	})
 	return p
+}
+
+// StartTogether starts both of a machine's instances as close to simultaneously
+// as the host allows, and returns a handle on each.
+//
+// It exists because "both instances start at once" is a real deployment
+// condition — a machine that reboots starts its two Windows Services together —
+// and starting them one after the other does not reproduce it. Each command is
+// built on the calling goroutine, so the only work left inside the race is the
+// launch itself, and both launches are released from one barrier.
+//
+// Which instance wins the machine's lease is deliberately not decided here. A
+// scenario that calls this must hold for either.
+func (m *Machine) StartTogether(ctx context.Context, t *testing.T, manifest PackageManifest) (primary, standby *ManagedProcess) {
+	t.Helper()
+	require.NotNilf(t, manifest.Standby, "%s deploys no standby, so it has no second instance to start with", m.Name)
+
+	type launch struct {
+		role string
+		args []string
+		proc *procrun.Process
+		err  error
+	}
+	launches := []launch{
+		{role: RolePrimary, args: manifest.Primary.Args},
+		{role: RoleStandby, args: manifest.Standby.Args},
+	}
+
+	release := make(chan struct{})
+	var launched sync.WaitGroup
+	for i := range launches {
+		cmd := exec.CommandContext(ctx, m.BinaryPath, launches[i].args...)
+		launched.Go(func() {
+			<-release
+			launches[i].proc, launches[i].err = procrun.Start(cmd)
+		})
+	}
+	close(release)
+	launched.Wait()
+
+	// Both outcomes are asserted on the calling goroutine. require.* inside the
+	// launch goroutines would call runtime.Goexit there and leave the other
+	// instance running with nothing to stop it.
+	started := make([]*ManagedProcess, 0, len(launches))
+	for i := range launches {
+		require.NoErrorf(t, launches[i].err, "%s: starting its %s instance", m.Name, launches[i].role)
+		p := &ManagedProcess{Process: launches[i].proc, Role: launches[i].role}
+		t.Cleanup(func() { _ = p.Kill() })
+		started = append(started, p)
+	}
+	return started[0], started[1]
 }
 
 // DiagStringer adapts a func into a fmt.Stringer, so a scenario can defer

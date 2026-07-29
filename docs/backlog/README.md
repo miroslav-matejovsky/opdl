@@ -10,7 +10,6 @@ Nothing here blocks the current POC.
 - [Distributed-host health envelope validation](distributed-health-envelope-validation.md)
 - [Live health-route partition and recovery](health-route-partition-validation.md)
 - [NATS route security](route-security.md)
-- [Simultaneous redundant-instance startup](redundancy-simultaneous-startup.md)
 - [Windows Service (SCM) integration](windows-service-integration.md)
 
 ## Transport / Security
@@ -22,5 +21,4 @@ Nothing here blocks the current POC.
 
 ## Platform / Lifecycle
 
-- [Simultaneous redundant-instance startup](redundancy-simultaneous-startup.md) (Effort: Small-Medium, Value: High)
 - [Windows Service (SCM) integration](windows-service-integration.md) (Effort: Medium, Value: High)
