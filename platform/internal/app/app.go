@@ -273,6 +273,12 @@ func Run(args []string) (runErr error) {
 	// Registered after the fabric's close so it runs before it: probing and the
 	// health connection stop before the broker they run on is shut down.
 	defer health.Stop()
+	// The runtime is handed the rendering of the view rather than the subsystem
+	// holding it, so nothing below here can stop, restart, or write to monitoring
+	// while answering a query about it. This is the last thing composed onto the
+	// process value, because it is the only one that cannot exist until the thing
+	// it reads does.
+	proc.serviceHealth = health.Response
 
 	runErr = runProcess(ctx, proc)
 	stopped := ProcessStopped{}

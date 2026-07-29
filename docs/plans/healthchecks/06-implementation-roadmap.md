@@ -1,8 +1,8 @@
 # Implementation roadmap
 
-Steps 00 through 03 are complete except for startup jitter, which is tracked
-in Step 06. Step 04 lifecycle composition is complete. The next implementation
-slice is the Step 04 public API.
+Steps 00 through 04 are complete except for startup jitter, which is tracked in
+Step 06. The next implementation slice is Step 05: black-box convergence and
+failure scenarios.
 
 ## Step 00: accept semantics
 
@@ -136,8 +136,15 @@ Acceptance:
 
 ## Step 04: compose both instances and add the API
 
-Status: lifecycle composition is complete. API, platform subsystem status,
-OpenAPI, generated SDK, and .NET test discovery remain.
+Status: complete.
+
+`GET /health/services` is served by both surfaces from `api.Deps`, the one value
+both are composed from, so neither can quietly stop reporting the view. The
+hardcoded `internalServices` check is now `serviceMonitor` and reports this
+instance's own observations about its own machine having expired — never what a
+probe found. `test.runsettings` fails a .NET run that discovers no test, and the
+`scenarios/sdk` category runs those tests against a live instance and asserts
+each one reported `Passed` rather than trusting the exit code.
 
 | | |
 | --- | --- |
@@ -174,7 +181,9 @@ Acceptance:
 
 ## Step 05: add black-box convergence and failure scenarios
 
-Status: pending the public API.
+Status: pending. The public API it asserts against exists, and `scenarios/sdk`
+is the first scenario to read it — from one machine, through the generated .NET
+client. What remains is everything about more than one observer.
 
 | | |
 | --- | --- |
@@ -238,10 +247,8 @@ Acceptance:
 
 ## Remaining delivery order
 
-1. Complete Step 04 API, subsystem health, generated artifacts, and .NET test
-   discovery.
-2. Complete Step 05 convergence, restart, partition, and recovery scenarios.
-3. Complete Step 06 jitter, load validation, and operations work.
+1. Complete Step 05 convergence, restart, partition, and recovery scenarios.
+2. Complete Step 06 jitter, load validation, and operations work.
 
 The largest uncertainty remains realistic multi-machine route partition testing
 on one Windows scenario host.

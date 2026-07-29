@@ -1,7 +1,6 @@
 # Configuration and API
 
-Status: blueprint, descriptor, validation, and runtime construction are
-implemented. The public API and generated clients are the next delivery slice.
+Status: implemented, including the public API and the generated clients.
 
 ## Blueprint
 
@@ -133,19 +132,23 @@ in the static view inventory instead of being repeated on the wire.
 
 ## Public API
 
-The composed health subsystem deliberately has no otherwise-unused public view
-accessor yet. Add the accessor with this endpoint so dead-code validation keeps
-the API boundary honest.
+`GET /health/services` is implemented as a non-domain endpoint. Every Active and
+Passive instance serves it, from one `api.Deps` value both surfaces are composed
+from. It reads only the instance's in-memory view, needs neither Primary
+Ownership nor a durable site projection, and is not in `api.DomainPaths`.
 
-Add a non-domain endpoint:
+The implemented shape follows the recommendation below with three refinements:
 
-```text
-GET /health/services
-```
-
-Every Active and Passive instance serves it. It reads only the instance's
-in-memory view and does not require Primary Ownership or a durable site
-projection. It must not be added to `api.DomainPaths`.
+- `distribution` is an object rather than a string. It carries the state plus
+  publisher, subscriber, rejection, and drop counters, which is what tells target
+  failure from monitor failure from distribution failure.
+- `staleObservers` is listed separately from `missingObservers`. An observer that
+  stopped talking and one that never started are different faults.
+- statuses use the capitalized vocabulary the rest of the API uses, mapped from
+  the view's lowercase wire values in one place, and `Machine` and `Role` name
+  the instance that produced the snapshot. Two instances of one machine hold
+  separate views and may briefly differ, so a response that did not say whose it
+  was could not be compared with another.
 
 Recommended response shape:
 
@@ -198,17 +201,23 @@ when the view itself cannot be read.
 Do not make target service state change platform `HealthResponse.Status`,
 `/health/ready`, or the peer promotion gate.
 
-The current hardcoded `internalServices: Healthy` label is misleading once a
-real service monitor exists. Recommended change:
+The hardcoded `internalServices: Healthy` label is gone. It is now
+`serviceMonitor`, and it reports this instance's own observations about its own
+machine having expired — a monitor that stopped producing. It never reports what
+a probe found, and a failing one degrades the instance rather than failing it,
+because `Unhealthy` is the gate a peer promotes through and the peer's monitor is
+no better placed than this one.
 
-- rename it to a precise platform subsystem check such as
-  `serviceHealthMonitor`; and
-- report whether probe scheduling and the in-memory reducer are running, not
-  whether every target service is Healthy.
+Never-reported observers do not count. A process whose monitor could not start
+does not serve, so the only thing "never" can mean on a serving instance is "not
+yet", during the first interval after startup.
 
-Distribution connectivity can remain a platform degradation. The existing
-`eventFabric` check proves only the local broker round trip, so the service API
-must separately expose whether expected site observations are arriving.
+Whether expected site observations are arriving is exposed separately, as
+`distribution.state` on the service endpoint. It asks only about observers on
+other machines: this instance's own reports reach its view directly and would
+report a working site through a broker that had stopped carrying anything, which
+is the failure the state exists for. The `eventFabric` check cannot see it — it
+round-trips through this instance's own embedded broker.
 
 Any public type change requires:
 

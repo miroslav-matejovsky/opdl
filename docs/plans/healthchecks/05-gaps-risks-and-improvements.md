@@ -11,18 +11,16 @@ Priorities:
 
 ## P0
 
-| Type | Gap or risk | Impact | Required action |
-| --- | --- | --- | --- |
-| Delivery gap | No `GET /health/services` endpoint, response types, OpenAPI contract, or generated .NET client | The converged in-memory view cannot be consumed or asserted outside the process | Implement the Step 04 API slice on Active, Passive, and journal-less handlers |
+No P0 gap remains open. The delivery gap this section carried — no
+`GET /health/services`, no response types, no OpenAPI contract, no generated
+client — is closed; see the resolved section below.
 
 ## P1
 
 | Type | Gap or risk | Impact | Required action |
 | --- | --- | --- | --- |
-| Test gate bug | The .NET E2E task succeeds when zero tests are discovered | Generated-client regressions can pass the repository gate | Fix discovery and make zero discovered tests fail before adding health API E2E coverage |
-| Scenario gap | Existing scenarios cannot query health convergence | Cross-instance convergence, restart reconstruction, and recovery are not proven end to end | Add controlled services and API assertions in Step 05 |
+| Scenario gap | One scenario reads the API, from a single machine with a single observer | Cross-instance convergence, restart reconstruction, and recovery are not proven end to end | Add controlled services and multi-observer API assertions in Step 05 |
 | Route gap | Tests cover two health connections on one embedded broker, not a routed multi-broker cluster | Route partition and reconnection behavior remain inferred from Core NATS semantics | Add route interruption and recovery tests and Windows scenarios |
-| Observability gap | Publisher, subscriber, stale-observer, and rejection state is not exposed through the platform health/API surface | Operators cannot distinguish target failure, monitor failure, and distribution failure | Add bounded counters and subsystem state to the API without folding target health into ownership readiness |
 | Load risk | Queue, view, and message bounds are unit-tested but not measured at supported site size and minimum interval | Production resource bounds are not demonstrated | Define limits, load-test them, and publish the supported envelope |
 | Scheduling risk | Primary and Standby probe immediately and can remain synchronized | Services receive duplicate probe bursts | Add deterministic observer-specific startup jitter during Step 06 hardening |
 | Documentation gap | Operational response for Unknown, Degraded, stale observers, invalid messages, and route loss is not documented | Operators may misdiagnose expected transient states | Add the Step 06 runbook |
@@ -56,6 +54,26 @@ particular:
   freshness, and deterministic reduction are implemented; and
 - startup and shutdown order subscribe before probing and reverse that order on
   shutdown.
+
+The Step 04 API slice resolves the delivery, observability, and test-gate gaps:
+
+- `GET /health/services` is served by both the Active and the Passive surface,
+  built from one `api.Deps` value, returning 200 for every valid view;
+- response types, deterministic ordering, OpenAPI, the Markdown companion, and
+  the generated .NET client are regenerated from `platform/api`;
+- publisher, subscriber, drop, and rejection counters are exposed on the service
+  endpoint, with every reason rendered including the ones at zero, and a
+  `distribution.state` derived from expected observers on *other* machines —
+  which the `eventFabric` check cannot see, because it round-trips through this
+  instance's own broker;
+- the hardcoded `internalServices: Healthy` check is now `serviceMonitor` and
+  reports this instance's own reports about its own machine having expired.
+  Never-reported observers are excluded: a process whose monitor could not start
+  does not serve, so "never" can only mean "not yet"; and
+- `test.runsettings` fails a .NET run that discovers no test, and the
+  `scenarios/sdk` category runs those tests against a live instance and asserts
+  each named test reported `Passed` rather than trusting the exit code. A
+  skipped test is a passing run, which is what made the old gate vacuous.
 
 The 2026-07-29 review also fixed these implementation defects:
 

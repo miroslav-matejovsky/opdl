@@ -51,6 +51,16 @@ type process struct {
 	// and connects to it before it runs anything. It is nil only in a test that
 	// composes a process without one.
 	fabricHealth func(context.Context) error
+	// serviceHealth renders this instance's view of the site's deployed services
+	// for GET /health/services. It is held as a func for the same reason
+	// fabricHealth is: nothing below the composition root should take the
+	// monitoring subsystem itself and start using it for something other than
+	// answering what it currently knows.
+	//
+	// It is set for every running process, because service monitoring starts
+	// before the runtime does. It is nil only in a test that composes a process
+	// without it, and an instance with none answers an empty view.
+	serviceHealth func() api.ServiceHealthResponse
 	// log is this process's application log, already stamped with the machine and
 	// the instance role. It is what the runtime says things through; what it
 	// states goes through local. A record here is for a person reading a failure,
@@ -143,6 +153,26 @@ func instanceIdentity(descriptor config.Descriptor, role redundancy.InstanceRole
 	}
 }
 
+// apiDeps is what this process's API answers from, in the given runtime state.
+//
+// Both of an instance's surfaces are built from it, and both are built from the
+// same one: an instance answers the same health and the same identity whether it
+// is Active or Passive, and the only thing that differs is what it says its
+// state is. Composing the two handlers from one place is what keeps that true —
+// a surface that quietly stopped reporting the service view or the lease would
+// otherwise be a difference an operator only finds after ownership has moved.
+func apiDeps(proc process, lease *redundancy.Lease, stateName string) api.Deps {
+	return api.Deps{
+		Instance: func() api.Instance {
+			return instanceIdentity(proc.descriptor, proc.role, stateName)
+		},
+		Started:       proc.started,
+		Lease:         func() api.LeaseView { return leaseViewOf(lease) },
+		EventFabric:   proc.fabricHealth,
+		ServiceHealth: proc.serviceHealth,
+	}
+}
+
 // runProcess binds this instance's API, opens the machine's ownership lease, and
 // runs the passive and active compositions as ownership moves.
 //
@@ -167,12 +197,8 @@ func runProcess(ctx context.Context, proc process) (runErr error) {
 	// process that leaves releases it inside the active composition, and a process
 	// that dies lets its grant lapse, which is what a promoter waits out.
 
-	leaseView := func() api.LeaseView { return leaseViewOf(lease) }
-
 	address := instanceOf(descriptor, role).APIAddress
-	passive := httpapi.NewPassiveHandler(func() api.Instance {
-		return instanceIdentity(descriptor, role, api.InstanceStatePassive)
-	}, proc.started, leaseView, proc.fabricHealth)
+	passive := httpapi.NewPassiveHandler(apiDeps(proc, lease, api.InstanceStatePassive))
 	standby := role == redundancy.RoleStandby
 	server, err := openInstanceServer(ctx, address, proc.cfg.ReadHeaderTimeout(standby), passive)
 	if err != nil {
@@ -247,9 +273,7 @@ func runActive(ctx context.Context, proc process, server *instanceServer, lease 
 	}
 
 	address := instanceOf(descriptor, role).APIAddress
-	server.serveWith(httpapi.NewActiveHandler(func() api.Instance {
-		return instanceIdentity(descriptor, role, api.InstanceStateActive)
-	}, proc.started, func() api.LeaseView { return leaseViewOf(lease) }, proc.fabricHealth))
+	server.serveWith(httpapi.NewActiveHandler(apiDeps(proc, lease, api.InstanceStateActive)))
 	proc.log.Info("active", "address", address, "instance_state", api.InstanceStateActive)
 
 	// An instance that cannot state that it is serving does not stay serving. The

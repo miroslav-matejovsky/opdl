@@ -22,15 +22,27 @@ sdk-dotnet/
       kiota-lock.json               generation manifest (contract hash, Kiota version)
   tests/Opdl.Sdk.E2E/
     Opdl.Sdk.E2E.csproj             end-to-end tests (references the SDK)
+    test.runsettings                fails a run that discovers no test
 ```
 
 ## End-to-end tests
 
-`tests/Opdl.Sdk.E2E` is meant to exercise the SDK against a real, running site, the
-way `scenarios/dotnet_sdk_e2e_test.go` would drive it once that harness exists. The
-platform has no domain operation right now beyond health and instance identity, so
-there is nothing here yet; it is where the tests for the static site/machine/instance
-approach land once that surface exists.
+`tests/Opdl.Sdk.E2E` exercises the SDK against a real, running instance. The
+`scenarios/sdk` category builds a machine, starts it, and runs these tests with its
+address in `OPDL_PLATFORM_BASEURL`; without that variable they skip, which is what
+they do under `task sdk-dotnet`.
+
+Two gates keep that from being empty ceremony:
+
+- `test.runsettings` sets `TreatNoTestsAsError`, so a run that discovers no test
+  fails. `dotnet test` otherwise exits 0 over an empty project, and this one was
+  empty and green for a while.
+- the scenario asserts each expected test reported `Passed`, not just that the
+  process exited 0. A skipped test is a passing run.
+
+The current tests cover `GET /health/services`: that the nested service view
+deserializes into the generated models, and that a target service the platform
+cannot reach does not make the instance itself report Unhealthy.
 
 ## Regenerating the client
 
@@ -83,13 +95,22 @@ var instance = await client.Instance.GetAsync();
 
 var health = await client.Health.GetAsync();
 // health.Status, health.RuntimeState, ...
+
+var services = await client.Health.Services.GetAsync();
+// services.Services[i].Status, .Observations[j].ObserverRole, .Distribution.State
 ```
 
-The API has no domain operation yet: it reports instance identity and health
-only. A prior version of this contract had a dynamic unit-registration protocol
-(`Registrations`); it was removed in favor of a static site/machine/instance
-approach, which will bring its own client surface and its own SDK usage examples
-when it lands.
+`Health.Services` is this instance's whole view of the site's deployed services:
+every service, what each platform instance observing it last found, and whether
+those findings are current. Every instance builds it in memory, so a Passive one
+answers it too, and asking either instance of a machine is valid — they hold
+separate views and may briefly differ, which is why the response says whose it is.
+
+The API has no domain operation yet: it reports instance identity, platform
+health, and service health only. A prior version of this contract had a dynamic
+unit-registration protocol (`Registrations`); it was removed in favor of a static
+site/machine/instance approach, which will bring its own client surface and its
+own SDK usage examples when it lands.
 
 ### Errors
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -32,6 +33,11 @@ const (
 	PathHealthReady = "/health/ready"
 	// PathHealthHA is the redundancy and ownership diagnostics endpoint.
 	PathHealthHA = "/health/ha"
+	// PathHealthServices is this instance's view of the site's deployed services.
+	// It is not a domain path: it reads only what this process holds in memory, so
+	// it needs neither Primary Ownership nor a site projection, and an instance
+	// that refuses every domain operation still answers it.
+	PathHealthServices = "/health/services"
 )
 
 // DomainPaths are the operations that need this node's authoritative projection,
@@ -66,6 +72,39 @@ type Handlers struct {
 	HealthReady func() HealthReadyResponse
 	// HealthHA reports high-availability and ownership diagnostics.
 	HealthHA func() HealthHAResponse
+	// HealthServices reports this instance's view of the site's deployed
+	// services. It takes no context because it reads memory: the view is built
+	// from reports that already arrived, and answering it never waits on anything.
+	HealthServices func() ServiceHealthResponse
+}
+
+// Deps is what the health operations read the running process through.
+//
+// Every field is read on each request rather than captured once, because all of
+// them change while the process runs: Role and State change when Primary
+// Ownership moves, the lease expires and is renewed, the fabric breaks and
+// recovers, and the service view changes on every probe interval at the site.
+//
+// The func fields are optional. A nil one means this build has nothing behind
+// that answer, and each operation says so by omitting what it cannot report
+// rather than by inventing a healthy value. Spec generation and the boundary
+// tests compose a Deps with none of them.
+type Deps struct {
+	// Instance reports what this instance is and what it is doing.
+	Instance func() Instance
+	// Started is when the process began running, the origin uptime counts from.
+	Started time.Time
+	// Lease reports this instance's Primary Ownership. Nil derives ownership from
+	// the runtime state alone.
+	Lease func() LeaseView
+	// EventFabric round-trips a message through this instance's embedded broker
+	// and reports what happened. Nil reports no fabric check rather than a healthy
+	// one.
+	EventFabric func(context.Context) error
+	// ServiceHealth renders this instance's current view of the site's services.
+	// Nil reports no service monitor check and answers the services endpoint with
+	// an empty view.
+	ServiceHealth func() ServiceHealthResponse
 }
 
 // Config returns the huma configuration for the platform API. It clears the
@@ -96,6 +135,10 @@ type healthReadyOutput struct {
 
 type healthHAOutput struct {
 	Body HealthHAResponse
+}
+
+type healthServicesOutput struct {
+	Body ServiceHealthResponse
 }
 
 // RegisterInstance attaches the instance operation to hapi.
@@ -129,35 +172,30 @@ type LeaseView struct {
 }
 
 // NewHealth builds the health handler funcs the runtime serves, deriving each
-// response from the live instance identity, the process start time, the current
-// lease, and this instance's event fabric. They are read on every request rather
-// than captured once, because Role, State, the lease, and the fabric all change
-// while the process runs.
+// response from what deps reports about the running process.
 //
-// leaseView may be nil, in which case /health/ha derives ownership from the
-// runtime state alone. eventFabric may be nil, in which case /health reports no
-// fabric check rather than claiming a healthy one. Both are nil for spec
-// generation and the boundary tests, which serve the shape without a runtime
-// behind it.
-//
-// A failing event fabric makes the instance Degraded, not Unhealthy. Unhealthy
-// on this endpoint is the gate a Passive instance promotes through, and moving
-// Primary Ownership would not fix a broken fabric: the other instance runs its
-// own embedded broker and its own client, so it has nothing better to offer. The
-// instance stays the machine's serving instance and says what is wrong with it.
-func NewHealth(instance func() Instance, started time.Time, leaseView func() LeaseView, eventFabric func(context.Context) error) Handlers {
+// A failing dependency makes the instance Degraded, not Unhealthy. Unhealthy on
+// this endpoint is the gate a Passive instance promotes through, and moving
+// Primary Ownership would not fix a broken event fabric or a stalled monitor:
+// the other instance runs its own broker, its own client, and its own probes, so
+// it has nothing better to offer. The instance stays the machine's serving
+// instance and says what is wrong with it.
+func NewHealth(deps Deps) Handlers {
 	return Handlers{
 		Health: func(ctx context.Context) HealthResponse {
-			inst := instance()
-			checks := map[string]string{
-				HealthCheckConfiguration:    HealthStatusHealthy,
-				HealthCheckInternalServices: HealthStatusHealthy,
-			}
+			inst := deps.Instance()
+			checks := map[string]string{HealthCheckConfiguration: HealthStatusHealthy}
 			status := HealthStatusHealthy
-			if eventFabric != nil {
+			if deps.EventFabric != nil {
 				checks[HealthCheckEventFabric] = HealthStatusHealthy
-				if err := eventFabric(ctx); err != nil {
+				if err := deps.EventFabric(ctx); err != nil {
 					checks[HealthCheckEventFabric] = HealthStatusUnhealthy
+					status = HealthStatusDegraded
+				}
+			}
+			if deps.ServiceHealth != nil {
+				checks[HealthCheckServiceMonitor] = serviceMonitorStatus(deps.ServiceHealth())
+				if checks[HealthCheckServiceMonitor] != HealthStatusHealthy {
 					status = HealthStatusDegraded
 				}
 			}
@@ -167,7 +205,7 @@ func NewHealth(instance func() Instance, started time.Time, leaseView func() Lea
 				Role:         inst.Role,
 				RuntimeState: inst.State,
 				Version:      apiVersion,
-				Uptime:       humanizeUptime(time.Since(started)),
+				Uptime:       humanizeUptime(time.Since(deps.Started)),
 				Checks:       checks,
 			}
 		},
@@ -178,12 +216,12 @@ func NewHealth(instance func() Instance, started time.Time, leaseView func() Lea
 			return HealthReadyResponse{Status: HealthStatusHealthy}
 		},
 		HealthHA: func() HealthHAResponse {
-			inst := instance()
+			inst := deps.Instance()
 			// Without a lease view, fall back to the runtime state: an Active
 			// instance owns, a Passive one does not.
 			view := LeaseView{Owned: inst.State == InstanceStateActive}
-			if leaseView != nil {
-				view = leaseView()
+			if deps.Lease != nil {
+				view = deps.Lease()
 			}
 			leaseState := LeaseStateUnowned
 			if view.Owned {
@@ -196,7 +234,34 @@ func NewHealth(instance func() Instance, started time.Time, leaseView func() Lea
 				LeaseExpirationUTC: view.ExpirationUTC,
 			}
 		},
+		HealthServices: deps.ServiceHealth,
 	}
+}
+
+// serviceMonitorStatus reports this instance's own watching of its machine's
+// services, from the view it just rendered.
+//
+// The question it answers is whether this process is still producing
+// observations, not what those observations found. Both are visible in the same
+// snapshot, and only one of them belongs in platform health: a target that is
+// down is down for the machine's other instance too, so surfacing it here would
+// tell an operator to fail over and repair nothing.
+//
+// What counts as a stalled monitor is this instance's own reports about its own
+// machine having expired. An expected observer that has never reported is not
+// counted: a process whose monitor could not start does not get this far, so the
+// only thing "never" can mean here is "not yet", during the first interval after
+// startup.
+func serviceMonitorStatus(view ServiceHealthResponse) string {
+	for _, unit := range view.Services {
+		if unit.Machine != view.Machine {
+			continue
+		}
+		if slices.Contains(unit.StaleObservers, view.Role) {
+			return HealthStatusUnhealthy
+		}
+	}
+	return HealthStatusHealthy
 }
 
 // humanizeUptime renders a process uptime as "<d>d <hh>h <mm>m <ss>s".
@@ -247,10 +312,7 @@ func RegisterHealth(hapi huma.API, h Handlers) {
 				RuntimeState: state,
 				Version:      apiVersion,
 				Uptime:       "0s",
-				Checks: map[string]string{
-					HealthCheckConfiguration:    HealthStatusHealthy,
-					HealthCheckInternalServices: HealthStatusHealthy,
-				},
+				Checks:       map[string]string{HealthCheckConfiguration: HealthStatusHealthy},
 			},
 		}, nil
 	})
@@ -320,6 +382,34 @@ func RegisterHealth(hapi huma.API, h Handlers) {
 				Role:         role,
 				RuntimeState: state,
 				LeaseState:   leaseState,
+			},
+		}, nil
+	})
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: "getHealthServices",
+		Method:      http.MethodGet,
+		Path:        PathHealthServices,
+		Summary:     "Report this instance's view of the site's deployed services",
+		Description: "Every service the site deploys, what each observer last found, and whether those findings are current. " +
+			"Answered by every instance in every state, from memory. " +
+			"Unhealthy, Degraded, and Unknown services are data rather than a failure to answer, so this returns 200 for every valid view.",
+	}, func(_ context.Context, _ *struct{}) (*healthServicesOutput, error) {
+		if h.HealthServices != nil {
+			return &healthServicesOutput{Body: h.HealthServices()}, nil
+		}
+		// A build with no service monitoring behind it answers an empty view
+		// rather than an error: the question was answerable and the answer is that
+		// this instance knows of no service. The slices are allocated so the
+		// document carries empty arrays rather than nulls.
+		return &healthServicesOutput{
+			Body: ServiceHealthResponse{
+				Services: []ServiceHealthUnit{},
+				Distribution: ServiceHealthDistribution{
+					State:    DistributionLocal,
+					Rejected: []ServiceHealthCount{},
+					Dropped:  []ServiceHealthCount{},
+				},
 			},
 		}, nil
 	})

@@ -1,10 +1,8 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
@@ -38,8 +36,8 @@ const (
 // served here.
 //
 // It takes no domain services because there are none to take.
-func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, eventFabric func(context.Context) error) http.Handler {
-	return newRefusingHandler(ModePassive, instance, started, leaseView, eventFabric, func(current api.Instance) string {
+func NewPassiveHandler(deps api.Deps) http.Handler {
+	return newRefusingHandler(ModePassive, deps, func(current api.Instance) string {
 		detail := "this instance is passive and does not serve domain operations"
 		if current.PeerAddress != "" {
 			detail += "; the machine's other instance holds Primary Ownership and serves at " + current.PeerAddress
@@ -60,11 +58,11 @@ func NewPassiveHandler(instance func() api.Instance, started time.Time, leaseVie
 // than the instance: a caller that retries elsewhere, or later, gets the same
 // answer.
 //
-// eventFabric probes this instance's embedded event fabric for /health. It may
-// be nil, which is what the boundary tests serve; a running instance always has
-// one, because it starts its broker before it serves anything.
-func NewActiveHandler(instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, eventFabric func(context.Context) error) http.Handler {
-	return newRefusingHandler(ModeActive, instance, started, leaseView, eventFabric, func(api.Instance) string {
+// The optional members of deps are what the boundary tests leave out; a running
+// instance supplies all of them, because it starts its broker and its service
+// monitoring before it serves anything.
+func NewActiveHandler(deps api.Deps) http.Handler {
+	return newRefusingHandler(ModeActive, deps, func(api.Instance) string {
 		return "this platform serves no domain operations"
 	}, "no_domain_operations")
 }
@@ -80,26 +78,26 @@ func NewActiveHandler(instance func() api.Instance, started time.Time, leaseView
 //
 // In ModePassive, a structural guard ensures that any non-GET/HEAD request is
 // refused even if an operation is omitted from DomainPaths.
-func newRefusingHandler(mode ServingMode, instance func() api.Instance, started time.Time, leaseView func() api.LeaseView, eventFabric func(context.Context) error, describe func(api.Instance) string, title string) http.Handler {
+func newRefusingHandler(mode ServingMode, deps api.Deps, describe func(api.Instance) string, title string) http.Handler {
 	mux := http.NewServeMux()
 	cfg := api.Config()
 	cfg.OpenAPIPath, cfg.DocsPath, cfg.SchemasPath = "", "", ""
 	hapi := humago.New(mux, cfg)
-	health := api.NewHealth(instance, started, leaseView, eventFabric)
-	health.Instance = instance
-	api.RegisterInstance(hapi, instance)
+	health := api.NewHealth(deps)
+	health.Instance = deps.Instance
+	api.RegisterInstance(hapi, deps.Instance)
 	api.RegisterHealth(hapi, health)
 
 	for _, pattern := range api.DomainPaths {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
-			current := instance()
+			current := deps.Instance()
 			refuse(w, current, title, describe(current))
 		})
 	}
 	if mode == ModePassive {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
-				current := instance()
+				current := deps.Instance()
 				refuse(w, current, title, describe(current))
 				return
 			}
