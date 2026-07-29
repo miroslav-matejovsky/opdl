@@ -7,7 +7,30 @@
   "machine_profile": "all-in-one",
   "ip": "127.0.0.1",
   "services": [
-    "core-services"
+    {
+      "name": "core-services",
+      "role": "master",
+      "health_check": {
+        "type": "http",
+        "port": 9101,
+        "path": "/health",
+        "interval": "10s",
+        "timeout": "2s",
+        "retries": 3
+      }
+    }
+  ],
+  "site_services": [
+    {
+      "machine": "mock",
+      "machine_profile": "all-in-one",
+      "service": "core-services",
+      "service_role": "master",
+      "observer_roles": [
+        "primary"
+      ],
+      "fresh_for": "22s"
+    }
   ],
   "machine_events_file": ".data/platform/machine-events.jsonl",
   "primary": {

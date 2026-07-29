@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -124,7 +126,8 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    machine      %s\n", d.Machine)
 	fmt.Fprintf(&b, "    profile      %s\n", d.MachineProfile)
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
-	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
+	fmt.Fprintf(&b, "    services     %s\n", servicesSummary(d.IP, d.Services))
+	fmt.Fprintf(&b, "    site_units   %s\n", siteServicesSummary(d.SiteServices))
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d, Role(standby)))
 	fmt.Fprintf(&b, "    events_file  %s\n", optionalPathSummary(inst.EventsFile))
 	fmt.Fprintf(&b, "    state_file   %s\n", optionalPathSummary(inst.StateFile))
@@ -159,6 +162,47 @@ func routesSummary(routes []string) string {
 		return "(none; this instance is the only one at its site)"
 	}
 	return strings.Join(routes, " ")
+}
+
+// servicesSummary renders the services this machine hosts and how each is
+// probed, one line's worth per service.
+//
+// The probe policy is here rather than only the names because it is what this
+// process is about to start doing to a live service, and an operator reading a
+// startup block is entitled to see the requests before they begin. It is
+// rendered compactly for the same reason the lease timings are: a person is
+// checking values they already expect, not learning the schema.
+func servicesSummary(machineIP string, services []Service) string {
+	if len(services) == 0 {
+		return "(none)"
+	}
+	parts := make([]string, 0, len(services))
+	for _, service := range services {
+		check := service.HealthCheck
+		address := net.JoinHostPort(machineIP, strconv.Itoa(check.Port))
+		parts = append(parts, fmt.Sprintf("%s(%s) %s://%s%s every=%s timeout=%s retries=%d",
+			service.Name, service.Role, check.Type, address, check.Path, check.Interval, check.Timeout, check.Retries))
+	}
+	return strings.Join(parts, "\n                 ")
+}
+
+// siteServicesSummary renders how much of the site this instance expects to hear
+// about: how many units and machines it knows of.
+//
+// The list itself is not printed. It is the same on every machine of the site
+// and grows with the site, so a startup block that rendered it would bury this
+// machine's own configuration in a copy of the site's. What an operator needs
+// here is whether this binary was built with the site the machine belongs to,
+// which the counts answer.
+func siteServicesSummary(units []SiteService) string {
+	if len(units) == 0 {
+		return "(none)"
+	}
+	machines := make(map[string]bool, len(units))
+	for _, unit := range units {
+		machines[unit.Machine] = true
+	}
+	return fmt.Sprintf("%d across %d machine(s)", len(units), len(machines))
 }
 
 // instancesSummary renders which of the machine's two instances are deployed,

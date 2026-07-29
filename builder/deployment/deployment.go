@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,8 +36,24 @@ type Descriptor struct {
 	// IP is the machine's network address. Both of its instances are reached on
 	// it, on their own ports.
 	IP string `json:"ip"`
-	// Services are the service groups this machine hosts.
-	Services []string `json:"services"`
+	// Services are the services this machine hosts, each with the probe policy
+	// the platform runs against it. Both of the machine's instances probe every
+	// one of them, in every ownership state.
+	//
+	// This is the local half of the health contract, and the only half that
+	// carries an endpoint. A probe reaches a service on this machine's own ip, so
+	// no other machine's descriptor has any use for these ports and paths.
+	Services []Service `json:"services"`
+	// SiteServices is every deployed service unit at this machine's site,
+	// including this machine's own, in one order every machine of the site
+	// resolves identically.
+	//
+	// It is the remote half, and it deliberately carries no endpoint. An instance
+	// needs to know which units exist, who is expected to report on each, and how
+	// long a report stays fresh, so that a unit nobody has reported on is Unknown
+	// rather than absent. It never needs to reach one: only the machine hosting a
+	// service probes it.
+	SiteServices []SiteService `json:"site_services"`
 	// MachineEventsFile is the machine's own append-only event store: the shared
 	// file both of its instances append machine-scoped events to.
 	//
@@ -62,6 +79,20 @@ type Descriptor struct {
 // HasStandby reports whether this machine deploys a Standby Instance.
 func (d Descriptor) HasStandby() bool { return d.Standby != nil }
 
+// ServiceNames lists the services this machine hosts, in descriptor order, for
+// consumers that place a service rather than probe it.
+//
+// The package manifest is what wants this: whoever installs a package needs to
+// know which services the machine is meant to run, and has no use for the ports
+// and paths the platform probes them on.
+func (d Descriptor) ServiceNames() []string {
+	names := make([]string, 0, len(d.Services))
+	for _, service := range d.Services {
+		names = append(names, service.Name)
+	}
+	return names
+}
+
 // PlatformInstanceRole is one of the two fixed platform instance roles.
 //
 // The roles are decided at build time and never assigned, negotiated, or
@@ -74,6 +105,83 @@ const (
 	RolePrimary PlatformInstanceRole = "primary"
 	RoleStandby PlatformInstanceRole = "standby"
 )
+
+// Service is one service this machine hosts and how the platform learns whether
+// it is up.
+//
+// The name is unique within the machine; a site tells two copies of one service
+// apart by the machine each runs on. Which copy leads is Role, and it is carried
+// as metadata rather than as a probe input: the platform probes a master and a
+// slave the same way and reports what it found.
+type Service struct {
+	// Name is the service identifier, unique within this machine.
+	Name string `json:"name"`
+	// Role is the part this machine's copy plays: "master" or "slave".
+	Role string `json:"role"`
+	// HealthCheck is the probe policy for this service. It is required: a service
+	// the platform cannot ask about is one nobody can be told has stopped.
+	HealthCheck HealthCheck `json:"health_check"`
+}
+
+// HealthCheck is the resolved probe policy for one service: what to ask, how
+// often, how long to wait, and how much failure to tolerate before the service
+// counts as down.
+//
+// The durations are Go duration strings ("10s", "2s"), validated by the builder
+// and parsed by the platform at startup, exactly like the lease timings.
+type HealthCheck struct {
+	// Type is the kind of probe. "http" is the only kind today.
+	Type string `json:"type"`
+	// Port is the port on this machine the probe connects to. It is the service's
+	// own listener, never one the platform binds, and two services may share it
+	// when they answer on different paths.
+	Port int `json:"port"`
+	// Path is the request target, as authored: a path and an optional query. It
+	// carries no scheme, host, or fragment, because where the probe connects is
+	// the machine's ip and this port.
+	Path string `json:"path"`
+	// Interval is how often the probe runs.
+	Interval string `json:"interval"`
+	// Timeout bounds one probe attempt. It is shorter than Interval, so a slow
+	// probe cannot still be running when the next one is due.
+	Timeout string `json:"timeout"`
+	// Retries is how many consecutive failed attempts mark the service down. It
+	// is at least 1.
+	Retries int `json:"retries"`
+}
+
+// SiteService is one deployed service unit anywhere at the site, as every
+// machine of that site is told about it.
+//
+// Every descriptor at one site carries the same list in the same order, so two
+// instances that received the same reports reduce them to the same view. It is
+// the static half of that view: it says what exists and who should be reporting,
+// which is what makes a service nobody has reported on Unknown rather than
+// missing.
+type SiteService struct {
+	// Machine is the machine hosting this unit, and MachineProfile is that
+	// machine's purpose. Together with Service they key the unit within the site.
+	Machine        string `json:"machine"`
+	MachineProfile string `json:"machine_profile"`
+	// Service is the service name as that machine authored it.
+	Service string `json:"service"`
+	// ServiceRole is the part that copy plays: "master" or "slave".
+	ServiceRole string `json:"service_role"`
+	// ObserverRoles are the platform instance roles expected to report on this
+	// unit: "primary", plus "standby" when the hosting machine deploys one.
+	//
+	// Both instances of a machine probe every service on it, so an expected
+	// observer that is silent is a fact about the platform rather than about the
+	// service, and the two must not look alike.
+	ObserverRoles []string `json:"observer_roles"`
+	// FreshFor is how long one observer's report on this unit stays current,
+	// measured by the receiver from when it arrived.
+	//
+	// It is derived from this unit's own probe policy rather than authored, so
+	// every machine of the site expires the same report at the same age without
+	// being told the endpoint that produced it.
+	FreshFor string `json:"fresh_for"`
+}
 
 // Lease is the machine's resolved local Primary Ownership lease: the shared
 // machine-wide file its two instances record ownership in, and the timings that
@@ -284,17 +392,24 @@ func (d Descriptor) Validate() error {
 	if net.ParseIP(d.IP) == nil {
 		return fmt.Errorf("ip %q is not a valid IP address", d.IP)
 	}
-	if len(d.Services) == 0 {
-		return fmt.Errorf("at least one service is required")
-	}
 	if strings.TrimSpace(d.MachineEventsFile) == "" {
 		return fmt.Errorf("machine_events_file is required")
 	}
+	// The standby policy is settled before the health contract is checked, because
+	// which instances are expected to report on this machine's services follows
+	// from it. A descriptor that got the standby wrong would otherwise be reported
+	// as an inventory that named the wrong observers.
 	if !d.HasStandby() {
 		if d.Lease != nil {
 			return fmt.Errorf("lease is set but no standby is deployed; omit lease when standby is absent")
 		}
 	} else if err := d.Lease.validate(); err != nil {
+		return err
+	}
+	if err := d.validateHostedServices(); err != nil {
+		return err
+	}
+	if err := d.validateSiteServices(); err != nil {
 		return err
 	}
 	if err := d.validateServices(); err != nil {
@@ -304,6 +419,288 @@ func (d Descriptor) Validate() error {
 		return err
 	}
 	return d.validateLocalFiles()
+}
+
+// probeTypeHTTP is the one probe kind a descriptor may carry. It is repeated
+// here rather than imported from the blueprint because the descriptor is the
+// contract between the two tools, and a runtime reading it must be able to
+// reject an unknown kind without the build tool present.
+const probeTypeHTTP = "http"
+
+// serviceRoles are the parts a machine's copy of a service may play.
+var serviceRoles = []string{"master", "slave"}
+
+// observerRoles are the platform instance roles that may be expected to report
+// on a unit, in the order a resolved descriptor lists them.
+var observerRoles = []string{string(RolePrimary), string(RoleStandby)}
+
+// validateHostedServices checks this machine's own services carry a complete,
+// runnable probe policy.
+//
+// Every field is required rather than defaulted. A probe policy with a zero
+// interval is not a policy a runtime could guess at: it is a descriptor that
+// lost one, and the difference matters because the platform is about to run
+// whatever it reads here against a live service.
+func (d Descriptor) validateHostedServices() error {
+	if len(d.Services) == 0 {
+		return fmt.Errorf("at least one service is required")
+	}
+	named := make(map[string]bool, len(d.Services))
+	for _, service := range d.Services {
+		name := strings.TrimSpace(service.Name)
+		if name == "" {
+			return fmt.Errorf("services: a service has no name")
+		}
+		if service.Name != name {
+			return fmt.Errorf("services[%s].name %q must not have leading or trailing whitespace", name, service.Name)
+		}
+		if named[name] {
+			return fmt.Errorf("services: %q is hosted more than once", name)
+		}
+		named[name] = true
+		if !slices.Contains(serviceRoles, service.Role) {
+			return fmt.Errorf("services[%s].role %q is not a known role; the known roles are %s",
+				name, service.Role, strings.Join(serviceRoles, ", "))
+		}
+		if err := service.HealthCheck.validate(fmt.Sprintf("services[%s].health_check", name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate checks one resolved probe policy is complete and runnable.
+func (h HealthCheck) validate(where string) error {
+	if h.Type != probeTypeHTTP {
+		return fmt.Errorf("%s.type %q is not a known probe; the known probes are %s", where, h.Type, probeTypeHTTP)
+	}
+	if h.Port < 1 || h.Port > 65535 {
+		return fmt.Errorf("%s.port %d is out of range 1-65535", where, h.Port)
+	}
+	if err := validateHealthRequestTarget(where+".path", h.Path); err != nil {
+		return err
+	}
+	interval, err := validatePositiveDuration(where+".interval", h.Interval)
+	if err != nil {
+		return err
+	}
+	timeout, err := validatePositiveDuration(where+".timeout", h.Timeout)
+	if err != nil {
+		return err
+	}
+	if timeout >= interval {
+		return fmt.Errorf("%s.timeout %s must be shorter than interval %s", where, h.Timeout, h.Interval)
+	}
+	if h.Retries < 1 {
+		return fmt.Errorf("%s.retries must be at least 1, got %d", where, h.Retries)
+	}
+	return nil
+}
+
+// validateHealthRequestTarget checks an HTTP probe carries only the path and
+// optional query sent to the service. The scheme and host come from the probe
+// type and machine descriptor.
+func validateHealthRequestTarget(where, target string) error {
+	if strings.TrimSpace(target) == "" {
+		return fmt.Errorf("%s is required", where)
+	}
+	if target != strings.TrimSpace(target) {
+		return fmt.Errorf("%s %q must not have leading or trailing whitespace", where, target)
+	}
+	if strings.IndexFunc(target, isControl) >= 0 {
+		return fmt.Errorf("%s %q must not contain control characters", where, target)
+	}
+	if strings.Contains(target, "#") {
+		return fmt.Errorf("%s %q must not contain a fragment; a fragment is never sent to a server", where, target)
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return fmt.Errorf("%s %q is not a valid request path: %w", where, target, err)
+	}
+	switch {
+	case parsed.Scheme != "":
+		return fmt.Errorf("%s %q must not be an absolute URL", where, target)
+	case parsed.Host != "":
+		return fmt.Errorf("%s %q must not name a host", where, target)
+	case !strings.HasPrefix(target, "/"):
+		return fmt.Errorf("%s %q must start with %q", where, target, "/")
+	}
+	return nil
+}
+
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
+
+// freshFor is how long one report on a service stays current: two probe
+// intervals plus one timeout.
+//
+// Two intervals is what makes a single lost report survivable — the next one is
+// already on its way — and the timeout covers an attempt that took the longest
+// it was allowed to before it was published. It is derived rather than authored
+// so every machine of a site expires the same report at the same age.
+func (h HealthCheck) freshFor() (time.Duration, error) {
+	interval, err := time.ParseDuration(strings.TrimSpace(h.Interval))
+	if err != nil {
+		return 0, err
+	}
+	timeout, err := time.ParseDuration(strings.TrimSpace(h.Timeout))
+	if err != nil {
+		return 0, err
+	}
+	if interval > (time.Duration(1<<63-1)-timeout)/2 {
+		return 0, fmt.Errorf("2 * interval %s + timeout %s overflows a duration", interval, timeout)
+	}
+	return 2*interval + timeout, nil
+}
+
+// validateSiteServices checks the static site inventory is complete, keyed
+// uniquely, and consistent with the services this machine hosts.
+//
+// The inventory is what every instance reduces reports against, so a machine
+// whose own service is missing from it would publish observations nobody could
+// place. That is why the local half is cross-checked against the remote half
+// here rather than trusted because one resolver produced both.
+func (d Descriptor) validateSiteServices() error {
+	if len(d.SiteServices) == 0 {
+		return fmt.Errorf("site_services is required; it carries this machine's own services too")
+	}
+	seen := make(map[unitKey]SiteService, len(d.SiteServices))
+	machines := make(map[string]siteMachine, len(d.SiteServices))
+	for _, unit := range d.SiteServices {
+		machine, service := strings.TrimSpace(unit.Machine), strings.TrimSpace(unit.Service)
+		where := fmt.Sprintf("site_services[%s/%s]", unit.Machine, unit.Service)
+		if machine == "" || service == "" {
+			return fmt.Errorf("site_services: an entry has no machine or no service")
+		}
+		if unit.Machine != machine {
+			return fmt.Errorf("%s.machine %q must not have leading or trailing whitespace", where, unit.Machine)
+		}
+		if unit.Service != service {
+			return fmt.Errorf("%s.service %q must not have leading or trailing whitespace", where, unit.Service)
+		}
+		if _, listed := seen[unitKey{machine, service}]; listed {
+			return fmt.Errorf("%s is listed more than once; a site names each unit once", where)
+		}
+		seen[unitKey{machine, service}] = unit
+		profile := strings.TrimSpace(unit.MachineProfile)
+		if profile == "" {
+			return fmt.Errorf("%s.machine_profile is required", where)
+		}
+		if unit.MachineProfile != profile {
+			return fmt.Errorf("%s.machine_profile %q must not have leading or trailing whitespace", where, unit.MachineProfile)
+		}
+		if !slices.Contains(serviceRoles, unit.ServiceRole) {
+			return fmt.Errorf("%s.service_role %q is not a known role; the known roles are %s",
+				where, unit.ServiceRole, strings.Join(serviceRoles, ", "))
+		}
+		if err := validateObserverRoles(where, unit.ObserverRoles); err != nil {
+			return err
+		}
+		if _, err := validatePositiveDuration(where+".fresh_for", unit.FreshFor); err != nil {
+			return err
+		}
+		policy := siteMachine{profile: profile, observerRoles: unit.ObserverRoles}
+		if previous, ok := machines[machine]; ok {
+			if previous.profile != policy.profile || !slices.Equal(previous.observerRoles, policy.observerRoles) {
+				return fmt.Errorf("%s disagrees with another service on machine %q about machine_profile or observer_roles",
+					where, machine)
+			}
+		} else {
+			machines[machine] = policy
+		}
+	}
+	return d.validateHostedServicesAreListed(seen)
+}
+
+// validateObserverRoles checks a unit names the platform instances expected to
+// report on it: primary alone, or primary and standby, in that order.
+//
+// A unit with no expected observer could never be anything but Unknown, and one
+// naming standby without primary describes a machine that cannot exist: the
+// Primary Instance is the one every machine deploys.
+func validateObserverRoles(where string, roles []string) error {
+	switch {
+	case len(roles) == 0:
+		return fmt.Errorf("%s.observer_roles is required; a unit nobody reports on is never anything but unknown", where)
+	case len(roles) > len(observerRoles):
+		return fmt.Errorf("%s.observer_roles has %d entries; a machine deploys at most %d instances", where, len(roles), len(observerRoles))
+	}
+	if !slices.Equal(roles, observerRoles[:len(roles)]) {
+		return fmt.Errorf("%s.observer_roles %v must be %v or %v; every machine deploys a primary and the order is fixed",
+			where, roles, observerRoles[:1], observerRoles)
+	}
+	return nil
+}
+
+// unitKey identifies one deployed service unit within a site. A service name is
+// unique only within its machine, so the machine is half the key.
+type unitKey struct{ machine, service string }
+
+// siteMachine is the machine-level policy repeated on each inventory unit.
+// Every service on one machine must repeat the same values.
+type siteMachine struct {
+	profile       string
+	observerRoles []string
+}
+
+// validateHostedServicesAreListed checks the two halves of the health contract
+// agree about this machine.
+//
+// The local half is the only one whose probe policy this descriptor can see, so
+// it is the only place the derived values in the inventory can be checked at
+// all. A machine that got its own entry wrong would have got every other
+// machine's wrong the same way, which is what makes checking one of them worth
+// doing.
+func (d Descriptor) validateHostedServicesAreListed(listed map[unitKey]SiteService) error {
+	machine := strings.TrimSpace(d.Machine)
+	hosted := make(map[string]bool, len(d.Services))
+	for _, service := range d.Services {
+		hosted[strings.TrimSpace(service.Name)] = true
+	}
+	for key := range listed {
+		if key.machine == machine && !hosted[key.service] {
+			return fmt.Errorf("site_services[%s/%s] names a service this machine does not host", key.machine, key.service)
+		}
+	}
+	for _, service := range d.Services {
+		name := strings.TrimSpace(service.Name)
+		unit, ok := listed[unitKey{machine, name}]
+		if !ok {
+			return fmt.Errorf("services[%s] has no site_services entry for machine %q; every hosted service is a unit of its site", name, d.Machine)
+		}
+		where := fmt.Sprintf("site_services[%s/%s]", machine, name)
+		if unit.ServiceRole != service.Role {
+			return fmt.Errorf("%s.service_role %q is not services[%s].role %q; one service plays one part",
+				where, unit.ServiceRole, name, service.Role)
+		}
+		if unit.MachineProfile != strings.TrimSpace(d.MachineProfile) {
+			return fmt.Errorf("%s.machine_profile %q is not this machine's profile %q", where, unit.MachineProfile, d.MachineProfile)
+		}
+		// This machine's expected observers are its own deployed instances, which
+		// the descriptor already states. An inventory that expected a standby
+		// report from a machine deploying none would leave the unit permanently
+		// short of an observer and therefore never Healthy.
+		wantRoles := observerRoles[:1]
+		if d.HasStandby() {
+			wantRoles = observerRoles
+		}
+		if !slices.Equal(unit.ObserverRoles, wantRoles) {
+			return fmt.Errorf("%s.observer_roles %v is not %v; both of a machine's instances probe every service on it",
+				where, unit.ObserverRoles, wantRoles)
+		}
+		derived, err := service.HealthCheck.freshFor()
+		if err != nil {
+			return fmt.Errorf("services[%s].health_check: %w", name, err)
+		}
+		stated, err := time.ParseDuration(strings.TrimSpace(unit.FreshFor))
+		if err != nil {
+			return fmt.Errorf("%s.fresh_for %q is not a valid duration: %w", where, unit.FreshFor, err)
+		}
+		if stated != derived {
+			return fmt.Errorf("%s.fresh_for %s is not the %s its probe policy derives",
+				where, unit.FreshFor, derived)
+		}
+	}
+	return nil
 }
 
 // validateServices checks each instance's Windows Service identity is present
@@ -366,16 +763,44 @@ func (d Descriptor) validateEndpoints() error {
 			struct{ where, address string }{"standby.nats.cluster_address", d.Standby.NATS.ClusterAddress},
 		)
 	}
-	taken := make(map[string]string, len(listeners))
+	taken := make(map[int]string, len(listeners))
 	for _, l := range listeners {
-		_, port, err := net.SplitHostPort(l.address)
+		_, portText, err := net.SplitHostPort(l.address)
 		if err != nil {
 			return fmt.Errorf("%s: %q must be host:port: %w", l.where, l.address, err)
 		}
+		port, err := strconv.Atoi(portText)
+		if err != nil {
+			return fmt.Errorf("%s: %q has no usable port", l.where, l.address)
+		}
 		if owner, used := taken[port]; used {
-			return fmt.Errorf("%s and %s are both on port %s; the machine's listeners run together and cannot share one", owner, l.where, port)
+			return fmt.Errorf("%s and %s are both on port %d; the machine's listeners run together and cannot share one", owner, l.where, port)
 		}
 		taken[port] = l.where
+	}
+	return d.validateServiceProbeEndpoints(taken)
+}
+
+// validateServiceProbeEndpoints checks local service targets do not name a
+// platform listener and that two service identities do not claim one endpoint.
+func (d Descriptor) validateServiceProbeEndpoints(platformPorts map[int]string) error {
+	type endpoint struct {
+		port int
+		path string
+	}
+	probed := make(map[endpoint]string, len(d.Services))
+	for _, service := range d.Services {
+		check := service.HealthCheck
+		if owner, used := platformPorts[check.Port]; used {
+			return fmt.Errorf("services[%s].health_check.port %d is %s; a service cannot be probed on a port the platform binds",
+				service.Name, check.Port, owner)
+		}
+		key := endpoint{port: check.Port, path: check.Path}
+		if owner, used := probed[key]; used {
+			return fmt.Errorf("services %q and %q are both probed at port %d path %q; two services may share a port but not an endpoint",
+				owner, service.Name, check.Port, check.Path)
+		}
+		probed[key] = service.Name
 	}
 	return nil
 }

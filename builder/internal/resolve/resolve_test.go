@@ -1,7 +1,9 @@
 package resolve_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,9 +31,8 @@ const (
 )
 
 // service builds a machine's hosted service with a role and a valid health
-// check. What resolution does with it is carry the name, so the rest is here to
-// keep the fixture authored the way a blueprint is rather than to be asserted
-// on.
+// check. Resolution carries all of it into the descriptor and derives the site
+// inventory from it, so every field here is asserted on somewhere below.
 func service(name string) blueprint.Service {
 	return blueprint.Service{
 		Name: name,
@@ -178,7 +179,7 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.Equal(t, "sensor", m.Machine)
 	require.Equal(t, "sensor-node", m.MachineProfile)
 	require.Equal(t, "10.0.1.10", m.IP)
-	require.Equal(t, []string{"sensor-services"}, m.Services)
+	require.Equal(t, []string{"sensor-services"}, m.ServiceNames())
 	require.NotEmpty(t, m.Primary.APIAddress, "a machine always deploys a primary process")
 	// The authored paths are carried whole. Nothing here composes them, so a
 	// resolver that derived a path would show up as a mismatch rather than as a
@@ -186,6 +187,129 @@ func TestBuildProducesMachineDescriptors(t *testing.T) {
 	require.Equal(t, eventsFile("sensor", "primary"), m.Primary.EventsFile)
 	require.Equal(t, stateFile("sensor", "primary"), m.Primary.StateFile)
 	require.Equal(t, logFile("sensor", "primary"), m.Primary.LogFile)
+}
+
+// TestBuildCarriesTheLocalProbePolicy checks the authored health check reaches
+// the descriptor whole.
+//
+// The descriptor is what the runtime probes from, so a resolver that dropped a
+// field would produce a machine that either cannot probe its services or probes
+// them on terms nobody authored. The path in particular is carried byte for
+// byte: a service that distinguishes its endpoints by a query is probed at the
+// one its author wrote.
+func TestBuildCarriesTheLocalProbePolicy(t *testing.T) {
+	p := projectOf(site(sensor(), companion()))
+	probed := service("sensor-services")
+	probed.Role = "slave"
+	probed.HealthCheck.Path = "/health?deep=1"
+	p.Sites[0].Machines[0].Services = []blueprint.Service{probed}
+
+	plan, err := resolve.Build(p, "acme-opdl")
+	require.NoError(t, err)
+
+	require.Equal(t, []deployment.Service{{
+		Name: "sensor-services",
+		Role: "slave",
+		HealthCheck: deployment.HealthCheck{
+			Type:     "http",
+			Port:     healthCheckPort,
+			Path:     "/health?deep=1",
+			Interval: "10s",
+			Timeout:  "2s",
+			Retries:  3,
+		},
+	}}, machineByName(t, plan, "sensor").Services)
+}
+
+// TestBuildResolvesTheSameSiteInventoryOntoEveryMachine checks every machine of
+// a site is told about every unit of it, in one order.
+//
+// Two instances reduce the reports they received against this list, so a list
+// that differed between machines would let two healthy instances disagree about
+// what the site contains. It carries this machine's own units too: an instance
+// builds one view of the whole site, not a remote view plus a local one.
+func TestBuildResolvesTheSameSiteInventoryOntoEveryMachine(t *testing.T) {
+	plan, err := resolve.Build(project(), "acme-opdl")
+	require.NoError(t, err)
+
+	sensorUnits := machineByName(t, plan, "sensor").SiteServices
+	companionUnits := machineByName(t, plan, "companion").SiteServices
+	require.Equal(t, sensorUnits, companionUnits,
+		"every machine of a site reduces reports against the same inventory in the same order")
+
+	require.Equal(t, []deployment.SiteService{
+		{
+			Machine:        "sensor",
+			MachineProfile: "sensor-node",
+			Service:        "sensor-services",
+			ServiceRole:    "master",
+			// The sensor deploys no standby, so its Primary Instance is the only
+			// process expected to report on what it hosts.
+			ObserverRoles: []string{"primary"},
+			FreshFor:      "22s",
+		},
+		{
+			Machine:        "companion",
+			MachineProfile: "node",
+			Service:        "core-services",
+			ServiceRole:    "master",
+			ObserverRoles:  []string{"primary", "standby"},
+			FreshFor:       "22s",
+		},
+	}, sensorUnits)
+}
+
+// TestBuildDerivesFreshnessFromTheProbePolicy checks how long a report stays
+// current follows from the policy that produced it: two intervals plus one
+// timeout.
+//
+// Two intervals is what makes a single lost report survivable, since the next is
+// already due. It is derived rather than authored so every machine of the site
+// expires the same report at the same age without being told the endpoint it
+// came from.
+func TestBuildDerivesFreshnessFromTheProbePolicy(t *testing.T) {
+	p := projectOf(site(sensor(), companion()))
+	slow := service("sensor-services")
+	slow.HealthCheck.Interval = "30s"
+	slow.HealthCheck.Timeout = "5s"
+	p.Sites[0].Machines[0].Services = []blueprint.Service{slow}
+
+	plan, err := resolve.Build(p, "acme-opdl")
+	require.NoError(t, err)
+
+	units := machineByName(t, plan, "sensor").SiteServices
+	require.Equal(t, "sensor-services", units[0].Service)
+	require.Equal(t, "1m5s", units[0].FreshFor, "2*30s + 5s")
+}
+
+func TestBuildRejectsFreshnessDurationOverflow(t *testing.T) {
+	p := projectOf(site(sensor(), companion()))
+	overflowing := service("sensor-services")
+	overflowing.HealthCheck.Interval = "1281024h"
+	overflowing.HealthCheck.Timeout = "1s"
+	p.Sites[0].Machines[0].Services = []blueprint.Service{overflowing}
+
+	_, err := resolve.Build(p, "acme-opdl")
+
+	require.ErrorContains(t, err, "derive health report freshness")
+	require.ErrorContains(t, err, "overflows a duration")
+}
+
+// TestBuildCarriesNoRemoteProbeEndpoint checks the site inventory says who to
+// expect a report from and never how to probe someone else's service.
+//
+// Only the machine hosting a service probes it. A descriptor that carried remote
+// ports and paths would hand every machine at the site a way to reach every
+// other machine's services, which is a different feature with a different
+// failure mode.
+func TestBuildCarriesNoRemoteProbeEndpoint(t *testing.T) {
+	plan, err := resolve.Build(project(), "acme-opdl")
+	require.NoError(t, err)
+
+	data, err := json.Marshal(machineByName(t, plan, "sensor").SiteServices)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "health_check")
+	require.NotContains(t, string(data), strconv.Itoa(healthCheckPort))
 }
 
 // TestBuildCarriesInstanceFiles checks each deployed instance's own files reach

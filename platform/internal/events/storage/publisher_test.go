@@ -23,7 +23,6 @@ var testDescriptor = config.Descriptor{
 	Machine:        "node",
 	MachineProfile: "all-in-one",
 	IP:             "127.0.0.1",
-	Services:       []string{"core-services"},
 }
 
 func testFactory() events.Factory {

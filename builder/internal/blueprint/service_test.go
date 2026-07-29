@@ -178,6 +178,30 @@ func TestServiceHealthCheckFailures(t *testing.T) {
 			func(c *blueprint.HealthCheck) { c.Path = "health" },
 			`health_check.path "health" must start with "/"`,
 		},
+		"absolute url": {
+			func(c *blueprint.HealthCheck) { c.Path = "http://10.0.1.10:9101/health" },
+			"must not be an absolute URL",
+		},
+		"scheme-relative url": {
+			func(c *blueprint.HealthCheck) { c.Path = "//10.0.1.10/health" },
+			"must not name a host",
+		},
+		"path with a fragment": {
+			func(c *blueprint.HealthCheck) { c.Path = "/health#ready" },
+			"must not contain a fragment",
+		},
+		"path with a bare fragment marker": {
+			func(c *blueprint.HealthCheck) { c.Path = "/health#" },
+			"must not contain a fragment",
+		},
+		"path with a control character": {
+			func(c *blueprint.HealthCheck) { c.Path = "/health\r\nX-Injected: 1" },
+			"must not contain control characters",
+		},
+		"path with an invalid escape": {
+			func(c *blueprint.HealthCheck) { c.Path = "/health%zz" },
+			"is not a valid request path",
+		},
 		"no port": {
 			func(c *blueprint.HealthCheck) { c.Port = 0 },
 			"health_check.port must be in range 1-65535",
@@ -230,6 +254,33 @@ func TestServiceHealthCheckFailures(t *testing.T) {
 			require.ErrorContains(t, err, test.errText)
 			require.ErrorContains(t, err, `machine "sensor": service "alarm-service"`,
 				"the error names the machine and the service an author has to fix")
+		})
+	}
+}
+
+// TestServiceHealthCheckPathsAreKeptAsAuthored checks the paths a blueprint may
+// state and that validation reads them without rewriting them. A service that
+// distinguishes its health endpoints by a query, by case, or by which bytes are
+// escaped is probed at the path its author wrote.
+func TestServiceHealthCheckPathsAreKeptAsAuthored(t *testing.T) {
+	paths := []string{
+		"/health",
+		"/health?verbose=1",
+		"/health?deep=1&timeout=2s",
+		"/Health/Ready",
+		"/health/%20spaced",
+		"/health?",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			p := validProject()
+			service := validService("alarm-service", 9101)
+			service.HealthCheck.Path = path
+			p.Sites[0].Machines[0].Services = []blueprint.Service{service}
+
+			require.NoError(t, p.Validate())
+			require.Equal(t, path, p.Sites[0].Machines[0].Services[0].HealthCheck.Path,
+				"validation reads the authored path and never rewrites it")
 		})
 	}
 }

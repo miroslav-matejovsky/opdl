@@ -46,14 +46,33 @@ const (
 
 func validDescriptor() deployment.Descriptor {
 	return deployment.Descriptor{
-		Platform:          "opdl",
-		Project:           "customer-a",
-		Environment:       "production",
-		Site:              "north",
-		Machine:           "sensor",
-		MachineProfile:    "sensor-node",
-		IP:                machineIP,
-		Services:          []string{"sensor-services"},
+		Platform:       "opdl",
+		Project:        "customer-a",
+		Environment:    "production",
+		Site:           "north",
+		Machine:        "sensor",
+		MachineProfile: "sensor-node",
+		IP:             machineIP,
+		Services: []deployment.Service{{
+			Name: "sensor-services",
+			Role: "master",
+			HealthCheck: deployment.HealthCheck{
+				Type:     "http",
+				Port:     9101,
+				Path:     "/health",
+				Interval: "10s",
+				Timeout:  "2s",
+				Retries:  3,
+			},
+		}},
+		SiteServices: []deployment.SiteService{{
+			Machine:        "sensor",
+			MachineProfile: "sensor-node",
+			Service:        "sensor-services",
+			ServiceRole:    "master",
+			ObserverRoles:  []string{"primary", "standby"},
+			FreshFor:       "22s",
+		}},
 		MachineEventsFile: machineEventsFile,
 		Primary: deployment.Instance{
 			Service:              &deployment.WinService{Name: "sensor-primary", DisplayName: "sensor primary"},
@@ -99,6 +118,19 @@ func TestDescriptorValidateOK(t *testing.T) {
 	require.NoError(t, validDescriptor().Validate())
 }
 
+func TestDescriptorValidateAllowsServicesToShareAProbePort(t *testing.T) {
+	d := validDescriptor()
+	service := d.Services[0]
+	service.Name = "other-services"
+	service.HealthCheck.Path = "/other/health"
+	d.Services = append(d.Services, service)
+	unit := d.SiteServices[0]
+	unit.Service = service.Name
+	d.SiteServices = append(d.SiteServices, unit)
+
+	require.NoError(t, d.Validate())
+}
+
 func TestDescriptorValidateFailures(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -113,6 +145,163 @@ func TestDescriptorValidateFailures(t *testing.T) {
 		{"missing machine profile", func(d *deployment.Descriptor) { d.MachineProfile = "" }, "machine profile is required"},
 		{"invalid ip", func(d *deployment.Descriptor) { d.IP = "not-an-ip" }, "is not a valid IP address"},
 		{"no services", func(d *deployment.Descriptor) { d.Services = nil }, "at least one service is required"},
+		{
+			"unknown service role",
+			func(d *deployment.Descriptor) { d.Services[0].Role = "leader" },
+			`role "leader" is not a known role`,
+		},
+		{
+			"padded service name",
+			func(d *deployment.Descriptor) { d.Services[0].Name = " sensor-services " },
+			"must not have leading or trailing whitespace",
+		},
+		{
+			"duplicate service",
+			func(d *deployment.Descriptor) { d.Services = append(d.Services, d.Services[0]) },
+			"is hosted more than once",
+		},
+		{
+			"unknown probe type",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Type = "ping" },
+			`type "ping" is not a known probe`,
+		},
+		{
+			"probe port out of range",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Port = 0 },
+			"port 0 is out of range",
+		},
+		{
+			"relative probe path",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Path = "health" },
+			`path "health" must start with "/"`,
+		},
+		{
+			"absolute probe url",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Path = "http://10.0.1.10:9101/health" },
+			"must not be an absolute URL",
+		},
+		{
+			"probe path with fragment",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Path = "/health#ready" },
+			"must not contain a fragment",
+		},
+		{
+			"probe path with invalid escape",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Path = "/health%zz" },
+			"is not a valid request path",
+		},
+		{
+			"probe timeout not shorter than interval",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Timeout = "10s" },
+			"must be shorter than interval",
+		},
+		{
+			"derived freshness overflows",
+			func(d *deployment.Descriptor) {
+				d.Services[0].HealthCheck.Interval = "2562047h47m16.854775807s"
+				d.Services[0].HealthCheck.Timeout = "1ns"
+			},
+			"overflows a duration",
+		},
+		{
+			"probe retries below one",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Retries = 0 },
+			"retries must be at least 1",
+		},
+		{
+			"no site inventory",
+			func(d *deployment.Descriptor) { d.SiteServices = nil },
+			"site_services is required",
+		},
+		{
+			"site unit listed twice",
+			func(d *deployment.Descriptor) { d.SiteServices = append(d.SiteServices, d.SiteServices[0]) },
+			"is listed more than once",
+		},
+		{
+			"site unit with no observers",
+			func(d *deployment.Descriptor) { d.SiteServices[0].ObserverRoles = nil },
+			"observer_roles is required",
+		},
+		{
+			"site unit observed by standby alone",
+			func(d *deployment.Descriptor) { d.SiteServices[0].ObserverRoles = []string{"standby"} },
+			"every machine deploys a primary and the order is fixed",
+		},
+		{
+			"hosted service missing from the inventory",
+			func(d *deployment.Descriptor) { d.SiteServices[0].Machine = "other-machine" },
+			"has no site_services entry",
+		},
+		{
+			"extra local inventory unit",
+			func(d *deployment.Descriptor) {
+				unit := d.SiteServices[0]
+				unit.Service = "other-services"
+				d.SiteServices = append(d.SiteServices, unit)
+			},
+			"names a service this machine does not host",
+		},
+		{
+			"inventory disagrees about the service role",
+			func(d *deployment.Descriptor) { d.SiteServices[0].ServiceRole = "slave" },
+			"one service plays one part",
+		},
+		{
+			"inventory expects no standby report from a machine that deploys one",
+			func(d *deployment.Descriptor) { d.SiteServices[0].ObserverRoles = []string{"primary"} },
+			"both of a machine's instances probe every service on it",
+		},
+		{
+			"freshness differs from the probe policy",
+			func(d *deployment.Descriptor) { d.SiteServices[0].FreshFor = "21s" },
+			"is not the 22s",
+		},
+		{
+			"freshness longer than the probe policy",
+			func(d *deployment.Descriptor) { d.SiteServices[0].FreshFor = "23s" },
+			"is not the 22s",
+		},
+		{
+			"remote units disagree about their machine profile",
+			func(d *deployment.Descriptor) {
+				d.SiteServices = append(d.SiteServices,
+					deployment.SiteService{
+						Machine: "gateway", MachineProfile: "gateway-node", Service: "gateway-a", ServiceRole: "master",
+						ObserverRoles: []string{"primary"}, FreshFor: "22s",
+					},
+					deployment.SiteService{
+						Machine: "gateway", MachineProfile: "other-node", Service: "gateway-b", ServiceRole: "slave",
+						ObserverRoles: []string{"primary"}, FreshFor: "22s",
+					},
+				)
+			},
+			"disagrees with another service",
+		},
+		{
+			"service probe uses the primary api port",
+			func(d *deployment.Descriptor) { d.Services[0].HealthCheck.Port = 8080 },
+			"a service cannot be probed on a port the platform binds",
+		},
+		{
+			"service probe uses a non-canonical primary api port",
+			func(d *deployment.Descriptor) {
+				d.Primary.APIAddress = "127.0.0.1:09101"
+			},
+			"a service cannot be probed on a port the platform binds",
+		},
+		{
+			"two services claim one probe endpoint",
+			func(d *deployment.Descriptor) {
+				service := d.Services[0]
+				service.Name = "other-services"
+				d.Services = append(d.Services, service)
+				unit := d.SiteServices[0]
+				unit.Service = service.Name
+				d.SiteServices = append(d.SiteServices, unit)
+			},
+			"two services may share a port but not an endpoint",
+		},
 		{
 			"missing machine events file",
 			func(d *deployment.Descriptor) { d.MachineEventsFile = "" },
@@ -313,6 +502,9 @@ func TestDescriptorValidateAcceptsOneInstanceMachine(t *testing.T) {
 	d := validDescriptor()
 	d.Standby = nil
 	d.Lease = nil
+	// A machine with one instance has one observer for every service on it, and
+	// the inventory says so. Nobody is expected to report and missing.
+	d.SiteServices[0].ObserverRoles = []string{"primary"}
 	d.Primary.NATS.Routes = []string{peerNATSRoute}
 	require.NoError(t, d.Validate())
 }
@@ -327,6 +519,7 @@ func TestDescriptorValidateAcceptsASiteOfOneInstance(t *testing.T) {
 	d := validDescriptor()
 	d.Standby = nil
 	d.Lease = nil
+	d.SiteServices[0].ObserverRoles = []string{"primary"}
 	d.Primary.NATS.Routes = nil
 	require.NoError(t, d.Validate())
 }

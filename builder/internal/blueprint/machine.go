@@ -195,22 +195,46 @@ func validateMachinePorts(machine Machine) error {
 			listener{"standby.nats.cluster_port", machine.Standby.NATS.ClusterPort},
 		)
 	}
-	// A service's health check port is a listener on this machine like any other.
-	// The platform's own APIs are on loopback and a service's endpoint usually is
-	// not, but both are bound on one host, so a port authored twice is still a
-	// machine where the second listener cannot come up.
-	for _, service := range machine.Services {
-		listeners = append(listeners, listener{
-			fmt.Sprintf("service %q health_check.port", service.Name),
-			service.HealthCheck.Port,
-		})
-	}
 	taken := make(map[int]string, len(listeners))
 	for _, l := range listeners {
 		if owner, used := taken[l.port]; used {
 			return fmt.Errorf("machine %q: %s and %s are both %d; every listener on a machine needs its own port", machine.Name, owner, l.where, l.port)
 		}
 		taken[l.port] = l.where
+	}
+	return validateServiceProbePorts(machine, taken)
+}
+
+// validateServiceProbePorts checks where this machine's services are probed.
+//
+// A service's health endpoint is a target, not a listener the platform binds, so
+// the rule is not the one above. Two services may deliberately answer on one
+// HTTP listener and be told apart by their paths, which is how a single process
+// hosting two service identities is authored. What they may not do is name a
+// port the platform itself binds: that endpoint is the platform's own listener,
+// and probing it would report the platform's health as the service's.
+//
+// Two services sharing both a port and a path are rejected. That is not one
+// listener serving two identities; it is one endpoint claimed twice, and
+// whichever of the two is unhealthy the other would report the same answer.
+func validateServiceProbePorts(machine Machine, platformPorts map[int]string) error {
+	type endpoint struct {
+		port int
+		path string
+	}
+	probed := make(map[endpoint]string, len(machine.Services))
+	for _, service := range machine.Services {
+		check := service.HealthCheck
+		if owner, used := platformPorts[check.Port]; used {
+			return fmt.Errorf("machine %q: service %q health_check.port %d is %s; a service cannot be probed on a port the platform binds",
+				machine.Name, service.Name, check.Port, owner)
+		}
+		key := endpoint{check.Port, check.Path}
+		if owner, used := probed[key]; used {
+			return fmt.Errorf("machine %q: services %q and %q are both probed at port %d path %q; two services may share a port but not an endpoint",
+				machine.Name, owner, service.Name, check.Port, check.Path)
+		}
+		probed[key] = service.Name
 	}
 	return nil
 }

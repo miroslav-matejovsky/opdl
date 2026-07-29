@@ -6,4 +6,4 @@ Nothing here blocks the current POC.
 
 ## Index
 
-Empty for now.
+- [Distributed service health](service-health.md)

@@ -39,7 +39,9 @@ only `-instance primary|standby`.
 
 | Descriptor part | Contents |
 | --- | --- |
-| Machine | platform, project, environment, site, machine, profile, IP, services, and `machine_events_file` |
+| Machine | platform, project, environment, site, machine, profile, IP, and `machine_events_file` |
+| `services` | every service this machine hosts, each with its role and the `health_check` policy the platform probes it with |
+| `site_services` | every service unit at the site, with its expected observer roles and `fresh_for`, and no probe endpoint |
 | `primary` | mandatory service identity, local event, state, and log files, loopback API address, listener timeouts, and the embedded event fabric broker (`nats`) |
 | `standby` | the same instance fields, present only when deployed |
 | `lease` | shared Primary Ownership file and failover timings, present exactly when `standby` is present |
@@ -65,9 +67,36 @@ The machine event store exists on every machine. The lease exists only on a
 machine with a standby. The builder rejects file collisions across instance
 event logs, state files, application logs, the machine event store, and the
 lease. It also rejects duplicate listener ports on one machine — the two
-instances' APIs, their two servers, and the service health checks are one set —
-duplicate cluster names across the project's sites, and duplicate Windows
-Service names.
+instances' APIs and their two servers are one set — duplicate cluster names
+across the project's sites, and duplicate Windows Service names.
+
+### Service health contract
+
+The descriptor carries health in two halves, and the split is the point of the
+shape. `services` is local: it names the machine's own services and the port,
+path, interval, timeout, and retry count the platform probes each with. A probe
+connects to the machine's own ip, so those endpoints belong to the descriptor of
+the machine hosting them and to no other.
+
+`site_services` is the same list for the whole site, and deliberately carries no
+endpoint. An instance needs to know which units exist, which platform instance
+roles are expected to report on each, and how long a report stays fresh, so that
+a unit nobody has reported on reads as Unknown rather than as missing. It never
+needs to reach one. Every machine at a site is built with the same list in the
+same order, which is what lets two instances that received the same reports
+reduce them to the same view.
+
+A service's health endpoint is a target rather than a listener the platform
+binds, so two services may share a port and be told apart by their paths. What
+they may not do is name a port the platform binds, or claim the same port and
+path as each other. `fresh_for` is derived from the target's own probe policy as
+`2 * interval + timeout`, so every receiver expires the same report at the same
+age without being told the endpoint that produced it.
+
+The runtime validates both halves when the descriptor decodes, including that
+its own services appear in the inventory with matching role, profile, observer
+roles, and freshness. Malformed health policy fails at startup rather than when
+the first probe is due.
 
 `builder/deployment` and `platform/config` define independent copies of the
 descriptor contract. `conformance-tests` keeps them compatible.

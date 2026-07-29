@@ -76,8 +76,21 @@
 // Both are required. The check states what to probe (type, port, and for http a
 // path), how often (interval), how long one attempt may take (timeout, shorter
 // than the interval), and how many consecutive failures mark the service down
-// (retries). Health check ports are listeners on the machine like the instance API
-// ports, so no two of them may be the same.
+// (retries).
+//
+// An http path is a request target and nothing more: a leading slash is
+// required and a query is allowed ("/health?verbose=1"), while a fragment, an
+// absolute URL, a host, control characters, and invalid escapes are rejected.
+// Where the probe connects is the machine's own ip and the authored port, which
+// the builder resolves. The path is kept exactly as written, so a service that
+// distinguishes "/Health" from "/health" is probed at the one its author wrote.
+//
+// A health check port is a target the platform probes, not a listener it binds,
+// so it is not held to the machine-wide listener rule. Two services may share a
+// port and be told apart by their paths, which is how one process hosting two
+// service identities is authored. What they may not do is name a port the
+// platform binds — probing one would report a platform instance's own health
+// under a service's name — or claim the same port and path as each other.
 //
 // Every deployed instance states the three local files it owns: eventlog_file
 // for the events it states, state_file for its epoch, and log_file for its
@@ -88,8 +101,7 @@
 // authored with, because the platform's client reaches its own server in
 // process and nothing outside the process is a client of it; what the cluster
 // port is for is the servers of a site reaching each other. It is a listener on
-// the machine like an instance api port or a service health check port, so no
-// two of them may be the same.
+// the machine like an instance api port, so no two of them may be the same.
 //
 // Unlike an api port, it is not resolved onto loopback. The builder joins it
 // with the machine's ip, because a cluster whose members were all on 127.0.0.1

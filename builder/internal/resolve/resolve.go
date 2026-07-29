@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/miroslav-matejovsky/opdl/builder/deployment"
 	"github.com/miroslav-matejovsky/opdl/builder/internal/blueprint"
@@ -31,7 +32,10 @@ func Build(p *blueprint.Project, platformName string) (*Plan, error) {
 	plan := &Plan{Project: p.Name}
 	for _, site := range p.Sites {
 		for _, machine := range site.Machines {
-			d := descriptor(p, site, machine, platformName)
+			d, err := descriptor(p, site, machine, platformName)
+			if err != nil {
+				return nil, fmt.Errorf("machine %q: %w", machine.Name, err)
+			}
 			if err := d.Validate(); err != nil {
 				return nil, fmt.Errorf("machine %q: %w", machine.Name, err)
 			}
@@ -44,7 +48,11 @@ func Build(p *blueprint.Project, platformName string) (*Plan, error) {
 // descriptor builds one machine's deployment descriptor from its place in the
 // blueprint. This is where the layered topology collapses into a concrete,
 // per-machine execution definition.
-func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Machine, platformName string) deployment.Descriptor {
+func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Machine, platformName string) (deployment.Descriptor, error) {
+	inventory, err := siteServices(site)
+	if err != nil {
+		return deployment.Descriptor{}, err
+	}
 	return deployment.Descriptor{
 		Platform:       platformName,
 		Project:        p.Name,
@@ -53,10 +61,13 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		Machine:        machine.Name,
 		MachineProfile: machine.MachineProfile,
 		IP:             machine.IP,
-		// The descriptor carries the names only. A machine's health checks are
-		// deployment policy the platform does not yet run, so resolving them into
-		// the runtime's contract would state a capability that does not exist.
-		Services: machine.ServiceNames(),
+		// The local half carries the probe policy the platform runs on this
+		// machine; the site half carries what every machine of the site needs to
+		// place a report it receives. They are resolved apart because only one of
+		// them has an endpoint in it: a probe is aimed at this machine's own ip, so
+		// no other machine has any use for these ports and paths.
+		Services:     services(machine),
+		SiteServices: inventory,
 		// The machine's own store is resolved for every machine, standby or not:
 		// a machine's facts are the machine's whether or not a second instance
 		// exists to read them.
@@ -64,7 +75,109 @@ func descriptor(p *blueprint.Project, site blueprint.Site, machine blueprint.Mac
 		Primary:           primaryInstance(site, machine),
 		Standby:           instance(site, machine, deployment.RoleStandby),
 		Lease:             lease(machine),
+	}, nil
+}
+
+// services resolves the probe policy for every service this machine hosts, in
+// authored order.
+//
+// The authored values are carried through unchanged. The blueprint already
+// validated them, and a path in particular is kept byte for byte: a service that
+// distinguishes "/Health" from "/health", or cares which characters are escaped,
+// is probed at the path its author wrote.
+func services(machine blueprint.Machine) []deployment.Service {
+	resolved := make([]deployment.Service, 0, len(machine.Services))
+	for _, authored := range machine.Services {
+		resolved = append(resolved, deployment.Service{
+			Name:        strings.TrimSpace(authored.Name),
+			Role:        authored.Role,
+			HealthCheck: healthCheck(authored.HealthCheck),
+		})
 	}
+	return resolved
+}
+
+func healthCheck(authored blueprint.HealthCheck) deployment.HealthCheck {
+	return deployment.HealthCheck{
+		Type:     authored.Type,
+		Port:     authored.Port,
+		Path:     authored.Path,
+		Interval: strings.TrimSpace(authored.Interval),
+		Timeout:  strings.TrimSpace(authored.Timeout),
+		Retries:  authored.Retries,
+	}
+}
+
+// siteServices resolves the static inventory of every service unit at the site.
+//
+// Every machine of the site gets the same list, so it is built from the site
+// rather than from the machine being resolved, and the order is the authored one
+// — machines as the site lists them, services as each machine lists them. Two
+// instances reducing the same reports against it produce the same view, and a
+// rebuild that changed nothing produces the same descriptor.
+//
+// No endpoint crosses into it. What a remote instance needs is which units
+// exist, who is expected to report on each, and how long a report stays fresh;
+// what it must never have is a way to probe a service on someone else's machine.
+func siteServices(site blueprint.Site) ([]deployment.SiteService, error) {
+	var inventory []deployment.SiteService
+	for _, machine := range site.Machines {
+		roles := observerRoles(machine)
+		for _, service := range machine.Services {
+			fresh, err := freshFor(service.HealthCheck)
+			if err != nil {
+				return nil, fmt.Errorf("site %q machine %q service %q: derive health report freshness: %w",
+					site.Name, machine.Name, service.Name, err)
+			}
+			inventory = append(inventory, deployment.SiteService{
+				Machine:        strings.TrimSpace(machine.Name),
+				MachineProfile: strings.TrimSpace(machine.MachineProfile),
+				Service:        strings.TrimSpace(service.Name),
+				ServiceRole:    service.Role,
+				ObserverRoles:  append([]string(nil), roles...),
+				FreshFor:       fresh,
+			})
+		}
+	}
+	return inventory, nil
+}
+
+// observerRoles lists the platform instances expected to report on a unit hosted
+// by this machine.
+//
+// Both of a machine's instances probe every service on it, in every ownership
+// state, so the answer is the machine's deployed instances and nothing about the
+// service. A fresh list is returned per machine rather than shared, so no two
+// inventory entries alias one slice.
+func observerRoles(machine blueprint.Machine) []string {
+	if machine.Endpoints(true) == nil {
+		return []string{string(deployment.RolePrimary)}
+	}
+	return []string{string(deployment.RolePrimary), string(deployment.RoleStandby)}
+}
+
+// freshFor derives how long one report on a service stays current: two probe
+// intervals plus one timeout.
+//
+// Two intervals is what makes a single lost report survivable, since the next is
+// already due, and the timeout covers an attempt that took the longest it was
+// allowed to before publishing. The blueprint validated both durations, so a
+// parse failure here is impossible after blueprint validation, but it is still
+// returned rather than hidden so resolution never turns a malformed policy into
+// an unrelated descriptor error.
+func freshFor(check blueprint.HealthCheck) (string, error) {
+	interval, err := time.ParseDuration(strings.TrimSpace(check.Interval))
+	if err != nil {
+		return "", fmt.Errorf("parse interval %q: %w", check.Interval, err)
+	}
+	timeout, err := time.ParseDuration(strings.TrimSpace(check.Timeout))
+	if err != nil {
+		return "", fmt.Errorf("parse timeout %q: %w", check.Timeout, err)
+	}
+	if interval > (time.Duration(1<<63-1)-timeout)/2 {
+		return "", fmt.Errorf("2 * interval %s + timeout %s overflows a duration", interval, timeout)
+	}
+	return (2*interval + timeout).String(), nil
 }
 
 // lease resolves a machine's local Primary Ownership lease when a Standby

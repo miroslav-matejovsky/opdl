@@ -2,6 +2,7 @@ package blueprint
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -66,7 +67,14 @@ type HealthCheck struct {
 	// own listener, not the platform's.
 	Port int `hcl:"port"`
 	// Path is the HTTP path the probe requests, e.g. "/health". Required for the
-	// "http" type.
+	// "http" type. An optional query is allowed ("/health?verbose=1"); a fragment
+	// or an absolute URL is not, because the host a probe connects to is the
+	// machine's, resolved by the builder, and never authored here.
+	//
+	// The authored bytes are kept exactly as written. Validation reads the path
+	// but never rewrites it, so a service that distinguishes "/Health" from
+	// "/health", or cares which characters are escaped, is probed at the path its
+	// author wrote.
 	Path string `hcl:"path,optional"`
 	// Interval is how often the probe runs.
 	Interval string `hcl:"interval"`
@@ -166,6 +174,17 @@ func validateHealthCheck(machineName string, service Service) error {
 
 // validateHTTPHealthCheck checks what the "http" probe kind requires beyond the
 // fields every kind states.
+//
+// The path is authored as the request target and nothing more. The scheme is
+// fixed by the probe type and the host is the machine's own ip, which the
+// builder resolves; a path that carried either would be stating where to connect
+// from the one field that describes what to ask for. So an absolute URL, a
+// scheme, and a host are all rejected here rather than quietly ignored by
+// whoever builds the request.
+//
+// A query is allowed, because a service may distinguish its health endpoints by
+// one. A fragment is not: it is never sent to a server, so authoring one asks
+// for something that cannot be probed.
 func validateHTTPHealthCheck(machineName, where string, check HealthCheck) error {
 	path := check.Path
 	switch {
@@ -173,8 +192,40 @@ func validateHTTPHealthCheck(machineName, where string, check HealthCheck) error
 		return fmt.Errorf("machine %q: %s.path is required for an %s probe", machineName, where, healthCheckHTTP)
 	case path != strings.TrimSpace(path):
 		return fmt.Errorf("machine %q: %s.path %q must not have leading or trailing whitespace", machineName, where, path)
+	}
+	// Checked before parsing, because url.Parse accepts most control characters
+	// and they would reach the request as a header injection or as a target no
+	// server can route.
+	if strings.IndexFunc(path, isControl) >= 0 {
+		return fmt.Errorf("machine %q: %s.path %q must not contain control characters", machineName, where, path)
+	}
+	// Matched on the authored bytes rather than on the parsed value, so a bare
+	// trailing "#" is rejected too: it parses to an empty fragment, which would
+	// otherwise read as no fragment at all.
+	if strings.Contains(path, "#") {
+		return fmt.Errorf("machine %q: %s.path %q must not contain a fragment; a fragment is never sent to a server", machineName, where, path)
+	}
+	parsed, err := url.Parse(path)
+	if err != nil {
+		return fmt.Errorf("machine %q: %s.path %q is not a valid request path: %w", machineName, where, path, err)
+	}
+	// Where the probe connects is checked before how the path is shaped, so an
+	// author who wrote a whole URL is told that rather than that their path is
+	// missing a leading slash. "//host/health" is the case the two checks split:
+	// it has no scheme and does start with a slash, and it still names a host.
+	switch {
+	case parsed.Scheme != "":
+		return fmt.Errorf("machine %q: %s.path %q must not be an absolute URL; the probe connects to the machine's own ip on %s.port",
+			machineName, where, path, where)
+	case parsed.Host != "":
+		return fmt.Errorf("machine %q: %s.path %q must not name a host; the probe connects to the machine's own ip on %s.port",
+			machineName, where, path, where)
 	case !strings.HasPrefix(path, "/"):
 		return fmt.Errorf("machine %q: %s.path %q must start with %q", machineName, where, path, "/")
 	}
 	return nil
 }
+
+// isControl reports whether r is a character that must not appear in a request
+// path: the C0 range and DEL.
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }

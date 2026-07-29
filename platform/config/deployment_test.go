@@ -13,18 +13,46 @@ import (
 // requires to be stated, and nothing else. Tests remove or corrupt one part at a
 // time rather than building a valid descriptor from scratch each time.
 const (
-	// machineJSON is the machine's own record: the shared event store every
-	// machine states, standby or not.
-	machineJSON = `"machine_events_file":".data/platform/machine-events.jsonl"`
-	primaryJSON = `"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080",` + instanceExtrasJSON + `}`
-	standbyJSON = `"standby":{` + standbyFilesJSON + `,"api_address":"127.0.0.1:8081",` + instanceExtrasJSON + `}`
+	// machineJSON is the machine's own record: its identity, the shared event
+	// store every machine states, and both halves of the health contract. The
+	// decoder cross-checks the two halves against the identity, so they travel
+	// together in one constant rather than being spelled out per case.
+	//
+	// Its inventory expects a report from the Primary Instance alone, which is
+	// what a machine deploying no standby resolves. Fixtures that deploy one use
+	// redundantMachineJSON.
+	machineJSON = machineRecordJSON + `,` + siteServicesPrimaryJSON
+	// redundantMachineJSON is the same record for a machine that deploys both
+	// instances: both of them probe every service on it, so both are expected to
+	// report on each unit.
+	redundantMachineJSON = machineRecordJSON + `,` + siteServicesBothJSON
+	// machineRecordJSON is the machine without its inventory: identity, event
+	// store, and hosted services. Cases that state their own site_services build
+	// from it, and machineRecordNoServicesJSON drops the local half too.
+	machineRecordJSON           = machineRecordNoServicesJSON + `,` + servicesJSON
+	machineRecordNoServicesJSON = machineIdentityJSON + `,` + machineEventsJSON
+	machineIdentityJSON         = `"machine":"mock","machine_profile":"all-in-one"`
+	machineEventsJSON           = `"machine_events_file":".data/platform/machine-events.jsonl"`
+	// servicesJSON is the local half: one hosted service and the probe policy the
+	// platform runs against it. Its freshness derives to 22s (2*10s + 2s).
+	servicesJSON = `"services":[{"name":"core-services","role":"master","health_check":` +
+		`{"type":"http","port":9101,"path":"/health","interval":"10s","timeout":"2s","retries":3}}]`
+	// The remote half, naming this machine's own unit. The two differ only in who
+	// is expected to report on it.
+	siteServicesPrimaryJSON = `"site_services":[{` + siteUnitJSON + `,"observer_roles":["primary"],"fresh_for":"22s"}]`
+	siteServicesBothJSON    = `"site_services":[{` + siteUnitJSON + `,"observer_roles":["primary","standby"],"fresh_for":"22s"}]`
+	siteUnitJSON            = `"machine":"mock","machine_profile":"all-in-one","service":"core-services","service_role":"master"`
+	primaryJSON             = `"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080",` + instanceExtrasJSON + `}`
+	standbyJSON             = `"standby":{` + standbyFilesJSON + `,"api_address":"127.0.0.1:8081",` + standbyInstanceExtrasJSON + `}`
 	// instanceExtrasJSON is what every instance record carries beyond its files
 	// and its API address: the listener timeouts, and the embedded event fabric
 	// broker the instance runs. Tests that remove one of these spell the rest
 	// out inline instead.
-	instanceExtrasJSON = `"api_read_header_timeout":"5s","api_shutdown_timeout":"10s",` + natsJSON
+	instanceExtrasJSON        = `"api_read_header_timeout":"5s","api_shutdown_timeout":"10s",` + natsJSON
+	standbyInstanceExtrasJSON = `"api_read_header_timeout":"5s","api_shutdown_timeout":"10s",` + standbyNATSJSON
 	// natsJSON is one instance's complete embedded event fabric record.
-	natsJSON = `"nats":{"server_name":"mock-primary","cluster_name":"local","cluster_address":"127.0.0.1:6222"}`
+	natsJSON        = `"nats":{"server_name":"mock-primary","cluster_name":"local","cluster_address":"127.0.0.1:6222"}`
+	standbyNATSJSON = `"nats":{"server_name":"mock-standby","cluster_name":"local","cluster_address":"127.0.0.1:6223"}`
 	// The local files an instance owns. Each is stated on its own instance record,
 	// so a descriptor missing either is a startup failure rather than an instance
 	// that opens a path nothing authored.
@@ -39,7 +67,7 @@ const (
 	standbyless = `{` + machineJSON + `,` + primaryJSON + `}`
 	// redundant is a machine that deploys both instances and the lease they
 	// contend for.
-	redundant = `{` + machineJSON + `,` + primaryJSON + `,` + standbyJSON + `,` + leaseJSON + `}`
+	redundant = `{` + redundantMachineJSON + `,` + primaryJSON + `,` + standbyJSON + `,` + leaseJSON + `}`
 )
 
 // TestDescriptorRequiresExplicitDecisions checks the descriptor decoder rejects
@@ -63,12 +91,16 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			json: `{` + machineJSON + `,"primary":{"events_file":".data/events.jsonl","state_file":".data/state.json","api_address":"127.0.0.1:8080",` + instanceExtrasJSON + `}}`,
 			err:  "primary.log_file is required",
 		},
+		"missing primary api address": {
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,` + instanceExtrasJSON + `}}`,
+			err:  "primary.api_address is required",
+		},
 		"missing primary read header timeout": {
-			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_shutdown_timeout":"10s",` + natsJSON + `}}`,
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080","api_shutdown_timeout":"10s",` + natsJSON + `}}`,
 			err:  "primary.api_read_header_timeout is required",
 		},
 		"bad primary shutdown timeout": {
-			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_read_header_timeout":"5s","api_shutdown_timeout":"soon",` + natsJSON + `}}`,
+			json: `{` + machineJSON + `,"primary":{` + primaryFilesJSON + `,"api_address":"127.0.0.1:8080","api_read_header_timeout":"5s","api_shutdown_timeout":"soon",` + natsJSON + `}}`,
 			err:  "primary.api_shutdown_timeout",
 		},
 		// The embedded broker is required on every deployed instance, and an
@@ -142,6 +174,115 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			json: `{"machine_events_file":null,` + primaryJSON + `}`,
 			err:  "machine_events_file is required",
 		},
+		// The health contract is guarded here for the same reason the lease
+		// timings are: the runtime is about to schedule real requests against a
+		// live service from these values, and a field that decoded as zero is a
+		// descriptor that lost one rather than a default to fall back on.
+		"missing services": {
+			json: `{` + machineRecordNoServicesJSON + `,` + siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err:  "services is required",
+		},
+		"missing site services": {
+			json: `{` + machineRecordJSON + `,` + primaryJSON + `}`,
+			err:  "site_services is required",
+		},
+		"unknown probe type": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":"core-services","role":"master",` +
+				`"health_check":{"type":"ping","port":9101,"path":"/health","interval":"10s","timeout":"2s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: `type "ping" is not a known probe`,
+		},
+		"padded service name": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":" core-services ","role":"master",` +
+				`"health_check":{"type":"http","port":9101,"path":"/health","interval":"10s","timeout":"2s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: "must not have leading or trailing whitespace",
+		},
+		"absolute probe url": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":"core-services","role":"master",` +
+				`"health_check":{"type":"http","port":9101,"path":"http://127.0.0.1:9101/health","interval":"10s","timeout":"2s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: "must not be an absolute URL",
+		},
+		"probe path with fragment": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":"core-services","role":"master",` +
+				`"health_check":{"type":"http","port":9101,"path":"/health#ready","interval":"10s","timeout":"2s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: "must not contain a fragment",
+		},
+		"probe path with invalid escape": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":"core-services","role":"master",` +
+				`"health_check":{"type":"http","port":9101,"path":"/health%zz","interval":"10s","timeout":"2s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: "is not a valid request path",
+		},
+		"probe timeout not shorter than interval": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":"core-services","role":"master",` +
+				`"health_check":{"type":"http","port":9101,"path":"/health","interval":"10s","timeout":"10s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: "must be shorter than interval",
+		},
+		"probe interval missing": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":"core-services","role":"master",` +
+				`"health_check":{"type":"http","port":9101,"path":"/health","timeout":"2s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: "interval is required",
+		},
+		"site unit observed by nobody": {
+			json: `{` + machineRecordJSON + `,"site_services":[{` + siteUnitJSON + `,"observer_roles":[],"fresh_for":"22s"}],` + primaryJSON + `}`,
+			err:  "observer_roles is required",
+		},
+		"site unit observed by standby alone": {
+			json: `{` + machineRecordJSON + `,"site_services":[{` + siteUnitJSON + `,"observer_roles":["standby"],"fresh_for":"22s"}],` + primaryJSON + `}`,
+			err:  "every machine deploys a primary and the order is fixed",
+		},
+		"hosted service missing from the inventory": {
+			json: `{` + machineRecordJSON + `,"site_services":[{"machine":"other-machine","machine_profile":"all-in-one",` +
+				`"service":"core-services","service_role":"master","observer_roles":["primary"],"fresh_for":"22s"}],` + primaryJSON + `}`,
+			err: "has no site_services entry",
+		},
+		"extra local inventory unit": {
+			json: `{` + machineRecordJSON + `,"site_services":[{` + siteUnitJSON +
+				`,"observer_roles":["primary"],"fresh_for":"22s"},{"machine":"mock","machine_profile":"all-in-one",` +
+				`"service":"other-services","service_role":"master","observer_roles":["primary"],"fresh_for":"22s"}],` + primaryJSON + `}`,
+			err: "names a service this machine does not host",
+		},
+		"freshness differs from the probe policy": {
+			json: `{` + machineRecordJSON + `,"site_services":[{` + siteUnitJSON + `,"observer_roles":["primary"],"fresh_for":"21s"}],` + primaryJSON + `}`,
+			err:  "is not the 22s",
+		},
+		"freshness longer than the probe policy": {
+			json: `{` + machineRecordJSON + `,"site_services":[{` + siteUnitJSON + `,"observer_roles":["primary"],"fresh_for":"23s"}],` + primaryJSON + `}`,
+			err:  "is not the 22s",
+		},
+		"remote units disagree about their machine profile": {
+			json: `{` + machineRecordJSON + `,"site_services":[{` + siteUnitJSON +
+				`,"observer_roles":["primary"],"fresh_for":"22s"},` +
+				`{"machine":"gateway","machine_profile":"gateway-node","service":"gateway-a","service_role":"master","observer_roles":["primary"],"fresh_for":"22s"},` +
+				`{"machine":"gateway","machine_profile":"other-node","service":"gateway-b","service_role":"slave","observer_roles":["primary"],"fresh_for":"22s"}],` +
+				primaryJSON + `}`,
+			err: "disagrees with another service",
+		},
+		"service probe uses the primary api port": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[{"name":"core-services","role":"master",` +
+				`"health_check":{"type":"http","port":8080,"path":"/health","interval":"10s","timeout":"2s","retries":3}}],` +
+				siteServicesPrimaryJSON + `,` + primaryJSON + `}`,
+			err: "a service cannot be probed on a port the platform binds",
+		},
+		"two services claim one probe endpoint": {
+			json: `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[` +
+				`{"name":"core-services","role":"master","health_check":{"type":"http","port":9101,"path":"/health","interval":"10s","timeout":"2s","retries":3}},` +
+				`{"name":"other-services","role":"slave","health_check":{"type":"http","port":9101,"path":"/health","interval":"10s","timeout":"2s","retries":3}}],` +
+				`"site_services":[{` + siteUnitJSON + `,"observer_roles":["primary"],"fresh_for":"22s"},` +
+				`{"machine":"mock","machine_profile":"all-in-one","service":"other-services","service_role":"slave","observer_roles":["primary"],"fresh_for":"22s"}],` +
+				primaryJSON + `}`,
+			err: "two services may share a port but not an endpoint",
+		},
+		"inventory expects one observer from a machine deploying two": {
+			json: `{` + machineJSON + `,` + primaryJSON + `,` + standbyJSON + `,` + leaseJSON + `}`,
+			err:  "both of a machine's instances probe every service on it",
+		},
+
 		"standby-less machine": {json: standbyless},
 		"redundant machine":    {json: redundant},
 	}
@@ -156,6 +297,19 @@ func TestDescriptorRequiresExplicitDecisions(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestDescriptorAllowsServicesToShareAProbePort(t *testing.T) {
+	const shared = `{` + machineIdentityJSON + `,` + machineEventsJSON + `,"services":[` +
+		`{"name":"core-services","role":"master","health_check":{"type":"http","port":9101,"path":"/core/health","interval":"10s","timeout":"2s","retries":3}},` +
+		`{"name":"other-services","role":"slave","health_check":{"type":"http","port":9101,"path":"/other/health","interval":"10s","timeout":"2s","retries":3}}],` +
+		`"site_services":[` +
+		`{"machine":"mock","machine_profile":"all-in-one","service":"core-services","service_role":"master","observer_roles":["primary"],"fresh_for":"22s"},` +
+		`{"machine":"mock","machine_profile":"all-in-one","service":"other-services","service_role":"slave","observer_roles":["primary"],"fresh_for":"22s"}],` +
+		primaryJSON + `}`
+
+	var descriptor config.Descriptor
+	require.NoError(t, json.Unmarshal([]byte(shared), &descriptor))
 }
 
 // TestDescriptorDecodesAStandbylessMachine checks the shape a machine with no

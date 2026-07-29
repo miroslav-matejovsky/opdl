@@ -41,9 +41,10 @@ func checkContractsMatch() error {
 // the contract has to carry: two independent runtimes on one machine, each with
 // its own local files, its own listener, and its own bounds on that listener.
 const (
-	site      = "north"
-	machine   = "sensor"
-	machineIP = "10.0.1.10"
+	site           = "north"
+	machine        = "sensor"
+	machineProfile = "sensor-node"
+	machineIP      = "10.0.1.10"
 
 	// The api addresses are on loopback. That is the contract: the platform API
 	// is machine-local, so it is resolved onto 127.0.0.1 and never onto the
@@ -98,11 +99,145 @@ const (
 	leaseRenewalInterval       = "5s"
 	leaseHealthCheckInterval   = "2s"
 	leaseFailbackStabilization = "30s"
+
+	// The services this machine hosts, and the probe policy the platform runs
+	// against each. The two differ in port and in role so a round trip that
+	// collapsed them, or resolved one service's policy onto the other, would
+	// fail. The paths differ from each other for the same reason.
+	sensorService     = "sensor-services"
+	sensorServiceRole = "master"
+	sensorProbePort   = 9101
+	sensorProbePath   = "/health"
+	coreService       = "core-services"
+	coreServiceRole   = "slave"
+	coreProbePort     = 9102
+	coreProbePath     = "/healthz?deep=1"
+
+	// One probe policy shared by both services. The freshness below is what it
+	// derives: two intervals plus one timeout.
+	probeType     = "http"
+	probeInterval = "10s"
+	probeTimeout  = "2s"
+	probeRetries  = 3
+	probeFreshFor = "22s"
+
+	// A unit on another machine of the same site. It is in the fixture because
+	// the remote half of the health contract is the half with no endpoint in it:
+	// this entry proves identity, expected observers, and freshness survive the
+	// round trip without a port or a path coming with them.
+	peerMachine        = "gateway"
+	peerMachineProfile = "gateway-node"
+	peerService        = "gateway-services"
+	peerServiceRole    = "master"
+	peerFreshFor       = "32s"
+
+	// The platform instance roles an inventory entry names as expected observers.
+	// They are the same two words the instance records are keyed by, spelled here
+	// as the values that cross the wire.
+	observerPrimary = "primary"
+	observerStandby = "standby"
 )
 
 // standbyNATSRoutes are the peers the Standby Instance's server dials: the other
 // instance on its own machine, and the member on the other machine.
 var standbyNATSRoutes = []string{"nats://" + natsClusterAddr, peerNATSRoute}
+
+// builtServices and wantServices are this machine's hosted services as each
+// module spells them. They are written out per module rather than converted,
+// because a converter shared by both sides would round-trip its own bugs.
+func builtServices() []builderdeployment.Service {
+	return []builderdeployment.Service{
+		{
+			Name: sensorService,
+			Role: sensorServiceRole,
+			HealthCheck: builderdeployment.HealthCheck{
+				Type: probeType, Port: sensorProbePort, Path: sensorProbePath,
+				Interval: probeInterval, Timeout: probeTimeout, Retries: probeRetries,
+			},
+		},
+		{
+			Name: coreService,
+			Role: coreServiceRole,
+			HealthCheck: builderdeployment.HealthCheck{
+				Type: probeType, Port: coreProbePort, Path: coreProbePath,
+				Interval: probeInterval, Timeout: probeTimeout, Retries: probeRetries,
+			},
+		},
+	}
+}
+
+func wantServices() []platformconfig.Service {
+	return []platformconfig.Service{
+		{
+			Name: sensorService,
+			Role: sensorServiceRole,
+			HealthCheck: platformconfig.HealthCheck{
+				Type: probeType, Port: sensorProbePort, Path: sensorProbePath,
+				Interval: probeInterval, Timeout: probeTimeout, Retries: probeRetries,
+			},
+		},
+		{
+			Name: coreService,
+			Role: coreServiceRole,
+			HealthCheck: platformconfig.HealthCheck{
+				Type: probeType, Port: coreProbePort, Path: coreProbePath,
+				Interval: probeInterval, Timeout: probeTimeout, Retries: probeRetries,
+			},
+		},
+	}
+}
+
+// siteObserverRoles are the platform instances expected to report on a unit this
+// machine hosts. Both of a machine's instances probe every service on it, so the
+// answer follows the machine's standby policy and nothing about the service.
+func siteObserverRoles(hasStandby bool) []string {
+	if hasStandby {
+		return []string{observerPrimary, observerStandby}
+	}
+	return []string{observerPrimary}
+}
+
+// builtSiteServices and wantSiteServices are the site's static health inventory:
+// this machine's two units, then a unit on another machine of the same site.
+func builtSiteServices(hasStandby bool) []builderdeployment.SiteService {
+	return []builderdeployment.SiteService{
+		{
+			Machine: machine, MachineProfile: machineProfile,
+			Service: sensorService, ServiceRole: sensorServiceRole,
+			ObserverRoles: siteObserverRoles(hasStandby), FreshFor: probeFreshFor,
+		},
+		{
+			Machine: machine, MachineProfile: machineProfile,
+			Service: coreService, ServiceRole: coreServiceRole,
+			ObserverRoles: siteObserverRoles(hasStandby), FreshFor: probeFreshFor,
+		},
+		{
+			Machine: peerMachine, MachineProfile: peerMachineProfile,
+			Service: peerService, ServiceRole: peerServiceRole,
+			ObserverRoles: []string{observerPrimary}, FreshFor: peerFreshFor,
+		},
+	}
+}
+
+func wantSiteServices(hasStandby bool) []platformconfig.SiteService {
+	return []platformconfig.SiteService{
+		{
+			Machine: machine, MachineProfile: machineProfile,
+			Service: sensorService, ServiceRole: sensorServiceRole,
+			ObserverRoles: siteObserverRoles(hasStandby), FreshFor: probeFreshFor,
+		},
+		{
+			Machine: machine, MachineProfile: machineProfile,
+			Service: coreService, ServiceRole: coreServiceRole,
+			ObserverRoles: siteObserverRoles(hasStandby), FreshFor: probeFreshFor,
+		},
+		{
+			Machine: peerMachine, MachineProfile: peerMachineProfile,
+			Service: peerService, ServiceRole: peerServiceRole,
+			ObserverRoles: []string{observerPrimary}, FreshFor: peerFreshFor,
+		},
+	}
+}
 
 // primaryNATSRoutes are the peers the Primary Instance's server dials. They
 // depend on the standby policy, because a standby that is not deployed runs no
@@ -185,9 +320,10 @@ func checkRoundTripFor(hasStandby bool) error {
 		Environment:       "production",
 		Site:              site,
 		Machine:           machine,
-		MachineProfile:    "sensor-node",
+		MachineProfile:    machineProfile,
 		IP:                machineIP,
-		Services:          []string{"sensor-services", "core-services"},
+		Services:          builtServices(),
+		SiteServices:      builtSiteServices(hasStandby),
 		MachineEventsFile: machineEventsFile,
 		Primary: builderdeployment.Instance{
 			EventsFile:           eventsFile,
@@ -226,9 +362,10 @@ func checkRoundTripFor(hasStandby bool) error {
 		Environment:       "production",
 		Site:              site,
 		Machine:           machine,
-		MachineProfile:    "sensor-node",
+		MachineProfile:    machineProfile,
 		IP:                machineIP,
-		Services:          []string{"sensor-services", "core-services"},
+		Services:          wantServices(),
+		SiteServices:      wantSiteServices(hasStandby),
 		MachineEventsFile: machineEventsFile,
 		Primary: platformconfig.Instance{
 			EventsFile:           eventsFile,
@@ -265,10 +402,10 @@ func checkWireShape(data []byte, hasStandby bool) error {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	if err := checkWireInstance(wire, "primary", true); err != nil {
+	if err := checkWireInstance(wire, observerPrimary, true); err != nil {
 		return err
 	}
-	if err := checkWireInstance(wire, "standby", hasStandby); err != nil {
+	if err := checkWireInstance(wire, observerStandby, hasStandby); err != nil {
 		return err
 	}
 
@@ -285,7 +422,70 @@ func checkWireShape(data []byte, hasStandby bool) error {
 	if _, ok := wire["machine_events_file"]; !ok {
 		return fmt.Errorf("builder descriptor omitted machine_events_file: the machine's shared event store is not an instance's file")
 	}
+	if err := checkWireHealth(wire); err != nil {
+		return err
+	}
 	return verifyWireLease(wire, hasStandby)
+}
+
+// checkWireHealth checks the two halves of the health contract are on the wire
+// and that only the local half carries an endpoint.
+//
+// The split is the point of the shape. A probe reaches a service on its own
+// machine's ip, so the ports and paths belong to the descriptor of the machine
+// hosting it and nowhere else. An inventory entry that carried them would hand
+// every machine at the site a way to probe every other machine's services, which
+// is a different feature with a different failure mode.
+func checkWireHealth(wire map[string]json.RawMessage) error {
+	services, ok := wire["services"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted services: the platform probes what the machine hosts")
+	}
+	var hosted []map[string]json.RawMessage
+	if err := json.Unmarshal(services, &hosted); err != nil {
+		return fmt.Errorf("builder descriptor services is not a list of objects: %w", err)
+	}
+	for _, service := range hosted {
+		for _, field := range []string{"name", "role", "health_check"} {
+			if _, ok := service[field]; !ok {
+				return fmt.Errorf("builder descriptor omitted services[].%s", field)
+			}
+		}
+		var check map[string]json.RawMessage
+		if err := json.Unmarshal(service["health_check"], &check); err != nil {
+			return err
+		}
+		for _, field := range []string{"type", "port", "path", "interval", "timeout", "retries"} {
+			if _, ok := check[field]; !ok {
+				return fmt.Errorf("builder descriptor omitted services[].health_check.%s", field)
+			}
+		}
+	}
+
+	inventory, ok := wire["site_services"]
+	if !ok {
+		return fmt.Errorf("builder descriptor omitted site_services: every instance builds a view of the whole site")
+	}
+	var units []map[string]json.RawMessage
+	if err := json.Unmarshal(inventory, &units); err != nil {
+		return fmt.Errorf("builder descriptor site_services is not a list of objects: %w", err)
+	}
+	if len(units) == 0 {
+		return fmt.Errorf("builder descriptor site_services is empty: it carries this machine's own services too")
+	}
+	for _, unit := range units {
+		for _, field := range []string{"machine", "machine_profile", "service", "service_role", "observer_roles", "fresh_for"} {
+			if _, ok := unit[field]; !ok {
+				return fmt.Errorf("builder descriptor omitted site_services[].%s", field)
+			}
+		}
+		for _, field := range []string{"health_check", "port", "path", "ip"} {
+			if _, ok := unit[field]; ok {
+				return fmt.Errorf("builder descriptor carries site_services[].%s: only the machine hosting a service probes it", field)
+			}
+		}
+	}
+	return nil
 }
 
 // checkWireInstance verifies one instance record is present exactly when the

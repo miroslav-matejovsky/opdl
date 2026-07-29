@@ -161,7 +161,7 @@ func (p *Packer) writeMetadata(pkgDir string, d deployment.Descriptor, binary, s
 		MachineProfile: d.MachineProfile,
 		Platform:       d.Platform,
 		Binary:         binary,
-		Services:       d.Services,
+		Services:       d.ServiceNames(),
 		Deployment:     deploymentFile,
 		Primary:        primary,
 		Standby:        standby,
