@@ -32,7 +32,7 @@ Priorities:
 | Type | Improvement or open decision | Impact | Recommendation |
 | --- | --- | --- | --- |
 | Policy tuning | `fresh_for = 2 * interval + timeout` has not been validated with production timing data | Slow or highly jittery environments may expire too early | Keep the implemented formula until measurements justify a contract change |
-| Probe support | Only plain HTTP is implemented | HTTPS, TCP, Windows Service state, and response-body contracts are unsupported | Add probe types only for an accepted requirement; decide certificate sourcing before HTTPS |
+| Probe support | Only plain HTTP is implemented | HTTPS, TCP, Windows Service state, and response-body contracts are unsupported | Add probe types only for an accepted requirement |
 | Warm-up | There is no request/reply snapshot exchange | A restarted receiver waits for new periodic reports | Keep periodic repair unless measured startup latency is unacceptable |
 | Identity | Site, machine, and service are the service-unit key | Multiple runtime instances of one authored service cannot be represented independently | Add an instance identifier only when the deployment model supports such instances |
 | Recovery policy | One success immediately recovers a target | A flapping endpoint can switch to Healthy after one success | Keep the simple rule until a real hysteresis requirement exists |

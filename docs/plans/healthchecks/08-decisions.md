@@ -1,10 +1,8 @@
 # Required decisions
 
 D01 through D12, D14, and D15 are accepted and reflected in the implementation.
-D08's multiplier, future HTTPS certificate sourcing, and a future service-instance
-identifier remain explicit follow-up decisions rather than blockers for the current
-HTTP slice. NATS route security (formerly D13) has been moved to the standing
-backlog ([docs/backlog/route-security.md](../../backlog/route-security.md)).
+D08's multiplier and a future service-instance identifier remain explicit
+follow-up decisions rather than blockers for the current HTTP slice.
 
 ## Decision summary
 
@@ -175,9 +173,7 @@ Decisions:
 - fragments, absolute URLs, hosts, control characters, and invalid escapes are
   rejected;
 - authored path bytes are not rewritten;
-- services may share a port when paths differ;
-- an exact duplicate port and path is rejected; and
-- a future HTTPS type still needs a certificate-source decision.
+- an exact duplicate port and path is rejected.
 
 ## D11: public query
 

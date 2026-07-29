@@ -213,7 +213,7 @@ Status: pending.
 | | |
 | --- | --- |
 | Complexity | Medium to high |
-| Estimate | 2-5 person-days, excluding certificate infrastructure |
+| Estimate | 2-5 person-days |
 | Depends on | Steps 00 and 05 |
 
 Actions:
