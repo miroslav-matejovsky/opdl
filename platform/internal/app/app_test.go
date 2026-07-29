@@ -2,18 +2,13 @@ package app
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/events/storage"
@@ -40,7 +35,6 @@ var testDescriptor = config.Descriptor{
 	Machine:        "node",
 	MachineProfile: "all-in-one",
 	IP:             "127.0.0.1",
-	Services:       []string{"core-services"},
 }
 
 // freeAddress reserves an ephemeral loopback port, then releases it so the
@@ -127,9 +121,7 @@ func newTestProcess(t *testing.T, descriptor config.Descriptor, cfg *config.Conf
 		descriptor: descriptor,
 		cfg:        cfg,
 		role:       role,
-		factory:    factory,
 		local:      local,
-		record:     record,
 		state:      st,
 		// The application log is the process's, opened by Run from the descriptor.
 		// These tests compose the parts below it, so they discard what it would
@@ -167,152 +159,6 @@ func TestResolveRole(t *testing.T) {
 	}
 }
 
-type fixedStatusFabric struct {
-	state fabricState
-	err   error
-}
-
-func (f fixedStatusFabric) State(context.Context) (fabricState, error) {
-	return f.state, f.err
-}
-
-// recordingPublisher collects what a component stated, and can be told to fail,
-// so a test can read the record without a storage backend.
-type recordingPublisher struct {
-	mu     sync.Mutex
-	err    error
-	stated []events.Event
-}
-
-func (p *recordingPublisher) Publish(_ context.Context, event events.Event) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.err != nil {
-		return p.err
-	}
-	p.stated = append(p.stated, event)
-	return nil
-}
-
-func (p *recordingPublisher) events() []events.Event {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return slices.Clone(p.stated)
-}
-
-// TestFailoverMonitorFailsBeforeRuntimeStarts checks a process never serves while
-// its readiness cannot be stated. Shutdown and handover tooling read the local
-// record, and an instance missing from it cannot be handed a machine.
-func TestFailoverMonitorFailsBeforeRuntimeStarts(t *testing.T) {
-	publisher := &recordingPublisher{err: errors.New("record unavailable")}
-
-	done, err := startFailoverMonitor(
-		t.Context(),
-		publisher,
-		fixedStatusFabric{state: fabricState{CaughtUp: true}},
-		redundancy.StateActive,
-		30*time.Second,
-		nil,
-	)
-	require.ErrorContains(t, err, "record unavailable")
-	require.Nil(t, done)
-}
-
-// TestFailoverMonitorStopsServingAfterFabricStateFailures checks loss of the
-// Event Fabric cannot leave an active process serving an indefinitely stale
-// view, and that the instance says so once rather than on every observation.
-func TestFailoverMonitorStopsServingAfterFabricStateFailures(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	publisher := &recordingPublisher{}
-	lagExceeded := make(chan struct{}, 1)
-	done, err := startFailoverMonitor(
-		ctx,
-		publisher,
-		fixedStatusFabric{err: errors.New("event fabric disconnected")},
-		redundancy.StateActive,
-		100*time.Millisecond,
-		func() {
-			select {
-			case lagExceeded <- struct{}{}:
-			default:
-			}
-		},
-	)
-	require.NoError(t, err)
-
-	select {
-	case <-lagExceeded:
-	case <-time.After(2 * monitorInterval):
-		require.FailNow(t, "fabric state failure never exceeded the lag bound")
-	}
-
-	cancel()
-	require.NoError(t, <-done)
-
-	// The opening observation is stated whatever it says, and an instance that was
-	// unready from the start and stayed unready has nothing more to state.
-	stated := publisher.events()
-	require.Len(t, stated, 1, "readiness is stated on change, not on a timer: %+v", stated)
-	readiness, ok := stated[0].(FailoverReadinessChanged)
-	require.True(t, ok)
-	require.False(t, readiness.Ready)
-	require.Equal(t, redundancy.StateActive.String(), readiness.InstanceState)
-	require.Contains(t, readiness.Error, "event fabric disconnected")
-}
-
-// TestFailoverMonitorStatesEveryReadinessChange checks the record carries the
-// transitions the status file used to be polled for: an instance that catches up
-// says so, and one that falls behind its bound says that too.
-func TestFailoverMonitorStatesEveryReadinessChange(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	publisher := &recordingPublisher{}
-	fabric := &togglingFabric{state: fabricState{CaughtUp: true, Applied: 7, HighWater: 7}}
-
-	done, err := startFailoverMonitor(ctx, publisher, fabric, redundancy.StatePassive, time.Nanosecond, nil)
-	require.NoError(t, err)
-
-	// A projection that falls behind for longer than the bound is no longer a
-	// machine anyone can be handed.
-	fabric.set(fabricState{CaughtUp: false, Applied: 7, HighWater: 9})
-	require.Eventually(t, func() bool {
-		return len(publisher.events()) >= 2
-	}, 10*monitorInterval, monitorInterval/4)
-
-	cancel()
-	require.NoError(t, <-done)
-
-	stated := publisher.events()
-	opening := stated[0].(FailoverReadinessChanged)
-	require.True(t, opening.Ready)
-	require.Equal(t, redundancy.StatePassive.String(), opening.InstanceState)
-	require.Equal(t, uint64(7), opening.AppliedSequence)
-
-	lost := stated[1].(FailoverReadinessChanged)
-	require.False(t, lost.Ready)
-	require.Equal(t, uint64(9), lost.HighWater)
-	require.Empty(t, lost.Error, "falling behind is not a failure to ask")
-}
-
-// togglingFabric is a progressFabric a test can move between states while the
-// monitor is observing it.
-type togglingFabric struct {
-	mu    sync.Mutex
-	state fabricState
-}
-
-func (f *togglingFabric) set(st fabricState) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.state = st
-}
-
-func (f *togglingFabric) State(context.Context) (fabricState, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.state, nil
-}
-
 func TestRunRejectsAnUnknownFlag(t *testing.T) {
 	require.Error(t, Run([]string{"-unknown"}))
 }
@@ -340,18 +186,4 @@ func TestOpenReportsUnusableEventsFile(t *testing.T) {
 
 	_, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
 	require.ErrorContains(t, err, "jsonl:", "the failure identifies the JSONL backend")
-}
-
-// TestSiteOpenReturnsAFailureToStateThatItIsOpening checks the error policy on a
-// startup path: a composition that cannot write its local record does not
-// quietly carry on composing.
-func TestSiteOpenReturnsAFailureToStateThatItIsOpening(t *testing.T) {
-	cfg := loadConfig(t)
-	descriptor := descriptorOnFreePorts(t, cfg)
-
-	proc, err := newTestProcess(t, descriptor, cfg, redundancy.RolePrimary)
-	require.NoError(t, err)
-
-	_, err = open(t.Context(), proc, true)
-	require.ErrorIs(t, err, api.ErrNotImplemented)
 }

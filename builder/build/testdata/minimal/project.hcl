@@ -9,11 +9,27 @@ project "buildtest" {
   environment = "test"
 
   site "solo" {
+    nats {
+      cluster_name = "buildtest-solo"
+    }
+
     machine "node-a" {
       profile         = "test-node"
       ip              = "10.0.0.10"
-      services        = ["test-services"]
       eventstore_file = "D:/opdl/buildtest/solo/node-a/machine-events.jsonl"
+
+      service "test-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/buildtest/solo/node-a/primary/events.jsonl"
@@ -24,6 +40,10 @@ project "buildtest" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -40,8 +60,20 @@ project "buildtest" {
     machine "node-b" {
       profile         = "test-node"
       ip              = "10.0.0.11"
-      services        = ["test-services"]
       eventstore_file = "D:/opdl/buildtest/solo/node-b/machine-events.jsonl"
+
+      service "test-services" {
+        role = "slave"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/buildtest/solo/node-b/primary/events.jsonl"
@@ -52,6 +84,10 @@ project "buildtest" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -72,13 +108,16 @@ project "buildtest" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {

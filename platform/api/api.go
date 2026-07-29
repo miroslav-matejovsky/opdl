@@ -27,6 +27,18 @@ const (
 	LeaseStateOwned = "Owned"
 	// LeaseStateUnowned indicates primary ownership lease is not held.
 	LeaseStateUnowned = "Unowned"
+
+	// HealthCheckConfiguration names the configuration entry in
+	// HealthResponse.Checks.
+	HealthCheckConfiguration = "configuration"
+	// HealthCheckInternalServices names the internal services entry in
+	// HealthResponse.Checks.
+	HealthCheckInternalServices = "internalServices"
+	// HealthCheckEventFabric names the event fabric entry in
+	// HealthResponse.Checks. It reports whether this instance's embedded broker
+	// is carrying messages, proven by a round trip through it rather than by a
+	// connection status.
+	HealthCheckEventFabric = "eventFabric"
 )
 
 // Instance is what one platform instance reports about itself.

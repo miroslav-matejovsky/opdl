@@ -7,7 +7,30 @@
   "machine_profile": "all-in-one",
   "ip": "127.0.0.1",
   "services": [
-    "core-services"
+    {
+      "name": "core-services",
+      "role": "master",
+      "health_check": {
+        "type": "http",
+        "port": 9101,
+        "path": "/health",
+        "interval": "10s",
+        "timeout": "2s",
+        "retries": 3
+      }
+    }
+  ],
+  "site_services": [
+    {
+      "machine": "mock",
+      "machine_profile": "all-in-one",
+      "service": "core-services",
+      "service_role": "master",
+      "observer_roles": [
+        "primary"
+      ],
+      "fresh_for": "22s"
+    }
   ],
   "machine_events_file": ".data/platform/machine-events.jsonl",
   "primary": {
@@ -20,6 +43,11 @@
     "log_file": ".data/platform/primary/platform.log",
     "api_address": "127.0.0.1:8080",
     "api_read_header_timeout": "5s",
-    "api_shutdown_timeout": "10s"
+    "api_shutdown_timeout": "10s",
+    "nats": {
+      "server_name": "mock-primary",
+      "cluster_name": "local",
+      "cluster_address": "127.0.0.1:6222"
+    }
   }
 }

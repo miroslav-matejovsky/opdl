@@ -28,7 +28,11 @@ type Manifest struct {
 	Platform string `json:"platform"`
 	// Binary is the runtime binary filename in the package.
 	Binary string `json:"binary"`
-	// Services are the service groups this machine hosts.
+	// Services are the names of the services this machine hosts.
+	//
+	// Names only. This manifest is for whoever installs the package, and how the
+	// platform probes a service is runtime policy carried in the deployment
+	// descriptor beside it.
 	Services []string `json:"services"`
 	// Deployment is the deployment descriptor filename in the package.
 	Deployment string `json:"deployment"`

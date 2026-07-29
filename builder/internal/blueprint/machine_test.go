@@ -10,7 +10,8 @@ import (
 
 func TestMachineListenersMustNotSharePort(t *testing.T) {
 	tests := map[string]func(*blueprint.Machine){
-		"standby api copies primary api": func(m *blueprint.Machine) { m.Standby.API.LocalPort = m.Primary.API.LocalPort },
+		"standby api copies primary api":   func(m *blueprint.Machine) { m.Standby.API.LocalPort = m.Primary.API.LocalPort },
+		"standby nats copies primary nats": func(m *blueprint.Machine) { m.Standby.NATS.ClusterPort = m.Primary.NATS.ClusterPort },
 	}
 	for label, collide := range tests {
 		t.Run(label, func(t *testing.T) {
@@ -19,6 +20,58 @@ func TestMachineListenersMustNotSharePort(t *testing.T) {
 			require.ErrorContains(t, p.Validate(), "needs its own port")
 		})
 	}
+}
+
+// TestServiceMayNotBeProbedOnAPlatformPort checks a service's health check
+// cannot be aimed at an endpoint the platform binds. Probing one would report
+// the platform instance's own health under a service's name, which is the one
+// answer a service monitor must never give.
+func TestServiceMayNotBeProbedOnAPlatformPort(t *testing.T) {
+	tests := map[string]func(*blueprint.Machine){
+		"primary api": func(m *blueprint.Machine) { m.Services[0].HealthCheck.Port = m.Primary.API.LocalPort },
+		"standby api": func(m *blueprint.Machine) { m.Services[0].HealthCheck.Port = m.Standby.API.LocalPort },
+		"primary nats": func(m *blueprint.Machine) {
+			m.Services[0].HealthCheck.Port = m.Primary.NATS.ClusterPort
+		},
+		"standby nats": func(m *blueprint.Machine) {
+			m.Services[0].HealthCheck.Port = m.Standby.NATS.ClusterPort
+		},
+	}
+	for label, collide := range tests {
+		t.Run(label, func(t *testing.T) {
+			p := validProject()
+			collide(&p.Sites[0].Machines[0])
+			require.ErrorContains(t, p.Validate(), "cannot be probed on a port the platform binds")
+		})
+	}
+}
+
+// TestServicesMayShareAProbePort checks two service identities can be hosted by
+// one HTTP listener and told apart by their paths. A service's health endpoint
+// is a target the platform probes, not a listener it binds, so the machine-wide
+// listener rule does not apply to it.
+func TestServicesMayShareAProbePort(t *testing.T) {
+	p := validProject()
+	alarm := validService("alarm-service", 9101)
+	alarm.HealthCheck.Path = "/alarm/health"
+	reporting := validService("reporting-service", 9101)
+	reporting.HealthCheck.Path = "/reporting/health"
+	p.Sites[0].Machines[0].Services = []blueprint.Service{alarm, reporting}
+
+	require.NoError(t, p.Validate())
+}
+
+// TestServicesMayNotShareAProbeEndpoint checks the limit of the rule above. One
+// listener answering for two services is a deployment; one endpoint claimed by
+// two services is two names for one answer.
+func TestServicesMayNotShareAProbeEndpoint(t *testing.T) {
+	p := validProject()
+	p.Sites[0].Machines[0].Services = []blueprint.Service{
+		validService("core-services", 9101),
+		validService("alarm-service", 9101),
+	}
+
+	require.ErrorContains(t, p.Validate(), "two services may share a port but not an endpoint")
 }
 
 func TestMachineEventstoreFileIsTheMachines(t *testing.T) {

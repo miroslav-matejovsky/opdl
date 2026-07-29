@@ -2,9 +2,9 @@ package app
 
 import "github.com/miroslav-matejovsky/opdl/platform/internal/events"
 
-// This file declares runtime lifecycle, API, standby, projection, and site
-// composition facts. Every event is instance-scoped and uses the default scope.
-// Catalog tests stamp the full list and verify that invariant.
+// This file declares runtime lifecycle, API, and standby facts. Every event is
+// instance-scoped and uses the default scope. Catalog tests stamp the full list
+// and verify that invariant.
 //
 // Startup and shutdown propagate publication failures. Background callbacks use
 // events.BestEffort because they have no caller to return an error to.
@@ -33,47 +33,19 @@ const (
 	// TypeAPIStopped is stated when the instance stops serving.
 	TypeAPIStopped events.Type = "platform.app.api_stopped"
 
-	// TypeStandbyWaiting is stated when a standby is caught up and waiting.
+	// TypeEventFabricStarted is stated once the instance's embedded broker is
+	// running and its own client is connected to it.
+	TypeEventFabricStarted events.Type = "platform.app.event_fabric_started"
+	// TypeEventFabricStartFailed is stated when either of those could not be
+	// brought up.
+	TypeEventFabricStartFailed events.Type = "platform.app.event_fabric_start_failed"
+
+	// TypeStandbyWaiting is stated when a standby is waiting for ownership.
 	TypeStandbyWaiting events.Type = "platform.app.standby_waiting"
-	// TypeStandbyOpenRetry is stated while a standby retries its projection.
-	TypeStandbyOpenRetry events.Type = "platform.app.standby_open_retry"
-	// TypeStandbyReady is stated when a standby's projection has caught up.
-	TypeStandbyReady events.Type = "platform.app.standby_ready"
-	// TypeProjectionCaughtUp is stated when a projection reaches a captured mark.
-	TypeProjectionCaughtUp events.Type = "platform.app.projection_caught_up"
-	// TypeProjectionLagExceeded is stated when lag crosses the serving bound.
-	TypeProjectionLagExceeded events.Type = "platform.app.projection_lag_exceeded"
-	// TypeFailoverReadinessChanged is stated when an instance's readiness to take
-	// over changes.
-	TypeFailoverReadinessChanged events.Type = "platform.app.failover_readiness_changed"
 
-	// TypeSiteOpening is stated when this node's site composition starts.
-	TypeSiteOpening events.Type = "platform.app.site_opening"
-	// TypeSiteOpenFailed is stated when that composition does not complete.
-	TypeSiteOpenFailed events.Type = "platform.app.site_open_failed"
-	// TypeSiteReady is stated when an active site can serve.
-	TypeSiteReady events.Type = "platform.app.site_ready"
-	// TypeSiteStopping is stated when a site begins releasing.
-	TypeSiteStopping events.Type = "platform.app.site_stopping"
-	// TypeSiteStopped is stated when a site has released.
-	TypeSiteStopped events.Type = "platform.app.site_stopped"
-	// TypeBackgroundLoopStopped is stated when a projector or handler loop ends.
-	TypeBackgroundLoopStopped events.Type = "platform.app.background_loop_stopped"
-)
-
-// Site open phases. A site opens in stages, and which one it got to is what an
-// operator needs to know from a failure: a configuration problem, a transport
-// that would not open, and a projection that would not catch up are three
-// different faults with the same outcome.
-const (
-	// PhaseConfiguration is deriving the Event Fabric configuration.
-	PhaseConfiguration = "configuration"
-	// PhaseEventFabric is opening the transport and its journal.
-	PhaseEventFabric = "event_fabric"
-	// PhaseStandbyCatchUp is a standby catching its projection up.
-	PhaseStandbyCatchUp = "standby_catch_up"
-	// PhaseActiveReadiness is an active node completing its readiness sequence.
-	PhaseActiveReadiness = "active_readiness"
+	// TypeServiceHealthStartFailed is stated when this process could not begin
+	// watching its machine's services.
+	TypeServiceHealthStartFailed events.Type = "platform.app.service_health_start_failed"
 )
 
 // failureSeverity ranks a fact that carries an optional error: an operation that
@@ -235,189 +207,83 @@ func (APIStopped) EventType() events.Type { return TypeAPIStopped }
 // Severity reports a failed stop as an error and a clean one as routine.
 func (e APIStopped) Severity() events.Severity { return failureSeverity(e.Error) }
 
-// StandbyWaiting states that a standby is caught up and waiting for Primary
-// Ownership. It carries no payload: the fact is the whole of it, and which
-// process it is about is in the envelope's origin.
+// EventFabricStarted states that this instance's embedded broker is running and
+// its own client is connected to it.
+//
+// Both instances of a machine state it, because both run their own broker for
+// their whole lifetime. It is the fact an operator reads to learn which server
+// name and which cluster address belong to which process, and which peers that
+// process set out to join.
+//
+// It says the broker is up and reachable, not that the site's cluster has
+// formed. Routes are dialed in the background and a peer that is down is
+// retried, so membership is a later and separate thing to observe.
+type EventFabricStarted struct {
+	// ServerName is the embedded broker's identity, unique within the project.
+	ServerName string `json:"server_name"`
+	// ClusterName is the NATS cluster it belongs to, which is the site's.
+	ClusterName string `json:"cluster_name"`
+	// ClusterAddress is where its peers reach it, on the machine's own ip. It is
+	// the only address the broker binds: the platform's own client connects in
+	// process.
+	ClusterAddress string `json:"cluster_address"`
+	// Routes are the peers it dials, as the descriptor stated them. Empty on a
+	// site that deploys one instance in total.
+	Routes []string `json:"routes,omitempty"`
+}
+
+// EventType returns the event's stable dotted kind.
+func (EventFabricStarted) EventType() events.Type { return TypeEventFabricStarted }
+
+// EventFabricStartFailed states that this instance could not bring its event
+// fabric up, either because the broker would not start or because the client
+// would not connect to it.
+type EventFabricStartFailed struct {
+	// ServerName is the embedded broker's identity, as the descriptor stated it.
+	ServerName string `json:"server_name"`
+	// ClusterName is the cluster it was to join, as the descriptor stated it.
+	ClusterName string `json:"cluster_name"`
+	// ClusterAddress is the address it was to bind, as the descriptor stated it.
+	// A port already taken is the usual reason it did not.
+	ClusterAddress string `json:"cluster_address"`
+	// Error is what went wrong.
+	Error string `json:"error"`
+}
+
+// EventType returns the event's stable dotted kind.
+func (EventFabricStartFailed) EventType() events.Type { return TypeEventFabricStartFailed }
+
+// Severity reports an instance with no event fabric at all as an error. It stops
+// rather than running detached from the site.
+func (EventFabricStartFailed) Severity() events.Severity { return events.SeverityError }
+
+// StandbyWaiting states that a standby is waiting for Primary Ownership. It
+// carries no payload: the fact is the whole of it, and which process it is about
+// is in the envelope's origin.
 type StandbyWaiting struct{}
 
 // EventType returns the event's stable dotted kind.
 func (StandbyWaiting) EventType() events.Type { return TypeStandbyWaiting }
 
-// StandbyOpenRetry states that a standby could not open its projection and is
-// retrying while it waits for ownership.
-type StandbyOpenRetry struct {
-	// Attempt is which try this is, counted from one.
-	Attempt int `json:"attempt"`
-	// Error is why the projection would not open.
+// ServiceHealthStartFailed states that this process could not begin watching its
+// machine's services.
+//
+// It is an error rather than a degradation, and the process stops on it. A
+// deployment whose machine cannot probe its own services reports every one of
+// them Unknown for as long as it runs, with nothing in the record saying why,
+// and that is worse than a process that refused to start.
+//
+// What service health finds never reaches this record. Health is recalculated
+// current state that expires, so only the failure to start watching is a fact
+// worth keeping; the observations themselves are not.
+type ServiceHealthStartFailed struct {
+	// Error is what went wrong.
 	Error string `json:"error"`
 }
 
 // EventType returns the event's stable dotted kind.
-func (StandbyOpenRetry) EventType() events.Type { return TypeStandbyOpenRetry }
+func (ServiceHealthStartFailed) EventType() events.Type { return TypeServiceHealthStartFailed }
 
-// Severity reports a standby that is not yet following the journal as a
-// degradation: the machine still has an instance, but not a warm one.
-func (StandbyOpenRetry) Severity() events.Severity { return events.SeverityWarn }
-
-// StandbyReady states that a standby's projection has caught up.
-type StandbyReady struct {
-	// AppliedSequence is the journal sequence the projection had applied.
-	AppliedSequence uint64 `json:"applied_sequence"`
-	// DurationMS is how long the standby took to reach it, from the start of the
-	// site composition.
-	DurationMS int64 `json:"duration_ms"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (StandbyReady) EventType() events.Type { return TypeStandbyReady }
-
-// ProjectionCaughtUp states that a projection reached a captured journal
-// high-water mark.
-type ProjectionCaughtUp struct {
-	// Phase names what the node was waiting to catch up with.
-	Phase string `json:"phase"`
-	// HighWater is the captured mark the projection was waiting to reach.
-	HighWater uint64 `json:"high_water"`
-	// AppliedSequence is the sequence the projection had applied when it got
-	// there, which may be past the mark on a site that kept publishing.
-	AppliedSequence uint64 `json:"applied_sequence"`
-	// DurationMS is how long the wait took.
-	DurationMS int64 `json:"duration_ms"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (ProjectionCaughtUp) EventType() events.Type { return TypeProjectionCaughtUp }
-
-// ProjectionLagExceeded states that a projection fell further behind the journal
-// than serving allows, so the instance stopped serving.
-type ProjectionLagExceeded struct {
-	// LagBound is the configured bound the lag crossed.
-	LagBound string `json:"lag_bound"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (ProjectionLagExceeded) EventType() events.Type { return TypeProjectionLagExceeded }
-
-// Severity reports an instance that stopped answering as an error.
-func (ProjectionLagExceeded) Severity() events.Severity { return events.SeverityError }
-
-// FailoverReadinessChanged states that an instance became, or stopped being,
-// current enough to take the machine over.
-//
-// It is what a service manager reads before it hands over, and it replaced the
-// status file the runtime used to rewrite once a second. The facts are the same
-// ones; what changed is that they are stated when they change instead of being
-// restated on a timer, so the local record carries readiness transitions rather
-// than a heartbeat.
-//
-// Which instance it is about is the envelope's origin: its role and its PID.
-// Reading the last one an instance stated is reading its current readiness,
-// because an instance that has not restated it has not changed it.
-type FailoverReadinessChanged struct {
-	// Ready reports whether this instance is current enough to take over. An
-	// instance is ready until its projection has been behind the journal for
-	// longer than the deployment's lag bound, or until it cannot ask its Event
-	// Fabric how far behind it is.
-	Ready bool `json:"ready"`
-	// InstanceState is what the instance was doing when readiness changed:
-	// passive while it follows the journal, active while it serves.
-	InstanceState string `json:"instance_state"`
-	// AppliedSequence is the highest journal sequence the projection had applied,
-	// zero when the Event Fabric could not be asked.
-	AppliedSequence uint64 `json:"applied_sequence"`
-	// HighWater is the last sequence the journal had accepted, as this instance
-	// last observed it.
-	HighWater uint64 `json:"high_water"`
-	// Lag is how long the projection had continuously been behind the journal, as
-	// a duration string; "0s" when caught up.
-	Lag string `json:"lag"`
-	// Error is why the Event Fabric could not be asked, empty when it could.
-	Error string `json:"error,omitempty"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (FailoverReadinessChanged) EventType() events.Type { return TypeFailoverReadinessChanged }
-
-// Severity reports a machine that has lost its ready instance as a degradation.
-// A machine still has an active instance either way, but one that can no longer
-// hand over has no redundancy left.
-func (e FailoverReadinessChanged) Severity() events.Severity {
-	if e.Ready {
-		return events.SeverityInfo
-	}
-	return events.SeverityWarn
-}
-
-// SiteOpening states that this node's site composition started.
-type SiteOpening struct {
-	// Active reports whether this composition is an active node or a warm
-	// standby, which decides how much of it is built.
-	Active bool `json:"active"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (SiteOpening) EventType() events.Type { return TypeSiteOpening }
-
-// SiteOpenFailed states that a site composition did not complete.
-type SiteOpenFailed struct {
-	// Phase is how far the composition got, one of the Phase constants.
-	Phase string `json:"phase"`
-	// Error is why it stopped there.
-	Error string `json:"error"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (SiteOpenFailed) EventType() events.Type { return TypeSiteOpenFailed }
-
-// Severity reports a node that cannot compose its site as an error.
-func (SiteOpenFailed) Severity() events.Severity { return events.SeverityError }
-
-// SiteReady states that an active site finished its readiness sequence.
-type SiteReady struct {
-	// AppliedSequence is the journal sequence the projection had applied.
-	AppliedSequence uint64 `json:"applied_sequence"`
-	// DurationMS is how long the whole readiness sequence took.
-	DurationMS int64 `json:"duration_ms"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (SiteReady) EventType() events.Type { return TypeSiteReady }
-
-// SiteStopping states that a site began releasing.
-type SiteStopping struct {
-	// Ready reports whether this node had announced its readiness, which is what
-	// makes announcing its shutdown meaningful.
-	Ready bool `json:"ready"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (SiteStopping) EventType() events.Type { return TypeSiteStopping }
-
-// SiteStopped states that a site finished releasing.
-type SiteStopped struct {
-	// Error is what failed during the release, empty when it was clean.
-	Error string `json:"error,omitempty"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (SiteStopped) EventType() events.Type { return TypeSiteStopped }
-
-// Severity reports a release that did not complete as an error.
-func (e SiteStopped) Severity() events.Severity { return failureSeverity(e.Error) }
-
-// BackgroundLoopStopped states that one of the node's background Event Fabric
-// loops ended. A loop that stops takes the node's serving with it, so which one
-// it was and why is the first question.
-type BackgroundLoopStopped struct {
-	// Loop names the loop, such as "projector" or "handler registration".
-	Loop string `json:"loop"`
-	// Error is why it stopped, empty when it was canceled cleanly.
-	Error string `json:"error,omitempty"`
-}
-
-// EventType returns the event's stable dotted kind.
-func (BackgroundLoopStopped) EventType() events.Type { return TypeBackgroundLoopStopped }
-
-// Severity reports a loop that gave up as an error and a canceled one as
-// routine.
-func (e BackgroundLoopStopped) Severity() events.Severity { return failureSeverity(e.Error) }
+// Severity reports a process that cannot watch its machine's services as an
+// error.
+func (ServiceHealthStartFailed) Severity() events.Severity { return events.SeverityError }

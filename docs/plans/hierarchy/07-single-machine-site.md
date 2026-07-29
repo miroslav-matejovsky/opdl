@@ -34,8 +34,9 @@ rebuilds the same answers.
    file still used by another.
 3. **Descriptor.** Add the minimum site-distribution configuration selected by
    the ADR to the blueprint, resolved descriptor, platform config, examples,
-   scenario templates, and descriptor conformance checks. Replace
-   `hasEventStorage`'s hardcoded result with descriptor truth.
+   scenario templates, and descriptor conformance checks, including the
+   projection lag bound the runtime will need again. Derive whether an instance
+   has a journal from the descriptor.
 4. **Command path.** Implement `CommandService.Create`: domain validation
    (blank advertised name, unknown role, and the documented `400` reasons),
    proposal-ID derivation (already implemented in `identifiers.go`),
@@ -48,18 +49,21 @@ rebuilds the same answers.
    `Rejected`, `Accepted`). On a single-machine site the expected set is
    `[self]`, so acceptance follows the machine's own confirmation. The
    full flow still exercises every event type.
-6. **Runtime site.** Implement `app.open`: open the projection, catch up, attach
-   the handler for an Active instance, catch up consequences, become ready, and
-   expose registration through the existing listener.
+6. **Runtime site.** Add a site composition to `app`: open the projection, catch
+   up, attach the handler for an Active instance, catch up consequences, become
+   ready, and expose registration through the existing listener. The previous
+   unimplemented stub was removed, so this is written fresh.
 7. **Passive side.** A Passive instance follows the site state but attaches no
-   domain handler. Restore projection-lag readiness against the real
-   `progressFabric`.
+   domain handler. Add projection-lag readiness back: the failover monitor, its
+   `FailoverReadinessChanged` fact, and `redundancy.LagState` were removed with
+   the stub and need reintroducing against a real projection.
 
 ## Actions
 
 1. Implement adapter and contract tests.
 2. Add descriptor, builder, config, conformance, and example changes.
-3. Implement `Create`, `NewHandler`, `app.open`, and the passive follower.
+3. Implement `Create`, `NewHandler`, the runtime site composition, and the
+   passive follower.
 4. Add unit tests for scope refusal, replay, acknowledgement, handler
    determinism, and publication failure.
 5. Update `docs/01-architecture.md`, `docs/02-events.md`, and
@@ -80,7 +84,7 @@ rebuilds the same answers.
   site fact.
 - Non-site envelopes never enter site storage.
 - No `ErrNotImplemented` remains on the registration path.
-- `hasEventStorage` reads the descriptor.
+- Whether an instance has a journal is read from the descriptor.
 
 ## Risks / open questions
 

@@ -9,6 +9,7 @@ Standby Instance. Both processes carry the same compiled machine identity.
 | --- | --- |
 | `redundancy` | Fixed roles, Primary Ownership, and active/passive sequencing. |
 | `eventstore` | Shared append-only storage for machine-scoped envelopes. |
+| `servicehealth` | Cancellable local HTTP probes, retry state, and target scheduling. |
 
 ## Primary Ownership
 
@@ -39,3 +40,11 @@ Instance-scoped lease attempts, waiting, and declined promotions remain only in
 the stating process's event log. See [Events](../../../docs/02-events.md).
 
 Local ownership does not depend on site distribution.
+
+## Service health
+
+Every running platform instance probes all configured services on its machine,
+independent of Active or Passive ownership state. A success recovers
+immediately. Configured consecutive failures are required before Unhealthy.
+Each completed attempt emits the current stable observation. Distribution and
+site reduction remain site-level responsibilities.

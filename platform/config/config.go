@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,7 +20,6 @@ type Config struct {
 	descriptor Descriptor
 	primary    instanceTimeouts
 	standby    instanceTimeouts
-	lagBound   time.Duration
 }
 
 // instanceTimeouts are one instance's parsed listener timeouts. They are per
@@ -47,10 +48,6 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	cfg.lagBound, err = lagBoundOf(d.Lease)
-	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
 	return cfg, nil
 }
 
@@ -70,16 +67,6 @@ func timeoutsOf(role PlatformInstanceRole, instance *Instance) (instanceTimeouts
 		return instanceTimeouts{}, err
 	}
 	return instanceTimeouts{readHeader: readHeader, shutdown: shutdown}, nil
-}
-
-// lagBoundOf parses the lease's projection lag bound. A machine that deploys no
-// Standby Instance carries no lease: it trades ownership with nobody, so there
-// is no failover for a lag bound to gate and the bound is zero.
-func lagBoundOf(lease *Lease) (time.Duration, error) {
-	if lease == nil {
-		return 0, nil
-	}
-	return validateDuration("lease.lag_bound", lease.LagBound)
 }
 
 func validateDuration(name, s string) (time.Duration, error) {
@@ -118,11 +105,6 @@ func (c *Config) ShutdownTimeout(standby bool) time.Duration {
 	return c.timeouts(standby).shutdown
 }
 
-// LagBound returns the lease's projection lag bound. A process lagging beyond it
-// is not ready to take over, and an active process beyond it stops serving. It
-// is zero on a machine that deploys no Standby Instance and therefore no lease.
-func (c *Config) LagBound() time.Duration { return c.lagBound }
-
 // Summary renders the effective configuration as a human-readable block for
 // logging at startup.
 //
@@ -144,7 +126,8 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "    machine      %s\n", d.Machine)
 	fmt.Fprintf(&b, "    profile      %s\n", d.MachineProfile)
 	fmt.Fprintf(&b, "    ip           %s\n", d.IP)
-	fmt.Fprintf(&b, "    services     %s\n", strings.Join(d.Services, ", "))
+	fmt.Fprintf(&b, "    services     %s\n", servicesSummary(d.IP, d.Services))
+	fmt.Fprintf(&b, "    site_units   %s\n", siteServicesSummary(d.SiteServices))
 	fmt.Fprintf(&b, "    instances    %s\n", instancesSummary(d, Role(standby)))
 	fmt.Fprintf(&b, "    events_file  %s\n", optionalPathSummary(inst.EventsFile))
 	fmt.Fprintf(&b, "    state_file   %s\n", optionalPathSummary(inst.StateFile))
@@ -157,7 +140,69 @@ func (c *Config) Summary(standby bool) string {
 	fmt.Fprintf(&b, "  this instance's api:\n")
 	fmt.Fprintf(&b, "    read_header_timeout %s\n", timeouts.readHeader)
 	fmt.Fprintf(&b, "    shutdown_timeout    %s\n", timeouts.shutdown)
+	// The embedded event fabric server is this instance's too, and it is the
+	// other listener the process binds, so it is printed beside the API rather
+	// than with the descriptor block above.
+	fmt.Fprintf(&b, "  this instance's event fabric:\n")
+	fmt.Fprintf(&b, "    nats_server_name     %s\n", inst.NATS.ServerName)
+	fmt.Fprintf(&b, "    nats_cluster_name    %s\n", inst.NATS.ClusterName)
+	fmt.Fprintf(&b, "    nats_cluster_address %s\n", inst.NATS.ClusterAddress)
+	fmt.Fprintf(&b, "    nats_routes          %s\n", routesSummary(inst.NATS.Routes))
 	return b.String()
+}
+
+// routesSummary renders the peers this instance's embedded server routes to.
+//
+// An empty list is printed as a statement rather than as a blank, because on a
+// site that deploys one instance it is the correct answer and an operator
+// reading a blank line would have no way to tell that from a truncated
+// descriptor.
+func routesSummary(routes []string) string {
+	if len(routes) == 0 {
+		return "(none; this instance is the only one at its site)"
+	}
+	return strings.Join(routes, " ")
+}
+
+// servicesSummary renders the services this machine hosts and how each is
+// probed, one line's worth per service.
+//
+// The probe policy is here rather than only the names because it is what this
+// process is about to start doing to a live service, and an operator reading a
+// startup block is entitled to see the requests before they begin. It is
+// rendered compactly for the same reason the lease timings are: a person is
+// checking values they already expect, not learning the schema.
+func servicesSummary(machineIP string, services []Service) string {
+	if len(services) == 0 {
+		return "(none)"
+	}
+	parts := make([]string, 0, len(services))
+	for _, service := range services {
+		check := service.HealthCheck
+		address := net.JoinHostPort(machineIP, strconv.Itoa(check.Port))
+		parts = append(parts, fmt.Sprintf("%s(%s) %s://%s%s every=%s timeout=%s retries=%d",
+			service.Name, service.Role, check.Type, address, check.Path, check.Interval, check.Timeout, check.Retries))
+	}
+	return strings.Join(parts, "\n                 ")
+}
+
+// siteServicesSummary renders how much of the site this instance expects to hear
+// about: how many units and machines it knows of.
+//
+// The list itself is not printed. It is the same on every machine of the site
+// and grows with the site, so a startup block that rendered it would bury this
+// machine's own configuration in a copy of the site's. What an operator needs
+// here is whether this binary was built with the site the machine belongs to,
+// which the counts answer.
+func siteServicesSummary(units []SiteService) string {
+	if len(units) == 0 {
+		return "(none)"
+	}
+	machines := make(map[string]bool, len(units))
+	for _, unit := range units {
+		machines[unit.Machine] = true
+	}
+	return fmt.Sprintf("%d across %d machine(s)", len(units), len(machines))
 }
 
 // instancesSummary renders which of the machine's two instances are deployed,
@@ -184,14 +229,13 @@ func instancesSummary(d Descriptor, self PlatformInstanceRole) string {
 }
 
 // leaseSummary renders the Primary Ownership lease file and its timings when a
-// standby is deployed. The lag bound is here because it is a lease timing: it
-// bounds whether ownership may move at all.
+// standby is deployed.
 func leaseSummary(lease *Lease) string {
 	if lease == nil {
 		return "(not deployed)"
 	}
-	return fmt.Sprintf("%s duration=%s renewal=%s health_check=%s failback=%s lag_bound=%s",
-		lease.File, lease.Duration, lease.RenewalInterval, lease.HealthCheckInterval, lease.FailbackStabilization, lease.LagBound)
+	return fmt.Sprintf("%s duration=%s renewal=%s health_check=%s failback=%s",
+		lease.File, lease.Duration, lease.RenewalInterval, lease.HealthCheckInterval, lease.FailbackStabilization)
 }
 
 func optionalPathSummary(path string) string {

@@ -39,8 +39,10 @@ only `-instance primary|standby`.
 
 | Descriptor part | Contents |
 | --- | --- |
-| Machine | platform, project, environment, site, machine, profile, IP, services, and `machine_events_file` |
-| `primary` | mandatory service identity, local event, state, and log files, loopback API address, and listener timeouts |
+| Machine | platform, project, environment, site, machine, profile, IP, and `machine_events_file` |
+| `services` | every service this machine hosts, each with its role and the `health_check` policy the platform probes it with |
+| `site_services` | every service unit at the site, with its expected observer roles and `fresh_for`, and no probe endpoint |
+| `primary` | mandatory service identity, local event, state, and log files, loopback API address, listener timeouts, and the embedded event fabric broker (`nats`) |
 | `standby` | the same instance fields, present only when deployed |
 | `lease` | shared Primary Ownership file and failover timings, present exactly when `standby` is present |
 
@@ -48,11 +50,53 @@ The blueprint calls the machine file `eventstore_file` and the instance files
 `eventlog_file`, `state_file`, and `log_file`. The resolved descriptor names them
 `machine_events_file`, `events_file`, `state_file`, and `log_file`.
 
+Each site authors one `nats` block naming its event fabric cluster, and each
+deployed instance authors one stating the `cluster_port` its embedded server
+binds. From those the builder resolves, per instance, `nats.server_name`
+(`<machine>-<role>`), `nats.cluster_name` (the site's), `nats.cluster_address`
+(the machine's ip joined to the authored port), and `nats.routes` — every other
+deployed instance at the site, as `nats://ip:port`.
+
+The cluster address is the one listener a descriptor resolves off loopback. A
+site's cluster spans machines, so a member has to be reachable from another
+host; an address on 127.0.0.1 would be a cluster that can never have a second
+machine. There is still no client port: the platform's client reaches its own
+server in process.
+
 The machine event store exists on every machine. The lease exists only on a
 machine with a standby. The builder rejects file collisions across instance
 event logs, state files, application logs, the machine event store, and the
-lease. It also rejects duplicate local API addresses and duplicate Windows
-Service names on one machine.
+lease. It also rejects duplicate listener ports on one machine — the two
+instances' APIs and their two servers are one set — duplicate cluster names
+across the project's sites, and duplicate Windows Service names.
+
+### Service health contract
+
+The descriptor carries health in two halves, and the split is the point of the
+shape. `services` is local: it names the machine's own services and the port,
+path, interval, timeout, and retry count the platform probes each with. A probe
+connects to the machine's own ip, so those endpoints belong to the descriptor of
+the machine hosting them and to no other.
+
+`site_services` is the same list for the whole site, and deliberately carries no
+endpoint. An instance needs to know which units exist, which platform instance
+roles are expected to report on each, and how long a report stays fresh, so that
+a unit nobody has reported on reads as Unknown rather than as missing. It never
+needs to reach one. Every machine at a site is built with the same list in the
+same order, which is what lets two instances that received the same reports
+reduce them to the same view.
+
+A service's health endpoint is a target rather than a listener the platform
+binds, so two services may share a port and be told apart by their paths. What
+they may not do is name a port the platform binds, or claim the same port and
+path as each other. `fresh_for` is derived from the target's own probe policy as
+`2 * interval + timeout`, so every receiver expires the same report at the same
+age without being told the endpoint that produced it.
+
+The runtime validates both halves when the descriptor decodes, including that
+its own services appear in the inventory with matching role, profile, observer
+roles, and freshness. Malformed health policy fails at startup rather than when
+the first probe is due.
 
 `builder/deployment` and `platform/config` define independent copies of the
 descriptor contract. `conformance-tests` keeps them compatible.
@@ -63,9 +107,9 @@ Runtime packages are grouped by the owner of their state:
 
 | Level | Identity | Current responsibilities |
 | --- | --- | --- |
-| Instance | one process in a fixed role | local event log, application log, durable epoch, and one loopback API |
-| Machine | one Windows host | Primary Ownership, active/passive sequencing, and the shared machine event store |
-| Site | all machines in one deployment site | site event contract |
+| Instance | one process in a fixed role | local event log, application log, durable epoch, one loopback API, one embedded NATS server, and one current service-health view |
+| Machine | one Windows host | Primary Ownership, active/passive sequencing, shared machine event store, and local service probes from each instance |
+| Site | all machines in one deployment site | one NATS cluster spanning every instance, ephemeral health distribution and reduction, the durable site event contract, and the client onto this instance's server |
 
 The detailed level documentation lives beside the code:
 
@@ -86,7 +130,10 @@ The detailed level documentation lives beside the code:
 | `internal/instance/state` | Durable per-instance epoch. |
 | `internal/machine/redundancy` | Fixed roles, Primary Ownership, and active/passive sequencing. |
 | `internal/machine/eventstore` | Shared append-only JSONL store for machine-scoped events. |
+| `internal/machine/servicehealth` | Local HTTP probes, retry state, and per-target scheduling. |
 | `internal/site/eventfabric` | Site delivery and durable-consumer contract. No implementation yet. |
+| `internal/site/healthfabric` | Bounded ephemeral Core NATS health publication and subscription. |
+| `internal/site/healthview` | Static inventory, observer fencing and freshness, and deterministic service reduction. |
 
 ### Dependency direction
 
@@ -115,8 +162,11 @@ At startup a process:
 4. Creates one event factory for the process.
 5. Opens the instance event log and machine event store.
 6. Opens and advances the instance state epoch.
-7. Binds the instance's loopback HTTP listener.
-8. Enters machine ownership management.
+7. Starts the instance's embedded NATS server and event-fabric client.
+8. Builds the site health view, subscribes and flushes its health connection,
+   then starts local service probes.
+9. Binds the instance's loopback HTTP listener and enters machine ownership
+   management.
 
 The application log is opened first so every later failure to open something has
 somewhere to be described, and closed last.
@@ -129,15 +179,18 @@ The listener stays bound for the process lifetime. Passive and Active states
 swap the handler behind that listener, so ownership transfer never moves an
 address between processes.
 
-### Current site limitation
+### Current durable site-event limitation
 
-Site event distribution has not been implemented. `app.hasEventStorage` returns
-`false`, so no site projection or durable handler is opened. Health endpoints
-and `GET /instance` work; the platform has no domain operation to serve beyond
-them.
+Durable site event distribution has not been implemented: there is no ordered
+site journal, projection, replay, acknowledgement, or durable handler.
 
-The projection lag bound remains in the descriptor but is not consulted on this
-path. The hierarchy plan tracks the remaining work in
+Service health is a separate implemented site composition. It distributes
+repeated, expiring current-state snapshots over Core NATS and reconstructs an
+in-memory view from static inventory. It intentionally provides no persistence
+or replay. The public `GET /health/services` query is still planned.
+
+Because nothing trails a journal, there is no projection lag to bound and the
+descriptor carries no lag bound. The hierarchy plan tracks the remaining work in
 [`docs/plans/hierarchy`](plans/hierarchy/README.md).
 
 ## Local redundancy

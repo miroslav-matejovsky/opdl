@@ -20,6 +20,8 @@ type Primary struct {
 	LogFile string `hcl:"log_file,optional"`
 	// API is the Primary Instance's local API endpoint policy.
 	API *API `hcl:"api,block"`
+	// NATS is the Primary Instance's embedded event fabric server policy.
+	NATS *NATS `hcl:"nats,block"`
 	// WinService is the Primary Instance's Windows Service identity.
 	WinService *WinService `hcl:"winservice,block"`
 }
@@ -45,6 +47,9 @@ type Standby struct {
 	Lease *Lease `hcl:"lease,block"`
 	// API is the Standby Instance's local API endpoint policy.
 	API *API `hcl:"api,block"`
+	// NATS is the Standby Instance's embedded event fabric server policy. It is
+	// required when the Standby Instance is deployed and rejected when it is not.
+	NATS *NATS `hcl:"nats,block"`
 	// WinService is the Standby Instance's Windows Service identity.
 	WinService *WinService `hcl:"winservice,block"`
 }
@@ -87,12 +92,15 @@ func authoredFiles(machine Machine) []instanceFile {
 	return files
 }
 
-// Endpoints are one instance's authored listener port and the timeouts that
-// govern it.
+// Endpoints are one instance's authored listener ports and the timeouts that
+// govern them.
 type Endpoints struct {
 	APILocalPort         int
 	APIReadHeaderTimeout string
 	APIShutdownTimeout   string
+	// NATSClusterPort is the port the instance's embedded event fabric server
+	// accepts route connections from its peers on.
+	NATSClusterPort int
 }
 
 // API is one instance's local API endpoint policy.
@@ -105,6 +113,30 @@ type API struct {
 	// ShutdownTimeout bounds the graceful drain of this instance's listener when
 	// it stops serving, whether it is stepping down or the process is leaving.
 	ShutdownTimeout string `hcl:"shutdown_timeout"`
+}
+
+// NATS is one instance's embedded event fabric server policy.
+//
+// Every deployed instance runs its own embedded NATS server for its whole
+// lifetime, exactly as it binds its own API listener, so the block is required
+// on the primary and on a deployed standby and rejected on a standby that is
+// not deployed.
+//
+// The server is at the instance level and the client that reaches it is at the
+// site level; nothing here is shared between the two processes on a machine.
+type NATS struct {
+	// ClusterPort is the port this instance's embedded NATS server accepts
+	// route connections from its peers on.
+	//
+	// It is the only port an instance's server binds. The platform's client
+	// connects to its own server in process, and nothing outside the process is
+	// a client of it, so there is no client port to author. What the cluster
+	// port is for is the servers reaching each other: it is what lets the
+	// embedded servers of a site form one NATS cluster.
+	//
+	// It is authored per instance because a machine's two instances run
+	// together and each runs its own server, so each needs a port of its own.
+	ClusterPort int `hcl:"cluster_port"`
 }
 
 // maxWinServiceName bounds a Windows Service name. The Service Control Manager
@@ -136,46 +168,55 @@ type Lease struct {
 	// FailbackStabilization is how long a returning Primary must be continuously
 	// healthy before an Active Standby hands ownership back to it.
 	FailbackStabilization string `hcl:"failback_stabilization"`
-	// LagBound is how far a process's projection may fall behind the journal
-	// before it stops being promotable.
-	LagBound string `hcl:"lag_bound"`
 }
 
 func validatePrimaryEndpoints(machine Machine) error {
-	return validateInstanceEndpoints(machine, "primary", machine.Primary.API)
+	return validateInstanceEndpoints(machine, "primary", machine.Primary.API, machine.Primary.NATS)
 }
 
-func validateInstanceEndpoints(machine Machine, block string, api *API) error {
+func validateInstanceEndpoints(machine Machine, block string, api *API, nats *NATS) error {
 	if api == nil {
 		return fmt.Errorf("machine %q: %s.api block is required", machine.Name, block)
 	}
 	if err := validatePort(machine.Name, block+".api.local_port", api.LocalPort); err != nil {
 		return err
 	}
-	if err := validateAPIDuration(machine.Name, block+".api.read_header_timeout", api.ReadHeaderTimeout); err != nil {
+	if _, err := validateDuration(machine.Name, block+".api.read_header_timeout", api.ReadHeaderTimeout); err != nil {
 		return err
 	}
-	return validateAPIDuration(machine.Name, block+".api.shutdown_timeout", api.ShutdownTimeout)
+	if _, err := validateDuration(machine.Name, block+".api.shutdown_timeout", api.ShutdownTimeout); err != nil {
+		return err
+	}
+	// The embedded event fabric server is checked with the API listener because
+	// it is one: the instance binds it for its whole lifetime, and a machine
+	// whose port it cannot take is a machine whose instance does not start.
+	if nats == nil {
+		return fmt.Errorf("machine %q: %s.nats block is required", machine.Name, block)
+	}
+	return validatePort(machine.Name, block+".nats.cluster_port", nats.ClusterPort)
 }
 
-func validateAPIDuration(machineName, where, value string) error {
+// validateDuration parses one authored duration and requires it to be positive,
+// naming the attribute an author has to change. It returns the parsed value for
+// the checks that compare two of them.
+func validateDuration(machineName, where, value string) (time.Duration, error) {
 	if strings.TrimSpace(value) == "" {
-		return fmt.Errorf("machine %q: %s is required", machineName, where)
+		return 0, fmt.Errorf("machine %q: %s is required", machineName, where)
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil {
-		return fmt.Errorf("machine %q: %s %q is not a valid duration: %w", machineName, where, value, err)
+		return 0, fmt.Errorf("machine %q: %s %q is not a valid duration: %w", machineName, where, value, err)
 	}
 	if d <= 0 {
-		return fmt.Errorf("machine %q: %s %s must be positive", machineName, where, d)
+		return 0, fmt.Errorf("machine %q: %s %s must be positive", machineName, where, d)
 	}
-	return nil
+	return d, nil
 }
 
 func validateStandbyEndpoints(machine Machine) error {
 	standby := machine.Standby
 	if !standby.Disabled {
-		return validateInstanceEndpoints(machine, "standby", standby.API)
+		return validateInstanceEndpoints(machine, "standby", standby.API, standby.NATS)
 	}
 	if strings.TrimSpace(standby.EventlogFile) != "" {
 		return fmt.Errorf("machine %q: standby.eventlog_file is set but the standby is disabled; remove it or deploy the standby", machine.Name)
@@ -191,6 +232,9 @@ func validateStandbyEndpoints(machine Machine) error {
 	}
 	if standby.API != nil {
 		return fmt.Errorf("machine %q: standby.api is set but the standby is disabled; remove it or deploy the standby", machine.Name)
+	}
+	if standby.NATS != nil {
+		return fmt.Errorf("machine %q: standby.nats is set but the standby is disabled; remove it or deploy the standby", machine.Name)
 	}
 	return nil
 }
@@ -294,9 +338,6 @@ func validateLease(machine Machine) error {
 		return err
 	}
 	if _, err := validateLeaseDuration(machine.Name, "failback_stabilization", lease.FailbackStabilization); err != nil {
-		return err
-	}
-	if _, err := validateLeaseDuration(machine.Name, "lag_bound", lease.LagBound); err != nil {
 		return err
 	}
 	if renewal >= duration {

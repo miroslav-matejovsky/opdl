@@ -7,11 +7,34 @@ project "customer-a" {
   environment = "production"
 
   site "north" {
+    # The site's event fabric cluster. Every deployed instance of every machine
+    # here runs an embedded NATS server, and all of them join this one cluster,
+    # primaries and standbys alike. It is named at the site because the site is
+    # what it spans; each instance authors only the port its own server binds.
+    nats {
+      cluster_name = "customer-a-north"
+    }
+
     machine "sensor" {
       profile         = "sensor-node"
       ip              = "10.0.1.10"
-      services        = ["sensor-services"]
       eventstore_file = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
+
+      # Every service the machine hosts declares the part this copy of it plays
+      # — master or slave — and the probe that says whether it is up: what to
+      # ask, how often, and how many consecutive failures make it down.
+      service "sensor-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
@@ -22,6 +45,15 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        # The instance's own embedded event fabric server, and the only port it
+        # binds: the platform's client reaches its own server in process, and
+        # this port is where the site's other servers reach it. It is bound on
+        # the machine's ip, so the port has to be open between the machines of
+        # the site.
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -39,8 +71,37 @@ project "customer-a" {
     machine "local-server" {
       profile         = "local-server"
       ip              = "10.0.1.11"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/north/local-server/machine-events.jsonl"
+
+      # The control room holds the master copy of the core services; this site
+      # follows it.
+      service "core-services" {
+        role = "slave"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
+
+      # A machine hosts as many services as it needs; each states its own role
+      # and its own probe, on its own port.
+      service "alarm-service" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9102
+          path     = "/health"
+          interval = "5s"
+          timeout  = "1s"
+          retries  = 2
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
@@ -51,6 +112,10 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -71,13 +136,16 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -89,11 +157,30 @@ project "customer-a" {
   }
 
   site "control-room" {
+    # A second site is a second cluster. The servers here route only to each
+    # other, never to the ones at "north", because a server accepts a route only
+    # from a peer naming the same cluster.
+    nats {
+      cluster_name = "customer-a-control-room"
+    }
+
     machine "master" {
       profile         = "master-server"
       ip              = "10.0.2.10"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/master/machine-events.jsonl"
+
+      service "core-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
@@ -104,6 +191,14 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        # The instance's own embedded event fabric broker. Every deployed
+        # instance runs one, and the only port it binds is this one: the
+        # platform's client reaches its own broker in process, and what the
+        # cluster port is for is the brokers of a site reaching each other.
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -124,13 +219,16 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -143,8 +241,20 @@ project "customer-a" {
     machine "slave" {
       profile         = "slave-server"
       ip              = "10.0.2.11"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/slave/machine-events.jsonl"
+
+      service "core-services" {
+        role = "slave"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
@@ -155,6 +265,14 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        # The instance's own embedded event fabric broker. Every deployed
+        # instance runs one, and the only port it binds is this one: the
+        # platform's client reaches its own broker in process, and what the
+        # cluster port is for is the brokers of a site reaching each other.
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -175,13 +293,16 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -194,8 +315,23 @@ project "customer-a" {
     machine "integration" {
       profile         = "integration-server"
       ip              = "10.0.2.12"
-      services        = ["integration-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/integration/machine-events.jsonl"
+
+      # Every service states a probe. What differs is how hard it presses: these
+      # services reach outward, so they are given longer to answer and more
+      # attempts before they are called down.
+      service "integration-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health/ready"
+          interval = "30s"
+          timeout  = "5s"
+          retries  = 5
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
@@ -206,6 +342,14 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        # The instance's own embedded event fabric broker. Every deployed
+        # instance runs one, and the only port it binds is this one: the
+        # platform's client reaches its own broker in process, and what the
+        # cluster port is for is the brokers of a site reaching each other.
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -226,13 +370,16 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {

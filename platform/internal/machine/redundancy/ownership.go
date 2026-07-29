@@ -236,9 +236,9 @@ func waitWhilePassive(ctx context.Context, publisher events.Publisher, lease *Le
 			<-passiveErr
 			return Acquisition{}, nil
 		case err := <-passiveErr:
-			// Passive returned on its own, meaning it can no longer follow the
-			// journal. Stop waiting rather than staying parked able to win ownership
-			// it is not ready to use.
+			// Passive returned an error on its own, meaning it can no longer hold
+			// up its side of being a standby. Stop waiting rather than staying
+			// parked able to win ownership it is not ready to use.
 			return Acquisition{}, err
 		case <-ticker.C:
 			acquired, decline, err := evaluatePromotion(ctx, lease, deps)

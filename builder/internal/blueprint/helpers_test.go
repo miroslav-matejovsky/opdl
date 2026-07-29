@@ -33,6 +33,7 @@ func validProject() *blueprint.Project {
 		Environment: "production",
 		Sites: []blueprint.Site{{
 			Name:     "north",
+			NATS:     &blueprint.SiteNATS{ClusterName: "customer-a-north"},
 			Machines: []blueprint.Machine{validMachine(), namedMachine("relay", "10.0.1.11")},
 		}},
 	}
@@ -43,13 +44,14 @@ func validMachine() blueprint.Machine {
 		Name:           "sensor",
 		MachineProfile: "sensor-node",
 		IP:             "10.0.1.10",
-		Services:       []string{"sensor-services"},
+		Services:       []blueprint.Service{validService("sensor-services", 9101)},
 		EventstoreFile: "D:/opdl/sensor/machine-events.jsonl",
 		Primary: &blueprint.Primary{
 			EventlogFile: "D:/opdl/sensor/primary/events.jsonl",
 			StateFile:    "D:/opdl/sensor/primary/state.json",
 			LogFile:      "D:/opdl/sensor/primary/platform.log",
 			API:          &blueprint.API{LocalPort: 8080, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
+			NATS:         &blueprint.NATS{ClusterPort: 6222},
 			WinService:   &blueprint.WinService{Name: "primary"},
 		},
 		Standby: &blueprint.Standby{
@@ -58,6 +60,7 @@ func validMachine() blueprint.Machine {
 			LogFile:      "D:/opdl/sensor/standby/platform.log",
 			Lease:        validLease("D:/opdl/sensor/lease"),
 			API:          &blueprint.API{LocalPort: 8081, ReadHeaderTimeout: "5s", ShutdownTimeout: "10s"},
+			NATS:         &blueprint.NATS{ClusterPort: 6223},
 			WinService:   &blueprint.WinService{Name: "standby"},
 		},
 	}
@@ -80,6 +83,25 @@ func namedMachine(name, ip string) blueprint.Machine {
 	return m
 }
 
+func validService(name string, port int) blueprint.Service {
+	return blueprint.Service{
+		Name:        name,
+		Role:        "master",
+		HealthCheck: validHealthCheck(port),
+	}
+}
+
+func validHealthCheck(port int) blueprint.HealthCheck {
+	return blueprint.HealthCheck{
+		Type:     "http",
+		Port:     port,
+		Path:     "/health",
+		Interval: "10s",
+		Timeout:  "2s",
+		Retries:  3,
+	}
+}
+
 func validLease(file string) *blueprint.Lease {
 	return &blueprint.Lease{
 		File:                  file,
@@ -87,7 +109,6 @@ func validLease(file string) *blueprint.Lease {
 		RenewalInterval:       "5s",
 		HealthCheckInterval:   "2s",
 		FailbackStabilization: "30s",
-		LagBound:              "30s",
 	}
 }
 
@@ -99,5 +120,6 @@ func disableStandby(p *blueprint.Project) {
 	standby.LogFile = ""
 	standby.Lease = nil
 	standby.API = nil
+	standby.NATS = nil
 	standby.WinService = nil
 }

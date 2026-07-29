@@ -15,8 +15,9 @@ and lower-level storage are implemented. Site distribution is not.
 | Site distribution and durable consumer positions | Not implemented |
 
 The runtime opens the instance and machine files before ownership management.
-`app.hasEventStorage` is still hardcoded `false`, so the site path is
-unreachable.
+There is no site path in the runtime at all: the unimplemented site composition
+has been removed rather than left behind a disabled flag, so site distribution
+is work to be added rather than work to be enabled.
 
 ## Event model
 
@@ -100,8 +101,8 @@ across primary and standby processes.
 
 ## Site Event Fabric contract
 
-`internal/site/eventfabric` currently defines only the read-side contract a
-site-scoped consumer needs:
+`internal/site/eventfabric` defines the read-side contract a site-scoped
+consumer needs:
 
 - `Delivery` pairs an envelope with the site's sequence;
 - `Consumer.Follow` replays unacknowledged deliveries and then follows live;
@@ -112,6 +113,36 @@ Site publication uses the common `events.Publisher`; the package does not define
 a second publisher type. A concrete site adapter still needs to integrate with
 the scoped backend flow, accept only site-scoped envelopes, assign site order,
 and implement durable consumption.
+
+## Event Fabric transport
+
+The transport under that contract is NATS, embedded in the platform process.
+Each instance runs its own server (`internal/instance/natsserver`) for the life
+of the process, and `eventfabric.Client` connects to it in process.
+
+Those servers form one cluster per site. Every deployed instance is a member,
+primaries and standbys alike: each binds a route listener on its machine's ip
+and dials every other member, from routes the builder resolved out of the
+blueprint. The cluster is named at the site, and a server accepts a route only
+from a peer naming its cluster, so two sites of one project form two clusters.
+
+Membership is not a startup condition. Routes are dialed and retried in the
+background, so an instance comes up whether or not its peers are there yet and
+joins them when they arrive.
+
+JetStream is off, so the cluster carries messages between connected members and
+stores nothing. Nothing implements `Consumer` yet: replay and durable
+acknowledgement need a durable stream, which is what JetStream would provide.
+
+What exists is the connection and `Client.Check`, a round trip through this
+instance's own server that `/health` reports as the `eventFabric` check. A
+failing check degrades the instance rather than failing it, so a broken fabric
+does not move Primary Ownership to an instance whose own server is no better
+off. The process states `platform.app.event_fabric_started` when its server and
+client are up, carrying the routes it set out to join, and
+`platform.app.event_fabric_start_failed` when either is not; an instance that
+cannot bring its fabric up does not run. Neither fact says the cluster has
+formed, because forming it is a background matter.
 
 The remaining design decision is how multiple machines share one durable order.
 A dynamic, event-sourced unit-registration protocol previously lived at this

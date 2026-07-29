@@ -2,11 +2,27 @@ project "customer-a" {
   environment = "production"
 
   site "north" {
+    nats {
+      cluster_name = "customer-a-north"
+    }
+
     machine "sensor" {
       profile         = "sensor-node"
       ip              = "10.0.1.10"
-      services        = ["sensor-services"]
       eventstore_file = "D:/opdl/customer-a/north/sensor/machine-events.jsonl"
+
+      service "sensor-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/north/sensor/primary/events.jsonl"
@@ -17,6 +33,10 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -34,8 +54,33 @@ project "customer-a" {
     machine "local-server" {
       profile         = "local-server"
       ip              = "10.0.1.11"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/north/local-server/machine-events.jsonl"
+
+      service "core-services" {
+        role = "slave"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
+
+      service "alarm-service" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9102
+          path     = "/health"
+          interval = "5s"
+          timeout  = "1s"
+          retries  = 2
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/north/local-server/primary/events.jsonl"
@@ -46,6 +91,10 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -66,13 +115,16 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -84,11 +136,27 @@ project "customer-a" {
   }
 
   site "control-room" {
+    nats {
+      cluster_name = "customer-a-control-room"
+    }
+
     machine "master" {
       profile         = "master-server"
       ip              = "10.0.2.10"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/master/machine-events.jsonl"
+
+      service "core-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/master/primary/events.jsonl"
@@ -99,6 +167,10 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -119,13 +191,16 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -138,8 +213,20 @@ project "customer-a" {
     machine "slave" {
       profile         = "slave-server"
       ip              = "10.0.2.11"
-      services        = ["core-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/slave/machine-events.jsonl"
+
+      service "core-services" {
+        role = "slave"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health"
+          interval = "10s"
+          timeout  = "2s"
+          retries  = 3
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/slave/primary/events.jsonl"
@@ -150,6 +237,10 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -170,13 +261,16 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {
@@ -189,8 +283,23 @@ project "customer-a" {
     machine "integration" {
       profile         = "integration-server"
       ip              = "10.0.2.12"
-      services        = ["integration-services"]
       eventstore_file = "D:/opdl/customer-a/control-room/integration/machine-events.jsonl"
+
+      # The integration services reach outward, so their probe is slower and more
+      # forgiving than a local one. Every service states a probe; what differs
+      # between them is how hard it presses.
+      service "integration-services" {
+        role = "master"
+
+        health_check {
+          type     = "http"
+          port     = 9101
+          path     = "/health/ready"
+          interval = "30s"
+          timeout  = "5s"
+          retries  = 5
+        }
+      }
 
       primary {
         eventlog_file = "D:/opdl/customer-a/control-room/integration/primary/events.jsonl"
@@ -201,6 +310,10 @@ project "customer-a" {
           local_port          = 8080
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6222
         }
 
         winservice {
@@ -221,13 +334,16 @@ project "customer-a" {
           renewal_interval       = "5s"
           health_check_interval  = "2s"
           failback_stabilization = "30s"
-          lag_bound              = "30s"
         }
 
         api {
           local_port          = 8081
           read_header_timeout = "5s"
           shutdown_timeout    = "10s"
+        }
+
+        nats {
+          cluster_port = 6223
         }
 
         winservice {

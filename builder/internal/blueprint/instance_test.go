@@ -17,10 +17,23 @@ func TestMachinePlatformStandby(t *testing.T) {
 		p := decodeHCL(t, `project "p" {
 		  environment = "production"
 		  site "north" {
+		    nats {
+		      cluster_name = "north-fabric"
+		    }
 		    machine "m1" {
-		      profile  = "node"
-		      ip       = "10.0.1.10"
-		      services = ["core-services"]
+		      profile = "node"
+		      ip      = "10.0.1.10"
+		      service "core-services" {
+		        role = "master"
+		        health_check {
+		          type     = "http"
+		          port     = 9101
+		          path     = "/health"
+		          interval = "10s"
+		          timeout  = "2s"
+		          retries  = 3
+		        }
+		      }
 		      `+body+`
 		    }
 		  }
@@ -80,10 +93,23 @@ func TestMachinePlatformDecodeFailures(t *testing.T) {
 			src := `project "p" {
 			  environment = "production"
 			  site "north" {
+			    nats {
+			      cluster_name = "north-fabric"
+			    }
 			    machine "m1" {
-			      profile  = "node"
-			      ip       = "10.0.1.10"
-			      services = ["core-services"]
+			      profile = "node"
+			      ip      = "10.0.1.10"
+			      service "core-services" {
+		        role = "master"
+		        health_check {
+		          type     = "http"
+		          port     = 9101
+		          path     = "/health"
+		          interval = "10s"
+		          timeout  = "2s"
+		          retries  = 3
+		        }
+		      }
 			      ` + tc.body + `
 			    }
 			  }
@@ -256,11 +282,6 @@ func TestProjectValidateLeaseFailures(t *testing.T) {
 		"renewal not shorter":   {func(l *blueprint.Lease) { l.RenewalInterval = "15s" }, "must be shorter than duration"},
 		"blank health interval": {func(l *blueprint.Lease) { l.HealthCheckInterval = "" }, "lease.health_check_interval is required"},
 		"blank failback":        {func(l *blueprint.Lease) { l.FailbackStabilization = "" }, "lease.failback_stabilization is required"},
-		"blank lag bound":       {func(l *blueprint.Lease) { l.LagBound = "" }, "lease.lag_bound is required"},
-		"bad lag bound":         {func(l *blueprint.Lease) { l.LagBound = "soon" }, "is not a valid duration"},
-		"non-positive lag bound": {
-			func(l *blueprint.Lease) { l.LagBound = "0s" }, "must be positive",
-		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

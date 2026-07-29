@@ -23,7 +23,15 @@ func TestLoad(t *testing.T) {
 	require.Equal(t, "sensor", m1.Name)
 	require.Equal(t, "sensor-node", m1.MachineProfile)
 	require.Equal(t, "10.0.1.10", m1.IP)
-	require.Equal(t, []string{"sensor-services"}, m1.Services)
+	require.Equal(t, []string{"sensor-services"}, m1.ServiceNames())
+	require.Equal(t, blueprint.HealthCheck{
+		Type:     "http",
+		Port:     9101,
+		Path:     "/health",
+		Interval: "10s",
+		Timeout:  "2s",
+		Retries:  3,
+	}, m1.Services[0].HealthCheck)
 	require.NotNil(t, m1.Primary)
 	require.NotNil(t, m1.Standby)
 	// The sensor opts out of a local standby process; local-server opts in. Both
@@ -35,9 +43,25 @@ func TestLoad(t *testing.T) {
 	require.NotNil(t, m2.Primary)
 	require.NotNil(t, m2.Standby)
 	require.False(t, m2.Standby.Disabled)
+	// A machine hosts as many services as it needs, in authored order.
+	require.Equal(t, []string{"core-services", "alarm-service"}, m2.ServiceNames())
 
 	require.Equal(t, "control-room", p.Sites[1].Name)
 	require.Len(t, p.Sites[1].Machines, 3)
+
+	// The integration machine probes its outward-facing services on slower terms
+	// than a local one. The fixture carries both, so loading proves a machine's
+	// own timings survive rather than only the ones every machine repeats.
+	integration := p.Sites[1].Machines[2]
+	require.Equal(t, []string{"integration-services"}, integration.ServiceNames())
+	require.Equal(t, blueprint.HealthCheck{
+		Type:     "http",
+		Port:     9101,
+		Path:     "/health/ready",
+		Interval: "30s",
+		Timeout:  "5s",
+		Retries:  5,
+	}, integration.Services[0].HealthCheck)
 }
 
 func TestLoadNoHCLFiles(t *testing.T) {

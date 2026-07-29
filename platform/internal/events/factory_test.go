@@ -22,7 +22,6 @@ var testDescriptor = config.Descriptor{
 	Machine:        "node",
 	MachineProfile: "all-in-one",
 	IP:             "127.0.0.1",
-	Services:       []string{"core-services"},
 }
 
 // testFactory returns a factory that stamps deterministic envelopes: a fixed

@@ -17,6 +17,11 @@ excludeFiles:
 vendors:
   huma: { in: "github.com/danielgtaylor/huma/v2**" }
   atomicfile: { in: "github.com/miroslav-matejovsky/opdl/utils/atomicfile" }
+  # The two halves of NATS are separate vendors so the rule below can say what
+  # the split is: the instance level embeds the broker, and only the site level
+  # holds a client of it.
+  natsbroker: { in: "github.com/nats-io/nats-server/v2/server" }
+  natsclient: { in: "github.com/nats-io/nats.go" }
 
 components:
   api: { in: api }
@@ -27,11 +32,15 @@ components:
   events-storage: { in: internal/events/storage }
   applog: { in: internal/instance/applog }
   eventlog: { in: internal/instance/eventlog }
+  natsserver: { in: internal/instance/natsserver }
   httpapi: { in: internal/httpapi }
   state: { in: internal/instance/state }
   redundancy: { in: internal/machine/redundancy }
   eventstore: { in: internal/machine/eventstore }
+  servicehealth: { in: internal/machine/servicehealth }
   eventfabric: { in: internal/site/eventfabric }
+  healthview: { in: internal/site/healthview }
+  healthfabric: { in: internal/site/healthfabric }
 
 deps:
   api:
@@ -50,7 +59,21 @@ deps:
     # state is here for the same reason: composition is what knows this
     # process is a new incarnation of the instance, so it opens the state file
     # and advances the epoch. Nothing below app reads or writes it.
-    mayDependOn: [api, applog, config, events, events-storage, eventlog, eventstore, httpapi, redundancy, state]
+    #
+    # natsserver and eventfabric are here because the two halves of the event
+    # fabric belong to different levels and only composition knows both: the
+    # instance's broker is started here and the site's client is opened onto it
+    # here, and nothing below is given either of them whole.
+    #
+    # servicehealth is here because the adapter between the descriptor and a
+    # probe belongs to composition: it is what knows the machine's ip, and what
+    # decides that monitoring runs for the whole process rather than for an
+    # activation. The monitor itself reads no descriptor.
+    #
+    # healthview and healthfabric are here for the same reason, and because
+    # joining them is composition's job too: what this machine's probes found
+    # goes to its own view and to the site, and only the root knows both halves.
+    mayDependOn: [api, applog, config, events, events-storage, eventfabric, eventlog, eventstore, healthfabric, healthview, httpapi, natsserver, redundancy, servicehealth, state]
   # applog has no entry here on purpose, for the same reason config has none: it
   # is a leaf. It is one local file behind log/slog, holding no descriptor and
   # stating no event. The composition root opens it, stamps the process identity
@@ -88,9 +111,33 @@ deps:
     # the backend contract that puts it behind a publisher, and on nothing else:
     # it is a store, so it must not know which domain wrote what it stores.
     mayDependOn: [events, events-storage]
+  natsserver:
+    # The instance level's embedded broker. It depends on the NATS server
+    # library and on nothing of ours: it holds no descriptor, states no event,
+    # and knows nothing about what is published through it. The composition root
+    # reads the descriptor and hands it a configuration.
+    canUse: [natsbroker]
+  # servicehealth has no entry here on purpose. It probes the machine's services
+  # and hands the results to an injected sink, so it depends on nothing of ours:
+  # it reads no descriptor, holds no transport, and states no event. The
+  # composition root reads the descriptor, resolves each service onto a request
+  # URL, and decides where the observations go. That is what keeps target
+  # service health out of the platform's own health and out of ownership.
+  # healthview has no entry here on purpose. It is the site's picture of its
+  # services, held entirely in memory: it takes reports as values, reduces them,
+  # and hands out snapshots. It holds no transport and no descriptor, which is
+  # what lets the reduction be tested without a broker and without a clock.
+  healthfabric:
+    # The transport that carries what healthview holds, exactly as eventfabric
+    # carries what events holds. It is a second client on the same broker,
+    # because durable facts and expiring current state are not the same traffic
+    # and should not share a connection.
+    canUse: [natsclient]
+    mayDependOn: [healthview]
   eventfabric:
-    # Contract only, and deliberately kept at the same one dependency as
-    # eventstore: whatever the step 06 ADR chooses to distribute events with,
-    # the site level's readers depend on the shape of a delivery and not on a
-    # transport.
+    # The site level holds the client and never the broker. natsbroker is
+    # deliberately absent: a site package that could start a server would put
+    # instance-level infrastructure at the wrong level, and the in-process
+    # connection it needs is named as a local interface instead.
+    canUse: [natsclient]
     mayDependOn: [events]

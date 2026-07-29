@@ -50,7 +50,10 @@ func TestProjectValidateEmptyServices(t *testing.T) {
 
 func TestProjectValidateDuplicateService(t *testing.T) {
 	p := validProject()
-	p.Sites[0].Machines[0].Services = []string{"sensor-services", "sensor-services"}
+	p.Sites[0].Machines[0].Services = []blueprint.Service{
+		validService("sensor-services", 9101),
+		validService("sensor-services", 9102),
+	}
 	require.ErrorContains(t, p.Validate(), "assigned more than once")
 }
 
@@ -69,6 +72,45 @@ func TestProjectValidateDuplicateSite(t *testing.T) {
 	require.ErrorContains(t, p.Validate(), "duplicate site")
 }
 
+// TestSiteMustNameItsEventFabricCluster checks the cluster is authored at the
+// site.
+//
+// It is a site's property, not a machine's: every instance of every machine at
+// the site joins one cluster, so a blueprint that left it unstated would have
+// nothing to resolve onto those instances.
+func TestSiteMustNameItsEventFabricCluster(t *testing.T) {
+	t.Run("the block is required", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].NATS = nil
+		require.ErrorContains(t, p.Validate(), `site "north": nats block is required`)
+	})
+
+	t.Run("the name is required", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].NATS = &blueprint.SiteNATS{ClusterName: "   "}
+		require.ErrorContains(t, p.Validate(), "nats.cluster_name is required")
+	})
+
+	t.Run("the name is taken as written", func(t *testing.T) {
+		p := validProject()
+		p.Sites[0].NATS = &blueprint.SiteNATS{ClusterName: " north "}
+		require.ErrorContains(t, p.Validate(), "must not have leading or trailing whitespace")
+	})
+}
+
+// TestTwoSitesCannotNameOneCluster checks a cluster name is not reused across
+// sites. Cluster membership is what a server checks before accepting a route, so
+// a shared name is the one thing that could let two sites' servers join.
+func TestTwoSitesCannotNameOneCluster(t *testing.T) {
+	p := validProject()
+	p.Sites = append(p.Sites, blueprint.Site{
+		Name:     "south",
+		NATS:     &blueprint.SiteNATS{ClusterName: p.Sites[0].ClusterName()},
+		Machines: []blueprint.Machine{namedMachine("south-node", "10.0.1.20")},
+	})
+	require.ErrorContains(t, p.Validate(), "both name their event fabric cluster")
+}
+
 func TestProjectValidateDuplicateIP(t *testing.T) {
 	t.Run("within one site", func(t *testing.T) {
 		p := validProject()
@@ -80,6 +122,7 @@ func TestProjectValidateDuplicateIP(t *testing.T) {
 		p := validProject()
 		p.Sites = append(p.Sites, blueprint.Site{
 			Name: "south",
+			NATS: &blueprint.SiteNATS{ClusterName: "customer-a-south"},
 			Machines: []blueprint.Machine{
 				namedMachine("south-node", "10.0.1.10"),
 				namedMachine("south-relay", "10.0.1.13"),
@@ -100,10 +143,23 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			hcl: `project "bad-profile" {
 			  environment = "production"
 			  site "north" {
+			    nats {
+			      cluster_name = "north-fabric"
+			    }
 			    machine "m1" {
-			      profile  = ""
-			      ip       = "10.0.1.10"
-			      services = ["core-services"]
+			      profile = ""
+			      ip      = "10.0.1.10"
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			    }
 			  }
 			}`,
@@ -114,10 +170,23 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			hcl: `project "bad-ip" {
 			  environment = "production"
 			  site "north" {
+			    nats {
+			      cluster_name = "north-fabric"
+			    }
 			    machine "m1" {
-			      profile  = "node"
-			      ip       = ""
-			      services = ["core-services"]
+			      profile = "node"
+			      ip      = ""
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			    }
 			  }
 			}`,
@@ -128,10 +197,23 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			hcl: `project "bad-ip" {
 			  environment = "production"
 			  site "north" {
+			    nats {
+			      cluster_name = "north-fabric"
+			    }
 			    machine "m1" {
-			      profile  = "node"
-			      ip       = "not-an-ip"
-			      services = ["core-services"]
+			      profile = "node"
+			      ip      = "not-an-ip"
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			    }
 			  }
 			}`,
@@ -142,11 +224,24 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			hcl: `project "dup-machine" {
 			  environment = "production"
 			  site "north" {
+			    nats {
+			      cluster_name = "north-fabric"
+			    }
 			    machine "node-1" {
 			      profile         = "node"
 			      ip              = "10.0.1.10"
-			      services        = ["core-services"]
 			      eventstore_file = "D:/opdl/node-1/machine-events.jsonl"
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			      primary {
 			        eventlog_file = "D:/opdl/node-1/primary/events.jsonl"
 			        state_file    = "D:/opdl/node-1/primary/state.json"
@@ -155,6 +250,9 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			          local_port          = 8080
 			          read_header_timeout = "5s"
 			          shutdown_timeout    = "10s"
+			        }
+			        nats {
+			          cluster_port = 6222
 			        }
 			        winservice {
 			          name = "primary"
@@ -171,12 +269,14 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			          renewal_interval       = "5s"
 			          health_check_interval  = "2s"
 			          failback_stabilization = "30s"
-			          lag_bound              = "30s"
 			        }
 			        api {
 			          local_port          = 8081
 			          read_header_timeout = "5s"
 			          shutdown_timeout    = "10s"
+			        }
+			        nats {
+			          cluster_port = 6223
 			        }
 			        winservice {
 			          name = "standby"
@@ -185,11 +285,24 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			    }
 			  }
 			  site "south" {
+			    nats {
+			      cluster_name = "south-fabric"
+			    }
 			    machine "node-1" {
 			      profile         = "node"
 			      ip              = "10.0.1.11"
-			      services        = ["core-services"]
 			      eventstore_file = "D:/opdl/node-1/machine-events.jsonl"
+			      service "core-services" {
+			        role = "master"
+			        health_check {
+			          type     = "http"
+			          port     = 9101
+			          path     = "/health"
+			          interval = "10s"
+			          timeout  = "2s"
+			          retries  = 3
+			        }
+			      }
 			      primary {
 			        eventlog_file = "D:/opdl/node-1/primary/events.jsonl"
 			        state_file    = "D:/opdl/node-1/primary/state.json"
@@ -198,6 +311,9 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			          local_port          = 8080
 			          read_header_timeout = "5s"
 			          shutdown_timeout    = "10s"
+			        }
+			        nats {
+			          cluster_port = 6222
 			        }
 			        winservice {
 			          name = "primary"
@@ -214,12 +330,14 @@ func TestProjectHCLValidationFailures(t *testing.T) {
 			          renewal_interval       = "5s"
 			          health_check_interval  = "2s"
 			          failback_stabilization = "30s"
-			          lag_bound              = "30s"
 			        }
 			        api {
 			          local_port          = 8081
 			          read_header_timeout = "5s"
 			          shutdown_timeout    = "10s"
+			        }
+			        nats {
+			          cluster_port = 6223
 			        }
 			        winservice {
 			          name = "standby"

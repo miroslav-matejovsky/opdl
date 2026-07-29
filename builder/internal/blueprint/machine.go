@@ -15,8 +15,9 @@ type Machine struct {
 	MachineProfile string `hcl:"profile"`
 	// IP is the machine's network address, e.g. "10.0.1.10".
 	IP string `hcl:"ip"`
-	// Services lists the service groups assigned to this machine.
-	Services []string `hcl:"services"`
+	// Services are the services this machine hosts, each with the health check
+	// that says whether it is up.
+	Services []Service `hcl:"service,block"`
 	// EventstoreFile is the machine's own append-only event store: the shared file
 	// both instances append machine-scoped events to. Required on every machine.
 	EventstoreFile string `hcl:"eventstore_file,optional"`
@@ -25,6 +26,16 @@ type Machine struct {
 	// Standby is the machine's local redundancy policy, and where a deployed
 	// Standby Instance states its own files, lease, api, and winservice.
 	Standby *Standby `hcl:"standby,block"`
+}
+
+// ServiceNames lists the machine's services by name, in authored order, for
+// consumers that place a service rather than probe it.
+func (m Machine) ServiceNames() []string {
+	names := make([]string, 0, len(m.Services))
+	for _, service := range m.Services {
+		names = append(names, strings.TrimSpace(service.Name))
+	}
+	return names
 }
 
 // Lease returns the machine's authored ownership lease policy, or nil when the
@@ -38,27 +49,37 @@ func (m Machine) Lease() *Lease {
 
 // Endpoints resolves one instance's authored endpoint ports, or nil when that
 // instance is not deployed.
+//
+// The embedded event fabric port is resolved alongside the API port because the
+// instance binds both for its whole lifetime. A deployed instance is required to
+// author both, so a zero NATSClientPort here is a blueprint that did not pass
+// validation.
 func (m Machine) Endpoints(standby bool) *Endpoints {
 	var api *API
+	var nats *NATS
 	if !standby {
 		if m.Primary == nil {
 			return nil
 		}
-		api = m.Primary.API
+		api, nats = m.Primary.API, m.Primary.NATS
 	} else {
 		if m.Standby == nil || m.Standby.Disabled {
 			return nil
 		}
-		api = m.Standby.API
+		api, nats = m.Standby.API, m.Standby.NATS
 	}
 	if api == nil {
 		return nil
 	}
-	return &Endpoints{
+	resolved := &Endpoints{
 		APILocalPort:         api.LocalPort,
 		APIReadHeaderTimeout: strings.TrimSpace(api.ReadHeaderTimeout),
 		APIShutdownTimeout:   strings.TrimSpace(api.ShutdownTimeout),
 	}
+	if nats != nil {
+		resolved.NATSClusterPort = nats.ClusterPort
+	}
+	return resolved
 }
 
 // Files returns one instance's authored local files, or the zero InstanceFiles
@@ -128,19 +149,8 @@ func (p *Project) validateMachine(site Site, machine Machine, machineNames map[s
 	if net.ParseIP(machine.IP) == nil {
 		return fmt.Errorf("machine %q: ip %q is not a valid IP address", machine.Name, machine.IP)
 	}
-	if len(machine.Services) == 0 {
-		return fmt.Errorf("machine %q: at least one service is required", machine.Name)
-	}
-
-	assigned := make(map[string]bool, len(machine.Services))
-	for _, name := range machine.Services {
-		if strings.TrimSpace(name) == "" {
-			return fmt.Errorf("machine %q: service with empty name", machine.Name)
-		}
-		if assigned[name] {
-			return fmt.Errorf("machine %q: service %q assigned more than once", machine.Name, name)
-		}
-		assigned[name] = true
+	if err := validateMachineServices(machine); err != nil {
+		return err
 	}
 
 	if machine.Primary == nil {
@@ -177,10 +187,12 @@ func validateMachinePorts(machine Machine) error {
 	}
 	listeners := []listener{
 		{"primary.api.local_port", machine.Primary.API.LocalPort},
+		{"primary.nats.cluster_port", machine.Primary.NATS.ClusterPort},
 	}
 	if !machine.Standby.Disabled {
 		listeners = append(listeners,
 			listener{"standby.api.local_port", machine.Standby.API.LocalPort},
+			listener{"standby.nats.cluster_port", machine.Standby.NATS.ClusterPort},
 		)
 	}
 	taken := make(map[int]string, len(listeners))
@@ -189,6 +201,40 @@ func validateMachinePorts(machine Machine) error {
 			return fmt.Errorf("machine %q: %s and %s are both %d; every listener on a machine needs its own port", machine.Name, owner, l.where, l.port)
 		}
 		taken[l.port] = l.where
+	}
+	return validateServiceProbePorts(machine, taken)
+}
+
+// validateServiceProbePorts checks where this machine's services are probed.
+//
+// A service's health endpoint is a target, not a listener the platform binds, so
+// the rule is not the one above. Two services may deliberately answer on one
+// HTTP listener and be told apart by their paths, which is how a single process
+// hosting two service identities is authored. What they may not do is name a
+// port the platform itself binds: that endpoint is the platform's own listener,
+// and probing it would report the platform's health as the service's.
+//
+// Two services sharing both a port and a path are rejected. That is not one
+// listener serving two identities; it is one endpoint claimed twice, and
+// whichever of the two is unhealthy the other would report the same answer.
+func validateServiceProbePorts(machine Machine, platformPorts map[int]string) error {
+	type endpoint struct {
+		port int
+		path string
+	}
+	probed := make(map[endpoint]string, len(machine.Services))
+	for _, service := range machine.Services {
+		check := service.HealthCheck
+		if owner, used := platformPorts[check.Port]; used {
+			return fmt.Errorf("machine %q: service %q health_check.port %d is %s; a service cannot be probed on a port the platform binds",
+				machine.Name, service.Name, check.Port, owner)
+		}
+		key := endpoint{check.Port, check.Path}
+		if owner, used := probed[key]; used {
+			return fmt.Errorf("machine %q: services %q and %q are both probed at port %d path %q; two services may share a port but not an endpoint",
+				machine.Name, owner, service.Name, check.Port, check.Path)
+		}
+		probed[key] = service.Name
 	}
 	return nil
 }
