@@ -577,20 +577,21 @@ func (d Descriptor) validateSiteServices() error {
 		if unit.Service != service {
 			return fmt.Errorf("%s.service %q must not have leading or trailing whitespace", where, unit.Service)
 		}
-		if _, listed := seen[unitKey{machine, service}]; listed {
+		if !slices.Contains(serviceRoles, unit.ServiceRole) {
+			return fmt.Errorf("%s.service_role %q is not a known role; the known roles are %s",
+				where, unit.ServiceRole, strings.Join(serviceRoles, ", "))
+		}
+		key := unitKey{machine, service}
+		if _, listed := seen[key]; listed {
 			return fmt.Errorf("%s is listed more than once; a site names each unit once", where)
 		}
-		seen[unitKey{machine, service}] = unit
+		seen[key] = unit
 		profile := strings.TrimSpace(unit.MachineProfile)
 		if profile == "" {
 			return fmt.Errorf("%s.machine_profile is required", where)
 		}
 		if unit.MachineProfile != profile {
 			return fmt.Errorf("%s.machine_profile %q must not have leading or trailing whitespace", where, unit.MachineProfile)
-		}
-		if !slices.Contains(serviceRoles, unit.ServiceRole) {
-			return fmt.Errorf("%s.service_role %q is not a known role; the known roles are %s",
-				where, unit.ServiceRole, strings.Join(serviceRoles, ", "))
 		}
 		if err := validateObserverRoles(where, unit.ObserverRoles); err != nil {
 			return err

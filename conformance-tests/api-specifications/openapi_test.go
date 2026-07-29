@@ -25,8 +25,31 @@ func TestOpenAPIReportsStableOperations(t *testing.T) {
 		"getHealthLive",
 		"getHealthReady",
 		"getHealthHA",
+		"getHealthServices",
 	} {
 		require.Contains(t, yaml, "operationId: "+id)
+	}
+}
+
+// TestServiceHealthModelsReachTheGeneratedSDK anchors the shapes a generated
+// client turns into types. The service view is the platform's first nested
+// response, so a schema that stopped being emitted — or that collapsed into an
+// inline object — would silently cost the SDK its models rather than fail
+// generation.
+func TestServiceHealthModelsReachTheGeneratedSDK(t *testing.T) {
+	doc, err := platformapi.OpenAPIYAML()
+	require.NoError(t, err)
+	yaml := string(doc)
+
+	for _, schema := range []string{
+		"ServiceHealthResponse",
+		"ServiceHealthSummary",
+		"ServiceHealthUnit",
+		"ServiceHealthObservation",
+		"ServiceHealthDistribution",
+		"ServiceHealthCount",
+	} {
+		require.Contains(t, yaml, "#/components/schemas/"+schema)
 	}
 }
 

@@ -6,6 +6,7 @@ using Microsoft.Kiota.Abstractions;
 using Opdl.Sdk.Client.Health.Ha;
 using Opdl.Sdk.Client.Health.Live;
 using Opdl.Sdk.Client.Health.Ready;
+using Opdl.Sdk.Client.Health.Services;
 using Opdl.Sdk.Client.Models;
 using System.Collections.Generic;
 using System.IO;
@@ -34,6 +35,11 @@ namespace Opdl.Sdk.Client.Health
         public global::Opdl.Sdk.Client.Health.Ready.ReadyRequestBuilder Ready
         {
             get => new global::Opdl.Sdk.Client.Health.Ready.ReadyRequestBuilder(PathParameters, RequestAdapter);
+        }
+        /// <summary>The services property</summary>
+        public global::Opdl.Sdk.Client.Health.Services.ServicesRequestBuilder Services
+        {
+            get => new global::Opdl.Sdk.Client.Health.Services.ServicesRequestBuilder(PathParameters, RequestAdapter);
         }
         /// <summary>
         /// Instantiates a new <see cref="global::Opdl.Sdk.Client.Health.HealthRequestBuilder"/> and sets the default values.

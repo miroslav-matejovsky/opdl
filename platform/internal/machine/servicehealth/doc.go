@@ -11,11 +11,19 @@
 //
 // # What a worker does
 //
-// One worker runs per target. It probes, folds the outcome into that target's
-// stable status, hands the result to the sink, and waits one interval before
-// probing again. Waiting after the attempt rather than on a fixed schedule is
-// what keeps attempts from overlapping: a slow probe delays the next one
-// instead of running beside it.
+// One worker runs per target. It waits out a startup jitter, probes, folds the
+// outcome into that target's stable status, hands the result to the sink, and
+// waits one interval before probing again. Waiting after the attempt rather
+// than on a fixed schedule is what keeps attempts from overlapping: a slow probe
+// delays the next one instead of running beside it.
+//
+// The startup jitter is somewhere in [0, interval), derived from the observer's
+// fixed instance role and the service name rather than drawn at random. Without
+// it a machine's two instances probe every service on it in the same instant —
+// a reboot starts both within the same second, and each then waits a fixed
+// interval, so the pair stays in step for as long as both run. Deriving it
+// rather than randomising it means a restarted instance resumes the phase it
+// had, so a restart cannot move it onto its peer.
 //
 // A snapshot reaches the sink after every completed attempt, including one that
 // changed nothing. That is deliberate. Distribution is at-most-once with no

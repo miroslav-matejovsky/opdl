@@ -35,8 +35,14 @@ Both instances keep their API bound. Only the Primary Ownership holder is
 Active. Handler replacement changes the API surface without moving the address.
 
 Site event distribution is not implemented. The active instance therefore
-serves health and instance identity only; it has no domain operation to serve.
-Local redundancy, instance event logging, and the machine event store continue
-to work.
+serves platform health, instance identity, and service health only; it has no
+domain operation to serve. Local redundancy, instance event logging, and the
+machine event store continue to work.
+
+Service health is implemented end to end. Both instances of a machine probe its
+services for their whole lifetime, share what they find across the site over
+Core NATS, and serve the resulting view at `GET /health/services` in every
+ownership state. Nothing it observes changes ownership or readiness. See
+[Service health](../docs/04-service-health.md).
 
 System design is documented in [`docs`](../docs/README.md).

@@ -31,9 +31,14 @@ const (
 	// HealthCheckConfiguration names the configuration entry in
 	// HealthResponse.Checks.
 	HealthCheckConfiguration = "configuration"
-	// HealthCheckInternalServices names the internal services entry in
-	// HealthResponse.Checks.
-	HealthCheckInternalServices = "internalServices"
+	// HealthCheckServiceMonitor names the service monitor entry in
+	// HealthResponse.Checks. It reports this instance's own watching of the
+	// machine's services — whether its probes are still producing observations
+	// its view accepts — and never what those probes found. A failing target is a
+	// fact about the target, reported by GET /health/services; both of a machine's
+	// instances can see it, so letting it reach this map would offer an operator a
+	// failover that repairs nothing.
+	HealthCheckServiceMonitor = "serviceMonitor"
 	// HealthCheckEventFabric names the event fabric entry in
 	// HealthResponse.Checks. It reports whether this instance's embedded broker
 	// is carrying messages, proven by a round trip through it rather than by a

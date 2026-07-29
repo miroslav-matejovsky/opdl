@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Run settings for the SDK end-to-end tests.
+
+  TreatNoTestsAsError is the whole reason this file exists. `dotnet test` exits 0
+  when it discovers nothing, so a project whose tests stopped being compiled in,
+  or whose runner stopped finding them, passed the repository gate while proving
+  nothing at all. That is not a hypothetical: this project sat empty and green.
+
+  With this, a run that discovers no test fails. A run that discovers tests and
+  skips them still passes here, because `task sdk-dotnet` starts no platform for
+  them to reach; the scenarios module is what runs them against a live instance,
+  and it asserts on the pass rather than on the exit code.
+-->
+<RunSettings>
+  <RunConfiguration>
+    <TreatNoTestsAsError>true</TreatNoTestsAsError>
+  </RunConfiguration>
+</RunSettings>

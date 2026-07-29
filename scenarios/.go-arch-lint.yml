@@ -35,6 +35,8 @@ components:
   waitfor: { in: internal/waitfor }
   smoke: { in: smoke }
   redundancy: { in: redundancy }
+  health: { in: health }
+  sdk: { in: sdk }
 
 # A component with no entry here depends on nothing outside the standard
 # library. That covers the root documentation package, the runner, and every
@@ -44,7 +46,7 @@ deps:
   # package is reached from here and from nowhere else, which is what keeps the
   # categories independent of each other.
   cmd:
-    mayDependOn: [runner, smoke, redundancy]
+    mayDependOn: [runner, smoke, redundancy, health, sdk]
 
   # The harness is the only component that builds anything or starts a platform
   # process. No category package may do either directly, which is what makes the
@@ -65,6 +67,21 @@ deps:
   redundancy:
     canUse: [testify]
     mayDependOn: [harness, runner, waitfor]
+
+  # The health category reaches nothing but the harness: the services it
+  # controls are the harness's, bound at the address each machine's blueprint
+  # authored, so a scenario decides what a service answers without knowing how
+  # it is served.
+  health:
+    canUse: [testify]
+    mayDependOn: [harness, runner]
+
+  # The one category that runs a process the harness knows nothing about: the
+  # .NET test host. procrun is what puts it in a job object, so a scenario that
+  # fails early does not leave a build and a test host behind it.
+  sdk:
+    canUse: [testify]
+    mayDependOn: [harness, runner, procrun]
 
   procrun:
     mayDependOn: [processtree]

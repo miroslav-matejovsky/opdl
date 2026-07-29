@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/miroslav-matejovsky/opdl/platform/api"
 	"github.com/miroslav-matejovsky/opdl/platform/config"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/machine/servicehealth"
 	"github.com/miroslav-matejovsky/opdl/platform/internal/site/healthfabric"
@@ -322,3 +323,199 @@ func (*countingConn) Subscribe(string, func([]byte)) (healthfabric.Subscription,
 	return nil, errors.New("this connection does not subscribe")
 }
 func (*countingConn) Flush(context.Context) error { return nil }
+
+// listeningConn accepts a subscription as well, which the rendering tests need:
+// a rendered response reports the subscriber's tallies beside the view's.
+type listeningConn struct{ countingConn }
+
+func (*listeningConn) Subscribe(string, func([]byte)) (healthfabric.Subscription, error) {
+	return noSubscription{}, nil
+}
+
+type noSubscription struct{}
+
+func (noSubscription) Unsubscribe() error { return nil }
+
+// siteOf builds the two-machine site the rendering tests read: this machine's
+// service and its neighbour's, in that order, so what the response preserves
+// about inventory order is visible.
+func siteOf() []healthview.Unit {
+	return []healthview.Unit{
+		{
+			UnitKey:        healthview.UnitKey{Machine: "sensor", Service: "alarm-service"},
+			MachineProfile: "sensor-node", ServiceRole: "master",
+			ObserverRoles: []string{"primary", "standby"}, FreshFor: 22 * time.Second,
+		},
+		{
+			UnitKey:        healthview.UnitKey{Machine: "gateway", Service: "reader-service"},
+			MachineProfile: "gateway-node", ServiceRole: "slave",
+			ObserverRoles: []string{"primary"}, FreshFor: 22 * time.Second,
+		},
+	}
+}
+
+// composed assembles the subsystem an endpoint renders from, without a broker
+// or a monitor behind it. Response reads the view and the two fabric halves and
+// nothing else, so those are the only parts it needs.
+func composed(t *testing.T, inventory []healthview.Unit) *serviceHealth {
+	t.Helper()
+	deployment := healthview.Deployment{Project: "customer-a", Environment: "production", Site: "north"}
+	view, err := healthview.New(deployment, inventory, healthview.SystemClock{})
+	require.NoError(t, err)
+
+	conn := &listeningConn{}
+	quiet := slog.New(slog.DiscardHandler)
+	subscriber, err := healthfabric.Subscribe(t.Context(), conn, view, quiet)
+	require.NoError(t, err)
+	t.Cleanup(subscriber.Close)
+
+	publisher, err := healthfabric.NewPublisher(conn, healthfabric.Identity{
+		Deployment: deployment, Machine: "sensor", ObserverRole: "primary", Epoch: 4,
+	}, quiet)
+	require.NoError(t, err)
+	t.Cleanup(publisher.Close)
+
+	return &serviceHealth{
+		machine: "sensor", role: "primary",
+		view: view, subscriber: subscriber, publisher: publisher,
+	}
+}
+
+// found is the primary observer's report about one service, as it would arrive
+// from the fabric. Every unit below expects a primary, and only some expect a
+// standby, so this is the one observer any of them can be told about.
+func found(machine, service string, status healthview.Status, sequence uint64) healthview.Observation {
+	return healthview.Observation{
+		Unit:         healthview.UnitKey{Machine: machine, Service: service},
+		ObserverRole: "primary",
+		Epoch:        4,
+		Sequence:     sequence,
+		Status:       status,
+		CheckedAtUTC: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+		Latency:      7 * time.Millisecond,
+	}
+}
+
+// TestResponseRendersWhatThisInstanceKnows is the endpoint's whole contract: the
+// snapshot, rendered, with this instance named as the one that produced it.
+//
+// Two instances of one machine hold separate views and may briefly differ, so a
+// response that did not say whose it was could not be compared with another.
+func TestResponseRendersWhatThisInstanceKnows(t *testing.T) {
+	health := composed(t, siteOf())
+	require.Equal(t, healthview.DropNone,
+		health.view.Apply(found("sensor", "alarm-service", healthview.StatusHealthy, 1)))
+
+	response := health.Response()
+
+	require.Equal(t, "customer-a", response.Project)
+	require.Equal(t, "production", response.Environment)
+	require.Equal(t, "north", response.Site)
+	require.Equal(t, "sensor", response.Machine)
+	require.Equal(t, "primary", response.Role)
+	require.Equal(t, api.ServiceHealthSummary{Healthy: 1, Unknown: 1}, response.Summary)
+
+	require.Len(t, response.Services, 2)
+	require.Equal(t, "alarm-service", response.Services[0].Service, "inventory order is preserved")
+	require.Equal(t, "reader-service", response.Services[1].Service)
+
+	reported := response.Services[0]
+	require.Equal(t, api.ServiceStatusHealthy, reported.Status)
+	require.Equal(t, "sensor-node", reported.MachineProfile)
+	require.Equal(t, "master", reported.ServiceRole)
+	require.Equal(t, []string{"primary", "standby"}, reported.ExpectedObservers)
+	require.Equal(t, []string{"standby"}, reported.MissingObservers, "the peer has not reported")
+	require.Empty(t, reported.StaleObservers)
+	require.Len(t, reported.Observations, 1)
+	require.Equal(t, "primary", reported.Observations[0].ObserverRole)
+	require.Equal(t, api.ServiceStatusHealthy, reported.Observations[0].Status)
+	require.False(t, reported.Observations[0].Stale)
+	require.Equal(t, "2026-07-29T12:00:00Z", reported.Observations[0].CheckedAtUTC)
+	require.Equal(t, int64(7), reported.Observations[0].LatencyMs)
+
+	silent := response.Services[1]
+	require.Equal(t, api.ServiceStatusUnknown, silent.Status,
+		"a service nothing has reported on is Unknown rather than absent")
+	require.Equal(t, []string{"primary"}, silent.MissingObservers)
+	require.Empty(t, silent.Observations)
+}
+
+// TestResponseRendersAFindingInThePublishedVocabulary keeps the two status sets
+// apart. The view's are wire and reducer values; the API's are a published
+// contract, and passing one through where the other is meant is exactly what a
+// single mapping in one place prevents.
+func TestResponseRendersAFindingInThePublishedVocabulary(t *testing.T) {
+	health := composed(t, siteOf())
+	health.view.Apply(found("sensor", "alarm-service", healthview.StatusUnhealthy, 1))
+
+	unit := health.Response().Services[0]
+	require.Equal(t, api.ServiceStatusUnhealthy, unit.Status)
+	require.Equal(t, api.ServiceStatusUnhealthy, unit.Observations[0].Status)
+	require.Equal(t, api.ServiceHealthSummary{Unhealthy: 1, Unknown: 1}, health.Response().Summary)
+}
+
+// TestResponseReportsEveryDropReasonEvenAtZero keeps the counters readable. A
+// row that appears only once it is nonzero makes an operator prove a reason
+// exists before they can see it is not happening.
+func TestResponseReportsEveryDropReasonEvenAtZero(t *testing.T) {
+	health := composed(t, siteOf())
+	require.Equal(t, healthview.DropUnknownTarget,
+		health.view.Apply(found("sensor", "no-such-service", healthview.StatusHealthy, 1)))
+
+	dropped := health.Response().Distribution.Dropped
+	reasons := make([]string, 0, len(dropped))
+	counts := map[string]int64{}
+	for _, drop := range dropped {
+		reasons = append(reasons, drop.Reason)
+		counts[drop.Reason] = drop.Count
+	}
+	require.Equal(t, []string{"duplicate", "stale", "unknown_observer", "unknown_target", "unusable_status"}, reasons,
+		"sorted by reason, so a poller sees a row move only when its number does")
+	require.Equal(t, int64(1), counts["unknown_target"])
+	require.Equal(t, int64(0), counts["stale"])
+
+	rejected := make([]string, 0)
+	for _, reject := range health.Response().Distribution.Rejected {
+		rejected = append(rejected, reject.Reason)
+		require.Equal(t, int64(0), reject.Count, "nothing malformed was delivered here")
+	}
+	require.Equal(t, []string{"oversize", "malformed", "version", "foreign_deployment", "incomplete", "impossible"},
+		rejected, "the fabric's own fixed order")
+}
+
+// TestDistributionStateAsksOnlyAboutOtherMachines is what makes this state worth
+// reading. This instance's own observations reach its view directly, so counting
+// them would report a working site through a broker that had stopped carrying
+// anything.
+func TestDistributionStateAsksOnlyAboutOtherMachines(t *testing.T) {
+	health := composed(t, siteOf())
+	health.view.Apply(found("sensor", "alarm-service", healthview.StatusHealthy, 1))
+	require.Equal(t, api.DistributionIsolated, health.Response().Distribution.State,
+		"this machine is reporting; nothing from the rest of the site has arrived")
+
+	health.view.Apply(found("gateway", "reader-service", healthview.StatusHealthy, 2))
+	require.Equal(t, api.DistributionConnected, health.Response().Distribution.State)
+}
+
+// TestDistributionStateIsLocalWithNoRemoteObserversToHearFrom keeps the state
+// honest on a one-machine site. There is no traffic there whose absence would
+// mean anything, and calling that Connected would claim a working fabric on no
+// evidence at all.
+func TestDistributionStateIsLocalWithNoRemoteObserversToHearFrom(t *testing.T) {
+	health := composed(t, siteOf()[:1])
+	require.Equal(t, api.DistributionLocal, health.Response().Distribution.State)
+}
+
+// TestDistributionStateIsPartialWhenSomeOfTheSiteIsReporting covers the middle
+// case: enough is arriving to prove the fabric works, and not all of it.
+func TestDistributionStateIsPartialWhenSomeOfTheSiteIsReporting(t *testing.T) {
+	inventory := append(siteOf(), healthview.Unit{
+		UnitKey:        healthview.UnitKey{Machine: "gateway", Service: "writer-service"},
+		MachineProfile: "gateway-node", ServiceRole: "master",
+		ObserverRoles: []string{"primary"}, FreshFor: 22 * time.Second,
+	})
+	health := composed(t, inventory)
+	health.view.Apply(found("gateway", "reader-service", healthview.StatusHealthy, 1))
+
+	require.Equal(t, api.DistributionPartial, health.Response().Distribution.State)
+}

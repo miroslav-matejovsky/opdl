@@ -78,6 +78,11 @@ path, interval, timeout, and retry count the platform probes each with. A probe
 connects to the machine's own ip, so those endpoints belong to the descriptor of
 the machine hosting them and to no other.
 
+A service name is unique within its machine. Service role is metadata, not a
+second identity dimension. Descriptor validation rejects the same name in two
+roles because the probe engine, publisher, wire contract, and site view all key
+the unit by machine and service name.
+
 `site_services` is the same list for the whole site, and deliberately carries no
 endpoint. An instance needs to know which units exist, which platform instance
 roles are expected to report on each, and how long a report stays fresh, so that
@@ -97,6 +102,18 @@ The runtime validates both halves when the descriptor decodes, including that
 its own services appear in the inventory with matching role, profile, observer
 roles, and freshness. Malformed health policy fails at startup rather than when
 the first probe is due.
+
+Both of a machine's instances probe every service on it, for the whole life of
+the process and in every ownership state. Each worker's first probe is delayed
+by a startup jitter in `[0, interval)`, derived from the observer's fixed
+instance role and the service name: without it a machine's two instances would
+ask every service the same question in the same instant, and stay in step for as
+long as both ran. It is derived rather than random so a restarted instance
+resumes its own phase instead of landing on its peer's.
+
+Nothing a probe finds reaches platform health, readiness, or Primary Ownership.
+Both instances can see a failing service, so moving the machine's listener would
+repair nothing.
 
 `builder/deployment` and `platform/config` define independent copies of the
 descriptor contract. `conformance-tests` keeps them compatible.
@@ -187,7 +204,8 @@ site journal, projection, replay, acknowledgement, or durable handler.
 Service health is a separate implemented site composition. It distributes
 repeated, expiring current-state snapshots over Core NATS and reconstructs an
 in-memory view from static inventory. It intentionally provides no persistence
-or replay. The public `GET /health/services` query is still planned.
+or replay. Every instance serves that view at `GET /health/services`, in every
+ownership state. See [Service health](04-service-health.md).
 
 Because nothing trails a journal, there is no projection lag to bound and the
 descriptor carries no lag bound. The hierarchy plan tracks the remaining work in

@@ -47,16 +47,49 @@ func testPassiveInstance() api.Instance {
 	}
 }
 
+// testSiteView is the service view both surfaces answer with in these tests.
+//
+// Its one unit is on the machine's neighbour rather than on node-a. That keeps
+// this file's subject to what the two surfaces serve: a unit on node-a would
+// also drive the platform's own service monitor check, which api's own tests
+// cover.
+func testSiteView() api.ServiceHealthResponse {
+	return api.ServiceHealthResponse{
+		Project:        "customer-a",
+		Environment:    "production",
+		Site:           "north",
+		Machine:        "node-a",
+		GeneratedAtUTC: time.Now().UTC().Format(time.RFC3339),
+		Summary:        api.ServiceHealthSummary{Healthy: 1},
+		Services: []api.ServiceHealthUnit{{
+			Machine:           "node-b",
+			MachineProfile:    "local-server",
+			Service:           "alarm-service",
+			ServiceRole:       "master",
+			Status:            api.ServiceStatusHealthy,
+			ExpectedObservers: []string{"primary"},
+		}},
+		Distribution: api.ServiceHealthDistribution{State: api.DistributionConnected},
+	}
+}
+
+// deps composes what an instance answers from in these tests: its identity, its
+// start time, and the site view it holds. It has no lease and no event fabric,
+// which is what a boundary test serves — the runtime supplies both.
+func deps(instance func() api.Instance) api.Deps {
+	return api.Deps{Instance: instance, Started: time.Now(), ServiceHealth: testSiteView}
+}
+
 // TestHandlerServesHealthEndpoints checks that both an Active and a Passive
 // instance answer every health endpoint, and that each answer reports the
 // instance's own live identity rather than a fabricated one: the Active instance
 // owns its lease, the Passive instance does not, and neither invents a lease
 // expiration the runtime has no lease subsystem to give.
 func TestHandlerServesHealthEndpoints(t *testing.T) {
-	activeSrv := httptest.NewServer(httpapi.NewActiveHandler(testInstance, time.Now(), nil, nil))
+	activeSrv := httptest.NewServer(httpapi.NewActiveHandler(deps(testInstance)))
 	defer activeSrv.Close()
 
-	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil, nil))
+	passiveSrv := httptest.NewServer(httpapi.NewPassiveHandler(deps(testPassiveInstance)))
 	defer passiveSrv.Close()
 
 	cases := []struct {
@@ -91,6 +124,16 @@ func TestHandlerServesHealthEndpoints(t *testing.T) {
 			require.Equal(t, tc.instance.State, ha.RuntimeState)
 			require.Equal(t, tc.leaseHeld, ha.LeaseState)
 			require.Nil(t, ha.LeaseExpirationUTC, "there is no lease subsystem to expire yet")
+
+			// Both surfaces serve the site view. It needs neither Primary
+			// Ownership nor a projection — every instance builds the whole thing
+			// in memory — so an operator gets the same answer from whichever
+			// instance they reached, which is the point of asking a Passive one.
+			var services api.ServiceHealthResponse
+			decodeGet(t, tc.srv.URL+api.PathHealthServices, &services)
+			require.Equal(t, "north", services.Site)
+			require.Len(t, services.Services, 1)
+			require.Equal(t, api.ServiceStatusHealthy, services.Services[0].Status)
 		})
 	}
 }
@@ -123,7 +166,7 @@ func do(t *testing.T, method, url string, body []byte, contentType string) *http
 // None of it comes from the journal, so it is answerable while the instance's
 // projection is still catching up and while it never will.
 func TestPassiveHandlerAnswersForItself(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil, nil))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(deps(testPassiveInstance)))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
@@ -145,7 +188,7 @@ func TestPassiveHandlerAnswersForItself(t *testing.T) {
 // typo that the platform is temporarily unavailable, and they would retry
 // forever. Refusing is about who serves an operation, not about whether it exists.
 func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil, nil))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(deps(testPassiveInstance)))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
@@ -160,7 +203,7 @@ func TestPassiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 // regardless of path: the structural guard does not need a path to exist to
 // refuse writing to it.
 func TestPassiveHandlerServingModeMatrix(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewPassiveHandler(testPassiveInstance, time.Now(), nil, nil))
+	srv := httptest.NewServer(httpapi.NewPassiveHandler(deps(testPassiveInstance)))
 	defer srv.Close()
 
 	methods := []string{
@@ -177,6 +220,7 @@ func TestPassiveHandlerServingModeMatrix(t *testing.T) {
 		"/health/live",
 		"/health/ready",
 		"/health/ha",
+		"/health/services",
 		"/instance",
 		"/no-such-operation",
 	}
@@ -188,7 +232,8 @@ func TestPassiveHandlerServingModeMatrix(t *testing.T) {
 				defer func() { _ = resp.Body.Close() }()
 
 				isHealthOrInstance := path == "/instance" || path == "/health" ||
-					path == "/health/live" || path == "/health/ready" || path == "/health/ha"
+					path == "/health/live" || path == "/health/ready" || path == "/health/ha" ||
+					path == "/health/services"
 
 				if (method == http.MethodGet || method == http.MethodHead) && isHealthOrInstance {
 					require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -230,7 +275,7 @@ func testSoloInstance() api.Instance {
 // still reports itself active and healthy: it holds Primary Ownership and there
 // is nothing wrong with it, even though it has no domain operation to serve.
 func TestActiveHandlerReportsASoloInstanceAsActive(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewActiveHandler(testSoloInstance, time.Now(), nil, nil))
+	srv := httptest.NewServer(httpapi.NewActiveHandler(deps(testSoloInstance)))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")
@@ -247,7 +292,7 @@ func TestActiveHandlerReportsASoloInstanceAsActive(t *testing.T) {
 // TestActiveHandlerStillReportsUnknownPathsAsNotFound checks the refusal is
 // scoped to the operations that exist, for the same reason the Passive one is.
 func TestActiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewActiveHandler(testSoloInstance, time.Now(), nil, nil))
+	srv := httptest.NewServer(httpapi.NewActiveHandler(deps(testSoloInstance)))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+"/no-such-operation", nil, "")
@@ -259,7 +304,7 @@ func TestActiveHandlerStillReportsUnknownPathsAsNotFound(t *testing.T) {
 // the identity operation on one path with one shape, so an operator asks the same
 // question of either and the specification describes one endpoint.
 func TestActiveHandlerAnswersTheSameInstanceOperation(t *testing.T) {
-	srv := httptest.NewServer(httpapi.NewActiveHandler(testInstance, time.Now(), nil, nil))
+	srv := httptest.NewServer(httpapi.NewActiveHandler(deps(testInstance)))
 	defer srv.Close()
 
 	response := do(t, http.MethodGet, srv.URL+api.PathInstance, nil, "")

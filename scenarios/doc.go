@@ -14,10 +14,18 @@
 //     and internal/processinfo are the supporting packages. Only utils/testnet is
 //     still shared with other modules.
 //
-// The scenarios themselves live in one package per category. There is one
-// category, smoke, which builds and runs the smallest deployment the platform
-// will start. Each category contributes a runner.Set through its Scenarios
-// function, and cmd collects them.
+// The scenarios themselves live in one package per category, and each
+// contributes a runner.Set through its Scenarios function that cmd collects:
+//
+//   - smoke builds and runs the smallest deployment the platform will start.
+//   - redundancy drives one machine's two instances through failover and
+//     failback.
+//   - health deploys two machines with services it controls and checks that
+//     every instance converges on the same picture of them.
+//   - sdk drives a running instance through the generated .NET client.
+//
+// A category package never depends on another. A helper two categories want
+// belongs in the harness.
 //
 // Nothing here reaches into platform or builder internals. The platform is a
 // black box reached through its packaged binaries, and the blueprint goes to the

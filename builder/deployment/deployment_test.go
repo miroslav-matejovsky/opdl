@@ -131,6 +131,20 @@ func TestDescriptorValidateAllowsServicesToShareAProbePort(t *testing.T) {
 	require.NoError(t, d.Validate())
 }
 
+func TestDescriptorValidateRejectsSameServiceNameInDifferentRoles(t *testing.T) {
+	d := validDescriptor()
+	slaveService := d.Services[0]
+	slaveService.Role = "slave"
+	slaveService.HealthCheck.Path = "/slave-health"
+	d.Services = append(d.Services, slaveService)
+
+	slaveUnit := d.SiteServices[0]
+	slaveUnit.ServiceRole = "slave"
+	d.SiteServices = append(d.SiteServices, slaveUnit)
+
+	require.ErrorContains(t, d.Validate(), "is hosted more than once")
+}
+
 func TestDescriptorValidateFailures(t *testing.T) {
 	tests := []struct {
 		name    string

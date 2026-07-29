@@ -159,6 +159,261 @@ components:
         - state
         - address
       type: object
+    ServiceHealthCount:
+      additionalProperties: false
+      properties:
+        count:
+          description: How many times it has happened.
+          example: 3
+          format: int64
+          type: integer
+        reason:
+          description: Why the message was not applied.
+          example: stale
+          type: string
+      required:
+        - reason
+        - count
+      type: object
+    ServiceHealthDistribution:
+      additionalProperties: false
+      properties:
+        delivered:
+          description: Messages received on the health subject.
+          example: 240
+          format: int64
+          type: integer
+        dropped:
+          description: Decoded reports the view did not apply, by reason.
+          items:
+            $ref: "#/components/schemas/ServiceHealthCount"
+          nullable: true
+          type: array
+        publishFailed:
+          description: Observations the connection refused.
+          example: 0
+          format: int64
+          type: integer
+        published:
+          description: Observations from this instance that reached the connection.
+          example: 120
+          format: int64
+          type: integer
+        rejected:
+          description: Messages rejected before decoding, by reason.
+          items:
+            $ref: "#/components/schemas/ServiceHealthCount"
+          nullable: true
+          type: array
+        state:
+          description: "Whether expected remote observations are arriving: Connected, Partial, Isolated, or Local."
+          example: Connected
+          type: string
+        superseded:
+          description: Observations replaced by a newer one before being sent.
+          example: 0
+          format: int64
+          type: integer
+      required:
+        - state
+        - published
+        - superseded
+        - publishFailed
+        - delivered
+        - rejected
+        - dropped
+      type: object
+    ServiceHealthObservation:
+      additionalProperties: false
+      properties:
+        ageMs:
+          description: Milliseconds since this report arrived, on the answering instance's clock.
+          example: 1200
+          format: int64
+          type: integer
+        checkedAtUtc:
+          description: When the observer says it probed, in UTC.
+          example: "2026-07-28T11:59:58Z"
+          type: string
+        consecutiveFailures:
+          description: Attempts that had failed in a row when the observer reported.
+          example: 0
+          format: int64
+          type: integer
+        error:
+          description: Why the observer's probe failed, absent when it succeeded.
+          type: string
+        latencyMs:
+          description: Milliseconds the observer's probe took.
+          example: 4
+          format: int64
+          type: integer
+        observerRole:
+          description: "Platform instance role that reported: primary or standby."
+          example: primary
+          type: string
+        receivedAtUtc:
+          description: When this instance received the report, in UTC.
+          example: "2026-07-28T11:59:58Z"
+          type: string
+        stale:
+          description: Whether this report has passed the service's freshness bound.
+          example: false
+          type: boolean
+        status:
+          description: "Status this observer reported: Healthy, Unhealthy, or Unknown."
+          example: Healthy
+          type: string
+      required:
+        - observerRole
+        - status
+        - stale
+        - checkedAtUtc
+        - receivedAtUtc
+        - ageMs
+        - latencyMs
+        - consecutiveFailures
+      type: object
+    ServiceHealthResponse:
+      additionalProperties: false
+      properties:
+        distribution:
+          $ref: "#/components/schemas/ServiceHealthDistribution"
+          description: State of this instance's site health traffic.
+        environment:
+          description: Environment this view covers.
+          example: production
+          type: string
+        generatedAtUtc:
+          description: When this snapshot was taken, in UTC.
+          example: "2026-07-28T12:00:00Z"
+          type: string
+        machine:
+          description: Machine of the instance that produced this view.
+          example: local-server
+          type: string
+        project:
+          description: Project this view covers.
+          example: customer-a
+          type: string
+        role:
+          description: "Fixed instance role that produced this view: primary or standby."
+          example: primary
+          type: string
+        services:
+          description: Every service at this site, in inventory order.
+          items:
+            $ref: "#/components/schemas/ServiceHealthUnit"
+          nullable: true
+          type: array
+        site:
+          description: Site this view covers.
+          example: north
+          type: string
+        summary:
+          $ref: "#/components/schemas/ServiceHealthSummary"
+          description: Service counts by status.
+      required:
+        - project
+        - environment
+        - site
+        - machine
+        - role
+        - generatedAtUtc
+        - summary
+        - services
+        - distribution
+      type: object
+    ServiceHealthSummary:
+      additionalProperties: false
+      properties:
+        degraded:
+          description: Services whose current observers disagree.
+          example: 0
+          format: int64
+          type: integer
+        healthy:
+          description: Services every current observer found well.
+          example: 2
+          format: int64
+          type: integer
+        unhealthy:
+          description: Services every current observer found failing.
+          example: 1
+          format: int64
+          type: integer
+        unknown:
+          description: Services nothing current says anything about.
+          example: 1
+          format: int64
+          type: integer
+      required:
+        - healthy
+        - unhealthy
+        - degraded
+        - unknown
+      type: object
+    ServiceHealthUnit:
+      additionalProperties: false
+      properties:
+        expectedObservers:
+          description: Platform instance roles expected to report on this service.
+          example:
+            - primary
+            - standby
+          items:
+            type: string
+          nullable: true
+          type: array
+        machine:
+          description: Machine hosting this service.
+          example: local-server
+          type: string
+        machineProfile:
+          description: Purpose of the hosting machine.
+          example: local-server
+          type: string
+        missingObservers:
+          description: Expected observers that have never reported.
+          items:
+            type: string
+          nullable: true
+          type: array
+        observations:
+          description: Last report from each observer, ordered by observer role.
+          items:
+            $ref: "#/components/schemas/ServiceHealthObservation"
+          nullable: true
+          type: array
+        service:
+          description: Service name.
+          example: alarm-service
+          type: string
+        serviceRole:
+          description: "Part this copy plays: master or slave."
+          example: master
+          type: string
+        staleObservers:
+          description: Expected observers whose last report has expired.
+          items:
+            type: string
+          nullable: true
+          type: array
+        status:
+          description: "Reduced service status: Healthy, Unhealthy, Degraded, or Unknown."
+          example: Healthy
+          type: string
+      required:
+        - machine
+        - machineProfile
+        - service
+        - serviceRole
+        - status
+        - expectedObservers
+        - missingObservers
+        - staleObservers
+        - observations
+      type: object
 info:
   description: HTTP API served by the OPDL platform runtime.
   title: OPDL Platform API
@@ -237,6 +492,24 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Report operational readiness
+  /health/services:
+    get:
+      description: Every service the site deploys, what each observer last found, and whether those findings are current. Answered by every instance in every state, from memory. Unhealthy, Degraded, and Unknown services are data rather than a failure to answer, so this returns 200 for every valid view.
+      operationId: getHealthServices
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceHealthResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Report this instance's view of the site's deployed services
   /instance:
     get:
       description: Answered by every instance in every state, including a Passive one that refuses every domain operation.

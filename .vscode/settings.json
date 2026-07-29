@@ -66,6 +66,7 @@
     "danielgtaylor",
     "deadcode",
     "depguard",
+    "Equalf",
     "eventfabric",
     "eventmodel",
     "eventstore",
@@ -80,6 +81,8 @@
     "gotestsum",
     "GOWORK",
     "hclparse",
+    "healthfabric",
+    "healthview",
     "httpapi",
     "huma",
     "humago",
@@ -114,6 +117,7 @@
     "unioned",
     "winmutex",
     "winservice",
-    "Xunit"
+    "Xunit",
+    "Zerof"
   ]
 }

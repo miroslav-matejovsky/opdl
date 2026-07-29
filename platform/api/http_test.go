@@ -71,7 +71,7 @@ func testIdentity() api.Instance {
 func health(t *testing.T, fabricErr error) *httptest.Server {
 	t.Helper()
 	check := func(context.Context) error { return fabricErr }
-	return serve(t, api.NewHealth(testIdentity, time.Now(), nil, check))
+	return serve(t, api.NewHealth(api.Deps{Instance: testIdentity, Started: time.Now(), EventFabric: check}))
 }
 
 func TestAWorkingEventFabricIsReportedHealthy(t *testing.T) {
@@ -100,10 +100,11 @@ func TestAnInstanceWithNoEventFabricWiredReportsNoFabricCheck(t *testing.T) {
 	// behind it. Claiming a healthy fabric there would report on something that
 	// is not running.
 	var response api.HealthResponse
-	decode(t, get(t, serve(t, api.NewHealth(testIdentity, time.Now(), nil, nil)).URL+"/health"), &response)
+	decode(t, get(t, serve(t, api.NewHealth(api.Deps{Instance: testIdentity, Started: time.Now()})).URL+"/health"), &response)
 
 	require.Equal(t, api.HealthStatusHealthy, response.Status)
 	require.NotContains(t, response.Checks, api.HealthCheckEventFabric)
+	require.NotContains(t, response.Checks, api.HealthCheckServiceMonitor)
 }
 
 func TestLivenessIgnoresTheEventFabric(t *testing.T) {
@@ -124,7 +125,7 @@ func TestOpenAPIYAMLIsDowngraded(t *testing.T) {
 	require.NoError(t, err)
 	yaml := string(doc)
 	require.Contains(t, yaml, "openapi: 3.0.3")
-	for _, id := range []string{"getInstance", "getHealth", "getHealthLive", "getHealthReady", "getHealthHA"} {
+	for _, id := range []string{"getInstance", "getHealth", "getHealthLive", "getHealthReady", "getHealthHA", "getHealthServices"} {
 		require.Contains(t, yaml, "operationId: "+id)
 	}
 	require.NotContains(t, yaml, "$schema", "the schema-link hook is cleared in Config")

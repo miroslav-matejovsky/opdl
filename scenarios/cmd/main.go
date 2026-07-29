@@ -37,8 +37,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miroslav-matejovsky/opdl/scenarios/health"
 	"github.com/miroslav-matejovsky/opdl/scenarios/internal/runner"
 	"github.com/miroslav-matejovsky/opdl/scenarios/redundancy"
+	"github.com/miroslav-matejovsky/opdl/scenarios/sdk"
 	"github.com/miroslav-matejovsky/opdl/scenarios/smoke"
 )
 
@@ -128,6 +130,8 @@ func scenarioSets() []runner.Set {
 	return []runner.Set{
 		smoke.Scenarios(),
 		redundancy.Scenarios(),
+		health.Scenarios(),
+		sdk.Scenarios(),
 	}
 }
 
