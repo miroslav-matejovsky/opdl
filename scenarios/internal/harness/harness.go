@@ -42,6 +42,20 @@ import (
 // every call. A scenario spanning two sites would take it as an argument again.
 const scenarioSite = "local"
 
+// loopbackHost is the address every platform listener a scenario deploys is
+// resolved onto, and the one every port reservation is taken against. A machine
+// may be authored on a different loopback address — its services bind the
+// machine's own ip — but nothing the platform binds ever leaves this one.
+const loopbackHost = "127.0.0.1"
+
+// The machine names the fixtures below deploy. Every fixture starts from node-a
+// and adds machines in order, so a scenario that wants "the first machine" and
+// one that wants "the machine with a standby" name the same thing.
+const (
+	machineA = "node-a"
+	machineB = "node-b"
+)
+
 //go:embed testdata/project.hcl.tmpl
 var projectTemplate string
 
@@ -63,6 +77,41 @@ type machineFixture struct {
 	ip   string
 	// standbyDisabled opts the machine out of a second local process.
 	standbyDisabled bool
+	// probe is the service health-check policy this machine is authored with.
+	// The zero value renders slowProbe.
+	probe probeFixture
+}
+
+// probeFixture is one machine's authored service health-check timings.
+//
+// It is per fixture rather than fixed in the template because the two kinds of
+// scenario want opposite things from it. A scenario about something else wants
+// the probes quiet and out of the way; a scenario about health wants
+// convergence to happen inside a poll rather than a coffee break.
+type probeFixture struct {
+	interval string
+	timeout  string
+	retries  int
+}
+
+// slowProbe is what a machine is authored with unless it says otherwise. It is
+// slow on purpose: nothing listens on the probe port in a scenario that is not
+// about health, so a fast interval would fill the log with connection refusals
+// that have nothing to do with what failed.
+var slowProbe = probeFixture{interval: "10s", timeout: "2s", retries: 3}
+
+// fastProbe is for the health scenarios. The retry threshold is reached in
+// about a second and a report stays current for `2*interval + timeout`, which
+// is 1.2s — short enough that an observer that stops reporting goes visibly
+// stale inside a poll rather than outliving the scenario.
+var fastProbe = probeFixture{interval: "500ms", timeout: "200ms", retries: 2}
+
+// orDefault fills in slowProbe for a fixture that stated no policy.
+func (p probeFixture) orDefault() probeFixture {
+	if p.interval == "" {
+		return slowProbe
+	}
+	return p
 }
 
 // projectFixtures are the blueprints scenarios build from, keyed by project.
@@ -75,11 +124,27 @@ var projectFixtures = map[string][]machineFixture{
 	// The smallest thing the platform runs: one machine deploying one Primary
 	// Instance, with no standby.
 	"simple": {
-		{name: "node-a", ip: "127.0.0.1", standbyDisabled: true},
+		{name: machineA, ip: loopbackHost, standbyDisabled: true},
 	},
 	// The local redundancy pair: one machine deploying both instances.
 	"redundancy": {
-		{name: "node-a", ip: "127.0.0.1"},
+		{name: machineA, ip: loopbackHost},
+	},
+	// The site the health scenarios observe: two machines on different addresses,
+	// one with a Standby Instance and one without.
+	//
+	// The asymmetry is the point. node-a's service is reported on by two
+	// observers, so disagreement and a lost observer are both visible on it;
+	// node-b's is reported on by one, so an outage there leaves the site with no
+	// opinion about it rather than a reduced one. A site of identical machines
+	// would exercise neither.
+	//
+	// The two machines are on different loopback addresses because their services
+	// bind the machine's own ip, which is what tells one machine's service from
+	// another's on a host running both.
+	"health": {
+		{name: machineA, ip: loopbackHost, probe: fastProbe},
+		{name: machineB, ip: "127.0.0.2", standbyDisabled: true, probe: fastProbe},
 	},
 }
 
@@ -91,6 +156,14 @@ type renderedMachine struct {
 	// MachineEventsFile is the machine's own event store, shared by both of its
 	// instances. Every machine authors one, standby or not.
 	MachineEventsFile string
+	// HealthPort is where this machine's one authored service answers its health
+	// check, on the machine's own ip. It is reserved from the same pool as the
+	// platform's listeners rather than fixed, because a scenario may actually bind
+	// it, and two scenario runs sharing one host must not both try.
+	HealthPort     int
+	HealthInterval string
+	HealthTimeout  string
+	HealthRetries  int
 	// The Primary Instance's ports and local files. NATSPort is its own embedded
 	// event fabric broker's cluster port, the other listener every deployed
 	// instance binds.
@@ -149,6 +222,9 @@ type reservedEndpoints struct {
 	// standbyAPIPort is the Standby Instance's own loopback API port, zero on a
 	// machine that deploys no standby.
 	standbyAPIPort int
+	// healthAddress is where this machine's authored service is expected to
+	// answer: the machine's own ip and its reserved health port.
+	healthAddress string
 }
 
 var (
@@ -229,11 +305,14 @@ func ScenarioDir(t *testing.T) string {
 // event fabric broker. Both are reserved from the same pool, because both are
 // on 127.0.0.1 and a collision between them is the same failure to bind as a
 // collision between two APIs.
+// One more comes from the same pool per machine: the port its authored service
+// answers its health check on. It is not the platform's listener, but a scenario
+// may bind it, so it is reserved rather than assumed free.
 func listenerPortsWanted(fixtures []machineFixture) int {
 	const perInstance = 2
 	wanted := 0
 	for _, fixture := range fixtures {
-		wanted += perInstance
+		wanted += perInstance + 1
 		if !fixture.standbyDisabled {
 			wanted += perInstance
 		}
@@ -305,7 +384,7 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 	// say nothing about whether two machines had been given the same loopback
 	// port, and the collision would only appear as the second machine failing to
 	// bind.
-	ports, err := testnet.Take("127.0.0.1", listenerPortsWanted(fixtures))
+	ports, err := testnet.Take(loopbackHost, listenerPortsWanted(fixtures))
 	require.NoError(t, err)
 	nextPort := 0
 	takePort := func() int {
@@ -315,10 +394,15 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 	}
 
 	for _, fixture := range fixtures {
+		probe := fixture.probe.orDefault()
 		machine := renderedMachine{
 			Name:              fixture.name,
 			IP:                fixture.ip,
 			MachineEventsFile: machineEventsFileFor(workDir, fixture.name),
+			HealthPort:        takePort(),
+			HealthInterval:    probe.interval,
+			HealthTimeout:     probe.timeout,
+			HealthRetries:     probe.retries,
 			APIPort:           takePort(),
 			NATSPort:          takePort(),
 			EventsFile:        eventsFileFor(workDir, fixture.name, RolePrimary),
@@ -338,6 +422,7 @@ func stageBlueprint(t *testing.T, project, workDir string) (root string, endpoin
 		endpoints[fixture.name] = reservedEndpoints{
 			apiPort:        machine.APIPort,
 			standbyAPIPort: machine.StandbyAPIPort,
+			healthAddress:  net.JoinHostPort(fixture.ip, strconv.Itoa(machine.HealthPort)),
 		}
 	}
 
@@ -453,6 +538,13 @@ type Sockets struct {
 	// deploys no standby; each instance binds its own for its whole lifetime.
 	API        string
 	StandbyAPI string
+
+	// HealthAddress is where this machine's authored service is expected to
+	// answer its health check: the machine's own ip and its reserved port. It is
+	// not the platform's listener — nothing binds it unless a scenario does, and
+	// a scenario that does not is one whose machines are watching a service that
+	// is not there, which is the honest default.
+	HealthAddress string
 }
 
 // Site is the machines of one built project under a scenario's control.
@@ -494,13 +586,14 @@ func DeploySite(ctx context.Context, t *testing.T, outDir, workDir, project stri
 			// The API address the builder resolved: this machine's authored
 			// local_port on 127.0.0.1. A scenario reaches a machine here rather
 			// than at an address it chose, because it no longer chooses one.
-			API: net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.apiPort)),
+			API:           net.JoinHostPort(loopbackHost, strconv.Itoa(reserved.apiPort)),
+			HealthAddress: reserved.healthAddress,
 		}
 		if !fixture.standbyDisabled {
 			sockets.StandbyEventsFile = filepath.FromSlash(eventsFileFor(workDir, fixture.name, RoleStandby))
 			sockets.StandbyStateFile = filepath.FromSlash(stateFileFor(workDir, fixture.name, RoleStandby))
 			sockets.StandbyLogFile = filepath.FromSlash(logFileFor(workDir, fixture.name, RoleStandby))
-			sockets.StandbyAPI = net.JoinHostPort("127.0.0.1", strconv.Itoa(reserved.standbyAPIPort))
+			sockets.StandbyAPI = net.JoinHostPort(loopbackHost, strconv.Itoa(reserved.standbyAPIPort))
 		}
 		s.Machines = append(s.Machines, prepareMachine(t, s, fixture.name, sockets))
 	}

@@ -19,8 +19,7 @@ client — is closed; see the resolved section below.
 
 | Type | Gap or risk | Impact | Required action |
 | --- | --- | --- | --- |
-| Scenario gap | One scenario reads the API, from a single machine with a single observer | Cross-instance convergence, restart reconstruction, and recovery are not proven end to end | Add controlled services and multi-observer API assertions in Step 05 |
-| Route gap | Tests cover two health connections on one embedded broker, not a routed multi-broker cluster | Route partition and reconnection behavior remain inferred from Core NATS semantics | Add route interruption and recovery tests and Windows scenarios |
+| Route gap | Scenarios cover a routed multi-broker site, but no test cuts a route while both brokers stay up | Partition and reconnection behavior remain inferred from Core NATS semantics and from observer expiry, which is not the same fault | Find a partition mechanism that needs no privilege and does not change what is deployed, then add interruption and recovery tests |
 | Load risk | Queue, view, and message bounds are unit-tested but not measured at supported site size and minimum interval | Production resource bounds are not demonstrated | Define limits, load-test them, and publish the supported envelope |
 | Scheduling risk | Primary and Standby probe immediately and can remain synchronized | Services receive duplicate probe bursts | Add deterministic observer-specific startup jitter during Step 06 hardening |
 | Documentation gap | Operational response for Unknown, Degraded, stale observers, invalid messages, and route loss is not documented | Operators may misdiagnose expected transient states | Add the Step 06 runbook |
@@ -74,6 +73,30 @@ The Step 04 API slice resolves the delivery, observability, and test-gate gaps:
   `scenarios/sdk` category runs those tests against a live instance and asserts
   each named test reported `Passed` rather than trusting the exit code. A
   skipped test is a passing run, which is what made the old gate vacuous.
+
+The Step 05 scenarios close the convergence gap. `scenarios/health` deploys two
+machines on separate loopback addresses — node-a with a Standby Instance and
+node-b without — each with a controllable service bound at the probe address its
+own blueprint authored, and asserts against all three instances at once:
+
+- every instance converges on the same status for both machines' services, and
+  the scenario compares the three views rather than trusting one;
+- a service that answers 503 is reported Unhealthy by the two instances that
+  never probe it, carrying the probe's error and its failure count, and recovers
+  on one success;
+- neither the failing service nor its machine changes any instance's own health,
+  readiness, or ownership;
+- an observer that is killed expires, is named in `staleObservers` by every
+  surviving instance, and leaves the target Healthy because another observer is
+  still current — while the fabric state drops to `Partial`;
+- a restarted instance rebuilds the whole site, including the machine it is not
+  on, from traffic that arrived after it started; and
+- ownership moving does not interrupt monitoring: the instance that takes over
+  had been probing the machine's services throughout.
+
+The absence of health persistence is proven by naming every file each machine's
+blueprint authored and failing on anything else under the work directory, rather
+than by looking for files whose names suggest health.
 
 The 2026-07-29 review also fixed these implementation defects:
 

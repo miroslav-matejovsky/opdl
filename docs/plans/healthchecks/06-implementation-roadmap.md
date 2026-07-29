@@ -1,8 +1,8 @@
 # Implementation roadmap
 
-Steps 00 through 04 are complete except for startup jitter, which is tracked in
-Step 06. The next implementation slice is Step 05: black-box convergence and
-failure scenarios.
+Steps 00 through 05 are complete except for startup jitter, which is tracked in
+Step 06, and route partition testing, which stays open as a P1 gap. The next
+implementation slice is Step 06: production hardening and rollout.
 
 ## Step 00: accept semantics
 
@@ -181,9 +181,19 @@ Acceptance:
 
 ## Step 05: add black-box convergence and failure scenarios
 
-Status: pending. The public API it asserts against exists, and `scenarios/sdk`
-is the first scenario to read it — from one machine, through the generated .NET
-client. What remains is everything about more than one observer.
+Status: complete except for route partition, which stays open as a P1 gap.
+
+The `scenarios/health` category deploys a two-machine site — node-a with a
+Standby and node-b without, on separate loopback addresses — with a controllable
+service bound at each machine's authored probe address. Every assertion is made
+against all three instances at once, because convergence is the claim.
+
+Route partition (action 7) is not implemented. Cutting a NATS route while both
+brokers stay up needs firewall or filter control this suite does not have on a
+developer host, and killing a process is a machine outage rather than a
+partition. What is proven instead is the observable half of the same behavior:
+an observer that stops reporting expires, is named by every surviving instance,
+and does not change the target's status while another observer is current.
 
 | | |
 | --- | --- |
@@ -193,27 +203,32 @@ client. What remains is everything about more than one observer.
 
 Actions:
 
-1. Extend the Windows scenario harness with controllable fake HTTP services
-   bound to each simulated machine IP.
-2. Add primary-only local monitoring.
-3. Add Primary and Standby duplicate observation coverage.
-4. Add two-machine site convergence.
-5. Change a target from Healthy to Unhealthy and back.
-6. Kill and restart one platform instance and prove reconstruction without a
-   health file.
-7. Interrupt a NATS route, prove local checks continue and views expose
-   staleness, then prove convergence after recovery.
-8. Transfer Primary Ownership while checks and NATS traffic continue.
-9. Assert bounded polling conditions instead of sleeping.
+1. Done. `harness.StartService` binds a controllable service at the machine's
+   authored probe address, and the probe port is reserved from the same pool as
+   the platform's listeners rather than fixed, so two runs may share a host.
+2. Done. node-b deploys no Standby, so its service has one expected observer.
+3. Done. node-a deploys both, and both report on its service.
+4. Done. Every assertion runs against all three instances at once.
+5. Done. The service answers 503 and then 200 again, without the listener moving:
+   a service that is up and unwell is a different fault from one that is gone.
+6. Done. node-a's Standby is killed and restarted, and rebuilds the whole site's
+   picture — including the machine it is not on — from traffic that arrived
+   after it started.
+7. Not implemented; see above.
+8. Done. node-a's Primary is killed, the Standby takes ownership, and node-a's
+   service stays watched throughout by the instance that was already probing it.
+9. Done. Every wait is a bounded poll; the category contains no sleep.
 
 Acceptance:
 
-- Every running instance reaches the same expected view after connectivity and
-  fresh reports.
-- The documented temporary divergence is observable during a partition.
-- No health-result persistence file is created.
-- Existing redundancy scenarios remain unchanged in meaning.
-- `task all` passes.
+- Met. Every running instance reaches the same expected view, and the scenario
+  compares the three rather than trusting one.
+- Partially met. Divergence is observable when an observer stops reporting; it
+  is not observed during a route partition, which action 7 does not produce.
+- Met. Every file the deployment writes is one its blueprint authored.
+- Met. The redundancy scenario is unchanged, and the probe policy it is authored
+  with is unchanged with it.
+- Met.
 
 ## Step 06: production hardening and rollout
 
@@ -247,8 +262,12 @@ Acceptance:
 
 ## Remaining delivery order
 
-1. Complete Step 05 convergence, restart, partition, and recovery scenarios.
-2. Complete Step 06 jitter, load validation, and operations work.
+1. Complete Step 06 jitter, load validation, and operations work.
+2. Reach route partition testing, whenever a mechanism for it exists.
 
-The largest uncertainty remains realistic multi-machine route partition testing
-on one Windows scenario host.
+The largest uncertainty is unchanged and is now the only thing left of Step 05:
+realistic multi-machine route partition testing on one Windows scenario host.
+Every mechanism that would cut a route between two live brokers — firewall
+rules, a filter driver, a proxy the blueprint routes through — is either
+privileged or a change to what the deployment is, and neither belongs in a
+scenario that is meant to run on a developer's machine.

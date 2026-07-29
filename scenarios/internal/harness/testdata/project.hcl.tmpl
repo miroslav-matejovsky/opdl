@@ -22,20 +22,22 @@ project "{{ .Name }}" {
       ip              = "{{ .IP }}"
       eventstore_file = "{{ .MachineEventsFile }}"
 
-      # The health check port is fixed rather than allocated. Nothing in a
-      # scenario probes it yet, and 9101 is below the 20000-32767 band the
-      # harness reserves API ports from, so it cannot collide with one. It is
-      # authored so a scenario blueprint passes the same rules an operator's does.
+      # The one service every scenario machine is authored with. Its port comes
+      # from the same reservation as the platform's listeners, because a health
+      # scenario binds a controllable service there and two runs sharing a host
+      # must not both try. Nothing binds it in the scenarios that are about
+      # something else, which is why those machines are authored with a slow
+      # interval: they are watching a service that is not there.
       service "core-services" {
         role = "master"
 
         health_check {
           type     = "http"
-          port     = 9101
+          port     = {{ .HealthPort }}
           path     = "/health"
-          interval = "10s"
-          timeout  = "2s"
-          retries  = 3
+          interval = "{{ .HealthInterval }}"
+          timeout  = "{{ .HealthTimeout }}"
+          retries  = {{ .HealthRetries }}
         }
       }
 

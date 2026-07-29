@@ -40,10 +40,20 @@
 // Fixed ports in checked-in HCL would not do either, since several machines
 // share one host and a developer's machine may already hold the port.
 //
+// Every machine is also authored with one service and a health check on a port
+// from the same reservation. Nothing binds it unless a scenario does, which is
+// why a machine is authored with a slow probe interval by default: it is
+// watching a service that is not there, and a fast one would fill its log with
+// connection refusals that explain nothing. A scenario about service health
+// binds StartService at that address and decides what the service answers; the
+// platform reaches it through the URL its own descriptor composed, on the
+// machine's own ip.
+//
 // # Evidence
 //
 // Behavior is checked through the platform's public API: what an instance
-// reports about itself on /instance, and the fact that it answers at all. That
+// reports about itself on /instance, what it holds about the site's services on
+// /health/services, and the fact that it answers at all. That
 // signal is real rather than a liveness check, since an instance does not report
 // itself active until its Event Fabric has connected, its projection has
 // replayed the retained journal, and its handlers have worked through what was
