@@ -1,6 +1,7 @@
 # GenAI
 .agents/
 .claude/
+!.claude/settings.json
 
 # Windows-Native / .NET / C#
 [Bb]in/
